@@ -737,6 +737,8 @@ export async function createDesktop({ state, open } = {}) {
     saveMissionFiles: body => settingsChange(body) && ['POST', '/setup/settings', body],
     setLock: body => ['POST', '/agent-lock', body],
     stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
+    // Settings > Delegation: {} reads it, anything else saves it (the daemon checks the shape).
+    delegation: body => !Object.keys(body).length ? ['GET', '/delegation'] : ['POST', '/delegation', body],
   };
   ipcMain.handle('p9:chat', async (event, ...args) => {
     const [action, payload = {}] = args;

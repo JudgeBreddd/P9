@@ -72,7 +72,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 36);
+  assert.equal((await client.listTools()).tools.length, 37);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -89,7 +89,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.equal((await mcp(entry.env[1].value, [1])).body.error.code, -32600);
   await call(instance, `/chat/${conversation}/stop`, 'POST', {});
   assert.equal((await mcp(entry.env[1].value)).status, 401);
-  console.log('PASS MCP: SDK client initialized and listed 36 tools; wrong, missing, cookie-only and stopped-chat tokens all 401');
+  console.log('PASS MCP: SDK client initialized and listed 37 tools; wrong, missing, cookie-only and stopped-chat tokens all 401');
 });
 
 test('MCP writes: File protection and the agent lock refuse them; the parser, a stale hash and a clashing ID keep the file', async (t) => {

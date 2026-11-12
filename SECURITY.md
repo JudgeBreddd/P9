@@ -641,49 +641,94 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats` and `answer_chat`. The
-chat that starts them is the parent, the chats it starts are its sub-agents, and the group is a
-sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it.
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `set_rules` and `answer_chat`. The
+chat that starts them is the parent, the chats it starts are its workers, and the group is a
+sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 
 - **What one chat can reach.** The tools use the same relay and the same per-chat token as the rest
   of the P9 MCP server. A token reaches the chats of its own chat's project, and the chats its own
-  chat started, directly or through a sub-agent. A general chat (no project) reaches only the chats
+  chat started, directly or through a worker. A general chat (no project) reaches only the chats
   it started. `stop_chat` reaches only the chats the caller started: a chat cannot stop its parent
   or a chat beside it. A chat outside that reach is answered as if it did not exist.
-- **A sub-agent is never wider than its parent.** It starts in the parent's mode unless a narrower
+- **A worker is never wider than its parent.** It starts in the parent's mode unless a narrower
   one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. A message from
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
   mode takes no message from it until that turn ends. The agent lock
-  and File protection are global, so they cover every sub-agent as they cover its parent.
-- **The agent lock.** `open_chat`, `send_chat` and `answer_chat` are refused while it
+  and File protection are global, so they cover every worker as they cover its parent.
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules` and `answer_chat` are refused while it
   is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
-- **Approvals are yours.** No agent can answer another chat's approval prompt; `answer_chat` refuses
-  it (`approval-is-the-users`). An agent may answer a question asked by a chat it started, and the
-  answer is recorded in that chat with the chat that gave it. An approval is shown in the
-  sub-agent's own chat, where you answer it.
-- **Folders.** A sub-agent's folder passes the same check as a folder the parent asks for itself:
+- **Approvals.** An agent may answer an approval or a question asked by a chat it started,
+  directly or through a worker, and by no other chat. For an approval, P9 first asks you in
+  the parent's chat, naming the worker, what it asked and the answer the parent wants to give;
+  only your Allow sends it. In Unrestricted mode (agent lock and File protection both off) it does
+  not ask, like `run_script`. The tool tells the parent to answer only what is within the task
+  it gave; that is an instruction to the agent, not a check P9 makes. Every answer is recorded in
+  the worker's chat with the chat that gave it. The approval also stays in the worker's own
+  chat, where you can answer it yourself.
+- **Sprint rules.** A parent has one text of rules, at most 8,000 characters, that P9 sends as
+  its own block with every message that parent's agent sends a chat it started. Until the parent
+  sets them (`set_rules`, or `rules` on `open_chat`) P9 sends a short default: state the folder
+  and branch first, wait for what you started, end with pass or fail. The rules are text the
+  parent's agent wrote, so the worker reads them as its parent's instructions, not yours; they
+  widen nothing a worker may do. A message you type, and P9's own `[p9]` lines, carry none.
+  The transcript keeps a hash of the rules sent, and the text is in the parent's tool call.
+- **Folders.** A worker's folder passes the same check as a folder the parent asks for itself:
   inside the workspace or a folder you allowed; any absolute folder only in Unrestricted mode.
-- **Tokens.** Each sub-agent gets its own token the way every chat does. Tokens live in memory
+- **Tokens.** Each worker gets its own token the way every chat does. Tokens live in memory
   only; Delegate saves nothing that grants access. What it adds to the ledger is which chat
   started which, and the name the parent gave it.
-- **What P9 sends on its own.** When a sub-agent's turn ends and its parent is not waiting on it,
+- **What P9 sends on its own.** When a worker's turn ends and its parent is not waiting on it,
   P9 sends the parent one line, `[p9] <title> finished: <last line of the reply>`, marked in the
-  transcript as P9's and not yours. That line is text the sub-agent wrote, so the parent reads
-  it as a report, not as an instruction from you. A sub-agent whose agent dies mid-turn is reported
+  transcript as P9's and not yours. That line is text the worker wrote, so the parent reads
+  it as a report, not as an instruction from you. A worker whose agent dies mid-turn is reported
   as `[p9] <title> failed`. Either line is sent only to a parent that is running; it never starts
   a stopped chat.
+- **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
+  receiving agent with one line in front, added by P9: it says the message is from another chat's
+  agent and not from you, and names that chat. Your own messages carry no such line. It is a
+  label, not a control: P9 does not stop the receiving agent from acting on the message.
+- **After a restart.** P9 resends nothing a restart cut off. When P9 starts and finds that a
+  restart stopped a chat of a sprint in the middle of a turn, it sends one line to the chat at the
+  top of that sprint, `[p9] P9 restarted. Interrupted mid-turn: <titles>. Not resent.`, which
+  starts that one chat; its agent decides what to send again. A sprint whose chats were all idle
+  is not started, however old. On the third start within 10 minutes P9 sends none.
 - **Stopping a parent.** Stop or close on a chat also stops every chat it started, directly or
-  through a sub-agent.
+  through a worker.
 - **Who may start one.** `open_chat` asks you in the parent chat first, naming the agent, the mode
   and the task. In Unrestricted mode (agent lock and File protection both off) it does not ask,
   like `run_script`. The same key from the same parent returns the chat it already made and asks
-  nothing. A chat has at most 20 running sub-agents, 3 levels deep.
-- **Provider profiles.** A sub-agent started by a chat on a provider profile runs on that profile
+  nothing. A chat has at most as many running workers as "Workers per chat" in Settings >
+  Delegation says (5 until changed, never more than 20), 3 levels deep.
+- **The Delegation setting.** Settings > Delegation, "Who starts a sprint", has three values, kept
+  in the daemon and read on every `open_chat`. **Off**: every new worker is refused
+  (`delegate-off`); chats already started keep running and can still be read, sent to and stopped.
+  **Ask me first** (the default): P9 asks you in the parent chat before that chat's first
+  worker, in every mode, Unrestricted included; your Allow covers that chat's later workers,
+  which follow the rule above. **Agent decides**: only the rule above applies. The setting is
+  changed from the desktop's Settings only; no MCP tool reads or writes it. A setting never
+  widens a mode: the mode rule above is unchanged.
+- **Workers per chat, and what each runs on.** The same section holds how many workers one chat
+  may have running at once, and one row per worker: an agent (the parent's own, Claude, Codex, or
+  one of your provider profiles), a model and an effort. A chat's new worker takes the first row
+  no running worker of that chat holds, and keeps it until it is stopped. Past the limit
+  `open_chat` is refused (`too-many-chats`); lowering the limit stops nothing. What the call
+  names still wins over the row, then the row, then the parent's own: the rows are your
+  defaults, not a fence, and the tool's text tells the agent to name its own only when you asked.
+  A pick the agent no longer lists, or a profile you removed, is passed over.
+- **A worker's approval, shown in the parent chat.** While a worker waits on an approval or
+  a question, the desktop also draws it in the chat that started it, labelled with the
+  worker's title. It is the same request, not a copy: your answer there is sent as your own
+  answer to the worker's chat, exactly as if you had opened it, and the parent's agent is not
+  involved. A worker an agent starts is listed under its parent and never takes the screen
+  from the chat you are reading.
+- **Provider profiles.** A worker started by a chat on a provider profile runs on that profile
   (the parent's model, or another the profile lists), so it and every command it runs can read
-  that profile's key, as its parent can (see Provider profiles above).
+  that profile's key, as its parent can (see Provider profiles above). A worker row set to a
+  provider profile does the same for that worker whatever its parent runs on: the parent's agent
+  never sees the key, but it chooses the task of a chat that can read it.
 - **Not on the phone.** The phone listener has no MCP server, so nothing here is reachable from
-  it. The phone shows sub-agents in its chat list like any chat.
+  it. The phone shows workers in its chat list like any chat.
 
 ## Agent modes
 

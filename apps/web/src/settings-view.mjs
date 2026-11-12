@@ -199,6 +199,44 @@ function defaultsRow(a) {
 // profileForm: null, 'new', or the id being edited. CHECKED: services a profile was really run against, with the base URL used.
 let profileForm = null, profileNote = '';
 const PROVIDERS = [['ollama.com', 'https://ollama.com', true], ['openrouter.ai', 'https://openrouter.ai', false]];
+// A7 Delegate: Settings > Delegation. The daemon keeps it (delegate.mjs reads it at each open_chat); null until it answers.
+let delegation = null, delegationNote = '';
+function delegationGroup() {
+  if (!window.p9?.chat || !outer.liveChat?.on) return '';
+  const d = delegation, off = d ? '' : ' disabled';
+  const sel = (attr, label, aria, opts, now) => `<label class="set-pick">${label}<select data-slot="input" ${attr}${off} aria-label="${aria}">${(now && !opts.some(([v]) => v === now) ? [...opts, [now, now]] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === (now ?? '') ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
+  const agents = [['', 'The parent chat\'s'], ...Object.keys(modes).map(a => [a, outer.names[a]]), ...outer.profiles.map(p => ['profile:' + p.id, p.name])];
+  // One row per worker, in the order a chat's workers start. A row on a provider profile offers that profile's models.
+  const row = (w, i) => { const prof = w.agent.startsWith('profile:') ? outer.profiles.find(p => 'profile:' + p.id === w.agent) : null, a = prof ? 'claude' : w.agent;
+    const ml = prof ? prof.models.map(m => [m, m]) : [['', 'Not set'], ...(outer.lastModels[a]?.options || []).map(o => [o.value, o.name])];
+    const el = [['', 'Not set'], ...(outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || []).map(o => [o.value, o.name])];
+    return `<div class="set-row set-dg" data-dg-worker="${i}"><span><strong>Worker ${i + 1}</strong>${a && ml.length < 2 && el.length < 2 ? `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>` : ''}</span>`
+      + sel(`data-dg-agent="${i}"`, 'Agent', `Worker ${i + 1} agent`, agents, w.agent)
+      + (w.agent ? sel(`data-dg-model="${i}"`, 'Model', `Worker ${i + 1} model`, ml, w.model || (prof ? prof.models[0] : '')) + sel(`data-dg-effort="${i}"`, 'Effort', `Worker ${i + 1} effort`, el, w.effort) : '') + '</div>'; };
+  return `<fieldset class="set-group" id="setDelegation"><legend>Delegation ${info('Delegate: a chat\'s agent can start workers, each one a chat of its own. Here: who may start a sprint, how many workers a chat may run, and what each worker runs on.', 'settings')}</legend>`
+    + '<p class="muted sm" data-dg-what>Delegate lets a chat\'s agent hand parts of a job to workers. Each worker is a chat of its own, listed in the sidebar under the chat that started it: you can open it, read it and type in it. Its approvals and questions also show in the chat that started it. A job split up this way is a sprint.</p>'
+    + `<div class="set-row"><span><strong>Who starts a sprint</strong><span class="muted sm">Off: agents cannot start workers. Ask me first: P9 asks you in the chat before a chat's first worker, in every mode. Agent decides: no question beyond the mode's own.</span></span>`
+    + sel('data-dg-start', '', 'Who starts a sprint', [['off', 'Off'], ['ask', 'Ask me first'], ['agent', 'Agent decides']], d?.start ?? 'ask') + '</div>'
+    + `<div class="set-row"><span><strong>Workers per chat</strong><span class="muted sm">The most workers one chat may have running at once. Each has a row below: the first worker a chat starts runs on Worker 1, the next on Worker 2. A row is free again when its worker is stopped. An agent that names its own agent, model or effort for a worker gets that one.</span></span>`
+    + sel('data-dg-max', '', 'Workers per chat', Array.from({ length: 20 }, (_, i) => [String(i + 1), String(i + 1)]), String(d?.max ?? 5)) + '</div>'
+    + (d ? d.workers.map(row).join('') : '<p class="muted sm" data-dg-wait>Reading from P9…</p>') + (delegationNote ? `<p class="muted sm" data-dg-note>${esc(delegationNote)}</p>` : '') + '</fieldset>';
+}
+// Drawn again on its own (never the whole page, which would drop what is being typed in another box).
+function drawDelegation() { const el = outer.$('#setDelegation'); if (el) { el.outerHTML = delegationGroup(); bindDelegation(); } }
+function bindDelegation() {
+  const el = outer.$('#setDelegation'); if (!el) return;
+  if (!delegation && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('delegation', {}).then(r => { if (r?.status === 200) { delegation = r.body; drawDelegation(); } }).catch(() => {}); }
+  const v = q => el.querySelector(q)?.value ?? '';
+  el.querySelectorAll('select').forEach(x => { x.onchange = async () => {
+    // A row whose agent just changed starts with no model or effort: the old ones belonged to the other agent.
+    const max = Number(v('[data-dg-max]')), changed = x.dataset.dgAgent;
+    const want = { start: v('[data-dg-start]'), max, workers: Array.from({ length: max }, (_, i) => { const agent = v(`[data-dg-agent="${i}"]`), keep = agent && String(i) !== changed;
+      return { agent, model: keep ? v(`[data-dg-model="${i}"]`) : '', effort: keep ? v(`[data-dg-effort="${i}"]`) : '' }; }) };
+    const r = await window.p9.chat('delegation', want).catch(() => null);
+    if (r?.status === 200) { delegation = r.body; delegationNote = ''; } else delegationNote = 'Not saved: P9 did not take it. Try again in a moment.';
+    drawDelegation();
+  }; });
+}
 function profilesGroup() {
   if (!outer.liveChat?.on || !window.p9?.chat) return '';
   const secret = { key: 'Key saved', command: 'Key from a command', none: 'No key yet' };
@@ -258,6 +296,7 @@ function bindDefaults() {
 function refreshDefaults() {
   outer.$('#setBody').querySelectorAll('.set-defaults').forEach(row => { if (!row.contains(document.activeElement)) row.outerHTML = defaultsRow(row.querySelector('[data-default-mode]').dataset.defaultMode); });
   bindDefaults();
+  if (!outer.$('#setDelegation')?.contains(document.activeElement)) drawDelegation();
 }
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
@@ -271,6 +310,7 @@ function renderSettings() {
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + profilesGroup()
+    + delegationGroup()
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (outer.pets ? petSettings() : '')
     + securityGroup(box)
@@ -289,7 +329,7 @@ function renderSettings() {
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
-  bindDefaults(); bindProfiles();
+  bindDefaults(); bindProfiles(); bindDelegation();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
   if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn; };
   if (outer.pets) wirePetSettings();

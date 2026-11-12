@@ -51,7 +51,11 @@ const cancelled = new Set();
 const turns = new Set(), background = new Set(), inbox = new Map();
 const deliver = (sessionId, text) => new Promise((done) => { if (!inbox.has(sessionId)) inbox.set(sessionId, []); inbox.get(sessionId).push({ text, done }); });
 const take = async (sessionId, say) => { for (const m of inbox.get(sessionId)?.splice(0) ?? []) { await say('got:' + m.text); m.done(); } };
-const textOf = (prompt) => prompt.map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
+// A7: P9's sprint rules block is not the message: it goes to rules.log (one JSON string a line) and the commands below never see it.
+const SPRINT = '[P9: sprint rules';
+const FROM = '[P9: from another chat'; // the sender label, to from.log the same way
+const sprintRules = (prompt) => { for (const block of prompt) if (block.type === 'text') { if (block.text.startsWith(SPRINT)) appendFileSync('rules.log', JSON.stringify(block.text) + '\n'); if (block.text.startsWith(FROM)) appendFileSync('from.log', JSON.stringify(block.text) + '\n'); } };
+const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.
 const png = (w, h) => {
   const chunk = (type, data) => { const head = Buffer.alloc(4), tail = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
@@ -124,6 +128,7 @@ const connection = acp.connectAgent(stream, {
   // Like claude-agent-acp 0.88's _session/steering with idleBehavior promptRequired.
   async extMethod(method, params) {
     if (method !== '_session/steering' || existsSync('no-steering')) throw acp.RequestError.methodNotFound(method);
+    sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
     if (!turns.has(params.sessionId) && process.argv[2] === 'codex') {
       const text = textOf(params.prompt);
@@ -188,6 +193,7 @@ const connection = acp.connectAgent(stream, {
   },
   async turn(params) {
     const { sessionId } = params;
+    sprintRules(params.prompt);
     const text = textOf(params.prompt);
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     if (text === 'crash') process.exit(3);

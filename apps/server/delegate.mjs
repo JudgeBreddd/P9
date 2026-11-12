@@ -1,29 +1,34 @@
 // A7 Delegate: the P9 MCP tools that let one chat's agent start and steer other chats (SECURITY.md § Delegate).
-// The chat that calls open_chat is the parent, the chats it starts are its sub-agents, the group is a sprint.
-// Everything here goes through chat.mjs's own create, prompt, stop and answer, so a sub-agent is an ordinary chat.
+// The chat that calls open_chat is the parent, the chats it starts are its workers, the group is a sprint.
+// Everything here goes through chat.mjs's own create, prompt, stop and answer, so a worker is an ordinary chat.
 import { randomUUID } from 'node:crypto';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 // How wide a mode is, across both agents: 0 reads only, 1 asks before each action, 2 edits files, 3 acts with a
-// reviewer, 4 acts unasked. A sub-agent's tier is never above its sender's.
+// reviewer, 4 acts unasked. A worker's tier is never above its sender's.
 const TIER = { claude: { Plan: 0, Manual: 1, 'Accept edits': 2, Auto: 3, 'Bypass permissions': 4 },
   codex: { 'Read-only': 0, 'Workspace access': 2, 'Auto review': 3, 'Full access': 4 } };
 const WAIT_MS = 50_000; // ponytail: below both agents' MCP call limit as the spec read it; not measured against a real agent yet
 const MAX_CHILDREN = 20, MAX_DEPTH = 3; // ponytail: a runaway guard, not a tuned limit
+const MAX_RULES = 8000;
 const text = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
 
 export const DELEGATE_TOOLS = (input) => {
   const chat = { type: 'string', description: 'A chat ID from open_chat or list_chats.' };
   return [
-    ['open_chat', 'Start a sub-agent: a new chat in your project that begins work on text. Left out, provider, model, effort, mode and folder are yours. mode may be narrower '
+    ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours, so name one only when the user asked for it; mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
       + 'than yours, never wider. The same key from you returns the chat it made before instead of a second one. The user is asked first, except in Unrestricted mode. '
-      + 'Returns the chat\'s ID and the folder it works in; follow it with wait_chat.',
-    input({ text: { type: 'string', description: 'The first message: the whole task, since the sub-agent knows nothing of your chat.' },
+      + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID and the folder it works in; follow it with wait_chat.',
+    input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -' },
       provider: { type: 'string', enum: ['claude', 'codex'] }, model: { type: 'string', description: 'A model that agent offers.' },
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
-      folder: { type: 'string', description: 'Where it starts, relative to the workspace.' } }, ['text'])],
+      folder: { type: 'string', description: 'Where it starts, relative to the workspace.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
+    ['set_rules', 'Replace your sprint rules: one text, at most ' + MAX_RULES + ' characters, that P9 sends along with every message you send a chat you started, so a worker '
+      + 'keeps them through a long task. Until you set them, P9 sends its own short default (state the folder and branch first, wait for what you started, end with pass or fail). '
+      + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
+    input({ rules: { type: 'string', maxLength: MAX_RULES } })],
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
       + 'or queue (after the running turn). It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue'] } }, ['chat', 'text'])],
@@ -35,8 +40,9 @@ export const DELEGATE_TOOLS = (input) => {
     input({ chat, after: { type: 'integer', minimum: 0 }, view: { type: 'string', enum: ['messages', 'activity'] } }, ['chat'])],
     ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether. A chat the user stops takes the chats it started with it.',
       input({ chat, close: { type: 'boolean' } }, ['chat'])],
-    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, parent, key and preview.', input({})],
-    ['answer_chat', 'Answer a question a chat you started is waiting on (wait_chat\'s waiting, kind question). An approval is the user\'s: it is refused.',
+    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, model, context (tokens used and the window\'s size, or null), active (when it was last used), parent, key and preview.', input({})],
+    ['answer_chat', 'Answer a question a chat you started is waiting on (wait_chat\'s waiting, kind question or approval). Answer an approval only when what it asks is within the task you gave that chat; '
+      + 'otherwise leave it for the user, who sees it in that chat. For an approval P9 asks the user in your chat first, except in Unrestricted mode.',
       input({ chat, request: { type: 'string', description: 'waiting.request from wait_chat.' },
         answer: { type: 'object', description: '{ "action": "accept", "content": { field: value } } with the fields of waiting.form, or { "action": "decline" }.' } }, ['chat', 'request', 'answer'])],
   ];
@@ -74,44 +80,85 @@ export function createDelegate({ chat, allowed }) {
       : target.provider === mine.provider ? mine.mode : under(target.provider, ceiling));
     const tier = tierOf(target.provider, want);
     if (tier === undefined) return { error: 'request-refused', detail: 'mode: one of ' + Object.keys(TIER[target.provider]).join(', ') };
-    if (tier > ceiling) return { error: 'mode-escalation', detail: 'A sub-agent is never wider than you: your mode is ' + mine.mode + '.' };
+    if (tier > ceiling) return { error: 'mode-escalation', detail: 'A worker is never wider than you: your mode is ' + mine.mode + '.' };
     return { mode: want, ceiling };
   };
 
+  const OFF = { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
+  const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. Stop one you no longer need, or wait for one to end.' });
+  const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
+  const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
   async function openChat(caller, args, signal) {
     if (chat.lock().on) return { error: 'agent-lock-on' };
     const me = chat.info(caller);
     if (!text(args.text, 100_000) || (args.title !== undefined && !text(args.title, 120)) || (args.key !== undefined && (typeof args.key !== 'string' || !KEY.test(args.key)))
         || (args.provider !== undefined && !Object.hasOwn(TIER, args.provider)) || (args.model !== undefined && !text(args.model, 200))
-        || (args.effort !== undefined && !text(args.effort, 200)) || (args.folder !== undefined && typeof args.folder !== 'string')) return { error: 'request-refused' };
-    const family = chat.family();
+        || (args.effort !== undefined && !text(args.effort, 200)) || (args.folder !== undefined && typeof args.folder !== 'string')
+        || (args.rules !== undefined && (typeof args.rules !== 'string' || args.rules.length > MAX_RULES))) return { error: 'request-refused' };
+    const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };
+    // Settings > Delegation, Who starts a sprint: Off refuses every new worker.
+    if (set.start === 'off') return OFF;
     let depth = 0;
     for (let at = family.find((c) => c.id === caller); at?.parent && depth < 50; at = family.find((c) => c.id === at.parent)) depth += 1;
-    if (depth >= MAX_DEPTH || family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length >= MAX_CHILDREN) {
-      return { error: 'too-many-chats', detail: 'At most ' + MAX_CHILDREN + ' running sub-agents per chat, ' + MAX_DEPTH + ' levels deep.' };
-    }
-    const provider = args.provider ?? me.provider;
+    // A call still being started (the user is being asked, the chat is being made) counts as a worker: two calls at once
+    // never pass the limit together.
+    if (depth >= MAX_DEPTH || running(caller, family) + (holding.get(caller)?.length ?? 0) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
+    const kids = family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state));
+    // Settings > Delegation has one row per worker. A new worker takes the first row no running worker of this chat holds.
+    const taken = new Set([...kids.map((c) => chat.slot(c.id)), ...(holding.get(caller) ?? [])]);
+    let at = 0; while (taken.has(at)) at += 1;
+    holding.set(caller, [...(holding.get(caller) ?? []), at]);
+    try { return await startWorker(caller, args, signal, { me, family, set, depth, at }); }
+    finally { const left = holding.get(caller).filter((n) => n !== at); if (left.length) holding.set(caller, left); else holding.delete(caller); }
+  }
+  async function startWorker(caller, args, signal, { me, family, set, depth, at }) {
+    const row = set.workers[at] ?? { agent: '', model: '', effort: '' };
+    // A row on a provider profile that was removed since says nothing: the worker starts like a row left on "the parent's".
+    const rowProfile = row.agent.startsWith('profile:') ? chat.profiles.list().profiles.find((p) => p.id === row.agent.slice(8)) ?? null : null;
+    const rowProvider = row.agent.startsWith('profile:') ? (rowProfile ? 'claude' : '') : row.agent;
+    // Each of provider, model and effort: what the call passed, else that worker's row in Settings, else the parent's own.
+    const provider = args.provider ?? (rowProvider || me.provider), known = chat.lists()[provider];
+    // The row's model and effort belong to the row's agent: they say nothing when the call named another, or the row names none.
+    const mine = rowProvider && rowProvider === provider ? row : null;
+    // A Settings pick the agent no longer lists is passed over, never an error: the next in line is used.
+    const listed = (options, value) => value && (!options || options.some((o) => o.value === value)) ? value : '';
+    const dflt = { model: !mine ? '' : rowProfile ? (rowProfile.models.includes(row.model) ? row.model : rowProfile.models[0]) : listed(known?.model?.options, row.model),
+      effort: mine ? listed(known?.pickers?.find((o) => o.category === 'thought_level')?.options, row.effort) : '' };
     const picked = modeFor(caller, { provider, mode: null }, args.mode);
     if (picked.error) return picked;
-    // A profile chat's sub-agent stays on that profile and model (its model is fixed for the chat); otherwise the caller's model.
-    const profile = provider === me.provider && me.profile && !me.profile.gone ? { profile: me.profile.id, model: args.model ?? me.profile.model } : null;
-    const model = profile ? undefined : args.model ?? (provider === me.provider ? me.model ?? undefined : undefined);
+    // A row on a profile starts the worker on that profile. With no row of its own, a profile chat's worker stays on its
+    // parent's profile and model (a profile chat's model is fixed for the chat).
+    const profile = mine && rowProfile ? { profile: rowProfile.id, model: args.model ?? dflt.model }
+      : !mine && provider === me.provider && me.profile && !me.profile.gone ? { profile: me.profile.id, model: args.model ?? me.profile.model } : null;
+    const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider && listed(known?.model?.options, me.model)) || undefined);
     const effortId = (provider === me.provider && me.effort?.id) || chat.lists()[provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
-    const effort = args.effort ?? (provider === me.provider ? me.effort?.value : undefined);
+    const effort = args.effort ?? ((effortId && dflt.effort) || (provider === me.provider ? me.effort?.value : undefined));
     if (args.effort !== undefined && !effortId) return { error: 'effort-unknown', detail: 'That agent\'s effort list is not known yet; leave effort out.' };
     const folder = args.folder ?? (me.folder.startsWith(':') ? undefined : me.folder); // ':…' is a project's own files: the project places the chat
     const title = args.title ?? args.text.trim().split('\n')[0].slice(0, 60);
-    const ask = 'P9 Delegate: start a ' + (provider === 'claude' ? 'Claude' : 'Codex') + ' sub-agent "' + title + '" in mode ' + picked.mode
+    const ask = 'P9 Delegate: start a ' + (profile ? (rowProfile && mine ? rowProfile.name : me.profile.name) : provider === 'claude' ? 'Claude' : 'Codex') + ' worker "' + title + '" in mode ' + picked.mode
       + (args.folder ? ', folder ' + args.folder : '') + '. Its task: ' + args.text.slice(0, 600) + (args.text.length > 600 ? '…' : '');
-    if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title: ask, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    // Ask me first (the default): the first worker of a chat the user started is a sprint's start, so the user is asked
+    // in every mode, Unrestricted too. Later ones, and Agent decides, follow the same check as every acting P9 tool.
+    const starts = set.start === 'ask' && depth === 0 && !family.some((c) => c.parent === caller);
+    const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This starts a sprint (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
+    if (!await (starts ? chat.approve(caller, request, signal) : allowed(caller, request, signal))) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     if (chat.lock().on) return { error: 'agent-lock-on' }; // turned on while the user was asked
+    // So is everything else the user may have changed meanwhile: Delegation off, a lower limit, this chat's own mode.
+    const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
+    if (now.start === 'off') return OFF;
+    if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
+    if (again.error) return again;
+    if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
     const made = await chat.create({ provider, title, ...(folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
+    chat.setSlot(made.conversation, at);
+    if (args.rules !== undefined) chat.setRules(caller, args.rules);
     const sent = await chat.prompt(made.conversation, { text: args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
     if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', chat: made.conversation, detail: 'The chat was made, but the message was not sent; send_chat can try again.' };
-    return { chat: made.conversation, title, provider, mode: picked.mode, folder: await chat.startFolder(made.conversation) };
+    return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation) };
   }
 
   async function sendChat(caller, args) {
@@ -195,24 +242,38 @@ export function createDelegate({ chat, allowed }) {
     return { chat: args.chat, action: args.close ? 'stopped' : 'interrupted', chats: stopped };
   }
 
+  function setRules(caller, args) {
+    if (args.rules === undefined) return { rules: chat.rules(caller) };
+    if (chat.lock().on) return { error: 'agent-lock-on' };
+    if (typeof args.rules !== 'string' || args.rules.length > MAX_RULES) return { error: 'request-refused' };
+    chat.setRules(caller, args.rules);
+    return { rules: args.rules, sentTo: chat.family().filter((c) => c.parent === caller).length };
+  }
+
   function listChats(caller) {
     const family = chat.family(), me = family.find((c) => c.id === caller), mine = below(family, caller);
     const rows = chat.list().filter((c) => c.id !== caller && !c.archived && (mine.includes(c.id) || (me?.project && c.project === me.project)));
     return { chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false }), waiting: c.waiting,
-      parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id), preview: c.preview })), ...(rows.length > 200 && { more: rows.length - 200 }) };
+      ...chat.gauge(c.id), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id), preview: c.preview })), ...(rows.length > 200 && { more: rows.length - 200 }) };
   }
 
-  function answerChat(caller, args) {
+  async function answerChat(caller, args, signal) {
     if (chat.lock().on) return { error: 'agent-lock-on' };
     if (!reach(caller, args.chat, true)) return { error: reach(caller, args.chat) ? 'not-a-descendant' : 'chat-not-found' };
     const ask = chat.info(args.chat).asks.find((a) => a.request === args.request);
     if (!ask) return { error: 'no-such-request' };
-    if (ask.kind !== 'question') return { error: 'approval-is-the-users', detail: 'Only the user answers an approval; it is shown in that chat.' };
+    if (ask.kind !== 'question') {
+      // An approval (SECURITY.md § Delegate): the same check as every acting P9 tool. Unrestricted: no ask; otherwise the
+      // user says yes in the caller's own chat. The request may have been answered meanwhile, so the lock and it are re-read.
+      const title = `P9 Delegate: answer ${JSON.stringify(args.answer?.optionId ?? null)} to the approval "${chat.info(args.chat).title}" waits on: ${ask.text.slice(0, 400)}`;
+      if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+      if (chat.lock().on) return { error: 'agent-lock-on' };
+    }
     const result = chat.answer(args.chat, { request: args.request, answer: args.answer }, caller);
     return result.status === 200 ? { chat: args.chat, action: 'answered' } : { error: result.error, ...(ask.form && { form: ask.form }) };
   }
 
-  // When a sub-agent's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
+  // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
   // § Delegate). Only a parent whose agent is running: an idle-since-start or stopped chat is never started by this.
   chat.settled((id, ok) => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
@@ -222,6 +283,21 @@ export function createDelegate({ chat, allowed }) {
       .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});
   });
 
+  // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and
+  // so one turn. P9 resends nothing; a sprint that was idle is not touched; none on the third start in 10 minutes.
+  chat.restarted().then(({ chats, storm }) => {
+    const all = new Map(chat.family().map((c) => [c.id, c])), tops = new Map();
+    const top = (c) => { for (let i = 0; i < 10 && c.parent && all.has(c.parent); i += 1) c = all.get(c.parent); return c; };
+    for (const id of chats) {
+      const c = all.get(id), root = c && top(c);
+      if (!c || (root === c && ![...all.values()].some((other) => other.parent === c.id))) continue; // not in a sprint
+      tops.set(root.id, [...(tops.get(root.id) ?? []), root === c ? 'this chat' : c.title]);
+    }
+    if (!storm) for (const [id, titles] of tops) {
+      chat.prompt(id, { text: `[p9] P9 restarted. Interrupted mid-turn: ${titles.slice(0, 20).join(', ').slice(0, 1000)}. Not resent.` }, undefined, 'p9').catch(() => {});
+    }
+  }).catch(() => {});
+
   return {
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
     send_chat: (args, caller) => sendChat(caller, args),
@@ -229,6 +305,7 @@ export function createDelegate({ chat, allowed }) {
     read_chat: (args, caller) => readChat(caller, args),
     stop_chat: (args, caller) => stopChat(caller, args),
     list_chats: (args, caller) => listChats(caller),
-    answer_chat: (args, caller) => answerChat(caller, args),
+    set_rules: (args, caller) => setRules(caller, args),
+    answer_chat: (args, caller, signal) => answerChat(caller, args, signal),
   };
 }
