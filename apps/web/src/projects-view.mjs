@@ -170,6 +170,7 @@ export function installProjects(o, api) {
     if (!s) return;
     if (m.dataset.pjchat === 'rename') return renameChat(s);
     if (m.dataset.pjchat === 'archive') return archiveChat(s, true);
+    if (m.dataset.pjchat === 'askable') return askableChat(s);
     if (m.dataset.pjchat === 'delete') return deleteChat(s);
   }, { signal: o.lifetime.signal });
   // Name and about save when they lose the focus; Enter ends the name, Escape puts it back.
@@ -201,6 +202,11 @@ export function installProjects(o, api) {
     if (!s) return; const r = await call('archiveChat', { id: s.id, archived }); if (r.status !== 200) return failed(r);
     s.archived = archived; o.renderTabs();
     if (archived) api.undoToast(`Archived <b>${esc(s.title)}</b>`, () => archiveChat(s, false));
+  }
+  // Peer help: whether other chats in the project may ask this one a question (ask_chat). Off until the user turns it on.
+  async function askableChat(s) {
+    const r = await call('askableChat', { id: s.id, on: !s.askable }); if (r.status !== 200) return failed(r);
+    s.askable = r.body.on; say(s.askable ? `${s.title} is open to questions from other chats in its project. It answers them read-only.` : `${s.title} no longer takes questions from other chats.`);
   }
   async function deleteChat(s) {
     if (!await confirmIt({ title: `Delete “${s.title}”?`, body: `Deletes the chat, what P9 remembered from it and its photos no other chat uses; its files and what it spent stay.${s.state === 'running' || s.pending ? ' It stops first.' : ''} This can't be undone.`, ok: 'Delete chat', danger: true })) return;
@@ -283,5 +289,5 @@ export function installProjects(o, api) {
   }
 
   o.openProject = openProject; o.newProject = newProject; o.renderPage = renderPage; o.openArchived = () => { o.S.view = { kind: 'archived' }; if (o.S.focus !== 'chat') o.setFocus('chat'); o.renderTabs(); page.focus(); };
-  o.chatMenuItems = s => `<div class="sep"></div><button role="menuitem" data-pjchat="rename" data-id="${esc(s.id)}">${svg.edit}Rename…</button><button role="menuitem" data-pjchat="archive" data-id="${esc(s.id)}">${svg.history}Archive</button><button role="menuitem" class="danger" data-pjchat="delete" data-id="${esc(s.id)}">${svg.x}Delete…</button>`;
+  o.chatMenuItems = s => `<div class="sep"></div><button role="menuitem" data-pjchat="rename" data-id="${esc(s.id)}">${svg.edit}Rename…</button><button role="menuitem" data-pjchat="archive" data-id="${esc(s.id)}">${svg.history}Archive</button><button role="menuitem" data-pjchat="askable" data-id="${esc(s.id)}">${svg.chat ?? svg.edit}${s.askable ? 'Close to questions' : 'Open to questions'}</button><button role="menuitem" class="danger" data-pjchat="delete" data-id="${esc(s.id)}">${svg.x}Delete…</button>`;
 }

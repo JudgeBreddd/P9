@@ -269,7 +269,7 @@ const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; 
   window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { outer.chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) outer.chatImgs.delete(hash); }); };
 function event(e, s) {
   switch (e.t) {
-    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
+    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}><div class="who">${e.ask ? 'Question from ' + esc(outer.S.sessions.find(x => x.id === e.ask)?.title ?? 'another chat') + ' · answered read-only' : 'You'}${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${outer.names[s.agent]}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent])}</div>`;
     case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
@@ -782,7 +782,7 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -837,7 +837,7 @@ function applyChat(ev, into) {
       s.events.push({ t: 'question', request: d.request, title: d.message, unsupported: !d.form, fields: d.form ? d.form.fields.map(field) : [] }); s.pending = 'question'; break; }
     case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
       notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
-    case 'lock-rejected': notice('Agent lock: rejected ' + (d.toolCall?.title || 'a tool call')); break;
+    case 'lock-rejected': notice((d.ask ? 'Answering another chat (read-only): rejected ' : 'Agent lock: rejected ') + (d.toolCall?.title || 'a tool call')); break;
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
     case 'turn-end': settle(); s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
@@ -846,6 +846,7 @@ function applyChat(ev, into) {
     case 'project': s.project = d.project ?? null; s.folderAsked = false; break;
     case 'renamed': s.title = d.title; break;
     case 'archived': s.archived = !!d.archived; break;
+    case 'askable': s.askable = !!d.on; break;
     case 'deleted': if (!into) { outer.S.sessions = outer.S.sessions.filter(x => x !== s); outer.S.open = outer.S.open.filter(x => x !== s.id); } break;
     case 'exited': settle(); s.state = 'stopped'; notice('The agent process exited' + (d.code != null ? ' (code ' + d.code + ')' : '') + '. Send again to resume.'); break;
     case 'stopped': settle(); s.state = 'stopped'; notice(d.result === 'stopped' ? 'Stopped. Everything this session started has ended.' : 'Stop could not confirm that everything ended.'); break;
@@ -908,7 +909,7 @@ async function loadChat() {
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
       outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out).
-      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.parent = c.parent ?? null; } }
+      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; } }
       outer.loadProjects?.();
       // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
       try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}

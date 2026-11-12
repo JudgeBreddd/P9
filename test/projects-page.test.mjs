@@ -200,6 +200,16 @@ test('projects: delete leaves the folder, Locate, archive and back, a chat\'s Re
   await ask.locator('input').fill('Scratch pad'); await ask.locator('[value=yes]').click();
   await until(async () => (await conv(instance, plain)).title === 'Scratch pad', 'renamed on the daemon');
   await page.locator(`#navList .row[data-chat="${plain}"]`, { hasText: 'Scratch pad' }).waitFor({ timeout: 5000 });
+  // Peer help: the menu opens a chat to other chats' questions and closes it again; the daemon keeps it.
+  await menu(b);
+  assert.equal((await page.locator('.lp-menu [data-pjchat=askable]').textContent()).trim(), 'Open to questions');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT peer-help-menu ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await page.locator('.lp-menu [data-pjchat=askable]').click();
+  await until(async () => (await conv(instance, b)).askable === true, 'opened to questions on the daemon');
+  await menu(b);
+  assert.equal((await page.locator('.lp-menu [data-pjchat=askable]').textContent()).trim(), 'Close to questions');
+  await page.locator('.lp-menu [data-pjchat=askable]').click();
+  await until(async () => (await conv(instance, b)).askable === false, 'closed again');
   await menu(b); await page.locator('.lp-menu [data-pjchat=archive]').click();
   await page.locator(`#navList .row[data-chat="${b}"]`).waitFor({ state: 'detached', timeout: 5000 });
   assert.equal((await conv(instance, b)).archived, true);

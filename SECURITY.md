@@ -641,7 +641,8 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `set_rules` and `answer_chat`. The
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `set_rules`, `answer_chat` and
+`ask_chat`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 
@@ -722,6 +723,34 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   answer to the worker's chat, exactly as if you had opened it, and the parent's agent is not
   involved. A worker an agent starts is listed under its parent and never takes the screen
   from the chat you are reading.
+- **Asking a chat beside you (`ask_chat`).** A chat's agent can put one question to another chat
+  of its project and get that chat's answer back, so it need not work out again what the other
+  already knows. What bounds it:
+  - **You open each chat to it.** A chat takes questions only after you turn on "Open to
+    questions" in its menu on the desktop. It is off for every chat until then, the phone cannot
+    change it, and no tool can.
+  - **Beside, never above or below.** The chat asked must be in the asker's project and must not
+    be its parent, a chat above that, or a chat it started: those have `send_chat`.
+  - **An answer, never an action.** The question gets a turn of its own in the helper, after
+    whatever the helper is doing; nothing else is joined to that turn and messages sent meanwhile
+    wait for its end. The turn runs as if the agent lock were on for that chat: the agent's
+    no-write mode (Claude Plan, Codex Read-only), every approval rejected, and P9's own tools
+    refused except the ones that only read. `ask_chat` is among the refused, so a question never
+    leads to a second one. The helper's own mode is not changed in the window, and comes back
+    before its next message is sent: that message sets the mode itself, and is not sent if the
+    set fails.
+  - **What it costs.** A helper that is stopped or has sat unused, and holds a large context,
+    reads all of it again to answer. P9 does not ask you before waking one: opening the chat to
+    questions is your yes, and closing it again is how you stop the cost.
+  - **What the asker gets.** The helper's reply as text, with a line saying it is another agent's
+    view, does not override the asker's instructions, and that a conflict or a decision of yours
+    goes to you. It is still text one agent wrote for another: an asker can be misled by a wrong
+    answer exactly as by a wrong file, and a chat you open to questions shows what it knows to
+    every chat of its project.
+  - **You can read it.** The question is in the helper's chat, marked as a question from the
+    asking chat, and the answer is the helper's reply there; the asker's tool call holds both.
+  Not covered: a question the helper's agent raises to you during that turn stays open, and a
+  background task the helper starts and that outlives the turn runs in the helper's own mode.
 - **Provider profiles.** A worker started by a chat on a provider profile runs on that profile
   (the parent's model, or another the profile lists), so it and every command it runs can read
   that profile's key, as its parent can (see Provider profiles above). A worker row set to a
