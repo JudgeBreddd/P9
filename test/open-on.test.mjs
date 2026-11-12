@@ -53,17 +53,26 @@ test('Open P9 on: Where it was last (as before), This computer or a remote; kept
   await status(onLocal, 'opened on this computer, as saved');
   let pick = await openOn(page);
   assert.deepEqual([await pick.inputValue(), await pick.locator('option').allInnerTexts()], ['last', ['Where it was last', 'This computer', 'test-host']]);
+  // Phase 2 review: a save main refuses says so and the row goes back; a good save sent right behind it still shows.
+  const choose = (values) => page.evaluate((vs) => { const el = document.querySelector('#setOpenOn'); if (![...el.options].some(o => o.value === 'not a host')) el.add(new Option('bad', 'not a host')); for (const v of vs) { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); } }, values);
+  await choose(['not a host']);
+  await page.locator('#toasts .toast', { hasText: 'Not saved' }).waitFor();
+  assert.equal(await pick.inputValue(), 'last', 'the row is back on what is kept');
+  assert.equal((await saved()).openOn, undefined, 'nothing was saved');
+  await choose(['not a host', 'local']);
+  assert.equal(await savedOpenOn(''), '');
+  await page.waitForFunction(() => document.querySelector('#setOpenOn').value === 'local', null, { timeout: 5000 });
+  await page.evaluate(() => document.querySelector('#setOpenOn option[value="not a host"]').remove());
   await pick.selectOption('test-host');
   assert.equal(await savedOpenOn('test-host'), 'test-host');
   assert.equal((await saved()).host, null, 'this window stays where it is until the next start');
   // Phase 2 review: saves that overlap. Every read during them is whole JSON, and the last one sent is the one kept.
   let reading = true, reads = 0;
   const reader = (async () => { while (reading) { JSON.parse(await readFile(file, 'utf8')); reads += 1; } })();
-  await page.evaluate(() => Promise.all(Array.from({ length: 200 }, (_, i) => window.p9.remotes('open-on', i % 2 ? '' : 'test-host'))));
-  await page.evaluate(() => window.p9.remotes('open-on', 'test-host'));
+  await page.evaluate(() => Promise.all(Array.from({ length: 200 }, (_, i) => window.p9.remotes('open-on', i % 2 ? 'test-host' : ''))));
   reading = false; await reader;
   assert.ok(reads > 0, 'the file was read while the saves ran');
-  assert.equal((await saved()).openOn, 'test-host', 'the last save is the one kept');
+  assert.equal((await saved()).openOn, 'test-host', 'the last of the overlapping saves is the one kept');
   await closeSettings(page);
   await status(onLocal, 'still on this computer');
   await app.close();
