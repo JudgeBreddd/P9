@@ -24,7 +24,8 @@ export const DELEGATE_TOOLS = (input) => {
   return [
     ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours, so name one only when the user asked for it; mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
       + 'than yours, never wider. The same key from you returns the chat it made before instead of a second one. The user is asked first, except in Unrestricted mode. '
-      + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID and the folder it works in; follow it with wait_chat.',
+      + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID, the folder it works in and your sprint\'s folder: plan.md there is your plan to fill in, rules.md your sprint rules, '
+      + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md is the worker\'s own. Follow it with wait_chat.',
     input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -' },
       provider: { type: 'string', enum: ['claude', 'codex'] }, model: { type: 'string', description: 'A model that agent offers.' },
@@ -167,6 +168,12 @@ export function createDelegate({ chat, allowed }) {
     if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
     if (again.error) return again;
     if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
+    // The sprint's files (SECURITY.md § Sprint files): the plan at the first worker; a keyed worker's role files and notes.
+    // Its instructions and where its notes are ride once, with its first message; its role rules with every lead message.
+    const sprint = chat.sprintFiles.ensure(caller), notes = args.key ? chat.sprintFiles.ensureWorker(caller, args.key) : null;
+    const said = args.key ? (chat.sprintFiles.read(caller, `roles/${args.key}.instructions.md`) ?? '').trim() : '';
+    const start = (said ? `[P9: your instructions, from your sprint's roles/${args.key}.instructions.md.\n${said}]\n\n` : '')
+      + (notes ? `[P9: your notes file is ${notes}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n` : '');
     // A worker folder (SECURITY.md § Worker folders): made after the user allowed the worker, before it starts.
     const own = args.worktree ? await chat.workers.make(caller, args.key, folder === undefined ? await chat.startFolder(caller) : await chat.checkedFolder(folder), chat.delegation().setup ?? '') : null;
     if (own?.error) return { ...own, detail: own.detail ?? 'Give the worker a key that is also a git branch name.' };
@@ -174,9 +181,10 @@ export function createDelegate({ chat, allowed }) {
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
     chat.setSlot(made.conversation, at);
     if (args.rules !== undefined) chat.setRules(caller, args.rules);
+    chat.startNote(made.conversation, start);
     const sent = await chat.prompt(made.conversation, { text: args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
     if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', chat: made.conversation, detail: 'The chat was made, but the message was not sent; send_chat can try again.' };
-    return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation) };
+    return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation), ...(sprint && { sprint }) };
   }
 
   async function sendChat(caller, args) {

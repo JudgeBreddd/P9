@@ -10,6 +10,7 @@ export const projectRoutes = (uuid) => {
     locateProject: ({ id, folder, ...rest }) => uuid(id) && typeof folder === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/locate', { folder }],
     deleteProject: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['POST', '/projects/' + id + '/delete', {}],
     addProjectFile: ({ id, name, data, ...rest }) => uuid(id) && typeof name === 'string' && typeof data === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files', { name, data }],
+    sprintFile: ({ id, lead, name, text, ...rest }) => uuid(id) && uuid(lead) && typeof name === 'string' && typeof text === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-file', { lead, name, text }],
     removeProjectFile: ({ id, name, ...rest }) => uuid(id) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files/remove', { name }],
     startedIn: ({ folder, ...rest }) => typeof folder === 'string' && folder.length <= 4096 && !Object.keys(rest).length && ['GET', '/chat/started-in?' + new URLSearchParams({ folder })],
     moveChat: ({ id, project, ...rest }) => uuid(id) && (project === null || uuid(project)) && !Object.keys(rest).length && ['POST', `/chat/${id}/project`, { project }],

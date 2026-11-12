@@ -20,7 +20,7 @@ export function installProjects(o, api) {
   const call = (action, body, opts) => o.liveChat.call(action, body, opts);
   const find = id => o.S.sessions.find(s => s.id === id);
   // cur: the shown project as GET /projects/<id> gives it (instructions, files, agentFiles, sharedWith).
-  let cur = null, edit = false, saveT = 0;
+  let cur = null, edit = false, saveT = 0, sprintOpen = ''; // sprintOpen: '<lead> <name>' of the sprint file shown in its box
   const say = (txt, level = 'ok') => o.toast({ kind: 'project', txt, level }, true);
   const failed = r => say(ERR[r.body?.error] || 'That did not work (' + (r.body?.error || r.status) + ').', 'warn');
 
@@ -84,7 +84,17 @@ export function installProjects(o, api) {
       <section class="sec" data-drop-files aria-labelledby="pjFilesH"><div class="sh2"><h2 id="pjFilesH">${mine ? 'Files' : 'Added files'}</h2><span class="muted">${mine ? 'handed to every chat in this project' : 'kept in P9, handed to every chat in this project'}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="add">${svg.plus}Add files</button></div>
         ${files.map(x => `<div class="crow file">${svg.files}<span class="t" title="${esc(x.name)}">${esc(x.name)}</span><span class="sz">${size(x.size)}</span><button class="rm" data-pj="rm" data-name="${esc(x.name)}" title="Remove ${esc(x.name)}" aria-label="Remove ${esc(x.name)}">${svg.x}</button></div>`).join('')
           || '<p class="hint">Drop files here, or Add files. Every chat in this project gets them.</p>'}</section>
+      ${(p.sprints ?? []).map(sprintHtml).join('')}
     </div>`;
+  }
+  // D1, D3, D4: a sprint's files, kept in P9; its lead and workers edit them too. One open at a time, saved as you type.
+  function sprintHtml(sp) {
+    const about = { 'plan.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker' };
+    const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this worker gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this worker with the sprint rules' : 'the worker keeps it itself');
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2><span class="muted">its files, kept in P9</span><span class="saved" data-sp-saved role="status">Saved</span></div>
+      ${sp.files.map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
+        return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz">${esc(what(f.name))}</span></button>`
+          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false">${esc(f.text)}</textarea>` : ''); }).join('')}</section>`;
   }
   function archivedHtml() {
     const ps = (o.S.projects || []).filter(p => p.archived), cs = o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden));
@@ -150,6 +160,7 @@ export function installProjects(o, api) {
     if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
     if (k === 'edit') { if (edit) { clearTimeout(saveT); await saveInstr(); } edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
     if (k === 'add') return picker.click();
+    if (k === 'spfile') { clearTimeout(saveT); await saveSprint(); const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return page.querySelector('[data-sp-box]')?.focus(); }
     if (k === 'rm') { const r = await call('removeProjectFile', { id: cur.id, name: b.dataset.name }); if (r.status !== 200) return failed(r); cur = { ...cur, files: r.body.files }; return renderPage(); }
     if (k === 'open') { o.files.scope = 'project'; if (!o.S.files) $('[data-tool=files]')?.click(); else o.renderTree(); return; }
     if (k === 'locate') { const f = await pick(); if (f === undefined) return; const r = await call('locateProject', { id: cur.id, folder: f }); if (r.status !== 200) return failed(r); refresh(r.body.project); return say(`Found it: ${where(f)}`); }
@@ -187,7 +198,12 @@ export function installProjects(o, api) {
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
     const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) return failed(r);
     cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
-  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); } });
+  const saveSprint = async () => { const box = page.querySelector('[data-sp-box]'); if (!box) return;
+    const sp = cur.sprints?.find(x => x.lead === box.dataset.lead), f = sp?.files.find(x => x.name === box.dataset.name); if (!f || f.text === box.value) return;
+    const r = await call('sprintFile', { id: cur.id, lead: sp.lead, name: f.name, text: box.value }); if (r.status !== 200) return failed(r);
+    sp.files = r.body.files; const s = box.closest('[data-sprint]')?.querySelector('[data-sp-saved]'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
+  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); } if (e.target.matches('[data-sp-box]')) { clearTimeout(saveT); saveT = setTimeout(saveSprint, 600); } });
+  page.addEventListener('focusout', e => { if (e.target.matches?.('[data-sp-box]')) { clearTimeout(saveT); saveSprint(); } });
   page.addEventListener('dragover', e => { if (e.target.closest('[data-drop-files]') && e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.target.closest('[data-drop-files]').setAttribute('data-over', ''); } });
   page.addEventListener('dragleave', e => e.target.closest?.('[data-drop-files]')?.removeAttribute('data-over'));
   page.addEventListener('drop', e => { const z = e.target.closest('[data-drop-files]'); if (!z || !e.dataTransfer.files.length) return; e.preventDefault(); z.removeAttribute('data-over'); addFiles([...e.dataTransfer.files]); });

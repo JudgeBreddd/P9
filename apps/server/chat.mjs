@@ -22,6 +22,7 @@ import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
+import { createSprintFiles } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -360,13 +361,23 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
-  // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, in prefs under rules:<parent>; never set, it is
-  // DEFAULT_RULES, and '' is none. It rides as its own block with every message that chat's agent sends a chat it
-  // started (a compaction in the worker cannot lose it), and with no other sender's message.
-  const rulesOf = (parent) => db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
+  // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, the sprint folder's rules.md (D3; before it, prefs
+  // under rules:<parent>, still read until the first set_rules); never set, it is DEFAULT_RULES, and '' is none. It rides
+  // as its own block with every message that chat's agent sends a chat it started (a compaction in the worker cannot lose
+  // it), and with no other sender's message. A keyed worker's roles/<key>.rules.md follows it.
+  const sprintFiles = createSprintFiles({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
+  const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
+  // firstNotes: a worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), sent once, after the rules
+  // of the first message from its parent.
+  const firstNotes = new Map();
   const rulesFor = (conversation, body) => {
-    const text = conversation?.parent && senders.get(body) === conversation.parent ? rulesOf(conversation.parent) : '';
-    return text ? { hash: createHash('sha256').update(text).digest('hex').slice(0, 12), text: `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` } : null;
+    const mine = conversation?.parent && senders.get(body) === conversation.parent;
+    const own = mine && conversation.key ? (sprintFiles.read(conversation.parent, `roles/${conversation.key}.rules.md`) ?? '').trim() : '';
+    const text = mine ? [rulesOf(conversation.parent), own].filter(Boolean).join('\n\n') : '';
+    const start = mine ? firstNotes.get(conversation.id) ?? '' : '';
+    if (start) firstNotes.delete(conversation.id);
+    const all = (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
+    return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all } : null;
   };
   // A message another chat's agent sent (send_chat, open_chat) says so to the agent that gets it, as its own leading block:
   // without it the text reads as the user's (Builder, 2026-11-11: a helper chat took a peer's questions for his).
@@ -964,7 +975,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
 
   // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).
   const workers = createWorkerFolders({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
-  const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
+  const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
       db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id); // O48, A7
@@ -1323,7 +1334,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
     setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },
     setDelegation(value) { db.prepare("INSERT INTO prefs (key, value) VALUES ('delegation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(value)); return this.delegation(); },
-    setRules: (id, text) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); },
+    setRules: (id, text) => { if (sprintFiles.write(id, 'rules.md', text)) db.prepare('DELETE FROM prefs WHERE key = ?').run('rules:' + id);
+      else db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); }, // no state folder: prefs, as before
+    sprintFiles,
+    startNote: (id, text) => { if (text) firstNotes.set(id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),
     // A folder a chat asked for, as its full path once it passes the "Start in" check (row 24), else null.
