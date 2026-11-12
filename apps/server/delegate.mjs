@@ -426,7 +426,7 @@ export function createDelegate({ chat, allowed }) {
     if (asks.get(caller) === open) asks.delete(caller);
     if (open.outcome.error) return { error: 'not-answered', chat: open.chat, reason: open.outcome.error, detail: 'It did not answer (its turn was stopped, or it could not take the question). Nothing is waiting any more.' };
     const reply = open.outcome.reply;
-    return { guidance: CROSS_CHAT, chat: open.chat, title, answered: true, reply: reply.slice(0, 20_000), ...(reply.length > 20_000 && { truncated: true }), note: ASK_NOTE };
+    return { guidance: CROSS_CHAT + ' ' + ASK_NOTE, chat: open.chat, title, answered: true, reply: reply.slice(0, 20_000), ...(reply.length > 20_000 && { truncated: true }), note: ASK_NOTE };
   }
 
   // The adapter reports the current turn's usage only at turn end, after ready is already visible.
