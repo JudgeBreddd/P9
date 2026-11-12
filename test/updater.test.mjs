@@ -77,28 +77,28 @@ test('the Nightly switch: read at start, kept, and it turns pre-releases on and 
   const fake = new EventEmitter(), calls = [];
   fake.checkForUpdates = async () => { calls.push('check ' + fake.allowPrerelease); };
   fake.downloadUpdate = async () => { calls.push('download'); };
-  let saved = true, waiting = null;
-  const channel = { get: () => saved, set: on => { saved = on; } }, pending = { get: () => waiting, set: v => { waiting = v; } };
+  let saved = true;
+  const channel = { get: () => saved, set: on => { saved = on; } };
   const updates = await startUpdater({ app: { isPackaged: true }, version: '1.0.0', log() {}, resources: await feed(), platform: 'win32',
-    env: {}, load: async () => fake, channel, pending });
+    env: {}, load: async () => fake, channel });
   assert.deepEqual([fake.allowPrerelease, fake.allowDowngrade, updates.read().nightly], [true, false, true]);
   assert.equal(updates.nightly({ nightly: false }).state, 'checking');
   assert.deepEqual([fake.allowPrerelease, saved, updates.read().nightly, calls], [false, false, false, ['check false']]);
   updates.nightly({ nightly: true });
   fake.emit('update-available', { version: '1.0.1-nightly.1' });
   fake.emit('update-downloaded', { version: '1.0.1-nightly.1' });
-  assert.deepEqual([updates.read().state, waiting], ['ready', '1.0.1-nightly.1']);
-  // Review finding 1: off drops the nightly that is ready, so the next open installs nothing (O24: nor does quitting); one
-  // still arriving is dropped too.
+  assert.deepEqual([updates.read().state, updates.read().available], ['ready', '1.0.1-nightly.1']);
+  // Review finding 1: off drops the nightly that is ready, so nothing of it survives to install (O24b: it never would
+  // anyway); one still arriving is dropped too.
   updates.nightly({ nightly: false });
-  assert.deepEqual([updates.read().state, updates.read().available, waiting, fake.allowDowngrade], ['checking', null, null, false]);
+  assert.deepEqual([updates.read().state, updates.read().available, fake.allowDowngrade], ['checking', null, false]);
   fake.emit('update-available', { version: '1.0.1-nightly.2' });
   fake.emit('update-downloaded', { version: '1.0.1-nightly.2' });
-  assert.deepEqual([updates.read().state, waiting, calls], ['idle', null, ['check false', 'check true', 'download', 'check false']]);
-  // A stable release still downloads and waits for the next open with the switch off.
+  assert.deepEqual([updates.read().state, calls], ['idle', ['check false', 'check true', 'download', 'check false']]);
+  // A stable release still downloads and asks with the switch off.
   fake.emit('update-available', { version: '1.0.2' });
   fake.emit('update-downloaded', { version: '1.0.2' });
-  assert.deepEqual([updates.read().state, updates.read().available, waiting, fake.autoInstallOnAppQuit], ['ready', '1.0.2', '1.0.2', false]);
+  assert.deepEqual([updates.read().state, updates.read().available, fake.autoInstallOnAppQuit], ['ready', '1.0.2', false]);
   // Off (a source checkout): the switch is still kept for when updates are on, and nothing loads.
   let loaded = false;
   const off = await startUpdater({ app: { isPackaged: false }, version: '1.0.0', log() {}, resources: await feed(), platform: 'win32', env: {},
@@ -161,10 +161,13 @@ test('a candidate build takes only <package.json version>-rc.<n>', () => {
   assert.throws(() => candidateVersion('0.1.5-rc.1', '0.1.5-rc.1-rc.1'), /not-a-candidate/);
 });
 
-// O24 (0.1.9): once an update is downloaded P9 asks, with the release's own list of changes. Update now closes P9, installs
-// and reopens it (quitAndInstall silent and force-run: the assisted installer starts P9 again only then); Later installs it
-// the next time P9 opens, never when it quits (0.1.8's install-on-quit ran behind a reopened window and never reopened P9).
-test('O24: the update-ready popup lists the release\'s changes; Update now installs and reopens, Later waits for the next open', async () => {
+// O24/O24b (0.1.9): once an update is downloaded P9 asks, with the release's own list of changes. Update now closes P9,
+// installs and reopens it (quitAndInstall silent and force-run: the assisted installer starts P9 again only then).
+// O24b: Later, or no answer at all (the box closed without a button, or P9 quit), installs nothing — 0.1.9-before-O24b
+// marked the version for the next open, which then installed it unasked — and every open asks again, forever; only
+// Update now (or Settings → Maintenance) installs. quitting P9 never installs (0.1.8's install-on-quit ran behind a
+// reopened window and never reopened P9).
+test('O24b: Later or no answer installs nothing and the next open asks again; only Update now installs', async () => {
   const settle = () => new Promise(done => setTimeout(done, 20));
   const make = () => {
     const fake = new EventEmitter(), calls = [];
@@ -173,18 +176,22 @@ test('O24: the update-ready popup lists the release\'s changes; Update now insta
     fake.quitAndInstall = (...args) => calls.push('install ' + args.join());
     return { fake, calls };
   };
+  // The "install at the next open" mark 0.1.9 wrote at download (update-pending.json, shared across opens). O24b's code
+  // ignores it — it is passed anyway so the same test on the old code fails: the old code wrote it at download and
+  // installed from it at the next open.
   let waiting = null;
-  const pending = { get: () => waiting, set: v => { waiting = v; } }, resources = await feed();
-  const start = (fake, version, more) => startUpdater({ app: { isPackaged: true }, version, log() {}, resources, platform: 'win32', env: {},
+  const pending = { get: () => waiting, set: v => { waiting = v; } };
+  const resources = await feed();
+  const start = (fake, more) => startUpdater({ app: { isPackaged: true }, version: '1.0.0', log() {}, resources, platform: 'win32', env: {},
     load: async () => fake, pending, ...more });
   // The release body as GitHub's feed gives it: the list before "## Install", tags and entities gone.
   const html = '<p>What changed (#19):</p>\n<ul>\n<li><strong>Restart</strong> &amp; reopen after an update.</li>\n'
     + '<li>Doctor shows <code>bash</code> output.</li>\n</ul>\n<h2>Install</h2>\n<ul><li>Download the .exe</li></ul>';
   const notes = ['Restart & reopen after an update.', 'Doctor shows bash output.'];
 
-  // Update now.
+  // Update now: the popup lists the release's changes, and it installs (P9 reopens on the new version).
   let { fake, calls } = make(), asked = [];
-  let updates = await start(fake, '1.0.0', { ready: async q => { asked.push(q); return 'now'; } });
+  let updates = await start(fake, { ready: async q => { asked.push(q); return 'now'; } });
   updates.check();
   fake.emit('update-available', { version: '1.0.1' });
   fake.emit('update-downloaded', { version: '1.0.1', releaseNotes: html });
@@ -192,32 +199,55 @@ test('O24: the update-ready popup lists the release\'s changes; Update now insta
   assert.deepEqual(asked, [{ version: '1.0.1', notes }]);
   assert.deepEqual([calls, fake.autoInstallOnAppQuit], [['check', 'download', 'install true,true'], false]);
 
-  // Later: nothing installs, not even on quit; the version waits for the next open. Notes as an array of { note } with
-  // Markdown, and none at all, still give a popup.
-  waiting = null;
+  // Later (notes as an array of { note } with Markdown still give the list): nothing installs, not even on quit.
   ({ fake, calls } = make()); asked = [];
-  updates = await start(fake, '1.0.0', { ready: async q => { asked.push(q); return 'later'; } });
+  updates = await start(fake, { ready: async q => { asked.push(q); return 'later'; } });
   updates.check();
   fake.emit('update-available', { version: '1.0.1' });
   fake.emit('update-downloaded', { version: '1.0.1', releaseNotes: [{ version: '1.0.1', note: 'What changed:\n- **One** fix\n- `Two`\n\n## Install\n- x' }] });
   await settle();
   assert.deepEqual(asked, [{ version: '1.0.1', notes: ['One fix', 'Two'] }]);
-  assert.deepEqual([calls, fake.autoInstallOnAppQuit, waiting, updates.read().state], [['check', 'download'], false, '1.0.1', 'ready']);
+  assert.deepEqual([calls, fake.autoInstallOnAppQuit, updates.read().state], [['check', 'download'], false, 'ready']);
 
-  // The next open: it looks at once (not after the usual 10 s), says it is installing, never asks again, and installs.
+  // The open after Later: the check finds the downloaded version again, the popup asks again, Later installs nothing
+  // again — every open, forever, never on its own.
+  for (const which of ['second', 'third']) {
+    ({ fake, calls } = make()); asked = [];
+    updates = await start(fake, { ready: async q => { asked.push(q); return 'later'; } });
+    updates.check();
+    fake.emit('update-available', { version: '1.0.1' });
+    fake.emit('update-downloaded', { version: '1.0.1', releaseNotes: null });
+    await settle();
+    assert.deepEqual([asked, calls], [[{ version: '1.0.1', notes: [] }], ['check', 'download']], 'asked again, installed nothing: ' + which);
+  }
+
+  // No answer at all (the box closed without a button, or P9 quit before answering): nothing installs either, and the
+  // next open asks again.
   ({ fake, calls } = make()); asked = [];
-  const told = [];
-  updates = await start(fake, '1.0.0', { ready: async q => { asked.push(q); return 'later'; }, installing: async v => { told.push(v); } });
-  await settle();
-  assert.deepEqual(calls, ['check'], 'the open after Later checks at once');
+  updates = await start(fake, { ready: q => { asked.push(q); return new Promise(() => {}); } });
+  updates.check();
   fake.emit('update-available', { version: '1.0.1' });
   fake.emit('update-downloaded', { version: '1.0.1', releaseNotes: null });
   await settle();
-  assert.deepEqual([told, asked, calls], [['1.0.1'], [], ['check', 'download', 'install true,true']]);
-
-  // Opened on that version (or a newer one): the wait is over and nothing is checked early.
-  ({ fake, calls } = make());
-  updates = await start(fake, '1.0.1', {});
+  assert.deepEqual([asked, calls], [[{ version: '1.0.1', notes: [] }], ['check', 'download']], 'no answer, no install');
+  ({ fake, calls } = make()); asked = [];
+  updates = await start(fake, { ready: async q => { asked.push(q); return 'later'; } });
+  updates.check();
+  fake.emit('update-available', { version: '1.0.1' });
+  fake.emit('update-downloaded', { version: '1.0.1', releaseNotes: null });
   await settle();
-  assert.deepEqual([waiting, calls], [null, []]);
+  assert.deepEqual([asked, calls], [[{ version: '1.0.1', notes: [] }], ['check', 'download']], 'asked again after no answer');
+
+  // No open ever installed on its own, and nothing was left marked to install: only Update now installs (Settings →
+  // Maintenance installs at once the same way).
+  assert.equal(waiting, null, 'no version was marked for the next open');
+  ({ fake, calls } = make());
+  updates = await start(fake, { ready: async () => 'later' });
+  updates.check();
+  fake.emit('update-available', { version: '1.0.1' });
+  fake.emit('update-downloaded', { version: '1.0.1' });
+  await settle();
+  assert.equal(updates.install().state, 'ready');
+  await settle();
+  assert.deepEqual(calls, ['check', 'download', 'install true,true']);
 });

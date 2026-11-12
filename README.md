@@ -432,7 +432,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
 - **Installed app (Windows, AppImage):** it checks P9's GitHub releases shortly after it starts and every 4
   hours, takes only releases that are not pre-releases (with Settings > Maintenance > Nightly builds on, the
   nightlies too), downloads a newer one in the background and asks: Update now (closes P9, installs, opens it again)
-  or Later (installs the next time P9 opens; quitting never installs). Installing restarts the daemon on the new
+  or Later (installs nothing; P9 asks again the next time it opens, and quitting never installs). Installing
+  restarts the daemon on the new
   version, which ends a chat turn in progress (reopen it to resume). What it downloads and how that is checked:
   `SECURITY.md` § Auto-update. Remove the AppImage's service with
   `node ~/.local/share/p9/daemon/<version>/scripts/uninstall-service.mjs`, then delete the AppImage.
