@@ -205,5 +205,14 @@ export function setupRoutes(outer) {
     outer.ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('terminal-greeting', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.show ? 'on' : 'off');
     return c.json({ show: outer.greeting() });
   });
+  // Desktop only, Settings > Delegation: who starts a sprint and a sub-agent's default provider, model and effort.
+  outer.app.get('/delegation', (c) => c.json(outer.chat.delegation()));
+  outer.app.post('/delegation', async (c) => {
+    const body = await outer.json(c), str = (x) => typeof x === 'string' && x.length <= 200;
+    const one = (x) => x && typeof x === 'object' && Object.keys(x).sort().join() === 'effort,model' && str(x.model) && str(x.effort);
+    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'claude,codex,provider,start' || !['off', 'ask', 'agent'].includes(body.start)
+        || !['', 'claude', 'codex'].includes(body.provider) || !one(body.claude) || !one(body.codex)) return c.json({ error: 'request-refused' }, 400);
+    return c.json(outer.chat.setDelegation(body));
+  });
   return { signedIn };
 }

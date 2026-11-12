@@ -11,7 +11,11 @@ import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelc
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 // profile.log in the workspace: the stand-in writes there what provider settings each agent start was given (a hash, never the key).
-const start = (t) => daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
+const boot = (t) => daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
+// Settings > Delegation starts on Ask me first; these tests are about the tools, so they run on Agent decides (the
+// Delegation test below boots without it).
+const BLANK = { model: '', effort: '' };
+const start = async (t) => { const instance = await boot(t); await call(instance, '/delegation', 'POST', { start: 'agent', provider: '', claude: BLANK, codex: BLANK }); return instance; };
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
   .then((result) => ({ ...result, body: result.text ? JSON.parse(result.text) : null }));
@@ -424,4 +428,57 @@ test('Delegate: after a restart the top chat of a sprint that was cut mid-turn g
   assert.equal((await events(instance, kid.chat)).filter((e) => e.cursor > mark && e.type === 'interrupted' && e.data.reason === 'daemon-restart').length, 1, 'the kill was not seen as a restart mid-turn');
   assert.deepEqual(await woke(busy.conversation), [line], 'the third start in 10 minutes woke the sprint');
   console.log('PASS Delegate restart wake: one line to the working sprint\'s top chat after a SIGTERM restart, no chat of the idle sprint started, none on the third start');
+});
+
+test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first sub-agent even in Unrestricted; Off refuses; a sub-agent starts on the Settings model and effort unless open_chat names its own', { timeout: 180000 }, async (t) => {
+  const instance = await boot(t);
+  const set = (body) => call(instance, '/delegation', 'POST', body);
+  assert.deepEqual((await call(instance, '/delegation')).body, { start: 'ask', provider: '', claude: BLANK, codex: BLANK }, 'a new install does not start on Ask me first');
+  for (const bad of [{}, { start: 'ask' }, { start: 'always', provider: '', claude: BLANK, codex: BLANK }, { start: 'ask', provider: 'other', claude: BLANK, codex: BLANK },
+    { start: 'ask', provider: '', claude: { model: 'opus' }, codex: BLANK }, { start: 'ask', provider: '', claude: BLANK, codex: { model: 'x'.repeat(201), effort: '' } },
+    { start: 'ask', provider: '', claude: BLANK, codex: BLANK, extra: 1 }]) assert.equal((await set(bad)).status, 400, JSON.stringify(bad).slice(0, 80));
+  assert.equal((await call(instance, '/delegation')).body.start, 'ask', 'a refused shape was kept');
+
+  // Unrestricted: no acting P9 tool asks. The start of a sprint still does.
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const approval = (after) => until(instance, (event) => event.conversation === a.conversation && event.type === 'approval', after);
+  const answer = (request, optionId) => call(instance, `/chat/${a.conversation}/answer`, 'POST', { request, answer: { optionId } });
+  let pending = a.tool('open_chat', { text: 'config', title: 'First' });
+  let asked = await approval(a.cursor);
+  assert.match(asked.hit.data.toolCall.title, /^This starts a sprint \(Settings > Delegation: Ask me first\)\. P9 Delegate: start a Claude sub-agent "First" in mode /);
+  await answer(asked.hit.data.request, 'reject');
+  assert.equal((await pending).error, 'not-allowed');
+  assert.equal((await rows(instance)).length, 1, 'a rejected sprint start made a chat');
+  pending = a.tool('open_chat', { text: 'config', title: 'First' });
+  asked = await approval(asked.cursor);
+  await answer(asked.hit.data.request, 'allow');
+  const first = await pending;
+  assert.match(first.chat, /^[0-9a-f-]{36}$/);
+  // The sprint is started: the next sub-agent is not asked about.
+  const second = await a.tool('open_chat', { text: 'config', title: 'Second' });
+  assert.match(second.chat, /^[0-9a-f-]{36}$/, JSON.stringify(second));
+  assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'approval').length, 2, 'the second sub-agent was asked about');
+  assert.match((await a.done(second.chat)).last, /config:model=default,effort=medium,/, 'with no Settings default the sub-agent is not on its parent\'s own');
+
+  // Off: no new sub-agent, said in words the agent can act on. The ones it has stay reachable.
+  assert.equal((await set({ start: 'off', provider: '', claude: BLANK, codex: BLANK })).status, 200);
+  const off = await a.tool('open_chat', { text: 'config', title: 'Third' });
+  assert.equal(off.error, 'delegate-off');
+  assert.match(off.detail, /Settings > Delegation/);
+  assert.equal((await rows(instance)).length, 3);
+  assert.equal((await a.tool('read_chat', { chat: second.chat })).error, undefined);
+
+  // The Settings defaults: used when open_chat names none, and kept across a restart.
+  assert.deepEqual((await set({ start: 'agent', provider: '', claude: { model: 'opus', effort: 'high' }, codex: BLANK })).body, { start: 'agent', provider: '', claude: { model: 'opus', effort: 'high' }, codex: BLANK });
+  const third = await a.tool('open_chat', { text: 'config', title: 'Third' });
+  assert.match((await a.done(third.chat)).last, /config:model=opus,effort=high,/);
+  const own = await a.tool('open_chat', { text: 'config', title: 'Fourth', model: 'haiku', effort: 'low' });
+  assert.match((await a.done(own.chat)).last, /config:model=haiku,effort=low,/, 'what open_chat passed did not win over the Settings default');
+  // A default the agent no longer lists is passed over (the parent's own is next in line); one the call names is still refused.
+  await set({ start: 'agent', provider: '', claude: { model: 'gone-model', effort: 'gone-effort' }, codex: BLANK });
+  const gone = await a.tool('open_chat', { text: 'config', title: 'Fifth' });
+  assert.equal(gone.error, undefined, JSON.stringify(gone));
+  assert.match((await a.done(gone.chat)).last, /config:model=default,effort=medium,/, 'a Settings default the agent does not list was sent to it');
+  console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, defaults opus/high reached the sub-agent, haiku/low from the call won, an unlisted default was passed over');
 });

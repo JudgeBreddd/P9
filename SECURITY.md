@@ -699,6 +699,22 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
   and the task. In Unrestricted mode (agent lock and File protection both off) it does not ask,
   like `run_script`. The same key from the same parent returns the chat it already made and asks
   nothing. A chat has at most 20 running sub-agents, 3 levels deep.
+- **The Delegation setting.** Settings > Delegation, "Who starts a sprint", has three values, kept
+  in the daemon and read on every `open_chat`. **Off**: every new sub-agent is refused
+  (`delegate-off`); chats already started keep running and can still be read, sent to and stopped.
+  **Ask me first** (the default): P9 asks you in the parent chat before that chat's first
+  sub-agent, in every mode, Unrestricted included; your Allow covers that chat's later sub-agents,
+  which follow the rule above. **Agent decides**: only the rule above applies. The setting is
+  changed from the desktop's Settings only; no MCP tool reads or writes it. The same section
+  holds the provider, model and effort a sub-agent starts on when `open_chat` names none: what
+  the call names wins, then this default, then the parent's own. A default the agent no longer
+  lists is passed over. A default never widens a mode: the mode rule above is unchanged.
+- **A sub-agent's approval, shown in the parent chat.** While a sub-agent waits on an approval or
+  a question, the desktop also draws it in the chat that started it, labelled with the
+  sub-agent's title. It is the same request, not a copy: your answer there is sent as your own
+  answer to the sub-agent's chat, exactly as if you had opened it, and the parent's agent is not
+  involved. A sub-agent an agent starts is listed under its parent and never takes the screen
+  from the chat you are reading.
 - **Provider profiles.** A sub-agent started by a chat on a provider profile runs on that profile
   (the parent's model, or another the profile lists), so it and every command it runs can read
   that profile's key, as its parent can (see Provider profiles above).

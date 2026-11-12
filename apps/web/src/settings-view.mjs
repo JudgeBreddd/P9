@@ -199,6 +199,37 @@ function defaultsRow(a) {
 // profileForm: null, 'new', or the id being edited. CHECKED: services a profile was really run against, with the base URL used.
 let profileForm = null, profileNote = '';
 const PROVIDERS = [['ollama.com', 'https://ollama.com', true], ['openrouter.ai', 'https://openrouter.ai', false]];
+// A7 Delegate: Settings > Delegation. The daemon keeps it (delegate.mjs reads it at each open_chat); null until it answers.
+let delegation = null, delegationNote = '';
+function delegationGroup() {
+  if (!window.p9?.chat || !outer.liveChat?.on) return '';
+  const d = delegation, off = d ? '' : ' disabled';
+  const sel = (attr, label, aria, opts, now) => `<label class="set-pick">${label}<select data-slot="input" ${attr}${off} aria-label="${aria}">${(now && !opts.some(([v]) => v === now) ? [...opts, [now, now]] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === (now ?? '') ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
+  const row = a => { const ml = outer.lastModels[a]?.options || [], el = outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || [], own = [['', 'The parent chat\'s']];
+    return `<div class="set-row set-dg"><span><strong>${outer.names[a]} sub-agents</strong>${ml.length || el.length ? '' : `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>`}</span><span class="spacer"></span>`
+      + sel(`data-dg-model="${a}"`, 'Model', `Sub-agent model for ${outer.names[a]}`, [...own, ...ml.map(o => [o.value, o.name])], d?.[a].model) + sel(`data-dg-effort="${a}"`, 'Effort', `Sub-agent effort for ${outer.names[a]}`, [...own, ...el.map(o => [o.value, o.name])], d?.[a].effort) + '</div>'; };
+  return `<fieldset class="set-group" id="setDelegation"><legend>Delegation ${info('Delegate: a chat\'s agent can start sub-agents, each one a chat of its own. Here: who may start a sprint, and what a sub-agent runs on when the agent that starts it names nothing.', 'settings')}</legend>`
+    + '<p class="muted sm" data-dg-what>Delegate lets a chat\'s agent hand parts of a job to sub-agents. Each sub-agent is a chat of its own, listed in the sidebar under the chat that started it: you can open it, read it and type in it. Its approvals and questions also show in the chat that started it. A job split up this way is a sprint.</p>'
+    + `<div class="set-row"><span><strong>Who starts a sprint</strong><span class="muted sm">Off: agents cannot start sub-agents. Ask me first: P9 asks you in the chat before a chat's first sub-agent, in every mode. Agent decides: no question beyond the mode's own.</span></span><span class="spacer"></span>`
+    + sel('data-dg-start', '', 'Who starts a sprint', [['off', 'Off'], ['ask', 'Ask me first'], ['agent', 'Agent decides']], d?.start ?? 'ask') + '</div>'
+    + `<div class="set-row"><span><strong>A sub-agent runs on</strong><span class="muted sm">These apply when the agent that starts a sub-agent names none.</span></span><span class="spacer"></span>`
+    + sel('data-dg-provider', '', 'Sub-agent provider', [['', 'The parent chat\'s agent'], ...Object.keys(modes).map(a => [a, outer.names[a]])], d?.provider) + '</div>'
+    + Object.keys(modes).map(row).join('')
+    + (d ? '' : '<p class="muted sm" data-dg-wait>Reading from P9…</p>') + (delegationNote ? `<p class="muted sm" data-dg-note>${esc(delegationNote)}</p>` : '') + '</fieldset>';
+}
+// Drawn again on its own (never the whole page, which would drop what is being typed in another box).
+function drawDelegation() { const el = outer.$('#setDelegation'); if (el) { el.outerHTML = delegationGroup(); bindDelegation(); } }
+function bindDelegation() {
+  const el = outer.$('#setDelegation'); if (!el) return;
+  if (!delegation && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('delegation', {}).then(r => { if (r?.status === 200) { delegation = r.body; drawDelegation(); } }).catch(() => {}); }
+  const v = q => el.querySelector(q).value;
+  el.querySelectorAll('select').forEach(x => { x.onchange = async () => {
+    const want = { start: v('[data-dg-start]'), provider: v('[data-dg-provider]'), ...Object.fromEntries(Object.keys(modes).map(a => [a, { model: v(`[data-dg-model="${a}"]`), effort: v(`[data-dg-effort="${a}"]`) }])) };
+    const r = await window.p9.chat('delegation', want).catch(() => null);
+    if (r?.status === 200) { delegation = r.body; delegationNote = ''; } else delegationNote = 'Not saved: P9 did not take it. Try again in a moment.';
+    drawDelegation();
+  }; });
+}
 function profilesGroup() {
   if (!outer.liveChat?.on || !window.p9?.chat) return '';
   const secret = { key: 'Key saved', command: 'Key from a command', none: 'No key yet' };
@@ -258,6 +289,7 @@ function bindDefaults() {
 function refreshDefaults() {
   outer.$('#setBody').querySelectorAll('.set-defaults').forEach(row => { if (!row.contains(document.activeElement)) row.outerHTML = defaultsRow(row.querySelector('[data-default-mode]').dataset.defaultMode); });
   bindDefaults();
+  if (!outer.$('#setDelegation')?.contains(document.activeElement)) drawDelegation();
 }
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
@@ -271,6 +303,7 @@ function renderSettings() {
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + profilesGroup()
+    + delegationGroup()
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (outer.pets ? petSettings() : '')
     + securityGroup(box)
@@ -289,7 +322,7 @@ function renderSettings() {
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
-  bindDefaults(); bindProfiles();
+  bindDefaults(); bindProfiles(); bindDelegation();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
   if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn; };
   if (outer.pets) wirePetSettings();

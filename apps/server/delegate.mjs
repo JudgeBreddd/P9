@@ -17,7 +17,7 @@ const text = (value, max) => typeof value === 'string' && value.length > 0 && va
 export const DELEGATE_TOOLS = (input) => {
   const chat = { type: 'string', description: 'A chat ID from open_chat or list_chats.' };
   return [
-    ['open_chat', 'Start a sub-agent: a new chat in your project that begins work on text. Left out, provider, model, effort, mode and folder are yours. mode may be narrower '
+    ['open_chat', 'Start a sub-agent: a new chat in your project that begins work on text. Left out, provider, model and effort are the defaults the user set for sub-agents (Settings > Delegation), else yours; mode and folder are yours. mode may be narrower '
       + 'than yours, never wider. The same key from you returns the chat it made before instead of a second one. The user is asked first, except in Unrestricted mode. '
       + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID and the folder it works in; follow it with wait_chat.',
     input({ text: { type: 'string', description: 'The first message: the whole task, since the sub-agent knows nothing of your chat.' },
@@ -91,28 +91,38 @@ export function createDelegate({ chat, allowed }) {
         || (args.provider !== undefined && !Object.hasOwn(TIER, args.provider)) || (args.model !== undefined && !text(args.model, 200))
         || (args.effort !== undefined && !text(args.effort, 200)) || (args.folder !== undefined && typeof args.folder !== 'string')
         || (args.rules !== undefined && (typeof args.rules !== 'string' || args.rules.length > MAX_RULES))) return { error: 'request-refused' };
-    const family = chat.family();
+    const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };
+    // Settings > Delegation, Who starts a sprint: Off refuses every new sub-agent.
+    if (set.start === 'off') return { error: 'delegate-off', detail: 'The user turned sub-agents off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
     let depth = 0;
     for (let at = family.find((c) => c.id === caller); at?.parent && depth < 50; at = family.find((c) => c.id === at.parent)) depth += 1;
     if (depth >= MAX_DEPTH || family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length >= MAX_CHILDREN) {
       return { error: 'too-many-chats', detail: 'At most ' + MAX_CHILDREN + ' running sub-agents per chat, ' + MAX_DEPTH + ' levels deep.' };
     }
-    const provider = args.provider ?? me.provider;
+    // Each of provider, model and effort: what the call passed, else the Settings default, else the parent's own.
+    const provider = args.provider ?? (set.provider || me.provider), known = chat.lists()[provider];
+    // A Settings default the agent no longer lists is passed over, never an error: the next in line is used.
+    const listed = (options, value) => value && (!options || options.some((o) => o.value === value)) ? value : '';
+    const dflt = { model: listed(known?.model?.options, set[provider].model), effort: listed(known?.pickers?.find((o) => o.category === 'thought_level')?.options, set[provider].effort) };
     const picked = modeFor(caller, { provider, mode: null }, args.mode);
     if (picked.error) return picked;
     // A profile chat's sub-agent stays on that profile and model (its model is fixed for the chat); otherwise the caller's model.
     const profile = provider === me.provider && me.profile && !me.profile.gone ? { profile: me.profile.id, model: args.model ?? me.profile.model } : null;
-    const model = profile ? undefined : args.model ?? (provider === me.provider ? me.model ?? undefined : undefined);
+    const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider ? me.model ?? undefined : undefined));
     const effortId = (provider === me.provider && me.effort?.id) || chat.lists()[provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
-    const effort = args.effort ?? (provider === me.provider ? me.effort?.value : undefined);
+    const effort = args.effort ?? ((effortId && dflt.effort) || (provider === me.provider ? me.effort?.value : undefined));
     if (args.effort !== undefined && !effortId) return { error: 'effort-unknown', detail: 'That agent\'s effort list is not known yet; leave effort out.' };
     const folder = args.folder ?? (me.folder.startsWith(':') ? undefined : me.folder); // ':…' is a project's own files: the project places the chat
     const title = args.title ?? args.text.trim().split('\n')[0].slice(0, 60);
     const ask = 'P9 Delegate: start a ' + (provider === 'claude' ? 'Claude' : 'Codex') + ' sub-agent "' + title + '" in mode ' + picked.mode
       + (args.folder ? ', folder ' + args.folder : '') + '. Its task: ' + args.text.slice(0, 600) + (args.text.length > 600 ? '…' : '');
-    if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title: ask, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    // Ask me first (the default): the first sub-agent of a chat the user started is a sprint's start, so the user is asked
+    // in every mode, Unrestricted too. Later ones, and Agent decides, follow the same check as every acting P9 tool.
+    const starts = set.start === 'ask' && depth === 0 && !family.some((c) => c.parent === caller);
+    const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This starts a sprint (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
+    if (!await (starts ? chat.approve(caller, request, signal) : allowed(caller, request, signal))) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     if (chat.lock().on) return { error: 'agent-lock-on' }; // turned on while the user was asked
     const made = await chat.create({ provider, title, ...(folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };

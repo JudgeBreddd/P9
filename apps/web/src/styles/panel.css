@@ -94,6 +94,13 @@
 .lpanel .kids .row{font-size:12.5px;padding:5px 8px}
 .lpanel .row.showmore{color:var(--muted-foreground);font-size:12px;padding-left:23px}
 .lpanel .row.showmore:hover{color:var(--foreground)}
+/* A7 Delegate: a sub-agent's chat sits indented under the chat that started it; .subs folds more than three of them. */
+.lpanel :is(.rowwrap,.row.subs)[data-depth="1"]{margin-left:14px;width:calc(100% - 14px)}
+.lpanel :is(.rowwrap,.row.subs)[data-depth="2"]{margin-left:28px;width:calc(100% - 28px)}
+.lpanel :is(.rowwrap,.row.subs)[data-depth="3"]{margin-left:42px;width:calc(100% - 42px)}
+.lpanel :is(.rowwrap,.row.subs)[data-depth="4"]{margin-left:56px;width:calc(100% - 56px)}
+.lpanel .row.subs{color:var(--muted-foreground);font-size:12px;gap:4px}
+.lpanel .row.subs:hover{color:var(--foreground)}
 .lpanel mark{background:color-mix(in oklch,var(--primary) 35%,transparent);color:inherit;border-radius:3px}
 
 /* Row states, by shape as well as colour; the left dot stays the agent's colour (d1.css .dot). */

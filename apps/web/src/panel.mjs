@@ -28,6 +28,17 @@ export const stripChats = sessions => { const live = s => s.state !== 'stopped',
   return [...ok.filter(live).sort(recent), ...ok.filter(s => !live(s) && (s.done || s.failed)).sort(recent)]; };
 // The list: the chats a message was sent in, and the ones still open (what the tab row and History showed together).
 export const listedChats = sessions => sessions.filter(s => (s.sent || !s.hidden) && !s.archived).sort(recent);
+// A7 Delegate: a chat an agent started (its parent) sits under that chat when both are in the rows given: { s, depth } per
+// chat and, for a chat with more than three sub-agents, one { fold } row above them. They start folded; opened[id] is the
+// user's own choice, all (a search) opens every one, and the chat on screen (cur) is never folded away. A sub-agent whose
+// parent is not in the rows stays where it would be without one.
+export const nested = (rows, opened = {}, cur = [], all = false) => { const ids = new Set(rows.map(s => s.id)), out = [];
+  const put = (s, depth) => { out.push({ s, depth }); const k = depth < 8 ? rows.filter(c => c.parent === s.id && c.id !== s.id) : []; if (!k.length) return;
+    const open = all || k.some(c => cur.includes(c.id)) || (opened[s.id] ?? k.length <= 3);
+    if (k.length > 3 && !all) out.push({ fold: s.id, n: k.length, open, depth: depth + 1 });
+    if (open) for (const c of k) put(c, depth + 1); };
+  for (const s of rows) if (!s.parent || s.parent === s.id || !ids.has(s.parent)) put(s, 0);
+  return out; };
 // A chat's project is the id the daemon gives it, never its folder (spec). An id no longer in the list puts it in Chats.
 export const projectOf = (s, projects) => (s.project && projects.find(p => p.id === s.project)) || null;
 // Times: short and one width, so titles line up.
@@ -38,7 +49,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const $ = s => document.querySelector(s), nav = $('#nav'), list = $('#navList'), strip = $('#rBots'), body = nav.parentElement;
   const key = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
   // open: the projects shown open; null until one is toggled, when every project is open.
-  const P = { q: '', more: {}, open: (k => k ? new Set(JSON.parse(k)) : null)(localStorage.getItem('p9-panel-open')), collapsed: localStorage.getItem('p9-panel-collapsed') === '1',
+  const P = { q: '', more: {}, subs: {}, open: (k => k ? new Set(JSON.parse(k)) : null)(localStorage.getItem('p9-panel-open')), collapsed: localStorage.getItem('p9-panel-collapsed') === '1',
     w: Math.min(420, Math.max(220, Number(localStorage.getItem('p9-panel-w')) || 272)), narrow: false, overlay: false, moved: null, noclick: false };
   const projects = () => (o.S.projects || []).filter(p => !p.archived);
   const find = id => o.S.sessions.find(s => s.id === id);
@@ -63,10 +74,13 @@ export function installPanel(o, { focus, stopChat, busy }) {
     : st === 'needs' ? `<span class="mk mk-needs" title="${LABEL.needs}">${I.hand}</span>` : st === 'failed' ? `<span class="mk mk-failed" title="${LABEL.failed}">${svg.x}</span>`
     : st === 'unread' ? `<span class="mk mk-unread" title="${LABEL.unread}"></span>` : '';
   // Builder's build fix 1: a row's state mark takes the time's place; the time shows on hover and focus (panel.css).
-  const chatRow = s => { const st = stateOf(s, busy(s)), cur = shown().includes(s.id), m = mark(st, s);
-    return `<div class="rowwrap"${live(s) ? ' data-live' : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
+  const chatRow = (s, depth = 0) => { const st = stateOf(s, busy(s)), cur = shown().includes(s.id), m = mark(st, s);
+    return `<div class="rowwrap"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
       + (live(s) ? `<button class="rstop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
       + `<button class="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
+  // A7: a zone's rows with each sub-agent under the chat that started it (nested, above).
+  const tree = (rows, q) => nested(rows, P.subs, shown(), !!q);
+  const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} sub-agents</span></button>`;
   function renderList() {
     const q = P.q.toLowerCase(), hit = t => !q || String(t).toLowerCase().includes(q), all = ordered(listedChats(o.S.sessions)), ps = projects();
     const groups = ps.map(p => ({ p, kids: all.filter(s => s.project === p.id && (hit(s.title) || hit(p.name))) })).filter(g => hit(g.p.name) || g.kids.length);
@@ -77,12 +91,12 @@ export function installPanel(o, { focus, stopChat, busy }) {
     h += groups.map(({ p, kids }) => {
       // A search opens every project with a match, closed ones too (point 5). The count is the chats the row lists when
       // open (listedChats, as the New project offer), not the daemon's count, which takes in hidden and archived chats too.
-      const open = isOpen(p.id) || !!q, cut = !q && kids.length > 5, rows = cut && !P.more[p.id] ? kids.slice(0, 5) : kids, gone = p.found === false;
+      const open = isOpen(p.id) || !!q, ents = tree(kids, q), cut = !q && ents.length > 5, rows = cut && !P.more[p.id] ? ents.slice(0, 5) : ents, gone = p.found === false;
       return `<div data-zone="${esc(p.id)}"><div class="rowwrap"><button class="row proj" data-proj="${esc(p.id)}" aria-expanded="${open}" aria-current="${o.S.view?.kind === 'project' && o.S.view.id === p.id && o.S.focus === 'chat'}" title="${esc(p.name)}${gone ? ' · folder not found' : ''}"${gone ? ' data-missing' : ''}><span class="chev" data-toggle="${esc(p.id)}">${svg.chev}</span><span class="fold">${gone ? I.alert : I.folder}</span><span class="t">${hl(p.name)}</span><span class="n">${all.filter(s => s.project === p.id).length}</span></button>`
         + `<button class="padd" data-newin="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}">${svg.plus}</button></div>`
-        + (open ? `<div class="kids">${rows.map(chatRow).join('')}${cut ? `<button class="row showmore" data-showmore="${esc(p.id)}">${P.more[p.id] ? 'Show fewer' : `Show ${kids.length - 5} more`}</button>` : ''}${kids.length ? '' : '<p class="none">No chats yet.</p>'}</div>` : '') + '</div>';
+        + (open ? `<div class="kids">${rows.map(treeRow).join('')}${cut ? `<button class="row showmore" data-showmore="${esc(p.id)}">${P.more[p.id] ? 'Show fewer' : `Show ${ents.length - 5} more`}</button>` : ''}${kids.length ? '' : '<p class="none">No chats yet.</p>'}</div>` : '') + '</div>';
     }).join('');
-    if (!q || general.length) h += `<div data-zone=""><div class="sh"><h3>Chats <span class="n">${general.length || ''}</span></h3></div>${general.map(chatRow).join('')}</div>`;
+    if (!q || general.length) h += `<div data-zone=""><div class="sh"><h3>Chats <span class="n">${general.length || ''}</span></h3></div>${tree(general, q).map(treeRow).join('')}</div>`;
     if (q && !groups.length && !general.length) h = `<p class="none">Nothing matches “${esc(P.q)}”.</p>`;
     // Archived projects and chats: one row at the end, to their page (projects-view.mjs), where Unarchive puts one back.
     const na = (o.S.projects || []).filter(p => p.archived).length + o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden)).length;
@@ -245,6 +259,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     const st = t.closest('[data-stop]'); if (st) { const id = st.dataset.stop; if (e.detail && pressedStop !== id) return; pressedStop = null; const s = find(id); return s && stopChat(s); }
     const more = t.closest('[data-more]');
     if (more) { if (more.getAttribute('aria-expanded') === 'true') return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
+    const sub = t.closest('[data-subs]'); if (sub) { P.subs[sub.dataset.subs] = sub.getAttribute('aria-expanded') !== 'true'; return renderPanel(); }
     const sm = t.closest('[data-showmore]'); if (sm) { P.more[sm.dataset.showmore] = !P.more[sm.dataset.showmore]; return renderPanel(); }
     const tog = t.closest('[data-toggle]'), pr = t.closest('[data-proj]');
     if (tog || (pr && !o.openProject)) { const id = (tog || pr).dataset.toggle || pr.dataset.proj; setOpen(id, !isOpen(id)); return renderPanel(); }

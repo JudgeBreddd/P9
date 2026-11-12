@@ -1168,6 +1168,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
     restarted: () => recovered.then(() => ({ chats: [...cut], storm: starts.length >= 3 })),
     rules: (id) => rulesOf(id),
+    // Settings > Delegation (SECURITY.md § Delegate), kept in prefs under 'delegation'. start: who starts a sprint ('off',
+    // 'ask' the default, 'agent'); provider and each agent's model and effort: a sub-agent's defaults ('' is the parent's own).
+    delegation: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'delegation'").get()?.value ?? '{}'); } catch { v = {}; }
+      const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : ''), one = (x) => ({ model: str(x?.model), effort: str(x?.effort) });
+      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', provider: Object.hasOwn(MODES, v?.provider ?? '') ? v.provider : '', claude: one(v?.claude), codex: one(v?.codex) }; },
+    setDelegation(value) { db.prepare("INSERT INTO prefs (key, value) VALUES ('delegation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(value)); return this.delegation(); },
     setRules: (id, text) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),
