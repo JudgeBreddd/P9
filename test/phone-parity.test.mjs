@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
 
@@ -461,10 +461,10 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
 
 // O55 (filed 2026-11-12: "the message sends but the text stays and I can keep sending it by hitting send" — it did it
 // mid-turn): after a send the box is empty on every send path, a second tap on Send with nothing typed posts no prompt,
-// and a refused send keeps the text and says why. Queue (the P4 test above), Interrupt (the P18 one) and the offline
+// and (next test) a mid-turn send the agent cannot take waits for the turn's end. Queue (the P4 test above), Interrupt (the P18 one) and the offline
 // queue (phone-continue.test.mjs PH2) already assert their empty box; this one covers the default send as Steer, a held
-// steer (a tool call running), a send with an image attached, the idle send, and the empty and refused taps.
-test('O55: a send empties the box on every path; an empty Send posts nothing; a refused send keeps the text', { timeout: 180000 }, async (t) => {
+// steer (a tool call running), a send with an image attached, the idle send, and the empty taps.
+test('O55: a send empties the box on every path; an empty Send posts nothing', { timeout: 180000 }, async (t) => {
   const { page, server } = await phoneOn(t);
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', bytes = Buffer.from(png, 'base64');
   const said = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events article')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 });
@@ -491,20 +491,6 @@ test('O55: a send empties the box on every path; an empty Send posts nothing; a 
   await page.click('#composer button[type="submit"]');
   await untilLabel('Send message');
   assert.equal(posts, beforeSteer + 1, 'an empty Send mid-turn posts no prompt');
-  // A refused steer keeps the text and says why; the same text goes when the agent takes it again.
-  await writeFile(path.join(server.workspace, 'steering-refuses'), '');
-  await send(page, 'slow'); await said('working');
-  const beforeRefused = posts;
-  await send(page, 'refuse me');
-  await noted('Not sent: turn-running');
-  assert.equal(await box(), 'refuse me', 'a refused send keeps the text');
-  assert.equal(posts, beforeRefused + 1, 'the refused steer is one prompt post');
-  await rm(path.join(server.workspace, 'steering-refuses'));
-  await page.click('#composer button[type="submit"]');
-  await said('got:refuse me');
-  assert.equal(await box(), '', 'the send after the refusal empties the box');
-  await page.click('#composer button[type="submit"]'); // Stop: the slow turn ends
-  await untilLabel('Send message');
   // A held steer (a tool call running): held to the step's end, the box empties at once, one prompt post.
   await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
   const beforeHeld = posts;
@@ -521,4 +507,25 @@ test('O55: a send empties the box on every path; an empty Send posts nothing; a 
   assert.equal(await box(), '', 'a send with an image empties the box');
   assert.equal(await page.evaluate(() => document.querySelectorAll('#attached .chip-img').length), 0, 'the sent image leaves the chips');
   await shot(page, 'phone-o55-box-empty-after-send');
+});
+
+// O55 (2026-11-12, "the send button mid-turn does not send and the text stays"): Claude's adapter on ACP 2 takes no steering
+// (chat.mjs ACP_ASK), so the daemon answers a mid-turn send 409 turn-running. The phone now keeps it for the turn's end
+// as the desktop does: the box empties, the phone says Queued, and it is sent when the turn ends. Fails on main (the text stayed
+// with "Not sent: turn-running"). A turn answering another chat's question (solo) is held by the daemon already (202), and
+// only the daemon's own peer-help path can start one, so this test does not drive it.
+test('O55: a mid-turn send the agent cannot steer waits for the turn to end, and the box empties', { timeout: 180000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  await writeFile(path.join(server.workspace, 'no-steering'), ''); // read at the chat's start: its agent advertises no steering
+  const said = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events article')].some((el) => el.textContent.includes(w)), want, { timeout: 30000 });
+  await newChat(page, 'claude');
+  await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
+  await send(page, 'after the turn');
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("after the turn")', { timeout: 10000 });
+  assert.equal(await page.inputValue('#prompt'), '', 'the box empties');
+  assert.equal(await page.evaluate(() => document.querySelector('#composerNote').hidden), true, 'no "Not sent" note');
+  assert.match(await page.textContent('#queued'), /Queued/);
+  await shot(page, 'phone-o55-queued-mid-turn');
+  await said('after the turn'); // sent as the next prompt once the tool call and the turn end
+  assert.equal(await page.inputValue('#prompt'), '', 'the box is still empty once it has gone');
 });

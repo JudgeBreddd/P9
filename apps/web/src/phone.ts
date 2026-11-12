@@ -829,6 +829,12 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
+  // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
+  // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
+  else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
+    if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = input.value.replace(text, '').trim(); label(); note(); renderQueue(); void drain(); return true; }
+  }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
