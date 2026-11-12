@@ -151,6 +151,8 @@ const spaceWords = (subject, error) => (error === 'empty'
     : { error: 'invalid-space', detail: subject + ' is JSON but not a space: it must be an object with a "sections" list, such as {"sections": []}.' });
 
 // useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
+const ANSWERING = new Set(['describe_mission', 'status', 'list_needs_you', 'validate_registry', 'validate_space', 'list_chats', 'read_chat', 'wait_chat']);
+
 export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
 
@@ -541,7 +543,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     return item && (await currentMission().named([item]))[0];
   };
   // Unrestricted mode (v0.1.6 U3, threat model row 33): the user turned the asks off, so the tool acts; every other check stays.
-  const allowed = (conversation, request, signal) => chat.loose() || chat.approve(conversation, request, signal);
+  const allowed = (conversation, request, signal) => chat.loose(conversation) || chat.approve(conversation, request, signal);
   async function runScript(conversation, { id, args }, signal) {
     if (chat.lock().on) return { error: 'agent-lock-on' };
     if (!string(id, 64) || (args !== undefined && !Array.isArray(args))) return { error: 'request-refused' };
@@ -744,6 +746,11 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       let result;
       // A refusal is the tool's answer (isError), never a protocol error, so the agent reads its reason.
       const call = () => calls[params.name](args, conversation, signal);
+      // Peer help (SECURITY.md § Delegate): while this chat's turn answers another chat's question, only the tools
+      // that read run. A list of what may run, so a tool added later is refused until someone puts it here.
+      if (!chat.lock().on && chat.lock(conversation).on && !ANSWERING.has(params.name)) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'answer-only', detail: 'This turn answers another chat\'s question and is read-only: answer in your reply.' }, null, 2) }], isError: true };
+      }
       try {
         if (args.space === undefined || !SPACE_TOOLS.has(params.name)) result = await call();
         else result = args.space === '' || draftAt(drafts, args.space) ? await drafting.run(args.space, call) : badName();

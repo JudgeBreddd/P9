@@ -524,3 +524,102 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   assert.equal((await a.tool('read_chat', { chat: third.chat })).error, undefined);
   console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, Worker 3 ran on its row (opus/high), haiku/low from the call won, an unlisted pick was passed over, a sixth worker was refused at 5, a stopped worker freed its row for a Codex worker, a profile row gave its worker the profile');
 });
+
+test('Delegate peer help: ask_chat asks a chat the user opened to questions; its turn is alone, read-only and its own; the helper\'s mode comes back; no chains, no parent or worker', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), out = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'mcp', title: 'Kid' }), kid = await connect(t, instance, made.chat);
+  const open = (id, on = true) => call(instance, `/chat/${id}/askable`, 'POST', { on });
+  const said = (id, text, after) => until(instance, (e) => e.conversation === id && e.data?.content?.text === text, after);
+  const B = b.conversation;
+
+  // Off until the user turns it on, per chat.
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode' })).error, 'not-askable');
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === B).askable, false);
+  assert.equal((await open(B)).body.on, true);
+  await open(a.conversation);
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === B).askable, true);
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === made.chat).askable, false, 'a chat it started is never askable to it');
+
+  // Beside only: not a worker, not the parent, not a chat outside the project.
+  await open(made.chat);
+  assert.equal((await a.tool('ask_chat', { chat: made.chat, text: 'x' })).error, 'not-a-peer');
+  assert.equal((await kid.tool('ask_chat', { chat: a.conversation, text: 'x' })).error, 'not-a-peer');
+  assert.equal((await out.tool('ask_chat', { chat: B, text: 'x' })).error, 'chat-not-found');
+
+  // The helper is put in Accept edits and is mid-turn. The question waits, then runs alone (not joined to the user's
+  // own waiting message), in the no-write mode; the user's message runs after it, back in the helper's own mode.
+  let at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'late', mode: 'Accept edits' });
+  let pending = a.tool('ask_chat', { chat: B, text: 'mode' });
+  await until(instance, (e) => e.conversation === B && e.type === 'held', at);
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'mode', when: 'queue' });
+  let got = await pending;
+  assert.equal(got.answered, true);
+  assert.equal(got.reply, 'mode:plan', 'the question ran alone and read-only');
+  assert.match(got.note, /not the user's/);
+  await said(B, 'mode:acceptEdits', at);
+  const asked = (await events(instance, B)).find((e) => e.type === 'user' && e.data.ask);
+  assert.equal(asked.data.from, a.conversation, 'the question is in the helper\'s chat, marked with its sender');
+  assert.ok(!(await events(instance, B)).some((e) => e.type === 'mode' && e.data.mode === 'plan'), 'the window was never told the helper is in Plan');
+
+  // An approval inside the answering turn is rejected without asking anyone.
+  got = await a.tool('ask_chat', { chat: B, text: 'permission' });
+  assert.equal(got.reply, 'permission:reject');
+  assert.ok((await events(instance, B)).some((e) => e.type === 'lock-rejected' && e.data.ask));
+  assert.ok(!(await events(instance, B)).some((e) => e.type === 'approval'));
+
+  // While it answers: its own P9 tools only read (so no second question), and a message sent to it waits and does not
+  // pin it in Plan.
+  at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  pending = a.tool('ask_chat', { chat: B, text: 'late' });
+  await until(instance, (e) => e.conversation === B && e.type === 'user' && e.data.ask, at);
+  assert.equal((await b.tool('ask_chat', { chat: a.conversation, text: 'x' })).error, 'answer-only');
+  assert.equal((await b.tool('set_rules', { rules: 'x' })).error, 'answer-only');
+  assert.equal((await b.tool('list_chats')).error, undefined);
+  // A narrower chat still sees the helper's own (wide) mode, not the answering turn's Plan, so its message is refused.
+  assert.equal((await kid.tool('send_chat', { chat: B, text: 'mode' })).error, 'mode-escalation');
+  assert.equal((await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'mode', mode: 'Accept edits' })).body.when, 'queue', 'the user\'s message waits for the answer to end');
+  assert.equal((await pending).reply, 'late reply');
+  await said(B, 'mode:acceptEdits', at);
+
+  // The asker's own next message to the helper is not joined to its question: the question's turn is the question alone.
+  at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'hi', mode: 'Accept edits' });
+  await said(a.conversation, 'echo:hi', at);
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'late' });
+  pending = a.tool('ask_chat', { chat: B, text: 'mode' });
+  await until(instance, (e) => e.conversation === B && e.type === 'held', at);
+  assert.match((await a.tool('send_chat', { chat: B, text: 'mode', when: 'queue' })).sent, /waiting for the turn to end/);
+  assert.equal((await pending).reply, 'mode:plan', 'the question was sent alone');
+  await said(B, 'mode:acceptEdits', at);
+
+  // One open question; timeoutMs 0 returns at once; cancel takes a waiting question out; a cancelled turn tells the asker.
+  at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'slow' });
+  await said(B, 'working', at);
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode', timeoutMs: 0 })).answered, false);
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'again' })).error, 'question-open');
+  assert.deepEqual(await a.tool('ask_chat', { cancel: true }), { chat: B, cancelled: true });
+  assert.ok((await events(instance, B)).some((e) => e.type === 'unheld' && e.data.why === 'removed'));
+  assert.equal((await a.tool('ask_chat', {})).error, 'no-open-question');
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode', timeoutMs: 0 })).answered, false);
+  await call(instance, `/chat/${B}/cancel`, 'POST');
+  for (let i = 0; i < 100 && !(await notices(instance, a.conversation)).some((line) => /did not answer your question/.test(line)); i += 1) await pause(100);
+  got = await a.tool('ask_chat', {});
+  assert.equal(got.error, 'not-answered');
+  assert.equal(got.reason, 'cancelled');
+
+  // A stopped helper is woken with no approval: the user opening it to questions was the yes.
+  await call(instance, `/chat/${B}/stop`, 'POST');
+  got = await a.tool('ask_chat', { chat: B, text: 'mode' });
+  assert.equal(got.reply, 'mode:plan');
+  assert.ok(!(await events(instance, a.conversation)).some((e) => e.type === 'approval'), 'the asker\'s user was never asked');
+
+  // Closed again: refused.
+  await open(B, false);
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode' })).error, 'not-askable');
+  console.log('PASS Delegate peer help: opt-in per chat, beside only, alone and read-only, approval rejected, tools read-only, mode back, cancel, a stopped helper woken unasked');
+});

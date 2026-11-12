@@ -41,4 +41,4 @@ export const partOrder = (order, defaults = PARTS) => {
 // A chat's last used time (History, the panel, the phone) is its newest event but these: the stops a close, an exit or a
 // restart write, its created event, and the bookkeeping the user does to it (move to a project, rename, archive; Builder,
 // nightly 3: "moving a chat to a project changes the edited last timer").
-export const NOT_USE = Object.freeze(['created', 'stopped', 'closed', 'exited', 'interrupted', 'project', 'renamed', 'archived']);
+export const NOT_USE = Object.freeze(['created', 'stopped', 'closed', 'exited', 'interrupted', 'project', 'renamed', 'archived', 'askable']);
