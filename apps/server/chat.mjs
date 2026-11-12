@@ -874,7 +874,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // No answer in 5 s: the request may still land, so a 409 (queued, sent again at the turn's end) could deliver it
       // twice. Shown as sent but unconfirmed; a later refusal says so with the text, so it never vanishes silently.
       // A note is not lost: it waits for the chat's next prompt instead.
-      const lost = () => (notes.has(body) ? park(id, body, true) : emit(id, 'steer-lost', { text: body.text }));
+      // A note whose steer was lost may have been read already: it counts as its one resend, so a prompt that
+      // fails after it is dropped, never parked a second time.
+      const lost = () => (notes.has(body) ? (resent.add(body), park(id, body, true)) : emit(id, 'steer-lost', { text: body.text }));
       request.then((late) => { if (!delivered(late)) lost(); }, lost);
       emit(id, 'user', { ...user(), unconfirmed: true });
       return { status: 202, steered: true, unconfirmed: true };

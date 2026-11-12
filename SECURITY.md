@@ -678,6 +678,11 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   - **What is kept.** A waiting note is in the chat's history at once. The copy that waits for the
     agent is in memory, the newest 20 for each chat: after P9 restarts, a note not yet read stays in
     the history but is not sent to the agent.
+  - **How often the agent reads a note.** Once in the normal case, twice at most, and sometimes
+    never. P9 sends a note again once only, after either of two failures where it cannot tell
+    whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
+    that carried the note and failed. After a second such failure the note is dropped from the
+    waiting list; it stays in the chat's history.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules` and `answer_chat` are refused while it
   is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
