@@ -54,6 +54,26 @@ When an agent makes something to look at, such as a page, a diagram or a plan, i
 - **Comments.** Select text in the artifact and press *Add comment*. Collect as many as you like, then *Send N comments* sends one message that quotes each. *Cancel* clears them. Nothing is sent until you press Send.
 - The pinned **Plan** card, and the plan Claude shows when it asks to leave plan mode, have an **Open** button that opens the plan the same way, with the same comments.
 
+### Delegate
+
+A chat's agent can hand part of a task to a **worker**: another P9 chat. Workers appear beneath the chat that started them in the sidebar. Open a worker to read its work or send it a message; its questions and approvals also appear in the parent chat. Stop or close the parent to stop its workers, including workers they started.
+
+In **Settings → Delegation**, choose who may start a sprint (a chat and its workers):
+
+- **Off** prevents new workers; existing workers keep running.
+- **Ask me first** asks you before a chat's first worker, even in Unrestricted mode. Later workers follow the agent's mode and approval rules.
+- **Agent decides** follows the agent's mode and approval rules without that first question.
+
+Set **Workers per chat** to limit running workers, and choose an agent, model and effort for each worker row. A stopped worker frees its row. These are defaults: an agent can request a different setting when you ask it to. A worker cannot run in a wider mode than its parent or be created in another project. The agent can set sprint rules that P9 includes with its messages to the workers; those rules cannot widen their permissions.
+
+| | P9 workers | An agent's built-in sub-agents |
+|---|---|---|
+| Visible as chats | Yes | Managed by the agent; not separate P9 chats |
+| After a P9 restart | Chats and history remain; interrupted work is not resent automatically | Managed by the agent |
+| Send a follow-up | Open the worker chat and send a message | Managed by the agent |
+| Provider | A worker row can choose an available agent or provider profile | Managed by the agent |
+| Workers per chat limit | Applies | Does not control agent-managed sub-agents |
+
 ### Agent lock
 
 Settings → Security settings → Agent lock. While it's on, agents can read and answer but can't edit files or run anything that asks for permission. The daemon enforces it, not the window, so it also covers chats started from your phone. You can turn it on or off from the computer or from a paired phone; an agent cannot.
