@@ -2,14 +2,16 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "O50: dependency updates arrive as PRs by themselves. Bot PRs merge by the same rule as any PR: CI green and a non-author verdict that read the changelog.",
-    "One rule for every package: a version under 3 days old is held back. No branch and no PR is made for it; it is listed by name under 'Pending Status Checks' on the Dependency Dashboard issue until it is old enough.",
+    "One rule for every package Renovate offers: a version under 3 days old is held back. No branch and no PR is made for it; it is listed by name under 'Pending Status Checks' on the Dependency Dashboard issue until it is old enough.",
     "Security fixes are not held (Renovate's vulnerability alerts skip the wait; they need Dependabot alerts turned on in the repository settings).",
-    "Not covered: the age of packages pulled in underneath (the lockfile's transitive entries); Renovate does not pass the wait to pnpm."
+    "Each group is one PR: major and smaller updates are not split (separateMajorMinor off).",
+    "Not covered: the age of packages pulled in underneath (the lockfile's transitive entries); Renovate does not pass the wait to pnpm. Whether the packageManager pnpm pin is held by the wait is not stated in Renovate's documentation."
   ],
   "extends": ["config:recommended"],
   "timezone": "America/Chicago",
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
+  "separateMajorMinor": false,
   "packageRules": [
     {
       "description": "The agent engines (Claude and Codex adapters, the ACP SDK) come as one PR, checked at any time.",
