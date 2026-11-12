@@ -1097,7 +1097,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           return await steer(id, body, images);
         } finally { release(); }
       }
-      if (notes.has(body)) { release(); return park(id, body); } // no turn running: a note starts none
+      // No turn running: a note starts none. A chat that moved to another machine reads nothing here again, so its note is refused.
+      if (notes.has(body)) { release(); return ['moving', 'moved'].includes(conversation.state) ? refused(409, conversation.state) : park(id, body); }
       // A prompt during Stop, or after a cleanup P9 could not confirm, would launch a second adapter beside old work.
       if (!['idle', 'running', 'stopped'].includes(conversation.state)) { release(); return refused(409, conversation.state); }
       if (closing) { release(); return refused(503, 'shutting-down'); }
@@ -1280,7 +1281,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const body = { text };
       notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);
-      return result.status === 409 ? park(id, body) : result;
+      return result.status === 409 && !['moving', 'moved'].includes(result.error) ? park(id, body) : result;
     },
     ask(id, text, from, still) {
       let end;
