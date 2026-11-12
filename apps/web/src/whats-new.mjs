@@ -2,17 +2,17 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.5',
+  version: '0.1.9-beta.6',
   changes: [
-    "Chats can run Claude Fable 5.2.",
-    "A resumed chat keeps its model, mode and effort; a setting it could not restore is shown.",
-    "Each New chat menu row starts the model it names; New chat opens on the agent you used last.",
-    "An Agent pill in the chat bar picks Claude or Codex, with that agent's saved defaults.",
-    "Every dropdown opens as P9's own list, readable in every look.",
-    "Open chats keep a stable order in the sidebar.",
-    "Deleting a chat removes what it left behind.",
-    "Chat Focus's file pane follows an In P9 project.",
-    "Project actions stay clear of notification cards.",
-    "The phone takes its app files from its own store even right after it was set up or hard-reloaded.",
+    "Delegate: a chat's agent can start worker chats, message, read and stop them. Off until you turn it on in Settings.",
+    "Workers show under the chat that started them; stopping the chat stops its workers.",
+    "Peer help: a chat you mark Open to questions answers questions from other chats in its project.",
+    "Notes: a chat's agent can pass information to another chat without starting a turn.",
+    "A reply the agent sends twice is shown once.",
+    "Provider profiles for Claude chats, set in Settings and picked in the New chat menu.",
+    "Model lists come from the agent itself, and the default is named.",
+    "New chat starts in one click and shows its folder.",
+    "A usage window with a pace mark; Codex plan figures are read from Codex.",
+    "The guide explains Delegate, its workers and its settings.",
   ],
 };
