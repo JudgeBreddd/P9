@@ -12,6 +12,7 @@
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
   "separateMajorMinor": false,
+  "enabledManagers": ["npm", "github-actions"],
   "packageRules": [
     {
       "description": "The agent engines (Claude and Codex adapters, the ACP SDK) come as one PR, checked at any time.",
