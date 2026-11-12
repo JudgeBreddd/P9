@@ -696,6 +696,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   it gave; that is an instruction to the agent, not a check P9 makes. Every answer is recorded in
   the worker's chat with the chat that gave it. The approval also stays in the worker's own
   chat, where you can answer it yourself.
+- **Ready and verdict.** A worker that was given a task with checks ends it with `ready`: its commit, one result
+  per check and its weakest part. A chat's agent marks another chat's ready commit with `verdict` (pass or fix, with a
+  note). Both write only P9's own sprint record for that chat, never a file, so they work in every mode, read-only
+  ones too; the agent lock refuses both. `ready` needs a parent and a task, and a folder with nothing unsaved; where
+  git can be read the commit and changed files are git's, not the agent's word. `verdict` reaches only a chat the
+  caller could message, never its own work, a chat below it or a chat above it in its line, and only at the commit
+  that chat marked ready: a newer commit makes the verdict stale.
 - **Sprint rules.** A parent has one text of rules, at most 8,000 characters, that P9 sends as
   its own block with every message that parent's agent sends a chat it started. Until the parent
   sets them (`set_rules`, or `rules` on `open_chat`) P9 sends a short default: state the folder
