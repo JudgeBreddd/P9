@@ -38,7 +38,8 @@ test('verdict requires the current commit and an independent reviewer', { timeou
 });
 
 test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, async (t) => {
-  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { mkdtempSync, writeFileSync, rmSync, existsSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { execFileSync } = await import('node:child_process');
@@ -53,7 +54,8 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
     setSprint: (_, patch) => Object.assign(state, patch), gauge: () => ({ context: { used: 7 } }),
     note: async (...args) => notes.push(args), pin: (_, data) => cards.push(data), turnEnded: (fn) => { endTurn = fn; }, tokenUsage: () => ({ input: 9, output: 2 }), settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
-  const valid = { commit: head, results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
+  const hasGitFacts = existsSync(fileURLToPath(new URL('../apps/server/worker-folders.mjs', import.meta.url)));
+  const valid = { commit: 'claimed-commit', results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
   assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
   assert.equal((await createDelegate({ chat: { ...chat, info: () => ({ parent, state: 'running' }) } }).ready(valid, worker)).error, 'no-active-turn');
   assert.equal((await tools.ready({ ...valid, results: [] }, worker)).error, 'request-refused');
@@ -63,10 +65,12 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   writeFileSync(join(folder, 'unsaved'), 'change');
   assert.equal((await tools.ready(valid, worker)).error, 'dirty-folder');
   rmSync(join(folder, 'unsaved'));
-  assert.equal((await tools.ready({ ...valid, results: [{ check: 'test', result: 'é'.repeat(4000) }], weakest: 'x'.repeat(400) }, worker)).error, 'report-too-large');
+  const oversized = await tools.ready({ ...valid, results: [{ check: 'test', result: 'é'.repeat(4000) }], weakest: 'x'.repeat(400) }, worker);
+  assert.equal(oversized.error, 'report-too-large');
+  assert.match(oversized.detail, /8192 bytes/);
   const result = await tools.ready(valid, worker);
-  assert.equal(result.ready.commit, head);
-  assert.equal(typeof result.ready.claimed, 'boolean');
+  assert.equal(result.ready.commit, hasGitFacts ? head : 'claimed-commit');
+  assert.equal(result.ready.claimed, !hasGitFacts);
   assert.deepEqual(result.ready.results, valid.results);
   assert.equal(result.ready.weakest, valid.weakest);
   assert.deepEqual(result.ready.files, []);

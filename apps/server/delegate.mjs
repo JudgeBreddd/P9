@@ -221,7 +221,7 @@ export function createDelegate({ chat, allowed }) {
       if (changed.trim()) return { error: 'dirty-folder' };
     }
     const value = { commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
-    if (card({ id: 'ready-' + caller, kind: 'markdown', text: report(task, value, { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER }) }).error) return { error: 'report-too-large' };
+    if (card({ id: 'ready-' + caller, kind: 'markdown', text: report(task, value, { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER }) }).error) return { error: 'report-too-large', detail: 'The completion card exceeds 8192 bytes; reduce the reported text or changed files.' };
     chat.setSprint(caller, { ready: value, verdict: null, idleSince: null });
     return { ready: value };
   }
