@@ -151,7 +151,7 @@ const spaceWords = (subject, error) => (error === 'empty'
     : { error: 'invalid-space', detail: subject + ' is JSON but not a space: it must be an object with a "sections" list, such as {"sections": []}.' });
 
 // useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
-const ANSWERING = new Set(['describe_mission', 'status', 'list_needs_you', 'validate_registry', 'validate_space', 'list_chats', 'read_chat', 'wait_chat']);
+const ANSWERING = new Set(['describe_mission', 'status', 'validate_registry', 'validate_space', 'list_chats', 'read_chat', 'wait_chat']);
 
 export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
