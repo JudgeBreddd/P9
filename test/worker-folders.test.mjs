@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createWorkerFolders, gitFacts } from '../apps/server/worker-folders.mjs';
+import { createWorkerFolders, gitFacts, setupShell } from '../apps/server/worker-folders.mjs';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -141,6 +141,13 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   assert.deepEqual(await folders.clean(ID), { removed: ['dirty', 'open', 'renamed'], kept: [] });
   assert.equal(fs.existsSync(path.join(home, ID)), false);
   console.log('PASS Worker folders A6');
+});
+
+test('Worker folders A4: the setup shell on Windows without ComSpec is System32\\cmd.exe; with ComSpec, that shell; elsewhere /bin/sh', () => {
+  assert.deepEqual(setupShell('npm ci & echo ok', 'win32', { SystemRoot: 'D:\\Win' }), ['D:\\Win\\System32\\cmd.exe', '/d', '/s', '/c', '"npm ci & echo ok"']);
+  assert.deepEqual(setupShell('x', 'win32', {}), ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', '"x"']);
+  assert.deepEqual(setupShell('x', 'win32', { ComSpec: 'E:\\cmd.exe', SystemRoot: 'D:\\Win' })[0], 'E:\\cmd.exe');
+  assert.deepEqual(setupShell('x', 'linux', {}), ['/bin/sh', '-c', 'x']);
 });
 
 test('Worker folders A4: a setup command past its cap is stopped with everything it started, and the answer waits only for that stop', { timeout: 60000 }, async (t) => {

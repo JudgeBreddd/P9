@@ -21,6 +21,8 @@ export const hasUserBus = () => process.platform === 'linux' && !!process.env.XD
   && existsSync(path.join(process.env.XDG_RUNTIME_DIR, 'bus'));
 
 const lookup = (environment, name) => Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+// A Windows system program by its full path, so a PATH entry of the same name is never run instead.
+export const system32 = (file, environment = process.env) => path.win32.join(lookup(environment, 'SystemRoot') || 'C:\\Windows', 'System32', file);
 
 // O23: with WSL installed, System32\bash.exe and WindowsApps\bash.exe are WSL launchers, and System32 comes early on PATH,
 // so a bare bash or sh (a Mission button's cmd) ran in WSL, where Doctor hung. For those two names both folders are
@@ -59,7 +61,7 @@ export function windowsArgv(argv, environment = process.env, fileExists = exists
   if (!/\.(cmd|bat)$/i.test(executable)) return { argv: [executable, ...argv.slice(1)], verbatim: false };
   const parts = [executable, ...argv.slice(1)];
   if (parts.some((part) => /["%\r\n\0]/.test(part))) throw new Error(`unsafe-batch-argument:${path.win32.basename(executable)}`);
-  const cmd = path.win32.join(lookup(environment, 'SystemRoot') || 'C:\\Windows', 'System32', 'cmd.exe');
+  const cmd = system32('cmd.exe', environment);
   return { argv: [cmd, '/d', '/s', '/v:off', '/c', '"' + parts.map((part) => `"${part}"`).join(' ') + '"'], verbatim: true };
 }
 
