@@ -2,7 +2,7 @@
 // the stand-in ssh of remote.test.mjs (test/fake-ssh.mjs: a host named unreachable* cannot be reached).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rmdir, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -53,9 +53,35 @@ test('Open P9 on: Where it was last (as before), This computer or a remote; kept
   await status(onLocal, 'opened on this computer, as saved');
   let pick = await openOn(page);
   assert.deepEqual([await pick.inputValue(), await pick.locator('option').allInnerTexts()], ['last', ['Where it was last', 'This computer', 'test-host']]);
+  // Phase 2 review: a save main refuses says so and the row goes back; a good save sent right behind it still shows.
+  const choose = (values) => page.evaluate((vs) => { const el = document.querySelector('#setOpenOn'); if (![...el.options].some(o => o.value === 'not a host')) el.add(new Option('bad', 'not a host')); for (const v of vs) { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); } }, values);
+  await choose(['not a host']);
+  await page.locator('#toasts .toast', { hasText: 'Not saved' }).waitFor();
+  assert.equal(await pick.inputValue(), 'last', 'the row is back on what is kept');
+  assert.equal((await saved()).openOn, undefined, 'nothing was saved');
+  await choose(['not a host', 'local']);
+  assert.equal(await savedOpenOn(''), '');
+  await page.waitForFunction(() => document.querySelector('#setOpenOn').value === 'local', null, { timeout: 5000 });
+  await page.evaluate(() => document.querySelector('#setOpenOn option[value="not a host"]').remove());
+  // A write to disk that fails (a folder sits where the temp file goes): the row goes back, the file is as it was, and
+  // the choice that failed is not written by the next save of anything else.
+  await mkdir(file + '.tmp');
+  await choose(['test-host']);
+  await page.waitForFunction(() => document.querySelector('#setOpenOn').value === 'local', null, { timeout: 5000 });
+  assert.equal((await saved()).openOn, '', 'the file still holds the last choice that was saved');
+  await rmdir(file + '.tmp');
+  await page.evaluate(async () => { await window.p9.remotes('add', 'other-host'); await window.p9.remotes('remove', 'other-host'); });
+  assert.equal((await saved()).openOn, '', 'a later save did not write the choice that failed');
   await pick.selectOption('test-host');
   assert.equal(await savedOpenOn('test-host'), 'test-host');
   assert.equal((await saved()).host, null, 'this window stays where it is until the next start');
+  // Phase 2 review: saves that overlap. Every read during them is whole JSON, and the last one sent is the one kept.
+  let reading = true, reads = 0;
+  const reader = (async () => { while (reading) { JSON.parse(await readFile(file, 'utf8')); reads += 1; } })();
+  await page.evaluate(() => Promise.all(Array.from({ length: 200 }, (_, i) => window.p9.remotes('open-on', i % 2 ? 'test-host' : ''))));
+  reading = false; await reader;
+  assert.ok(reads > 0, 'the file was read while the saves ran');
+  assert.equal((await saved()).openOn, 'test-host', 'the last of the overlapping saves is the one kept');
   await closeSettings(page);
   await status(onLocal, 'still on this computer');
   await app.close();

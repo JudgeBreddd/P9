@@ -122,7 +122,9 @@ apply to them. Install only extensions you trust. (Decided 2026-10-15: the guard
 applies; an extension, terminal or language server that writes to disk directly is
 not guarded.)
 
-Doctor bundles include only structured unit states, runtime versions and recognized
+Doctor bundles include only structured unit states, runtime versions, the name of a missing
+shared library (only a file name shaped like lib*.so*) or the package that holds it (only
+from a fixed list, today libatomic1), read from the Linux service install log, and only while the daemon does not answer) and recognized
 daemon event names, allowlisted storage error codes and a nonnegative recovery-record
 count from the authenticated health endpoint. The count includes published conflict
 records, not temporary record files. They exclude request data, credentials, paths, environment,

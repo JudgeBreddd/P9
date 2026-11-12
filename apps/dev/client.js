@@ -297,7 +297,9 @@ const markLanguage = editor => { document.documentElement.dataset.lang = editor?
 markLanguage(v.window.activeTextEditor);
 v.window.onDidChangeActiveTextEditor(markLanguage);
 await followLook(config.look);
-window.p9dev.onLook(look => followLook(look).catch(error => console.error('p9: editor look failed:', error.message)));
+// One look at a time, in the order they arrived: a slower earlier change can never land after a later one.
+let looking = Promise.resolve();
+window.p9dev.onLook(look => { looking = looking.then(() => followLook(look)).catch(error => console.error('p9: editor look failed:', error.message)); });
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
 window.devFocus = { v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };

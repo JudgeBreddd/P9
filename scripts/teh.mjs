@@ -70,7 +70,7 @@ export function missingLibrary(text) {
 export function collectBundle({ status, journal, daemon, install = '' }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
   return {
-    version: VERSION, node: process.versions.node, platform: process.platform, missingLibrary: missingLibrary(install),
+    version: VERSION, node: process.versions.node, platform: process.platform, missingLibrary: daemon?.status === 'ok' ? null : missingLibrary(install), // the log is cumulative: a daemon that answers has its libraries
     daemon: daemon?.status === 'ok' ? { status: 'ok', phase: 3, writes: daemon.writes === 'guarded' ? 'guarded' : 'unavailable',
       recoveryRecordCount: Number.isSafeInteger(daemon.recoveryRecordCount) && daemon.recoveryRecordCount >= 0
         ? daemon.recoveryRecordCount : null } : { status: 'unavailable' },
