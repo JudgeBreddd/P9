@@ -115,6 +115,21 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   g = await geometry(page);
   assert.deepEqual(g.sprints.map(x => [x.inside, x.apart]), [[true, true], [true, true]], 'Split, opened in the narrow pane: still inside it and apart from the cards');
   await shot('sprint-card-split-open');
+  // The narrowest Split (721 px: two panes of about 335 px, the cards stack over the right one): both cards start folded, and opened they
+  // stay inside their pane and apart from the cards, the right one moving below the stack where there is no room beside it.
+  await sizeTo(app, 721, 800); await page.waitForTimeout(500);
+  g = await geometry(page);
+  assert.equal(g.width, 721, 'the window is not the narrowest Split size');
+  assert.equal(await page.locator('#chats .pane').count(), 2, 'not a Split at 721 px');
+  assert.ok(g.sprints.some(x => x.cardsOverPane), 'the cards do not reach a pane here');
+  const setFold = async (want) => { for (const sp of await page.locator('#chats .sprint').all()) if (await sp.getAttribute('data-folded') !== want) await sp.locator('[data-sprint-fold]').click(); };
+  await setFold('true'); g = await geometry(page);
+  assert.deepEqual(g.sprints.map(x => [x.folded, x.inside, x.apart]), [['true', true, true], ['true', true, true]], '721 px Split, folded: inside the panes and apart from the cards');
+  await shot('sprint-card-split-721-folded');
+  await setFold('false'); g = await geometry(page);
+  assert.deepEqual(g.sprints.map(x => [x.folded, x.inside, x.apart]), [['false', true, true], ['false', true, true]], '721 px Split, opened: inside the panes and apart from the cards');
+  await shot('sprint-card-split-721-open');
+  await sizeTo(app, 1400, 900); await page.waitForTimeout(500);
   await page.click('#chats .pane [data-tool="split"]');
   await page.locator('#navList .row[data-chat="' + lead + '"]').click();
   for (const look of ['redline', 'duskwood']) {

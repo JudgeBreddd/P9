@@ -340,12 +340,17 @@ function placeSprints() {
   for (const p of document.querySelectorAll('.pane')) {
     const sp = p.querySelector(':scope > .sprint'); if (!sp) { p.style.removeProperty('--sp-pad'); continue; }
     spObs.observe(p);
-    const pr = p.getBoundingClientRect(), right = cr && cr.left < pr.right && cr.right > pr.left ? Math.round(pr.right - cr.left + 10) : 18, w = Math.max(160, Math.min(296, Math.floor(pr.width - right - 10)));
+    const pr = p.getBoundingClientRect(), over = cr && cr.left < pr.right && cr.right > pr.left;
+    let right = over ? Math.round(pr.right - cr.left + 10) : 18, top = 46;
+    // Where the cards leave this pane under 220 px beside them (a 720 px Split, an uneven one), the card goes below the stack instead.
+    if (over && pr.width - right - 10 < 220) { right = 18; top = Math.max(46, Math.round(cr.bottom - pr.top + 10)); }
+    const w = Math.max(120, Math.min(296, Math.floor(pr.width - right - 10)));
+    sp.style.setProperty('--sp-top', top + 'px'); sp.style.setProperty('--sp-room', Math.max(120, Math.floor(pr.height - top - 10)) + 'px');
     sp.style.setProperty('--sp-right', right + 'px'); sp.style.setProperty('--sp-w', w + 'px');
     if (sp.dataset.auto === 'true') sp.dataset.folded = String(pr.width - w - right - 14 < 420);
     const open = sp.dataset.folded === 'false';
     sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));
-    const room = pr.width - w - right - 14; p.style.setProperty('--sp-pad', open && room >= 420 ? w + right + 14 + 'px' : '20px'); // opened by choice where the text has no room, it lies over the text
+    const room = pr.width - w - right - 14; p.style.setProperty('--sp-pad', open && room >= 420 && top === 46 ? w + right + 14 + 'px' : '20px'); // opened by choice where the text has no room, it lies over the text
   }
 }
 // The live fields (task, ready, verdict, idleSince) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
