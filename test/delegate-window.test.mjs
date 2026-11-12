@@ -209,3 +209,27 @@ test('Delegate window: a completed worker pins its report in the parent chat', {
   await shot(page, 'completion-card');
   assert.deepEqual(errors, []);
 });
+
+test('Delegate window: New chat does not crash while the daemon is connecting', { timeout: 90000, skip: process.platform === 'win32' }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-delay-')), 'profile');
+  process.kill(instance.child.pid, 'SIGSTOP');
+  let paused = true;
+  const resume = () => { if (paused) { paused = false; try { process.kill(instance.child.pid, 'SIGCONT'); } catch {} } };
+  t.after(resume);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { resume(); await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow(), errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  try {
+    await until(() => page.evaluate(() => typeof document.querySelector('#newBtn')?.onclick === 'function'), 'New chat handler');
+    await page.locator('#newBtn').click();
+    await page.locator('#chats > .pane').first().waitFor({ timeout: 15000 });
+    assert.deepEqual(errors, []);
+    await shot(page, 'connecting-chat');
+  } finally { resume(); }
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  console.log('CONNECTING_CHAT_PANES_AFTER ' + await page.locator('#chats > .pane').count());
+});
