@@ -160,16 +160,31 @@ export function createDelegate({ chat, allowed }) {
     const starts = set.start === 'ask' && depth === 0 && !family.some((c) => c.parent === caller);
     const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This starts a sprint (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
     if (!await (starts ? chat.approve(caller, request, signal) : allowed(caller, request, signal))) return { error: 'not-allowed', detail: 'The user did not allow it.' };
-    if (chat.lock(caller).on) return { error: 'agent-lock-on' }; // turned on while the user was asked
-    // So is everything else the user may have changed meanwhile: Delegation off, a lower limit, this chat's own mode.
-    const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
-    if (now.start === 'off') return OFF;
-    if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
-    if (again.error) return again;
-    if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
-    // A worker folder (SECURITY.md § Worker folders): made after the user allowed the worker, before it starts.
-    const own = args.worktree ? await chat.workers.make(caller, args.key, folder === undefined ? await chat.startFolder(caller) : await chat.checkedFolder(folder), chat.delegation().setup ?? '') : null;
-    if (own?.error) return { ...own, detail: own.detail ?? 'Give the worker a key that is also a git branch name.' };
+    // Checked again after the user was asked, and again after a worker folder's clone and setup (which can take
+    // minutes): the agent lock, Delegation off, a lower limit, this chat's own mode, a cancelled call.
+    const still = () => {
+      if (signal?.aborted) return { error: 'cancelled' };
+      if (chat.lock(caller).on) return { error: 'agent-lock-on' };
+      const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
+      if (now.start === 'off') return OFF;
+      if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
+      if (again.error) return again;
+      if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
+      return null;
+    };
+    const changed = still();
+    if (changed) return changed;
+    // A worker folder (SECURITY.md § Worker folders): made after the user allowed the worker, before it starts. A folder
+    // P9 cannot resolve is refused here, never handed to git (which would run in the daemon's own folder).
+    let own = null;
+    if (args.worktree) {
+      const source = folder === undefined ? await chat.startFolder(caller) : await chat.checkedFolder(folder);
+      if (!source) return { error: 'folder-refused', detail: 'A worker folder is made from the folder the worker would start in; P9 could not use that folder.' };
+      own = await chat.workers.make(caller, args.key, source, chat.delegation().setup ?? '');
+      if (own.error) return { ...own, detail: own.detail ?? 'Give the worker a key that is also a git branch name.' };
+      const after = still(); // the prepared folder is kept: the next open_chat with this key uses it
+      if (after) return { ...after, detail: (after.detail ? after.detail + ' ' : '') + 'The worker folder was made and is kept; the worker was not started.' };
+    }
     const made = await chat.create({ provider, title, ...(own ? { folder: WORKER } : folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
     chat.setSlot(made.conversation, at);
