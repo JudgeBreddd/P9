@@ -199,6 +199,7 @@ export async function createDesktop({ state, open } = {}) {
   // 0.1.8 Settings > Open P9 on (openOn): null, where it was last (host, as before); '', this computer; a host, that remote,
   // which connects like Connect does and shows the connecting screen while it cannot be reached.
   let openOn = saved?.openOn === '' ? '' : named(saved?.openOn);
+  let openOnKept = openOn; // what the file holds: moved only when a write lands
   let serverHost = openOn === '' ? null : openOn ?? named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
@@ -221,9 +222,11 @@ export async function createDesktop({ state, open } = {}) {
   // Temp file + rename, one write at a time: a reader (the next start, a test) never sees a half-written file, and two
   // quick saves cannot interleave. The data is read when the write starts, so the last save always wins.
   let serverSaving = Promise.resolve();
-  const keepServer = () => serverSaving = serverSaving.catch(() => {}).then(() =>
-    writeFile(serverFile + '.tmp', JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, ...(openOn !== null && { openOn }) }), { mode: 0o600 })
-      .then(() => rename(serverFile + '.tmp', serverFile)));
+  const keepServer = () => serverSaving = serverSaving.catch(() => {}).then(() => {
+    const wrote = openOn;
+    return writeFile(serverFile + '.tmp', JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, ...(openOn !== null && { openOn }) }), { mode: 0o600 })
+      .then(() => rename(serverFile + '.tmp', serverFile)).then(() => { openOnKept = wrote; });
+  });
   // The download runs on the remote (POST /setup/agents-fetch); the page shows its phase from p9:get-status.
   const fetchAgents = (host, names) => {
     if (!names.length || !server?.slim || (agentsJob?.host === host && agentsJob.phase === 'running')) return;
@@ -952,7 +955,9 @@ export async function createDesktop({ state, open } = {}) {
     // 0.1.8: 'open-on' keeps Settings > Open P9 on: null (where it was last), '' (this computer) or a host.
     const okHost = typeof host === 'string' && HOST.test(host), ok = action === 'open-on' ? host === null || host === '' || okHost : ['add', 'remove'].includes(action) && okHost;
     if (!fromApp(event) || args.length !== 2 || !ok) throw new Error('ipc-sender-refused');
-    if (action === 'open-on') { openOn = host; await keepServer(); return { remotes, openOn }; }
+    // The answer is what the file holds after this save, not the newest choice still in the queue. A save that fails
+    // gives its choice up (unless a newer one has replaced it), so no later save writes it unasked.
+    if (action === 'open-on') { openOn = host; try { await keepServer(); } catch (error) { if (openOn === host) openOn = openOnKept; throw error; } return { remotes, openOn: openOnKept }; }
     remotes = action === 'add' ? [...new Set([...remotes, host])].slice(-50) : remotes.filter(h => h !== host); // ponytail: 50 kept, the oldest go
     if (action === 'remove') noKey = noKey.filter(h => h !== host); // row 79: a removed remote's Don't ask again goes with it
     await keepServer();

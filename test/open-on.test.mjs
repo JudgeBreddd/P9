@@ -2,7 +2,7 @@
 // the stand-in ssh of remote.test.mjs (test/fake-ssh.mjs: a host named unreachable* cannot be reached).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rmdir, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -63,6 +63,15 @@ test('Open P9 on: Where it was last (as before), This computer or a remote; kept
   assert.equal(await savedOpenOn(''), '');
   await page.waitForFunction(() => document.querySelector('#setOpenOn').value === 'local', null, { timeout: 5000 });
   await page.evaluate(() => document.querySelector('#setOpenOn option[value="not a host"]').remove());
+  // A write to disk that fails (a folder sits where the temp file goes): the row goes back, the file is as it was, and
+  // the choice that failed is not written by the next save of anything else.
+  await mkdir(file + '.tmp');
+  await choose(['test-host']);
+  await page.waitForFunction(() => document.querySelector('#setOpenOn').value === 'local', null, { timeout: 5000 });
+  assert.equal((await saved()).openOn, '', 'the file still holds the last choice that was saved');
+  await rmdir(file + '.tmp');
+  await page.evaluate(async () => { await window.p9.remotes('add', 'other-host'); await window.p9.remotes('remove', 'other-host'); });
+  assert.equal((await saved()).openOn, '', 'a later save did not write the choice that failed');
   await pick.selectOption('test-host');
   assert.equal(await savedOpenOn('test-host'), 'test-host');
   assert.equal((await saved()).host, null, 'this window stays where it is until the next start');
