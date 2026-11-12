@@ -19,7 +19,7 @@ apps/server/sprint.mjs needs you 1
 apps/server/sprint.mjs status.json  1
 apps/server/telemetry.mjs plan.md  1
 apps/web/src/checklist.mjs _private  1
-apps/web/src/controller.mjs needs you 10
+apps/web/src/controller.mjs needs you 9
 apps/web/src/controller.mjs plan.md  1
 apps/web/src/controller.mjs _private  1
 apps/web/src/controller.mjs _tyler  7
