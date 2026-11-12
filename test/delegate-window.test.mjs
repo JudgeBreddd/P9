@@ -121,7 +121,10 @@ test('Delegate window: workers indented under their chat and folded past three; 
   // The question's form answers Kid 2.
   await card(kids[1]).locator('input[value="blue"]').check();
   await card(kids[1]).evaluate((form) => form.requestSubmit());
-  assert.match((await a.done(kids[1])).last, /^ask:.*blue/);
+  // requestSubmit only starts the answer's request: until it lands, wait_chat returns at once with the question still waiting.
+  let answered;
+  await until(async () => { answered = await a.done(kids[1]); return !answered.waiting; }, 'Kid 2 past its question', 30000);
+  assert.match(answered.last, /^ask:.*blue/);
   await card(kids[1]).waitFor({ state: 'detached', timeout: 15000 });
   // Nothing was copied into the parent's history, and the answers are the user's own (no sending chat on them).
   assert.equal((await events(instance, parent)).filter((e) => ['approval', 'question', 'answered'].includes(e.type)).length, 0, 'the parent\'s history holds a worker\'s request');
