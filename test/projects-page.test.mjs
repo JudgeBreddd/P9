@@ -291,11 +291,10 @@ test('projects: the offered chat moves in and shows under the project', { timeou
   // Builder has projects closed in the panel: the open/closed choice is kept.
   await page.locator(`#navList [data-toggle="${other}"]`).click();
   await page.locator(`#navList [data-proj="${other}"][aria-expanded=false]`).waitFor({ timeout: 5000 });
-  await page.click('#newBtn'); await page.locator('#newFolder').waitFor();
+  await page.click('#newBtn');
   await pickNext(path.join(instance.workspace, 'site'));
-  await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
-  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'site', null, { timeout: 5000 });
-  await page.locator('#newPop [data-new="claude"]').first().click();
+  await page.locator('.pane [data-chat-folder]').click();
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: path.join(instance.workspace, 'site') }).waitFor({ timeout: 10000 });
   await page.locator('.pane .welcome', { hasText: 'site' }).waitFor({ timeout: 10000 });
   const chat = (await call(instance, '/chat')).conversations.find((c) => c.folder === 'site').id;
   await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title Site notes' }); await ended(instance, chat);
@@ -430,8 +429,11 @@ test('project New chat stays clickable with notification cards at narrow widths'
     const png = await page.screenshot({ type: 'png' });
     if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o49-' + width + ' ' + png.toString('base64'));
     await button.click({ timeout: 5000 });
-    await page.locator('#newPop [data-new]').first().waitFor({ state: 'visible', timeout: 5000 });
-    await page.keyboard.press('Escape');
+    await page.locator(`.pane:visible [data-goproj="${id}"]`).waitFor({ state: 'attached', timeout: 10000 });
+    if (width === 960) {
+      await page.locator(`.pane [data-goproj="${id}"]`).click();
+      await page.locator('#projPage h1', { hasText: 'Garden' }).waitFor();
+    }
   }
   assert.deepEqual(errors, []);
 });

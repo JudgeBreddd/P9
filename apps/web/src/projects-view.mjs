@@ -146,7 +146,7 @@ export function installProjects(o, api) {
     if (k === 'unproj') return archiveProject(b.dataset.id, false).then(renderPage);
     if (k === 'unchat') return archiveChat(find(b.dataset.id), false).then(renderPage);
     if (!cur) return;
-    if (k === 'new') return setTimeout(() => { o.newPop.open(); api.newAt(b, cur.id); $('#newPop [data-new]')?.focus(); });
+    if (k === 'new') return o.newSession(o.lastAgent(), '', cur.id);
     if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
     if (k === 'edit') { if (edit) { clearTimeout(saveT); await saveInstr(); } edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
     if (k === 'add') return picker.click();

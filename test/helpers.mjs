@@ -229,7 +229,6 @@ export function leased(ws) {
 export async function openFiles(page, timeout = 20000) {
   if (!(await page.locator('#chats > .pane').count())) {
     await page.click('#newBtn', { timeout });
-    await page.locator('#newPop [data-new="claude"]').first().click({ timeout });
   }
   await page.locator('#chats > .pane').first().locator('[data-tool=files]').click({ timeout });
 }

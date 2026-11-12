@@ -180,7 +180,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   // and says why it cannot go higher; a click selects, a double click opens, a breadcrumb goes back.
   await mkdir(path.join(remote.workspace, 'proj', 'sub'), { recursive: true });
   const dlg = page.locator('#folderDlg'), row = name => dlg.locator('#folderList [data-fdir]', { hasText: new RegExp('^' + name + '$') });
-  const choose = async () => { if (!await page.locator('#newFolder').isVisible()) await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' }); };
+  const choose = async () => { if (!await page.locator('.pane [data-chat-folder]').isVisible()) await page.click('#newBtn'); await page.locator('.pane [data-chat-folder]').click(); };
   await choose();
   await dlg.locator('#folderWhy', { hasText: 'agent lock or File protection is on' }).waitFor({ timeout: 10000 });
   assert.equal(await dlg.locator('#folderUp').isDisabled(), true, 'the workspace top: Up is off, and the dialog says why');
@@ -200,14 +200,13 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await row('proj').waitFor({ timeout: 10000 });
   await row('proj').dblclick(); await row('sub').waitFor({ timeout: 10000 });
   await dlg.locator('button[value="yes"]').click();
-  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj', null, { timeout: 5000 });
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: path.join(remote.workspace, 'proj') }).waitFor({ timeout: 10000 });
   // Cancel keeps the folder picked before.
   await choose();
   await row('proj').dblclick({ timeout: 10000 }); await row('sub').click({ timeout: 10000 });
   await dlg.locator('button[value="no"]').click();
   await dlg.waitFor({ state: 'hidden', timeout: 5000 });
-  await page.waitForFunction(() => document.querySelector('#newFolder').value !== ':pick', null, { timeout: 5000 }); // the select redraws after the dialog closes
-  assert.equal(await page.locator('#newFolder').inputValue(), 'proj', 'Cancel changes nothing');
+  assert.match(await page.locator('.pane [data-chat-folder]').innerText(), /proj/, 'Cancel changes nothing');
   // In Unrestricted mode the walk starts at the workspace's full path and goes up past it (Builder, 2026-11-02: "need a
   // picker so i can click in and out of folders"); a folder outside it goes as its full path.
   await http({ socketPath: path.join(remote.state, 'daemon.sock'), route: '/file-protection', method: 'POST',
@@ -237,7 +236,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await dlg.locator('#folderPath').press('Enter');
   await dlg.locator('#folderCrumbs [aria-current]', { hasText: /^outside-ws$/ }).waitFor({ timeout: 10000 });
   await dlg.locator('button[value="yes"]').click();
-  await page.waitForFunction(() => /^\/.*outside-ws$/.test(document.querySelector('#newFolder').value), null, { timeout: 5000 });
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: 'outside-ws' }).waitFor({ timeout: 10000 });
   await page.keyboard.press('Escape');
   // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this
   // computer's daemon and the forward closes.

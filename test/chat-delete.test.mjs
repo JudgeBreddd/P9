@@ -125,3 +125,28 @@ test('a database made before its table reads as no rows until the table is there
   assert.throws(() => rows(file, 'SELECT * FROM turns WHERE nope = 1'), /no such column/);
   db.close();
 });
+
+test('empty-only replacement cannot delete a delegated child', async (t) => {
+  const instance = await daemon(t);
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  const child = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  try { db.prepare('UPDATE conversations SET parent = ?, key = ? WHERE id = ?').run(parent, 'child', child); } finally { db.close(); }
+  const result = await call(instance, `/chat/${child}/delete`, 'POST', { empty: true });
+  assert.equal(result.status, 409);
+  assert.ok((await call(instance, '/chat')).body.conversations.some(row => row.id === child && row.parent === parent));
+});
+
+test('deleting a chat preserves anonymous cursors for readers without retaining its events', async (t) => {
+  const instance = await daemon(t);
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'private title' })).body.conversation;
+  const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).body.conversation;
+  const before = (await call(instance, '/chat/events?after=0')).body.events;
+  const cursor = before.find(event => event.conversation === first).cursor;
+  assert.equal((await call(instance, `/chat/${first}/delete`, 'POST', { empty: true })).status, 200);
+  const after = (await call(instance, '/chat/events?after=0')).body.events;
+  const placeholder = after.find(event => event.cursor === cursor);
+  assert.deepEqual([placeholder.conversation, placeholder.type, placeholder.data, placeholder.at], ['', 'deleted-cursor', {}, 0]);
+  assert.ok(!JSON.stringify(after).includes('private title'));
+  assert.ok(after.some(event => event.conversation === second));
+});

@@ -707,6 +707,7 @@ export async function createDesktop({ state, open } = {}) {
       && (tail === undefined || only !== undefined && Number.isSafeInteger(tail) && tail >= 1 && tail <= 200)
       && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}${tail === undefined ? '' : '&tail=' + tail}`],
     create: body => ['POST', '/chat', body],
+    chatFolder: ({ id: item }) => uuid(item) && ['GET', `/chat/${item}/folder`],
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
@@ -1247,8 +1248,8 @@ export async function createDesktop({ state, open } = {}) {
     return settings;
   });
   petsIpc(outer);
-  // New chat's Choose folder... (threat model row 24): the system folder dialog, then only a folder inside the workspace's real path goes
-  // back, workspace-relative ('' is the workspace itself). The daemon checks it again when the chat is made.
+  // New chat folder (threat model row 24): the system dialog returns an inside folder relative to the workspace,
+  // or an outside folder only in Unrestricted mode. The daemon checks it again when the chat is made.
   // Setup's Pick buttons name a file ('setup-file') or folder ('setup-folder') the same way; the daemon checks the path again.
   const PICKS = { 'setup-file': ['Choose the file', 'Use this file', 'openFile'], 'setup-folder': ['Choose the folder', 'Use this folder', 'openDirectory'] };
   ipcMain.handle('p9:pick-folder', async (event, ...args) => {

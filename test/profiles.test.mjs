@@ -185,8 +185,8 @@ async function launch(t, instance, profile) {
   await page.locator('#rChat').waitFor();
   return { app, page, errors };
 }
-const newRows = async (page) => { await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
-  const got = await page.locator('#newPop [data-sec="claude"] :is([data-new], [data-profile-hd])').evaluateAll((l) => l.map((b) => b.textContent)); await page.keyboard.press('Escape'); return got; };
+const newRows = async (page) => { const pane = page.locator('.pane:visible').first(); await pane.locator('[data-pill="Agent"]').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
+  const got = await page.locator('#pillMenu [data-profile]').evaluateAll(rows => rows.map(row => row.querySelector('.truncate').textContent.trim().replace(/\s*runs on Claude$/, ''))); await page.keyboard.press('Escape'); return got; };
 const menu = async (page, pane) => { await pane.locator('[data-pill="Model"]').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
   const got = { head: await page.locator('#pillMenu .hd').first().textContent(), items: await page.locator('#pillMenu .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent)), notes: await page.locator('#pillMenu [data-list-note]').evaluateAll((l) => l.map((x) => x.textContent)) };
   await page.keyboard.press('Escape'); return got; };
@@ -194,9 +194,10 @@ const profilesPage = async (page) => { await page.click('#setBtn'); await page.l
 
 test('window: a profile typed in Settings puts its models in the New chat menu; its chat runs on that one model and leaves Claude\'s list alone; the page never holds the key after Save; a removed profile says so', { timeout: 240000 }, async (t) => {
   const instance = await start(t);
-  const { page, errors } = await launch(t, instance, path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'p9-prof-')), 'profile'));
+  const { app, page, errors } = await launch(t, instance, path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'p9-prof-')), 'profile'));
   const shot = async (name) => { if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); } };
-  const CLAUDE = ['Claude default model', 'Claude · Default (recommended)', 'Claude · Opus', 'Claude · Haiku'];
+  const CLAUDE = [];
+  await page.click('#newBtn'); await page.locator('.pane:visible [data-pill="Agent"]').first().waitFor({ timeout: 20000 });
   await until(async () => JSON.stringify(await newRows(page)) === JSON.stringify(CLAUDE), 'Claude\'s own models are listed, and no profile row yet');
   // The user's default Claude model: not a profile's model, so a profile chat must not send it.
   await page.evaluate(() => localStorage.setItem('p9-model-default:claude', 'opus'));
@@ -235,13 +236,26 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   await page.click('#profileCancel');
   await page.keyboard.press('Escape');
   // New chat: the profile's models under Claude's own.
-  assert.deepEqual(await newRows(page), [...CLAUDE, 'Far Cloud', 'glm-5.3', 'kimi-k3:cloud']);
-  await page.click('#newBtn'); await page.locator('#newPop [data-profile]').first().waitFor(); await shot('o48-new-menu');
-  await page.click('#newPop [data-profile][data-model="glm-5.3"]');
+  assert.deepEqual(await newRows(page), ['Far Cloud']);
+  await page.click('#newBtn'); await page.locator('.pane:visible [data-pill="Agent"]').first().click(); await page.locator('#pillMenu [data-profile]').first().waitFor(); await shot('o48-agent-menu');
+  await page.locator('#pillMenu [data-profile]').first().click();
   let id; await until(async () => (id = (await call(instance, '/chat')).conversations.find((c) => c.profile)?.id), 'the chat was made on the profile');
-  const pane = page.locator('.pane[data-id="' + id + '"]');
+  let pane = page.locator('.pane[data-id="' + id + '"]');
   await pane.locator('[data-pill="Model"]').waitFor({ timeout: 10000 });
+  await pane.locator('[data-pill="Model"]').click();
+  await page.locator('#pillMenu [data-model][data-val="kimi-k3:cloud"]').click();
+  const previous = id; await until(async () => (id = (await call(instance, '/chat')).conversations.find(c => c.profile?.model === 'kimi-k3:cloud')?.id) && id !== previous, 'profile model changed');
+  pane = page.locator('.pane[data-id="' + id + '"]'); await pane.locator('[data-pill="Model"]').click();
+  await page.locator('#pillMenu [data-model][data-val="glm-5.3"]').click();
+  await until(async () => (id = (await call(instance, '/chat')).conversations.find(c => c.profile?.model === 'glm-5.3')?.id) && id !== previous, 'profile model restored');
+  pane = page.locator('.pane[data-id="' + id + '"]'); await pane.locator('[data-pill="Model"]').waitFor();
   assert.equal((await pane.locator('[data-pill="Model"]').getAttribute('aria-label')), 'Model: glm-5.3');
+  fs.mkdirSync(path.join(instance.workspace, 'profile-sub'));
+  await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, path.join(instance.workspace, 'profile-sub'));
+  await pane.locator('[data-chat-folder]').click();
+  await until(async () => (id = (await call(instance, '/chat')).conversations.find(c => c.profile?.model === 'glm-5.3' && c.folder === 'profile-sub')?.id), 'profile folder changed');
+  pane = page.locator('.pane[data-id="' + id + '"]'); await pane.locator('[data-pill="Model"]').waitFor();
+  assert.equal(await pane.locator('[data-pill="Model"]').getAttribute('aria-label'), 'Model: glm-5.3');
   assert.equal(await pane.locator('.meters .meter').count(), 1, 'Context only: the Claude plan\'s 5 h and 7 d bars are not this chat\'s');
   await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter');
   await pane.locator('.hist', { hasText: 'model:glm-5.3' }).waitFor({ timeout: 20000 }); // ran, on its model, though the Claude default is Opus
@@ -250,7 +264,7 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   assert.deepEqual(await menu(page, pane), { head: 'Far Cloud', items: ['glm-5.3'], notes: ['This chat runs on this model only. Start a new chat for another one.'] });
   assert.equal((await pane.locator('[data-pill="Model"]').getAttribute('aria-label')), 'Model: glm-5.3');
   // Its one-model report did not become Claude's list.
-  assert.deepEqual(await newRows(page), [...CLAUDE, 'Far Cloud', 'glm-5.3', 'kimi-k3:cloud']);
+  assert.deepEqual(await newRows(page), ['Far Cloud']);
   // Removed in Settings: gone from the menu, and the chat says why it cannot go on.
   await profilesPage(page);
   await page.click('#setProfiles [data-profile-remove]');

@@ -1644,48 +1644,67 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   console.log('PASS Security settings: four switches, defaults unchanged; Unrestricted Keep changes nothing, Turn off frees all and a new Codex chat starts in Full access; off restores; with protection already off it asks itself');
 });
 
-test('Chat folder: Start in offers the workspace, recent folders and Choose folder...; a chosen folder reaches the chat, outside picks are refused (threat model row 24)', { timeout: 120000 }, async (t) => {
+test('Chat folder: a new chat shows its folder and replaces only an unsent chat', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.workspace, 'proj/sub'), { recursive: true });
-  await symlink(instance.directory, path.join(instance.workspace, 'out'));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-folder-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
-  const page = await app.firstWindow();
-  await page.locator('#rChat').waitFor();
-  const pickNext = (filePaths) => app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: !filePaths.length, filePaths }); }, filePaths);
-  const folder = page.locator('#newFolder');
-  const labels = () => folder.locator('option').allInnerTexts();
-  await page.click('#newBtn'); await folder.waitFor();
-  assert.deepEqual(await labels(), ['Workspace', 'Choose folder…']);
-  // Main sends back only a folder whose real path is inside the workspace: outside, a link out, and Cancel give nothing.
-  for (const [pick, want] of [[[instance.directory], null], [[path.join(instance.workspace, 'out')], null], [[], undefined], [[instance.workspace], '']]) {
-    await pickNext(pick);
-    assert.equal(await page.evaluate(() => window.p9.pickFolder()), want, JSON.stringify(pick));
-  }
-  await pickNext([instance.directory]);
-  await folder.selectOption({ label: 'Choose folder…' });
-  await page.locator('#toasts', { hasText: 'Pick a folder inside the workspace.' }).waitFor({ timeout: 5000 });
-  assert.equal(await folder.inputValue(), '');
-  await pickNext([path.join(instance.workspace, 'proj/sub')]);
-  await folder.selectOption({ label: 'Choose folder…' });
-  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
-  if (process.env.P9_EVIDENCE) await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'chat-folder-pick.png') });
-  await page.locator('#newPop [data-new="claude"]').first().click();
-  await page.locator('.pane .welcome', { hasText: 'proj/sub' }).waitFor({ timeout: 10000 });
-  if (process.env.P9_EVIDENCE) await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'chat-folder-welcome.png') });
-  assert.deepEqual((await call(instance, '/chat')).conversations.map((c) => c.folder), ['proj/sub']);
-  // The folder is now a recent one, also after a reload; Workspace still makes a chat with no folder.
-  await page.reload(); await page.locator('#rChat').waitFor();
-  await page.click('#newBtn'); await folder.waitFor();
-  assert.deepEqual(await labels(), ['Workspace', 'proj/sub', 'Choose folder…']);
-  await folder.selectOption({ label: 'Workspace' });
-  await page.locator('#newPop [data-new="claude"]').first().click();
+  const page = await app.firstWindow(); await page.locator('#rChat').waitFor();
+  await page.click('#newBtn');
+  const folder = page.locator('.pane [data-chat-folder]');
+  await folder.filter({ hasText: instance.workspace }).waitFor({ timeout: 15000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT new-folder-welcome ' + (await page.screenshot()).toString('base64'));
+  const before = (await call(instance, '/chat')).conversations[0].id;
+  await app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths }); }, [path.join(instance.workspace, 'proj/sub')]);
+  await folder.click();
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: path.join(instance.workspace, 'proj/sub') }).waitFor({ timeout: 15000 });
+  let chats = (await call(instance, '/chat')).conversations;
+  assert.equal(chats.length, 1); assert.notEqual(chats[0].id, before); assert.equal(chats[0].folder, 'proj/sub');
+  const pane = page.locator('.pane[data-id="' + chats[0].id + '"]');
+  await pane.locator('.composer textarea').fill('cwd'); await pane.locator('.composer textarea').press('Enter');
+  await pane.locator('.hist', { hasText: 'cwd:new:' + path.join(instance.workspace, 'proj/sub') }).waitFor({ timeout: 20000 });
+  for (const text of ['hello', 'again']) { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter'); await pane.locator('.hist', { hasText: 'echo:' + text }).waitFor({ timeout: 20000 }); }
+  assert.equal(await pane.locator('[data-chat-folder]').count(), 0, 'folder cannot change after sending');
+  assert.equal(await pane.locator('.chat-folder-readonly').innerText(), path.join(instance.workspace, 'proj/sub'));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-folder-readonly ' + (await page.screenshot()).toString('base64'));
+  await page.click('#newBtn');
   await page.waitForFunction(async () => (await window.p9.chat('list')).body.conversations.length === 2, null, { timeout: 10000 });
-  assert.deepEqual((await call(instance, '/chat')).conversations.map((c) => c.folder), ['', 'proj/sub']);
-  console.log('PASS chat folder: outside, linked-out and cancelled picks give nothing; a chosen folder reaches the daemon and the welcome; kept as a recent folder after a reload');
+  chats = (await call(instance, '/chat')).conversations;
+  assert.equal(chats[0].folder, '', 'a later chat starts in the workspace');
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: instance.workspace }).waitFor();
+  const outside = path.join(instance.directory, 'outside-workspace'); await mkdir(outside);
+  await app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths }); }, [outside]);
+  await page.locator('.pane [data-chat-folder]').click();
+  await page.locator('#toasts', { hasText: 'inside the workspace' }).waitFor({ timeout: 10000 });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  await page.locator('.pane [data-chat-folder]').click();
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: outside }).waitFor({ timeout: 15000 });
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal(await page.evaluate(() => window.p9.pickFolder()), null, 'agent lock refuses outside');
+  console.log('PASS chat folder: path shown, chosen folder reaches the agent, empty old chat removed, next chat starts in workspace, outside needs unrestricted');
+});
+
+test('Chat folder: sending while the picker is open keeps the original chat', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'proj'), { recursive: true });
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-folder-race-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process(); t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow(); await page.locator('#rChat').waitFor(); await page.click('#newBtn');
+  const folder = page.locator('.pane [data-chat-folder]'); await folder.filter({ hasText: instance.workspace }).waitFor();
+  const original = (await call(instance, '/chat')).conversations[0].id;
+  await app.evaluate(({ dialog }) => { dialog.showOpenDialog = () => new Promise(resolve => { globalThis.finishFolderPick = resolve; }); });
+  await folder.click();
+  const pane = page.locator('.pane[data-id="' + original + '"]');
+  await pane.locator('.composer textarea').fill('hello'); await pane.locator('.composer textarea').press('Enter');
+  await pane.locator('.hist', { hasText: 'echo:hello' }).waitFor({ timeout: 20000 });
+  await app.evaluate((_, selected) => globalThis.finishFolderPick({ canceled: false, filePaths: [selected] }), path.join(instance.workspace, 'proj'));
+  await page.locator('#toasts', { hasText: 'This chat has a message now' }).waitFor({ timeout: 15000 });
+  await page.waitForFunction(async id => { const c = (await window.p9.chat('list')).body.conversations; return c.length === 1 && c[0].id === id; }, original, { timeout: 10000 });
 });
 
 test('Chat file browser: each scope lists its real folder, a file opens in the editor with its text, ../, links and locked names are refused (threat model row 23)', { timeout: 120000 }, async (t) => {
@@ -1736,9 +1755,9 @@ test('Chat file browser: each scope lists its real folder, a file opens in the e
   // Current project follows the chat shown: a chat started in proj/sub.
   await scope('Current project', 'proj');
   await app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths }); }, [path.join(instance.workspace, 'proj/sub')]);
-  await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
-  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
-  await page.locator('#newPop [data-new="claude"]').first().click();
+  await page.click('#newBtn');
+  await page.locator('.pane [data-chat-folder]').click();
+  await page.locator('.pane [data-chat-folder]').filter({ hasText: path.join(instance.workspace, 'proj/sub') }).waitFor({ timeout: 10000 });
   await listed('proj/sub'); assert.deepEqual(await names(), ['deep.md']);
   // List and read take one string path each (save is tested in file-edit.test.mjs); the daemon refuses ../, links and locked names as on every file route.
   const ask = (action, payload) => page.evaluate(([a, p]) => window.p9.mission(a, p), [action, payload]);

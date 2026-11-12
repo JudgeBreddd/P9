@@ -115,10 +115,8 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       assert.ok(await alpha(page.locator('#setDlg')) >= 0.9, 'Settings background');
       await look('look-settings');
       await page.keyboard.press('Escape');
-      await page.click('#newBtn'); await page.locator('#newPop:not([hidden])').waitFor(); await page.waitForTimeout(300);
-      assert.ok(await alpha(page.locator('#newPop')) >= 0.9, 'new chat picker background');
+      await page.click('#newBtn'); await page.locator('.pane .welcome').waitFor();
       await look('look-new-chat');
-      await page.keyboard.press('Escape');
       assert.ok(await alpha(page.locator('#cards .card').first()) >= 0.9, 'card background');
     });
     await t.test('Usage shows one row per plan window on the Mission page and in its dialog, amber from 75%, with the pace tick', async () => {

@@ -49,7 +49,7 @@ export function mountShell({ askAdmin } = {}) {
     get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
     get land() { return land; }, get landOn() { return landOn; }, get landVideo() { return landVideo; },
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
-    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newRows() { return newRows; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
+    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
     get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get profiles() { return profiles; }, get loadProfiles() { return loadProfiles; }, get defaultEffort() { return defaultEffort; },
     get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
@@ -59,11 +59,11 @@ export function mountShell({ askAdmin } = {}) {
     get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; },
     get missionLive() { return missionLive; }, get modals() { return modals; }, get morph() { return morph; },
     get moveDlg() { return moveDlg; }, get moveReloaded() { return moveReloaded; }, get names() { return names; },
-    get needsLabel() { return needsLabel; }, get newFolder() { return newFolder; }, get noteModal() { return noteModal; },
+    get needsLabel() { return needsLabel; }, get newSession() { return newSession; }, get lastAgent() { return lastAgent; }, get noteModal() { return noteModal; },
     get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; }, get petCanvas() { return petCanvas; },
     get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
     get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
-    get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get newPop() { return newPop; }, get loadProjects() { return panel.loadProjects; },
+    get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get loadProjects() { return panel.loadProjects; },
     get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
     get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get renderMission() { return renderMission; },
     get renderModal() { return renderModal; }, get renderSideChat() { return renderSideChat; }, get renderTabs() { return renderTabs; },
@@ -88,7 +88,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
+  const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
@@ -428,33 +428,7 @@ document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElem
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
-$('#newPop').innerHTML = `<div class="hd eyebrow" id="newInHd" hidden></div><div class="hd eyebrow" id="newFolderHd">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><div id="newAgents"><div data-sec="claude"></div><div data-sec="codex"></div></div>`;
-// New chat's folder (Builder, 2026-10-19: "a dropdown with what folder i want to open the chat in"; threat model row 24): the workspace,
-// the main project, the last 5 folders used, or the system folder dialog (main sends back only a folder inside the workspace;
-// ':pick' cannot be a folder, the daemon refuses ':' in paths).
-// The daemon checks it again. The choice stays picked until changed.
-let newFolder = '';
-$('#newFolder').onchange = async e => {
-  if (e.target.value !== ':pick') { newFolder = e.target.value; return; }
-  let picked = await window.p9.pickFolder();
-  if (picked?.remote) picked = await pickRemoteFolder();
-  if (typeof picked === 'string') newFolder = picked;
-  else if (picked === null) toast({ kind: 'chat', txt: 'Pick a folder inside the workspace.', level: 'warn' }, true);
-  renderNewFolder();
-};
-// O29 (Builder, 2026-11-08): New chat opens on the agent used last on this computer (a chat made or a message sent): its
-// section comes first and its first row has the focus, so + then Enter starts it, with that agent's saved defaults.
-// O44: each row starts the model it names. A live P9's rows come from the agent's own list (the last one this window saw),
-// after the row that starts on the defaults; before any list, that row alone. The sample data keeps its fixed names.
-const SAMPLE_MODELS = { claude: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'], codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini'] };
-const row = (a, label, model) => `<button class="item" data-new="${a}"${model ? ` data-model="${esc(model)}"` : ''}>${label}</button>`;
-const newRows = () => { for (const a of Object.keys(names)) $(`#newAgents [data-sec="${a}"]`).innerHTML = `<hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New ${names[a]}</div>`
-  + row(a, `${names[a]} <span class="muted">default model</span>`, !liveChat.on && SAMPLE_MODELS[a][0])
-  + (liveChat.on ? lastModels[a]?.options || [] : SAMPLE_MODELS[a].slice(1).map(v => ({ value: v, name: v }))).map(o => row(a, `${names[a]} · ${esc(o.name)}`, o.value)).join('')
-  // O48: under New Claude, each profile's models; such a chat runs on that model only
-  + (a === 'claude' && liveChat.on ? profiles.map(p => `<div class="hd eyebrow" data-profile-hd>${esc(p.name)}</div>` + p.models.map(m => `<button class="item" data-new="claude" data-profile="${esc(p.id)}" data-model="${esc(m)}">${esc(m)}</button>`).join('')).join('') : ''); };
-const newPop = popover($('#newBtn'), $('#newPop'), () => { newRows(); $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
-$('#newAgents').onclick = e => { const b = e.target.closest('[data-new]'); if (b) { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn, b.dataset.profile); newPop.close(); } };
+$('#newBtn').onclick = () => newSession(lastAgent());
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
@@ -1258,7 +1232,6 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
     f.id = r.body.conversation; const s = S.sessions.find(x => x.id === f.id);
     if (s) { fresh.splice(fresh.indexOf(f), 1); startDefaults(s, model); renderChats(); }
   }
-  if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;
 };
 // Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.

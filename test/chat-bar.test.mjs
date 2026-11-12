@@ -219,7 +219,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   // A new chat from the New button starts with them before any message, and its first prompt carries them.
   const fresh = async () => {
     const had = await page.locator('#navList .row[data-chat]').evaluateAll((l) => l.map((x) => x.dataset.chat));
-    await page.click('#newBtn'); await page.locator('#newPop [data-new="claude"]').first().click();
+    await page.click('#newBtn');
     await page.waitForFunction((had) => [...document.querySelectorAll('#navList .row[data-chat]')].some((x) => !had.includes(x.dataset.chat)), had, { timeout: 15000 });
     const id = await page.locator('#navList .row[data-chat]').evaluateAll((l, had) => l.map((x) => x.dataset.chat).find((x) => !had.includes(x)), had);
     await page.locator('#nav .row[data-chat="' + id + '"]').click();
@@ -330,10 +330,8 @@ test('New chat (+) opens on the agent used last here: + then Enter after a Codex
   await pane.locator('[data-pill="Mode"][aria-label="Mode: Read-only"]').waitFor();
   await send('mode'); await said('mode:read-only'); await idle();
   const had = await rows(page);
-  await page.click('#newBtn'); await page.locator('#newPop:not([hidden])').waitFor();
-  assert.deepEqual(await page.locator('#newPop .hd').evaluateAll((l) => l.filter((h) => h.offsetParent).map((h) => h.textContent).slice(-2)), ['New Codex', 'New Claude'], 'the last agent\'s section comes first');
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.new), 'codex', 'its first row has the focus');
-  await page.keyboard.press('Enter');
+  await page.click('#newBtn');
+  assert.equal(await page.locator('#newPop').isHidden(), true, 'one click does not open the picker');
   const made = await madeNext(page, had);
   assert.deepEqual([await pillValue(made.pane, 'Agent'), await pillValue(made.pane, 'Mode')], ['Codex', 'Read-only'], 'a Codex chat, in Codex\'s saved mode');
   await made.pane.locator('.composer textarea').fill('mode'); await made.pane.locator('.composer textarea').press('Enter');
@@ -359,7 +357,9 @@ test('Agent pill: an empty chat switches agent and takes that agent\'s defaults;
   await page.keyboard.press('Escape');
   // An empty Codex chat from the New menu: its Agent menu offers Claude with what Claude would start on.
   let had = await rows(page);
-  await page.click('#newBtn'); await page.locator('#newPop [data-new="codex"]').first().click();
+  await page.click('#newBtn');
+  const initial = await madeNext(page, had); had = await rows(page);
+  await choose(page, initial.pane, 'Agent', 'Codex');
   const empty = await madeNext(page, had);
   assert.equal(await pillValue(empty.pane, 'Agent'), 'Codex');
   await pillOf(empty.pane, 'Agent').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
@@ -380,24 +380,14 @@ test('Agent pill: an empty chat switches agent and takes that agent\'s defaults;
   console.log('PASS agent pill: first in the bar; an empty chat switches with the agent\'s defaults; a chat with messages keeps its agent');
 });
 
-// O44: each New menu row starts the model it names. The rows are the agent's own list (the fake agent offers Default, Opus and
-// Haiku) after the row that starts on the defaults; Codex, whose list this window has not seen, has only that row.
-test('New menu: each row names a model the agent offers, and the chat it starts is on that model', { timeout: 150000 }, async (t) => {
-  const { page, errors } = await setup(t, 'new-menu', 'claude');
-  await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
-  const named = (a) => page.locator(`#newPop [data-sec="${a}"] [data-new]`).evaluateAll((l) => l.map((b) => [b.dataset.model ?? null, b.textContent]));
-  assert.deepEqual(await named('claude'), [[null, 'Claude default model'], ['default', 'Claude · Default (recommended)'], ['opus', 'Claude · Opus'], ['haiku', 'Claude · Haiku']]);
-  await until(async () => (await named('codex')).length === 4, 'the open menu fills in when the Codex list is read'); // O47: no reopen
-  assert.deepEqual(await named('codex'), [[null, 'Codex default model'], ['default', 'Codex · Default (recommended)'], ['opus', 'Codex · Opus'], ['haiku', 'Codex · Haiku']], 'O47: listed before any Codex chat');
-  await shot(page, 'o44-new-menu');
-  const had = await rows(page);
-  await page.locator('#newPop [data-new="claude"][data-model="haiku"]').click();
-  const made = await madeNext(page, had);
-  await until(async () => await pillValue(made.pane, 'Model') === 'Haiku', 'the chat shows the row\'s model', 5000);
+test('New chat model pill lists the agent models and selects the model for the first message', { timeout: 150000 }, async (t) => {
+  const { page, errors } = await setup(t, 'new-model-pill', 'claude');
+  const had = await rows(page); await page.click('#newBtn'); const made = await madeNext(page, had);
+  assert.deepEqual((await pillItems(page, made.pane, 'Model')).slice(0, 3), ['Default (recommended) ✓', 'Opus', 'Haiku']);
+  await choose(page, made.pane, 'Model', 'Haiku');
   await made.pane.locator('.composer textarea').fill('model'); await made.pane.locator('.composer textarea').press('Enter');
   await made.pane.locator('.hist', { hasText: 'model:haiku' }).waitFor({ timeout: 20000 });
   assert.deepEqual(errors, []);
-  console.log('PASS new menu: rows from the agent\'s own list; the row picked is the model the chat runs on');
 });
 
 // O44 review: the window's chat calls, held in the main process after the daemon answers. hold('create') holds the create
@@ -418,7 +408,7 @@ async function holdChat(app) {
   return { hold: (what, ms = 0) => app.evaluate((_, [what, ms]) => Object.assign(globalThis.o44, { what, ms, done: 0 }), [what, ms]), done: () => app.evaluate(() => globalThis.o44.done),
     once: (what, pre, post) => app.evaluate((_, [what, pre, post]) => { globalThis.o44.once.push({ what, pre, post }); globalThis.o44.done = 0; }, [what, pre, post]) };
 }
-const fromRow = async (page, model) => { const had = await rows(page); await page.click('#newBtn'); await page.locator(`#newPop [data-new="claude"][data-model="${model}"]`).click(); return madeNext(page, had); };
+const fromRow = async (page, model) => { const had = await rows(page); await page.click('#newBtn'); const made = await madeNext(page, had); await choose(page, made.pane, 'Model', model === 'opus' ? 'Opus' : 'Haiku'); return made; };
 const sendModel = async (pane) => { await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter'); };
 const ranOn = (pane, model) => pane.locator('.hist', { hasText: 'model:' + model }).waitFor({ timeout: 20000 });
 
@@ -458,13 +448,14 @@ test('New menu: two overlapping creates for one agent each get their own row\'s 
   const chat = await holdChat(app);
   await chat.once('create', 10000, 0); await chat.once('create', 0, 4000);
   const had = await rows(page);
-  await page.click('#newBtn'); await page.locator('#newPop [data-new="claude"][data-model="haiku"]').click();
+  await page.click('#newBtn');
   const b = await fromRow(page, 'opus');
   assert.equal(await pillValue(b.pane, 'Model'), 'Opus', 'the second create\'s chat, before either reply: its own row\'s model');
   await sendModel(b.pane);
   assert.equal(await chat.done(), 0, 'the message went while the second create\'s reply was still held');
   await ranOn(b.pane, 'opus');
   const a = await madeNext(page, [...had, b.id]);
+  await choose(page, a.pane, 'Model', 'Haiku');
   assert.equal(await pillValue(a.pane, 'Model'), 'Haiku', 'the first create\'s chat: its own row\'s model');
   await sendModel(a.pane); await ranOn(a.pane, 'haiku');
   await page.click(`#navList .row[data-chat="${b.id}"]`); await b.pane.locator('[data-pill="Model"]').waitFor({ timeout: 5000 }); // the Haiku chat was shown on its created
@@ -498,8 +489,10 @@ const panes = (page, where = '#chats') => page.locator(where + ' .pane[data-id]'
 // An empty Codex chat from the New menu, then the chat with messages shown again: the open chats are [chat with messages, empty].
 async function emptyBeside(page, id) {
   const had = await rows(page);
-  await page.click('#newBtn'); await page.locator('#newPop [data-new="codex"]').first().click();
-  const empty = await madeNext(page, had);
+  await page.click('#newBtn');
+  const initial = await madeNext(page, had), before = await rows(page);
+  await choose(page, initial.pane, 'Agent', 'Codex');
+  const empty = await madeNext(page, before);
   await page.locator('#nav .row[data-chat="' + id + '"]').click();
   return empty.id;
 }
