@@ -619,6 +619,28 @@ test('Delegate peer help: ask_chat asks a chat the user opened to questions; its
   assert.equal((await call(instance, `/chat/${B}/askable`, 'POST', { on: true })).status, 200);
   await said(B, 'late reply', at);
 
+  // Nor is a question whose asker left the project while it waited; and a cancel releases a call already waiting.
+  const elsewhere = (await call(instance, '/projects', 'POST', { name: 'Other', work: { kind: 'new', parent: '', name: 'other' } })).body.project.id;
+  at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'late' });
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode', timeoutMs: 0 })).answered, false);
+  await until(instance, (e) => e.conversation === B && e.type === 'held', at);
+  assert.equal((await call(instance, `/chat/${a.conversation}/project`, 'POST', { project: elsewhere })).status, 200);
+  const left = await a.tool('ask_chat', {});
+  assert.deepEqual([left.error, left.reason], ['not-answered', 'not-a-peer']);
+  assert.equal((await call(instance, `/chat/${a.conversation}/project`, 'POST', { project })).status, 200);
+  await said(B, 'late reply', at);
+  at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'slow' });
+  await said(B, 'working', at);
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode', timeoutMs: 0 })).answered, false);
+  const waiter = a.tool('ask_chat', {});
+  await pause(200);
+  assert.equal((await a.tool('ask_chat', { cancel: true })).cancelled, true);
+  assert.equal((await waiter).reason, 'cancelled-by-you');
+  await call(instance, `/chat/${B}/cancel`, 'POST');
+  for (let i = 0; i < 100 && (await rows(instance)).find((c) => c.id === B).state === 'turn'; i += 1) await pause(100);
+
   // One open question; timeoutMs 0 returns at once; cancel takes a waiting question out; a cancelled turn tells the asker.
   at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
   await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'slow' });

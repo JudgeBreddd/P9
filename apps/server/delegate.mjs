@@ -295,7 +295,7 @@ export function createDelegate({ chat, allowed }) {
     if (args.cancel) {
       if (!open) return { error: 'no-open-question' };
       asks.delete(caller);
-      open.cancelled = true; // a question still on its way to the helper is taken out when it lands (below)
+      open.cancelled = true; open.drop(); // every call waiting on it returns now; a question still on its way to the helper is taken out when it lands (below)
       // Still waiting its turn: taken out, so the helper never sees it. Already being answered: only the answer is dropped.
       const removed = open.held && !open.outcome && chat.unhold(open.chat, { held: open.held }).status === 200;
       return { chat: open.chat, cancelled: true, ...(!removed && !open.outcome && { detail: 'It had already started on it; its answer is dropped.' }) };
@@ -304,13 +304,16 @@ export function createDelegate({ chat, allowed }) {
       // The lock, and the chat's own turn being an answer to another chat: no question leads to a second one.
       if (chat.lock(caller).on) return { error: 'agent-lock-on' };
       if (open) return { error: 'question-open', chat: open.chat, detail: 'You have a question open. Call ask_chat with no arguments to wait for its answer, or with cancel: true to drop it.' };
-      const found = reach(caller, args.chat);
+      const found = reach(caller, args.chat), target = args.chat;
+      // Beside: in the caller's project, and neither started the other. Checked now and again when the question's turn comes.
+      const beside = (it = reach(caller, target)) => !!it && !it.mine && !below(it.family, target).includes(caller);
       if (!found) return { error: 'chat-not-found' };
-      if (found.mine || below(found.family, args.chat).includes(caller)) return { error: 'not-a-peer', detail: 'ask_chat is for a chat beside you. For a chat you started use send_chat and wait_chat; your parent reads your reply when your turn ends.' };
+      if (!beside(found)) return { error: 'not-a-peer', detail: 'ask_chat is for a chat beside you. For a chat you started use send_chat and wait_chat; your parent reads your reply when your turn ends.' };
       if (!chat.askable(args.chat)) return { error: 'not-askable', detail: 'The user has not opened that chat to questions (its tab menu, Open to questions). Work it out yourself or ask the user.' };
       const it = chat.info(args.chat); // no ask before waking a stopped or long-idle helper: the user opening it to questions is the yes
       if (stateOf(it) === 'failed') return { error: 'chat-not-askable', reason: it.state };
-      const asked = chat.ask(args.chat, args.text, caller), mine = open = { chat: args.chat, waits: 0 };
+      const asked = chat.ask(args.chat, args.text, caller, () => beside()), mine = open = { chat: args.chat, waits: 0 };
+      mine.dropped = new Promise((resolve) => { mine.drop = resolve; });
       // Sending can take as long as starting a stopped helper, so the call does not wait for it (timeoutMs: 0 returns at
       // once). A question the helper could not take ends as an answer that did not come.
       const sent = asked.sent.catch(() => ({ status: 500, error: 'failed' })).then((sent) => {
@@ -335,8 +338,10 @@ export function createDelegate({ chat, allowed }) {
     const aborted = new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }));
     let timer;
     open.waits += 1;
-    try { await Promise.race([open.done, aborted, new Promise((resolve) => { timer = setTimeout(resolve, Math.min(args.timeoutMs ?? WAIT_MS, WAIT_MS)); })]); } finally { clearTimeout(timer); open.waits -= 1; }
+    try { await Promise.race([open.done, open.dropped, aborted, new Promise((resolve) => { timer = setTimeout(resolve, Math.min(args.timeoutMs ?? WAIT_MS, WAIT_MS)); })]); } finally { clearTimeout(timer); open.waits -= 1; }
     const title = chat.info(open.chat)?.title ?? null;
+    // Cancelled by another call while this one waited: the answer is dropped here too, even if it came.
+    if (open.cancelled) return { error: 'not-answered', chat: open.chat, reason: 'cancelled-by-you', detail: 'You cancelled this question; its answer is dropped.' };
     if (!open.outcome) return { chat: open.chat, title, answered: false, detail: 'No answer yet: it is ' + (stateOf(chat.info(open.chat) ?? {}) === 'working' ? 'working' : 'not done') + '. Call ask_chat with no arguments to keep waiting, or with cancel: true to drop the question. You can carry on with other work meanwhile.' };
     if (asks.get(caller) === open) asks.delete(caller);
     if (open.outcome.error) return { error: 'not-answered', chat: open.chat, reason: open.outcome.error, detail: 'It did not answer (its turn was stopped, or it could not take the question). Nothing is waiting any more.' };

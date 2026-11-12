@@ -881,10 +881,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (cancelled || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
     const gone = items.filter((item) => !item.allowed());
     unheld(id, gone, 'session-ended');
-    // A question that waited while the user closed this chat to questions is not answered.
-    const shut = api.askable(id) ? [] : items.filter((item) => !gone.includes(item) && solos.has(item.body));
-    unheld(id, shut, 'not-askable');
-    gone.push(...shut);
+    // A question is checked again when its turn comes: one that waited while the user closed this chat to questions, or
+    // while its asker stopped being a chat beside this one (moved to another project), is not answered.
+    for (const item of items.filter((x) => !gone.includes(x) && solos.has(x.body))) {
+      const why = !api.askable(id) ? 'not-askable' : solos.get(item.body).still?.() === false ? 'not-a-peer' : null;
+      if (why) { unheld(id, [item], why); gone.push(item); }
+    }
     const send = [];
     let text = '', images = [], mode, rest = false;
     for (const item of items.filter((x) => !gone.includes(x))) {
@@ -1220,10 +1222,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Peer help (delegate.mjs ask_chat). ask: text goes to chat id as a question from the chat `from`, after whatever
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.
     answering: (id) => !!live.get(id)?.solo,
-    ask(id, text, from) {
+    ask(id, text, from, still) {
       let end;
       const done = new Promise((resolve) => { end = resolve; });
-      return { sent: api.prompt(id, { text, when: 'queue' }, undefined, from, { end }), done };
+      return { sent: api.prompt(id, { text, when: 'queue' }, undefined, from, { end, still }), done };
     },
     // Open to questions: the user's own mark on a chat (desktop only, server.mjs), in prefs under askable:<chat>.
     askable: (id) => db.prepare('SELECT value FROM prefs WHERE key = ?').get('askable:' + id)?.value === 'on',
