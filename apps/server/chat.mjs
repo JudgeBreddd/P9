@@ -1179,7 +1179,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
       // answers another chat: they wait for the chat's own next message.
       const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
-      const prompt = [...told.map((n) => ({ type: 'text', text: fromFor(n) + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
+      const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id); } catch {} } } },

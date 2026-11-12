@@ -779,4 +779,7 @@ test('Delegate ready emits one parent report after the worker turn ends', { time
   assert.match(cards[0], /check: passed/);
   assert.match(cards[0], /Weakest part: not live/);
   assert.match(cards[0], /Tokens used: Not reported/);
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'hello' });
+  const delivered = await until(instance, (e) => e.conversation === a.conversation && e.data?.content?.text?.includes('Ready report pinned for B4.'));
+  assert.match(delivered.hit.data.content.text, /^echo:\[p9\] Ready report pinned for B4\./);
 });
