@@ -288,6 +288,18 @@ test('Delegate: a chat working in a wider mode takes no message from a narrower 
   const replies = (await events(instance, a.conversation)).map((e) => e.data?.content?.text).filter((x) => typeof x === 'string');
   assert.deepEqual(replies.slice(replies.indexOf('late reply') + 1), ['mode:plan', 'mode:auto'], 'the chat\'s queued text ran in the mode of your later message');
 
+  // Three of your own messages waiting, the middle one for another mode: they run in the order sent, each in its mode.
+  // The third is not joined to the first across the second.
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'late', mode: 'Plan' });
+  for (const mode of ['Plan', 'Auto', 'Plan']) assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mode', mode, when: 'queue' })).status, 202);
+  let order = [];
+  for (let i = 0; i < 100 && order.length < 3; i++) {
+    const all = (await events(instance, a.conversation)).map((e) => e.data?.content?.text).filter((x) => typeof x === 'string');
+    order = all.slice(all.lastIndexOf('late reply') + 1);
+    if (order.length < 3) await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.deepEqual(order, ['mode:plan', 'mode:auto', 'mode:plan'], 'waiting messages ran in the order sent');
+
   // A 25,000-character task: the first page is that message cut to 20,000, and next moves on to the reply.
   const long = 'x'.repeat(25_000);
   const made = await u.tool('open_chat', { text: long, title: 'Long' });
