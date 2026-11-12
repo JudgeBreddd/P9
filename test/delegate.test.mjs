@@ -256,6 +256,60 @@ test('Delegate: a provider-profile chat\'s worker stays on that profile, on its 
   console.log('PASS Delegate profile: the worker got the profile\'s address, key and model; a model outside the profile was refused');
 });
 
+test('Delegate notes: a note reaches a wider working chat and a worker\'s parent, starts no turn, and is read with the next message', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  // No project: the parent, its worker and a chat that is neither.
+  const a = await agent(t, instance), other = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'mcp', title: 'Kid' }), kid = await connect(t, instance, made.chat);
+  const said = (id, text, after) => until(instance, (event) => event.conversation === id && event.data?.content?.text === text, after);
+  const of = async (id, type) => (await events(instance, id)).filter((e) => e.type === type);
+  const state = async (id) => (await rows(instance)).find((c) => c.id === id).state;
+  const quiet = async (id) => { for (let i = 0; i < 100 && await state(id) === 'turn'; i += 1) await pause(100); assert.notEqual(await state(id), 'turn'); };
+  // The worker is in Plan; its parent is mid-turn in Auto. An ordinary message is refused; a note goes into the turn.
+  await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Plan' });
+  await said(kid.conversation, 'mode:plan');
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'slow', mode: 'Auto' });
+  await said(a.conversation, 'working');
+  assert.deepEqual(await kid.tool('send_chat', { chat: a.conversation, text: 'the branch is pushed', when: 'note' }), { chat: a.conversation, sent: 'as a note: into its running turn' });
+  await said(a.conversation, 'got:the branch is pushed');
+  const steered = (await of(a.conversation, 'user')).at(-1).data;
+  assert.deepEqual([steered.text, steered.from, steered.info, steered.steered], ['the branch is pushed', kid.conversation, true, true]);
+  // Its turn over, a note starts none: it is in the chat's history and waits for the next message.
+  await call(instance, `/chat/${a.conversation}/cancel`, 'POST', {});
+  await quiet(a.conversation);
+  const before = (await of(a.conversation, 'user')).length;
+  assert.deepEqual(await kid.tool('send_chat', { chat: a.conversation, text: 'review is done', when: 'note' }), { chat: a.conversation, sent: 'as a note: it reads it with its next message' });
+  await pause(500);
+  assert.notEqual(await state(a.conversation), 'turn', 'a note started a turn');
+  assert.equal((await of(a.conversation, 'user')).length, before, 'a note was recorded as a message');
+  assert.deepEqual((await of(a.conversation, 'note')).map((e) => [e.data.text, e.data.from]), [['review is done', kid.conversation]]);
+  // The next message carries it, once.
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Auto' });
+  await said(a.conversation, 'note:review is done');
+  await quiet(a.conversation);
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'model', mode: 'Auto' });
+  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text?.startsWith('model:'));
+  await quiet(a.conversation);
+  const replies = (await events(instance, a.conversation)).map((e) => e.data?.content?.text).filter((x) => typeof x === 'string');
+  assert.equal(replies.filter((x) => x === 'note:review is done').length, 1, 'a waiting note was sent twice');
+  assert.ok(replies.at(-1).startsWith('model:'), replies.at(-1));
+  // A parent notes its worker; a chat that is neither parent, worker nor in the same project reaches nothing.
+  assert.equal((await a.tool('send_chat', { chat: kid.conversation, text: 'thanks', when: 'note' })).sent, 'as a note: it reads it with its next message');
+  assert.deepEqual(await other.tool('send_chat', { chat: a.conversation, text: 'hello', when: 'note' }), { error: 'chat-not-found' });
+  assert.deepEqual(await kid.tool('send_chat', { chat: other.conversation, text: 'hello', when: 'note' }), { error: 'chat-not-found' });
+  assert.equal((await kid.tool('send_chat', { chat: a.conversation, text: 'x'.repeat(20001), when: 'note' })).error, 'request-refused');
+  // A prompt the agent refuses does not use up the waiting note: the next prompt carries it.
+  const heard = async () => (await events(instance, kid.conversation)).filter((e) => e.data?.content?.text === 'note:thanks').length;
+  await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'auth-required', mode: 'Plan' });
+  await until(instance, (event) => event.conversation === kid.conversation && event.type === 'error');
+  await quiet(kid.conversation);
+  const first = await heard();
+  await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Plan' });
+  for (let i = 0; i < 100 && await heard() === first; i += 1) await pause(100);
+  assert.equal(await heard(), first + 1, 'a note sent with a refused prompt was lost');
+});
+
 test('Delegate: a chat working in a wider mode takes no message from a narrower one; read_chat gets past a message longer than a page', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });

@@ -162,6 +162,16 @@ test('Delegate window: workers indented under their chat and folded past three; 
   await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
   await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
   await until(async () => await page.locator('#setDelegation [data-dg-model="0"]').count() === 1 && await page.locator('#setDelegation [data-dg-model="0"]').inputValue() === 'opus', 'Settings reopened with the saved model');
+  // A note from a worker shows in its parent's chat under the worker's name, marked as information.
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await call(instance, '/chat/' + kids[0] + '/prompt', 'POST', { text: 'mcp' });
+  const kid = await tools(t, instance, kids[0]);
+  assert.match((await kid.tool('send_chat', { chat: parent, text: 'The branch is pushed and the tests pass.', when: 'note' })).sent ?? '', /^as a note/);
+  await row(parent).click();
+  const who = page.locator(`.pane[data-id="${parent}"] .msg.user .who`).last();
+  await until(async () => (await who.innerText()).startsWith('Note from Kid 1 · information only'), 'the note under its sender\'s name');
+  await who.scrollIntoViewIfNeeded();
+  await shot(page, 'note-from-worker');
   assert.deepEqual(errors, [], 'page errors: ' + errors.join(' | '));
   console.log('PASS Delegate window: 3 workers indented, 4 folded behind "Show 4 workers"; Kid 1\'s approval and Kid 2\'s question answered from the parent chat; Settings > Delegation saved ask, 3 workers: Claude opus, Codex, a provider profile');
 });
