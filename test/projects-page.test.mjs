@@ -461,13 +461,13 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   assert.ok(base, 'found P9\'s projects folder');
   const sprint = path.join(base, 'sprints', lead);
   await mkdir(path.join(sprint, 'roles'), { recursive: true, mode: 0o700 }); await mkdir(path.join(sprint, 'notes'), { mode: 0o700 });
-  await writeFile(path.join(sprint, 'plan.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
+  await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
   await writeFile(path.join(sprint, 'rules.md'), 'Only touch docs/.');
   await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
   await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
   const { page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
-  const row = page.locator('[data-pj="spfile"]', { hasText: 'plan.md' });
+  const row = page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' });
   await row.waitFor({ timeout: 10000 });
   assert.equal(await page.locator('[data-pj="spfile"]').count(), 4);
   await row.click();
@@ -475,8 +475,8 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await box.waitFor({ timeout: 5000 });
   assert.match(await box.inputValue(), /Goal: the docs site\./);
   await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
-  await until(async () => (await readFile(path.join(sprint, 'plan.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to plan.md');
-  assert.match(await readFile(path.join(sprint, 'plan.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
+  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to sprint.md');
+  assert.match(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
   await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-files ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.deepEqual(errors, []);

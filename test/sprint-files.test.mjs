@@ -18,23 +18,23 @@ test('Sprint files: fixed names only, no links, whole writes, made once and neve
   const home = path.join(dir, 'sprints'), files = createSprintFiles({ home });
   assert.equal(files.exists(LEAD), false);
   assert.equal(files.ensure(LEAD), path.join(home, LEAD));
-  assert.match(files.read(LEAD, 'plan.md'), /^# Plan\n\nGoal:[\s\S]*## Items[\s\S]*## What I will need from you/);
+  assert.match(files.read(LEAD, 'sprint.md'), /^# Plan\n\nGoal:[\s\S]*## Items[\s\S]*## What I will need from you/);
   const notes = files.ensureWorker(LEAD, 'w1');
   assert.equal(notes, path.join(home, LEAD, 'notes', 'w1.md'));
   assert.match(fs.readFileSync(notes, 'utf8'), /^## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n$/);
   assert.equal(files.read(LEAD, 'roles/w1.instructions.md'), '');
   // Made once: an edit stays.
-  assert.equal(files.write(LEAD, 'plan.md', 'mine'), true);
+  assert.equal(files.write(LEAD, 'sprint.md', 'mine'), true);
   files.ensure(LEAD); files.ensureWorker(LEAD, 'w1');
-  assert.equal(files.read(LEAD, 'plan.md'), 'mine');
-  assert.equal((fs.statSync(path.join(home, LEAD, 'plan.md')).mode & 0o777), 0o600);
-  assert.deepEqual(files.list(LEAD).map((f) => f.name), ['plan.md', 'roles/w1.instructions.md', 'roles/w1.rules.md', 'notes/w1.md']);
+  assert.equal(files.read(LEAD, 'sprint.md'), 'mine');
+  assert.equal((fs.statSync(path.join(home, LEAD, 'sprint.md')).mode & 0o777), 0o600);
+  assert.deepEqual(files.list(LEAD).map((f) => f.name), ['sprint.md', 'roles/w1.instructions.md', 'roles/w1.rules.md', 'notes/w1.md']);
   // Only the names on the list, under a chat ID.
-  for (const name of ['../x.md', 'other.md', 'roles/W1.rules.md', 'roles/w1.md', 'notes/a/b.md', 'notes/.x.md', 'plan.md/x', '/etc/passwd'])
+  for (const name of ['../x.md', 'other.md', 'roles/W1.rules.md', 'roles/w1.md', 'notes/a/b.md', 'notes/.x.md', 'sprint.md/x', '/etc/passwd'])
     assert.equal(files.write(LEAD, name, 'x'), false, name);
-  assert.equal(files.write('not-an-id', 'plan.md', 'x'), false);
-  assert.equal(files.write(LEAD, 'plan.md', 'x'.repeat(MAX_FILE + 1)), false, 'over the cap');
-  assert.equal(files.write(LEAD, 'plan.md', 'bad \ud800'), false, 'not well formed');
+  assert.equal(files.write('not-an-id', 'sprint.md', 'x'), false);
+  assert.equal(files.write(LEAD, 'sprint.md', 'x'.repeat(MAX_FILE + 1)), false, 'over the cap');
+  assert.equal(files.write(LEAD, 'sprint.md', 'bad \ud800'), false, 'not well formed');
   assert.deepEqual(fs.readdirSync(path.join(home, LEAD)).filter((f) => f.includes('p9-tmp')), [], 'no temp file left');
   // A link in place of a folder or a file is refused, read and write.
   const outside = path.join(dir, 'outside'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'w2.md'), 'secret');
@@ -48,7 +48,7 @@ test('Sprint files: fixed names only, no links, whole writes, made once and neve
   assert.equal(fs.readFileSync(path.join(outside, 'w2.md'), 'utf8'), 'secret');
   // No state folder: nothing.
   const none = createSprintFiles({ home: null });
-  assert.equal(none.ensure(LEAD), null); assert.equal(none.write(LEAD, 'plan.md', 'x'), false); assert.deepEqual(none.list(LEAD), []);
+  assert.equal(none.ensure(LEAD), null); assert.equal(none.write(LEAD, 'sprint.md', 'x'), false); assert.deepEqual(none.list(LEAD), []);
   console.log('PASS Sprint files module');
 });
 
@@ -87,7 +87,7 @@ test('Sprint files: open_chat makes the plan and a keyed worker\'s files; rules.
   assert.equal(first.error, undefined, JSON.stringify(first));
   assert.match(first.sprint, new RegExp(`[\\\\/]sprints[\\\\/]${a.conversation}$`));
   const sprint = first.sprint, file = (name) => path.join(sprint, name);
-  assert.match(fs.readFileSync(file('plan.md'), 'utf8'), /^# Plan/);
+  assert.match(fs.readFileSync(file('sprint.md'), 'utf8'), /^# Plan/);
   for (const name of ['roles/w1.instructions.md', 'roles/w1.rules.md', 'notes/w1.md']) assert.ok(fs.existsSync(file(name)), name);
   await a.done(first.chat);
   // The stand-in writes each P9 rules block it got to rules.log in its own working folder, the workspace: one log for all.
@@ -123,17 +123,17 @@ test('Sprint files: open_chat makes the plan and a keyed worker\'s files; rules.
   const view = (await call(instance, `/projects/${project}`)).body.project;
   const sp = view.sprints.find((s) => s.lead === a.conversation);
   assert.ok(sp, JSON.stringify(view.sprints));
-  assert.ok(['plan.md', 'rules.md', 'notes/w1.md', 'roles/w2.instructions.md'].every((n) => sp.files.some((f) => f.name === n)), JSON.stringify(sp.files.map((f) => f.name)));
-  const edit = await call(instance, `/projects/${project}/sprint-file`, 'POST', { lead: a.conversation, name: 'plan.md', text: '# Plan\n\nGoal: docs.' });
+  assert.ok(['sprint.md', 'rules.md', 'notes/w1.md', 'roles/w2.instructions.md'].every((n) => sp.files.some((f) => f.name === n)), JSON.stringify(sp.files.map((f) => f.name)));
+  const edit = await call(instance, `/projects/${project}/sprint-file`, 'POST', { lead: a.conversation, name: 'sprint.md', text: '# Plan\n\nGoal: docs.' });
   assert.equal(edit.status, 200);
-  assert.equal(fs.readFileSync(file('plan.md'), 'utf8'), '# Plan\n\nGoal: docs.');
+  assert.equal(fs.readFileSync(file('sprint.md'), 'utf8'), '# Plan\n\nGoal: docs.');
   assert.equal((await call(instance, `/projects/${project}/sprint-file`, 'POST', { lead: a.conversation, name: '../x.md', text: 'x' })).status, 400);
-  assert.equal((await call(instance, `/projects/${project}/sprint-file`, 'POST', { lead: a.conversation, name: 'plan.md', text: 'x', more: 1 })).status, 400);
+  assert.equal((await call(instance, `/projects/${project}/sprint-file`, 'POST', { lead: a.conversation, name: 'sprint.md', text: 'x', more: 1 })).status, 400);
   // The lead must be in this project: another project's page cannot reach it.
   fs.mkdirSync(path.join(instance.workspace, 'other'));
   const other = (await call(instance, '/projects', 'POST', { name: 'Other', work: { kind: 'linked', folder: 'other' } })).body.project.id;
-  assert.equal((await call(instance, `/projects/${other}/sprint-file`, 'POST', { lead: a.conversation, name: 'plan.md', text: 'x' })).status, 404);
+  assert.equal((await call(instance, `/projects/${other}/sprint-file`, 'POST', { lead: a.conversation, name: 'sprint.md', text: 'x' })).status, 404);
   assert.deepEqual((await call(instance, `/projects/${other}`)).body.project.sprints, []);
-  assert.equal(fs.readFileSync(file('plan.md'), 'utf8'), '# Plan\n\nGoal: docs.');
+  assert.equal(fs.readFileSync(file('sprint.md'), 'utf8'), '# Plan\n\nGoal: docs.');
   console.log('PASS Sprint files through the daemon');
 });

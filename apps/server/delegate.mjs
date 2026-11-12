@@ -24,7 +24,7 @@ export const DELEGATE_TOOLS = (input) => {
   return [
     ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours, so name one only when the user asked for it; mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
       + 'than yours, never wider. The same key from you returns the chat it made before instead of a second one. The user is asked first, except in Unrestricted mode. '
-      + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID, the folder it works in and your sprint\'s folder: plan.md there is your plan to fill in, rules.md your sprint rules, '
+      + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID, the folder it works in and your sprint\'s folder: sprint.md there is your plan to fill in, rules.md your sprint rules, '
       + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md is the worker\'s own. Follow it with wait_chat.',
     input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -' },

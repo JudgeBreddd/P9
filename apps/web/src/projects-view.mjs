@@ -89,7 +89,7 @@ export function installProjects(o, api) {
   }
   // D1, D3, D4: a sprint's files, kept in P9; its lead and workers edit them too. One open at a time, saved as you type.
   function sprintHtml(sp) {
-    const about = { 'plan.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker' };
+    const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker' };
     const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this worker gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this worker with the sprint rules' : 'the worker keeps it itself');
     return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2><span class="muted">its files, kept in P9</span><span class="saved" data-sp-saved role="status">Saved</span></div>
       ${sp.files.map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;

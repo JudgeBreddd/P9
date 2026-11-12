@@ -1,6 +1,6 @@
 // The sprint's files (sprint spec D1, D3, D4; SECURITY.md § Sprint files). Plain files in the sprint's folder in P9's
 // state, <ownership>/sprints/<lead chat id>/, beside the worker folders: the lead's agent, its workers and the owner
-// (project page) all read and edit them. Only these names: plan.md; rules.md (the sprint rules set_rules writes, sent
+// (project page) all read and edit them. Only these names: sprint.md; rules.md (the sprint rules set_rules writes, sent
 // with every lead message); roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent
 // with the sprint rules to that worker); notes/<key>.md (the worker keeps it itself: Now and Log).
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import path from 'node:path';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const KEY = '[a-z0-9][a-z0-9._-]{0,63}'; // open_chat's key rule
-const NAME = new RegExp(`^(?:plan\\.md|rules\\.md|roles/${KEY}\\.(?:instructions|rules)\\.md|notes/${KEY}\\.md)$`);
+const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles/${KEY}\\.(?:instructions|rules)\\.md|notes/${KEY}\\.md)$`);
 export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
@@ -47,7 +47,7 @@ export function createSprintFiles({ home }) {
     read,
     write,
     // D1: the sprint's folder and its plan, made at the lead's first worker.
-    ensure(lead) { start(lead, 'plan.md', PLAN); return folderOf(lead); },
+    ensure(lead) { start(lead, 'sprint.md', PLAN); return folderOf(lead); },
     // D3, D4: a keyed worker's role files and its notes. Returns the notes file's full path.
     ensureWorker(lead, key) {
       start(lead, `roles/${key}.instructions.md`, ''); start(lead, `roles/${key}.rules.md`, ''); start(lead, `notes/${key}.md`, NOTES);
@@ -57,7 +57,7 @@ export function createSprintFiles({ home }) {
     list(lead) {
       const folder = folderOf(lead);
       if (!folder) return [];
-      const names = ['plan.md', 'rules.md'];
+      const names = ['sprint.md', 'rules.md'];
       for (const dir of ['roles', 'notes']) {
         try { for (const f of readdirSync(path.join(folder, dir)).sort()) names.push(dir + '/' + f); } catch { /* none */ }
       }

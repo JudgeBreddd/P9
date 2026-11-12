@@ -843,11 +843,11 @@ A sprint's plan, rules, role files and workers' notes are plain files in the spr
 id>/` (the same folder as its worker folders, 0700). The lead's agent, its workers and you all read and edit them.
 Written before the code (sprint spec D1, D3, D4).
 
-- **Only these names.** `plan.md`, `rules.md`, `roles/<key>.instructions.md`, `roles/<key>.rules.md` and
+- **Only these names.** `sprint.md`, `rules.md`, `roles/<key>.instructions.md`, `roles/<key>.rules.md` and
   `notes/<key>.md`, where `key` follows `open_chat`'s key rule. P9 reads or writes no other name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
   (a temp file, then a rename).
-- **Who makes them.** P9 makes `plan.md` (a short outline) at the lead's first worker. For a worker with a key it
+- **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker. For a worker with a key it
   makes empty role files and a notes outline. It never writes over a file that is already there.
 - **What reaches an agent.** `rules.md` is the sprint rules (`set_rules` writes it; a value kept from before this
   change is still read until the first `set_rules`). A keyed worker's `roles/<key>.rules.md` follows them, under the
