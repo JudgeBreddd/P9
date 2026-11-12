@@ -56,22 +56,24 @@ When an agent makes something to look at, such as a page, a diagram or a plan, i
 
 ### Delegate
 
-A chat's agent can hand part of a task to a **worker**: another P9 chat. Workers appear beneath the chat that started them in the sidebar. Open a worker to read its work or send it a message; its questions and approvals also appear in the parent chat. Stop or close the parent to stop its workers, including workers they started.
+A chat's agent can hand part of a task to a **worker**: another P9 chat. Workers appear beneath the chat that started them in the sidebar. Open a worker to read its work or send it a message; its questions and approvals also appear in the parent chat. Stopping or closing the parent stops its workers, including workers they started. The agent can also interrupt a worker's current turn or close it altogether.
 
 In **Settings → Delegation**, choose who may start a sprint (a chat and its workers):
 
 - **Off** prevents new workers; existing workers keep running.
-- **Ask me first** asks you before a chat's first worker, even in Unrestricted mode. Later workers follow the agent's mode and approval rules.
+- **Ask me first** asks before the first worker of a chat you started, even in Unrestricted mode. Later worker-start requests follow the agent's mode and approval rules.
 - **Agent decides** follows the agent's mode and approval rules without that first question.
 
-Set **Workers per chat** to limit running workers, and choose an agent, model and effort for each worker row. A stopped worker frees its row. These are defaults: an agent can request a different setting when you ask it to. A worker cannot run in a wider mode than its parent or be created in another project. The agent can set sprint rules that P9 includes with its messages to the workers; those rules cannot widen their permissions.
+Set **Workers per chat** to limit workers not yet stopped, including idle workers, and choose an agent, model and effort for each worker row. A stopped worker frees its row. These rows are defaults, not a fence: P9 tells the agent to request different settings only when you ask, but does not enforce that instruction. A worker starts no wider than its parent and in the same project; new messages are capped at the sender's current mode. Narrowing the parent does not interrupt a worker's running turn. The agent can set sprint rules that P9 includes with messages to workers it started directly; those rules do not change permissions.
+
+An agent can list, read, wait on and message any chat in its own project; it can stop or answer requests only for chats it started, directly or through workers. The parent agent can answer a worker's question and can answer an approval after the usual check; in Unrestricted mode the approval needs no extra question.
 
 | | P9 workers | An agent's built-in sub-agents |
 |---|---|---|
 | Visible as chats | Yes | Managed by the agent; not separate P9 chats |
-| After a P9 restart | Chats and history remain; interrupted work is not resent automatically | Managed by the agent |
+| After a P9 restart | Chats and history remain; P9 normally sends the sprint's top chat one line about interrupted chats, starting a turn there, but does not resend the interrupted work; repeated restarts suppress the notice | Managed by the agent |
 | Send a follow-up | Open the worker chat and send a message | Managed by the agent |
-| Provider | A worker row can choose an available agent or provider profile | Managed by the agent |
+| Provider | A worker row can choose an available agent or provider profile; a profile worker and every command it runs can read that profile's key | Managed by the agent |
 | Workers per chat limit | Applies | Does not control agent-managed sub-agents |
 
 ### Agent lock
