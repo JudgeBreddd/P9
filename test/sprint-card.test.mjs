@@ -12,16 +12,30 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const MIN = 60000;
 const worker = (id, title, over = {}) => ({ id, agent: 'claude', title, parent: 's-claude-2', state: 'running', pending: null, live: false, model: 'Opus 5.5', mode: 'Manual', effort: 'Medium', queue: [], limits: { h5: 0, d7: 0 }, context: null, cacheMin: null, cwd: '~', events: [{ t: 'agent', text: 'On it.' }], ...over });
 
-test('Sprint card: a chat with workers shows one row per worker with its item, status, age and ring; open requests are listed with how long they waited', { timeout: 120000 }, async (t) => {
+const launch = async (t, sample) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-card-sprint-row-'));
   const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
   t.after(() => app.close());
   const page = await app.firstWindow({ timeout: 15000 });
-  page.on('pageerror', e => console.log('PAGEERROR ' + e.message)); page.on('console', m => m.type() === 'error' && console.log('CONSOLE ' + m.text()));
+  page.on('pageerror', e => console.log('PAGEERROR ' + e.message));
   await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
-  const shot = async (name) => { await page.waitForTimeout(500); const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png); };
+  return { app, page };
+};
+const shotAt = async (page, app, name) => { await page.waitForTimeout(500); const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png); };
+const sizeTo = async (app, w, h) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [w, h]);
+// Where the first card sits against its pane and the needs-you cards, as the page lays it out.
+const geometry = (page) => page.evaluate(() => {
+  const hit = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  const cards = [...document.querySelectorAll('#cards .card')].map(c => c.getBoundingClientRect());
+  return { width: innerWidth, sprints: [...document.querySelectorAll('#chats .sprint')].map(sp => { const b = sp.getBoundingClientRect(), p = sp.closest('.pane').getBoundingClientRect();
+    return { id: sp.closest('.pane').dataset.id, folded: sp.dataset.folded, right: getComputedStyle(sp).right, inside: b.left >= p.left && b.right <= p.right && b.top >= p.top && b.bottom <= p.bottom, apart: !cards.some(c => hit(b, c)), cardsOverPane: cards.some(c => hit(p, c)) }; }) };
+});
+
+test('Sprint card: a chat with workers shows one row per worker with its item, status, age and ring; open requests are listed with how long they waited', { timeout: 120000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await sizeTo(app, 1400, 900);
+  const shot = (name) => shotAt(page, app, name);
   await page.addStyleTag({ content: '#toasts{display:none!important}' }); // the sample notifications' toasts sit in the same corner; this test is about the card
   const now = Date.now();
   const lead = 's-claude-2';
@@ -44,6 +58,21 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   ];
   await page.evaluate(w => window.__sprint.add(...w), ws);
   await page.locator('.sprint').waitFor({ timeout: 5000 });
+  // The narrowest window P9 allows (720 px): a chat nobody has opened the card on starts folded, the question form stays usable, and
+  // opening the card keeps it inside the pane and apart from the needs-you cards.
+  await sizeTo(app, 720, 800); await page.waitForTimeout(500);
+  let g = await geometry(page);
+  assert.equal(g.width, 720, 'the window is not the narrow size');
+  assert.deepEqual(g.sprints.map(x => [x.id, x.folded, x.inside, x.apart]), [[lead, 'true', true, true]], 'fresh chat, narrow: folded, inside its pane, apart from the cards');
+  const submit = page.locator('.pane[data-id="' + lead + '"] button:has-text("Submit answer")');
+  await submit.waitFor({ timeout: 5000 });
+  assert.equal(await submit.evaluate(b => { const r = b.getBoundingClientRect(); return b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); }), true, 'the form button is covered');
+  await shot('sprint-card-narrow-folded');
+  await page.click('[data-sprint-fold]');
+  g = await geometry(page);
+  assert.deepEqual(g.sprints.map(x => [x.folded, x.inside, x.apart]), [['false', true, true]], 'opened at 720 px: inside the pane, apart from the cards');
+  await shot('sprint-card-narrow-open');
+  await sizeTo(app, 1400, 900); await page.waitForTimeout(500);
   // Opened here: it folds by default only in a narrow window.
   if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]');
   const rows = await page.evaluate(() => [...document.querySelectorAll('.sprint .sp-row')].map(r => [r.dataset.sprintOpen, r.dataset.status, r.querySelector('.sp-item').textContent, r.querySelector('.sp-st time')?.textContent ?? '']));
@@ -72,17 +101,85 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   assert.equal(await page.locator('.sprint .sp-row').count(), 15);
   const r = await page.locator('.sprint').boundingBox(); assert.ok(r.y + r.height <= 900, 'the long card runs off the window');
   await shot('sprint-card-15-workers');
+  // Split: two leads, each with workers; each card sits in its own pane, and only a pane the cards overlap makes room for them.
+  await page.click('#chats .pane [data-tool="split"]');
+  await page.waitForFunction(() => document.querySelectorAll('#chats .pane').length === 2, null, { timeout: 5000 });
+  const two = await page.evaluate(() => [...document.querySelectorAll('#chats .pane')].map(p => p.dataset.id));
+  await page.evaluate(([a, b]) => window.__sprint.add(...[a, b].flatMap((id, i) => [1, 2].map(n => ({ id: 'sp' + i + n, agent: 'claude', title: 'Split worker ' + i + n, parent: id, state: 'running', pending: null, live: false, model: 'Opus 5.5', mode: 'Manual', effort: 'Medium', queue: [], limits: { h5: 0, d7: 0 }, context: null, cacheMin: null, cwd: '~', events: [], task: { item: 'S' + i + n + ' split item' } })))), two);
+  await page.waitForFunction(() => document.querySelectorAll('#chats .sprint').length === 2, null, { timeout: 5000 });
+  g = await geometry(page);
+  assert.deepEqual(g.sprints.map(x => [x.inside, x.apart]), [[true, true], [true, true]], 'Split: each card inside its own pane and apart from the cards');
+  assert.equal(g.sprints.find(x => !x.cardsOverPane)?.right ?? '18px', '18px', 'a pane the cards do not overlap keeps the card at its own edge');
+  await shot('sprint-card-split');
+  await page.locator('#chats .sprint [data-sprint-fold]').last().click();
+  g = await geometry(page);
+  assert.deepEqual(g.sprints.map(x => [x.inside, x.apart]), [[true, true], [true, true]], 'Split, opened in the narrow pane: still inside it and apart from the cards');
+  await shot('sprint-card-split-open');
+  await page.click('#chats .pane [data-tool="split"]');
+  await page.locator('#navList .row[data-chat="' + lead + '"]').click();
   for (const look of ['redline', 'duskwood']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + look + '"]'); await page.keyboard.press('Escape');
     await shot('sprint-card-' + look);
   }
 
-  // Narrow window: the card is there, within the window, and folded until opened.
-  await page.locator('#navList .row[data-chat="' + lead + '"]').click();
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(520, 800));
-  await page.waitForTimeout(400);
-  const box = await page.locator('.sprint').boundingBox();
-  assert.ok(box && box.x >= 0 && box.x + box.width <= 520, 'the card is outside the narrow window: ' + JSON.stringify(box));
-  await shot('sprint-card-narrow');
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+});
+
+// The fields arrive the way they do live: the daemon's list and its events, nothing patched into the page. A stand-in daemon answers the
+// page's chat calls (list, events, profiles) and the test changes what it reports.
+test('Sprint card: a new worker, its ready, its verdict and its next turn reach the card from the daemon with nothing patched in; a field the list drops is cleared', { timeout: 120000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await sizeTo(app, 1400, 900);
+  await app.evaluate(({ ipcMain }) => {
+    const f = globalThis.__fake = { convs: [], events: [], cursor: 0 };
+    ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (_e, action, payload = {}) => {
+      if (action === 'list') return { status: 200, body: { conversations: f.convs.map(c => ({ ...c })), lists: {} } };
+      if (action === 'profiles') return { status: 200, body: { profiles: [] } };
+      if (action === 'events') {
+        const after = Number(payload.after) || 0, take = () => f.events.filter(e => e.cursor > after);
+        for (let i = 0; i < 30 && payload.wait && !take().length; i++) await new Promise(r => setTimeout(r, 100));
+        return { status: 200, body: { events: take(), cursor: f.cursor, more: false } };
+      }
+      return { status: 404, body: {} };
+    });
+  });
+  const send = (convs, events) => app.evaluate((_, [convs, events]) => { const f = globalThis.__fake; f.convs = convs; for (const e of events) f.events.push({ ...e, at: Date.now(), cursor: ++f.cursor }); }, [convs, events]);
+  const now = Date.now(), MIN = 60000;
+  const conv = (id, over = {}) => ({ id, provider: 'claude', title: id, folder: '~', created: now - 1000, state: 'running', sent: 0, used: now, project: null, archived: false, parent: null, ...over });
+  const lead = conv('lead-1');
+  await send([lead], [{ type: 'created', conversation: 'lead-1', data: { provider: 'claude', title: 'Lead', folder: '~' } }, { type: 'connected', conversation: 'lead-1', data: { session: 's1' } }]);
+  await page.reload();
+  await page.locator('.pane[data-id="lead-1"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('.sprint').count(), 0, 'a card on a lead with no workers');
+  const row = (id) => page.locator('.sprint [data-sprint-open="' + id + '"]');
+  const status = async (id) => (await row(id).count()) ? row(id).getAttribute('data-status') : null;
+  const is = async (id, want, why) => { await assert.doesNotReject(async () => { for (let i = 0; i < 60; i++) { if (await status(id) === want) return; await page.waitForTimeout(100); } throw new Error(why + ': wanted ' + want + ', the card has ' + await status(id)); }); };
+
+  // A worker the lead starts: its row, with the item from the list, appears and works.
+  const w = (over = {}) => conv('w-1', { parent: 'lead-1', title: 'Builder', task: { item: 'A1 login form', doneMeans: 'x', checks: [] }, ...over });
+  await send([lead, w()], [{ type: 'created', conversation: 'w-1', data: { provider: 'claude', title: 'Builder', folder: '~', parent: 'lead-1' } }, { type: 'connected', conversation: 'w-1', data: { session: 's2' } }]);
+  await is('w-1', 'working', 'a new worker');
+  assert.equal(await row('w-1').locator('.sp-item').textContent(), 'A1 login form');
+  // Ready.
+  await send([lead, w({ ready: { commit: 'c1', claimed: false, results: [], files: [], at: Date.now() } })], [{ type: 'turn-end', conversation: 'w-1', data: { stopReason: 'end_turn' } }]);
+  await is('w-1', 'ready', 'ready reported');
+  // A verdict for that commit passes it; one for another commit does not; one with no commit does not.
+  await send([lead, w({ ready: { commit: 'c1', at: Date.now() }, verdict: { by: 'rev', commit: 'c1', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'verdict' } }]);
+  await is('w-1', 'passed', 'a verdict for the ready commit');
+  await shotAt(page, app, 'sprint-card-live-passed');
+  await send([lead, w({ ready: { commit: 'c2', at: Date.now() }, verdict: { by: 'rev', commit: 'c1', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'newer commit' } }]);
+  await is('w-1', 'ready', 'a verdict for an older commit');
+  await send([lead, w({ ready: { commit: 'c2', at: Date.now() }, verdict: { by: 'rev', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'no commit' } }]);
+  await is('w-1', 'ready', 'a verdict with no commit');
+  await send([lead, w({ verdict: { by: 'rev', commit: 'c2', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'no ready' } }]);
+  await is('w-1', 'working', 'a verdict with no ready commit');
+  // A new turn: the list no longer has ready or verdict, and the card drops them.
+  await send([lead, w()], [{ type: 'user', conversation: 'w-1', data: { text: 'fix the label' } }]);
+  await is('w-1', 'working', 'a new turn clears ready and verdict');
+  // Idle with an age, then working again once the field is gone.
+  await send([lead, w({ idleSince: Date.now() - 12 * MIN })], [{ type: 'note', conversation: 'lead-1', data: { text: 'idle' } }]);
+  await is('w-1', 'idle', 'idleSince');
+  assert.equal(await row('w-1').locator('.sp-st time').textContent(), '12 min');
+  await send([lead, w()], [{ type: 'note', conversation: 'lead-1', data: { text: 'busy' } }]);
+  await is('w-1', 'working', 'idleSince dropped');
 });

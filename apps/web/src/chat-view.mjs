@@ -299,7 +299,7 @@ const SPRINT = { folded: new Map() };
 const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null }); // the contract's optional fields: a chat without them looks as it does today
 const SP_LABEL = { working: 'Working', idle: 'Idle', asked: 'Asked', ready: 'Ready', passed: 'Passed', fix: 'Fix', stopped: 'Stopped' };
 // A verdict belongs to one exact commit (spec C): one for an older commit than the one reported ready is not a pass of this version.
-const verdictOf = k => k.verdict && (!k.ready || !k.verdict.commit || k.verdict.commit === k.ready.commit) ? k.verdict : null;
+const verdictOf = k => k.verdict?.commit && k.ready?.commit && k.verdict.commit === k.ready.commit ? k.verdict : null; // no ready commit, or no commit on the verdict: nothing is verified
 function workerStatus(k) {
   const v = verdictOf(k);
   if (k.pending && k.state === 'running') return ['asked', null];
@@ -318,18 +318,41 @@ const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e &
 function sprintCard(s) {
   if (s.stub) return '';
   const workers = kin(s.id); if (!workers.length) return '';
-  const folded = SPRINT.folded.get(s.id) ?? (innerWidth < 1100 || outer.S.split), now = Date.now();
+  const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
   const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.task?.item ? 1 : 0, passed = st === 'passed' ? 1 : 0;
     return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button></li>` }; });
   const asks = workers.filter(k => k.pending && k.state === 'running').map(askOf).filter(Boolean).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
   const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
-  return `<aside class="sprint" data-sprint data-folded="${folded}" data-open-asks="${asks.length}" aria-label="Sprint">
+  return `<aside class="sprint" data-sprint data-folded="${folded}" data-auto="${choice === undefined}" data-open-asks="${asks.length}" aria-label="Sprint">
     <button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button>
     <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>
     ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
   </aside>`;
 }
 const sprintDoor = () => { if (!window.__sprint && outer.sampleView) window.__sprint = { add: (...x) => { outer.S.sessions.push(...x); renderChats(); }, set: (id, patch) => { Object.assign(outer.S.sessions.find(x => x.id === id), patch); renderChats(); }, render: () => renderChats() }; }; // ponytail: the UI test's door (sample data is handed in only by tests)
+// Per pane: the card moves left of the cards stack only where they overlap this pane, takes the width the pane has, and (unless
+// the person chose) opens only when the text keeps 420 px beside it; the text's right padding follows while it is open.
+let spObs; // made on first use: the controller's observe() is not there yet when this module loads
+function placeSprints() {
+  spObs ||= outer.observe(() => placeSprints());
+  const cards = outer.$('#cards'), cr = cards?.querySelector('.card') && getComputedStyle(cards).visibility !== 'hidden' ? cards.getBoundingClientRect() : null;
+  if (cards) spObs.observe(cards);
+  for (const p of document.querySelectorAll('.pane')) {
+    const sp = p.querySelector(':scope > .sprint'); if (!sp) { p.style.removeProperty('--sp-pad'); continue; }
+    spObs.observe(p);
+    const pr = p.getBoundingClientRect(), right = cr && cr.left < pr.right && cr.right > pr.left ? Math.round(pr.right - cr.left + 10) : 18, w = Math.max(160, Math.min(296, Math.floor(pr.width - right - 10)));
+    sp.style.setProperty('--sp-right', right + 'px'); sp.style.setProperty('--sp-w', w + 'px');
+    if (sp.dataset.auto === 'true') sp.dataset.folded = String(pr.width - w - right - 14 < 420);
+    const open = sp.dataset.folded === 'false';
+    sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));
+    const room = pr.width - w - right - 14; p.style.setProperty('--sp-pad', open && room >= 420 ? w + right + 14 + 'px' : '20px'); // opened by choice where the text has no room, it lies over the text
+  }
+}
+// The live fields (task, ready, verdict, idleSince) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
+// Until then a batch of events marks the list stale and it is read again, a field the list no longer has cleared.
+const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent]));
+  for (const c of conversations) { const s = outer.S.sessions.find(x => x.id === c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
+  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent])); };
 setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
 const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));
@@ -577,6 +600,7 @@ function renderChats(only) {
   if (outer.side.current()?.slot === 'artifact' && ART.mode === 'panel' && outer.S.focus === 'chat' && !chatsInView().includes(ART.state?.sid)) outer.side.close('artifact', 'hidden'); // item 19
   outer.side.refresh(); // a pinned artifact shows only while its chat is in view (O28)
   chatFilesFollow(ids);
+  placeSprints();
   outer.tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
@@ -915,7 +939,9 @@ async function loadChat() {
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
   };
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); return l.body?.conversations || []; };
+  let sprintStale = false, sprintAt = 0;
   while (!outer.lifetime.signal.aborted) {
+    if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
     const l = scope ? null : await window.p9.chat('list', {});
     if (l?.status === 200) { lists(l.body); listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
     // P20: the first replay reads each open chat's newest blocks only (tailed, above).
@@ -947,7 +973,7 @@ async function loadChat() {
       const closed = !replaying && ev.type === 'closed' && outer.S.sessions.find(s => s.id === ev.conversation && !s.hidden);
       if (closed) { closed.hidden = true; untab(closed.id); }
     }
-    outer.liveChat.cursor = r.body.cursor;
+    outer.liveChat.cursor = r.body.cursor; if (!replaying && r.body.events.length) sprintStale = true;
     if (r.body.more) for (const s of outer.S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
     if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
