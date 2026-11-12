@@ -13,7 +13,7 @@ const MIN = 60000;
 const worker = (id, title, over = {}) => ({ id, agent: 'claude', title, parent: 's-claude-2', state: 'running', pending: null, live: false, model: 'Opus 5.5', mode: 'Manual', effort: 'Medium', queue: [], limits: { h5: 0, d7: 0 }, context: null, cacheMin: null, cwd: '~', events: [{ t: 'agent', text: 'On it.' }], ...over });
 
 test('Sprint card: a chat with workers shows one row per worker with its item, status, age and ring; open requests are listed with how long they waited', { timeout: 120000 }, async (t) => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-sprint-card-'));
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-card-sprint-row-'));
   const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
   t.after(() => app.close());
