@@ -283,6 +283,30 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // beside the body like its sender. end(outcome) is a promise's resolve, so the first outcome is the only one.
   const solos = new WeakMap();
   const sender = (body) => (senders.has(body) ? { from: senders.get(body) } : {});
+  // A reply sent a second time (seen on the server 2026-11-09 to 11, 9 times in 3 days, Claude chats only): after a
+  // compaction, or after a message that joined work the agent had begun by itself, the adapter sends a whole reply
+  // again in one piece, under its own message id or a new one. P9 had streamed it already, so it showed twice. A piece
+  // that is exactly a recent reply streamed in two or more pieces is that copy and is not recorded, when it comes
+  // under that reply's id after the reply was over, or opens a new id and is 200 characters or more (no first piece
+  // of a stream is a whole long reply; a short one may be a new reply that says the same). A reply is over at its
+  // turn's end, at the next message sent, at a compaction, or when another reply starts.
+  // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
+  // reply, or of a short reply under a new id is recorded.
+  const repeated = (session, update) => {
+    const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over;
+    if (update?.sessionUpdate === 'compaction_update') { if (open) open.over = true; return false; }
+    if (update?.sessionUpdate !== 'agent_message_chunk') return false;
+    // A piece that is not text (an image, a link) belongs to its reply like any other; a reply that has one is never
+    // taken for a copy's original.
+    const id = update.messageId, text = typeof update.content?.text === 'string' ? update.content.text : null;
+    if (typeof id !== 'string') { if (open) open.over = true; return false; }
+    if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; } return false; }
+    const copy = text !== null && heard.some((m) => !m.mixed && m.parts > 1 && m.text === text && (m.id === id || text.length >= 200));
+    // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
+    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, ...(text === null && { mixed: true }) });
+    if (heard.length > 20) heard.shift();
+    return copy;
+  };
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
   // A7 list_chats: a chat's model and context use, from its newest config and usage_update events. Read from the ledger
   // once per chat (gauge, below), then kept current here.
@@ -292,6 +316,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const kept = gauges.get(conversation);
     if (kept && type === 'config' && data.model?.current) kept.model = data.model.current;
     else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
+    if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
     for (const wake of listeners) wake();
@@ -679,6 +704,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A name the user gave (N1, the rename route's 'renamed' event) is kept.
           if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
+        if (repeated(session, update)) return;
         emit(conversation.id, 'update', trim(agentImages(update)));
         if (session.ghost) session.ghost.refresh();
         if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);

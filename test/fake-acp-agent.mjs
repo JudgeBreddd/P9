@@ -337,6 +337,24 @@ const connection = acp.connectAgent(stream, {
       }
       return { stopReason: 'cancelled' };
     }
+    // A reply the adapter sends again whole: the first under its own message id, the second under a new one.
+    if (text === 'twice') {
+      const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
+      const long = 'x'.repeat(150), tail = 'y'.repeat(150);
+      await piece('m1', 'one '); await piece('m1', 'two');
+      await piece('m2', long); await piece('m2', tail);
+      await piece('m1', 'one two'); await piece('r1', long + tail); // the two copies
+      await piece('r1', long + tail); await piece('r1', 'more'); // what follows a copy under its new id is a reply, and is kept
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'r2', content: { type: 'resource_link', uri: 'file:///nowhere/notes.txt', name: 'notes.txt' } } });
+      await piece('r2', long + tail); // a reply that opened with a link: its text is not a first piece
+      await piece('m3', 'end'); await piece('m4', 'end'); // one piece, said twice: two replies
+      await piece('m5', 'al'); await piece('m5', 'pha'); await piece('m6', 'so '); await piece('m6', 'alpha'); // a short piece that equals an earlier reply
+      await piece('m7', long); await piece('m7', tail); await piece('m7', long + tail); // a reply that repeats itself while it streams
+      await piece('m8', 'sh'); await piece('m8', 'ort');
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'compaction_update', compactionId: 'c1', status: 'completed' } });
+      await piece('m8', 'short'); // the newest reply, short, again under its own id after a compaction
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {
       cancelled.delete(sessionId);
