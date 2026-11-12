@@ -82,6 +82,21 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   assert.match(cards[0].text, /B1/);
   assert.match(cards[0].text, /Input 9; output 2/);
   assert.match(notes[0][1], /Ready report pinned/);
+  let release, locked = false;
+  const pendingFolder = new Promise((resolve) => { release = resolve; });
+  const racing = createDelegate({ chat: { ...chat, lock: () => ({ on: locked }), startFolder: () => pendingFolder } });
+  const attempted = racing.ready(valid, worker);
+  locked = true;
+  release(folder);
+  assert.equal((await attempted).error, 'agent-lock-on');
+  let releaseTurn, currentState = 'turn';
+  const pendingTurnFolder = new Promise((resolve) => { releaseTurn = resolve; });
+  const interrupted = createDelegate({ chat: { ...chat, info: () => ({ parent, state: currentState }), startFolder: () => pendingTurnFolder } });
+  const interruptedAttempt = interrupted.ready(valid, worker);
+  currentState = 'running';
+  releaseTurn(folder);
+  assert.equal((await interruptedAttempt).error, 'no-active-turn');
+
 });
 
 test('cross-chat list identifies another chat’s words as untrusted', { timeout: 5000 }, () => {
