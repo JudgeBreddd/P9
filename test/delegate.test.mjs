@@ -451,15 +451,26 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   await answer(asked.hit.data.request, 'reject');
   assert.equal((await pending).error, 'not-allowed');
   assert.equal((await rows(instance)).length, 1, 'a rejected sprint start made a chat');
+  // Turned Off while the user is being asked: Allow starts nothing.
   pending = a.tool('open_chat', { text: 'config', title: 'First' });
   asked = await approval(asked.cursor);
+  await set({ start: 'off', max: 5, workers: [] });
+  await answer(asked.hit.data.request, 'allow');
+  assert.equal((await pending).error, 'delegate-off', 'Delegation turned Off while the user was asked still started a worker');
+  assert.equal((await rows(instance)).length, 1);
+  // A call still waiting for the user counts toward Workers per chat: with one allowed, a second call at the same time is refused.
+  await set({ start: 'ask', max: 1, workers: [] });
+  pending = a.tool('open_chat', { text: 'config', title: 'First' });
+  asked = await approval(asked.cursor);
+  assert.equal((await a.tool('open_chat', { text: 'config', title: 'Twin' })).error, 'too-many-chats', 'two calls at once passed a limit of one');
+  await set({ start: 'ask', max: 5, workers: [] });
   await answer(asked.hit.data.request, 'allow');
   const first = await pending;
   assert.match(first.chat, /^[0-9a-f-]{36}$/);
   // The sprint is started: the next worker is not asked about.
   const second = await a.tool('open_chat', { text: 'config', title: 'Second' });
   assert.match(second.chat, /^[0-9a-f-]{36}$/, JSON.stringify(second));
-  assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'approval').length, 2, 'the second worker was asked about');
+  assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'approval').length, 3, 'the second worker was asked about');
   assert.match((await a.done(second.chat)).last, /config:model=default,effort=medium,/, 'a worker whose row is left on the parent\'s is not on its parent\'s own');
 
   // Off: no new worker, said in words the agent can act on. The ones it has stay reachable.

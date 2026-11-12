@@ -174,6 +174,7 @@ test('c18 row 66: the phone turns the agent lock and File protection on and off 
   // The rest of /setup and new files stay the desktop's.
   for (const route of ['/setup/starter', '/setup/login', '/setup/agent-terminal']) assert.equal((await post(route, {})).status, 404, route);
   assert.equal((await post('/files', { path: 'phone-made.txt', content: 'x' })).status, 404);
+  assert.deepEqual([(await server.remote('/delegation', { session })).status, (await post('/delegation', { start: 'agent', max: 20, workers: [] })).status], [404, 404], 'Settings > Delegation is the desktop\'s');
   console.log('PASS c18 row 66: phone lock on/off, protection off/on, settings row saved with .bak; no session 401, bad CSRF 403, bad body 400, nothing changed');
 });
 

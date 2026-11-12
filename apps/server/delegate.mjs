@@ -84,6 +84,9 @@ export function createDelegate({ chat, allowed }) {
     return { mode: want, ceiling };
   };
 
+  const OFF = { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
+  const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. Stop one you no longer need, or wait for one to end.' });
+  const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
   const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
   async function openChat(caller, args, signal) {
     if (chat.lock().on) return { error: 'agent-lock-on' };
@@ -96,13 +99,13 @@ export function createDelegate({ chat, allowed }) {
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };
     // Settings > Delegation, Who starts a sprint: Off refuses every new worker.
-    if (set.start === 'off') return { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
+    if (set.start === 'off') return OFF;
     let depth = 0;
     for (let at = family.find((c) => c.id === caller); at?.parent && depth < 50; at = family.find((c) => c.id === at.parent)) depth += 1;
+    // A call still being started (the user is being asked, the chat is being made) counts as a worker: two calls at once
+    // never pass the limit together.
+    if (depth >= MAX_DEPTH || running(caller, family) + (holding.get(caller)?.length ?? 0) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
     const kids = family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state));
-    if (depth >= MAX_DEPTH || kids.length >= Math.min(set.max, MAX_CHILDREN)) {
-      return { error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. Stop one you no longer need, or wait for one to end.' };
-    }
     // Settings > Delegation has one row per worker. A new worker takes the first row no running worker of this chat holds.
     const taken = new Set([...kids.map((c) => chat.slot(c.id)), ...(holding.get(caller) ?? [])]);
     let at = 0; while (taken.has(at)) at += 1;
@@ -143,6 +146,12 @@ export function createDelegate({ chat, allowed }) {
     const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This starts a sprint (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
     if (!await (starts ? chat.approve(caller, request, signal) : allowed(caller, request, signal))) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     if (chat.lock().on) return { error: 'agent-lock-on' }; // turned on while the user was asked
+    // So is everything else the user may have changed meanwhile: Delegation off, a lower limit, this chat's own mode.
+    const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
+    if (now.start === 'off') return OFF;
+    if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
+    if (again.error) return again;
+    if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
     const made = await chat.create({ provider, title, ...(folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
     chat.setSlot(made.conversation, at);
