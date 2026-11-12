@@ -66,19 +66,20 @@ export function windowsArgv(argv, environment = process.env, fileExists = exists
 // mode Job: the host waits on the child inside a kill-on-close Job Object (detach: what the child starts leaves it, W1).
 // Console: it starts the child in a new console window and exits at once (a registry terminal button on Windows, D1).
 // Launch: the same with no window, for an app or a page (W2). Both start the child outside the daemon's job.
-export function windowsJobCommand(argv, environment = childEnv(), mode = 'Job', detach = false) {
-  const { argv: resolved, verbatim } = windowsArgv(argv, environment);
+// line: the caller's own command line after the executable, passed unchanged (a shell's /c line).
+export function windowsJobCommand(argv, environment = childEnv(), mode = 'Job', detach = false, line = false) {
+  const { argv: resolved, verbatim: batch } = windowsArgv(argv, environment), verbatim = batch || line;
   const payload = Buffer.from(JSON.stringify({ argv: resolved, env: environment, ...(verbatim ? { verbatim } : {}), ...(detach ? { detach } : {}) })).toString('base64');
   return ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', host, '-Mode', mode, '-Payload', payload];
 }
 
 // Windows owns the process tree through a Job Object. Linux chat uses a systemd scope; other launches use a process group.
-export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', scope = false, stdio = 'pipe', detach = false, env } = {}) {
+export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', scope = false, stdio = 'pipe', detach = false, env, verbatim = false } = {}) {
   let full = argv, unit = null, job = false, detached = true;
   // env (O48): names added for this one child after the allow list. Never a secret: on Windows it rides the command line.
   if (process.platform === 'win32') {
-    full = windowsJobCommand(argv, { ...childEnv(), ...env }, 'Job', detach);
+    full = windowsJobCommand(argv, { ...childEnv(), ...env }, 'Job', detach, verbatim);
     job = true;
     detached = false;
   } else if (scope && hasUserBus()) {
