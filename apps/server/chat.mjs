@@ -296,10 +296,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const text = update.content?.text, id = update.messageId;
     if (typeof text !== 'string' || typeof id !== 'string') { if (open) open.over = true; return false; }
     if (going && open.id === id) { open.text += text; open.parts += 1; return false; }
-    if (heard.some((m) => m.parts > 1 && m.text === text && (m.id === id || text.length >= 200))) return true;
-    heard.push({ id, text, parts: 1 });
+    const copy = heard.some((m) => m.parts > 1 && m.text === text && (m.id === id || text.length >= 200));
+    // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
+    if (!copy || open?.id !== id) heard.push({ id, text, parts: 1 });
     if (heard.length > 20) heard.shift();
-    return false;
+    return copy;
   };
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
   // A7 list_chats: a chat's model and context use, from its newest config and usage_update events. Read from the ledger

@@ -74,7 +74,7 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   // The three whole copies are gone. Kept: a reply said in one piece and said again ('end'), a short piece that equals
   // an earlier reply ('alpha'), and a reply that repeats itself while it streams.
   assert.deepEqual(seen.filter(said(id, '')).map((event) => event.data.content.text),
-    ['one ', 'two', long, tail, 'end', 'end', 'al', 'pha', 'so ', 'alpha', long, tail, long + tail, 'sh', 'ort']);
+    ['one ', 'two', long, tail, long + tail, 'more', 'end', 'end', 'al', 'pha', 'so ', 'alpha', long, tail, long + tail, 'sh', 'ort']);
   // The chat takes its next message as before.
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
   const next = await until(instance, said(id, 'mode:'));
