@@ -337,6 +337,15 @@ const connection = acp.connectAgent(stream, {
       }
       return { stopReason: 'cancelled' };
     }
+    // A reply the adapter sends again whole: the first under its own message id, the second under a new one.
+    if (text === 'twice') {
+      const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
+      await piece('m1', 'one '); await piece('m1', 'two');
+      await piece('m2', 'an'); await piece('m2', 'other');
+      await piece('m1', 'one two'); await piece('r1', 'another');
+      await piece('m3', 'end'); await piece('m4', 'end');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {
       cancelled.delete(sessionId);

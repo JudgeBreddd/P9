@@ -280,6 +280,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // beside the body, never read from it, so no window or phone can set it.
   const senders = new WeakMap();
   const sender = (body) => (senders.has(body) ? { from: senders.get(body) } : {});
+  // A reply sent a second time (seen on the server 2026-11-09 to 11, 9 times in 3 days, Claude chats only): after a
+  // compaction, or after a message that joined work the agent had begun by itself, the adapter sends a whole reply
+  // again in one piece, under its own message id or a new one. P9 had streamed it already, so it showed twice. A piece
+  // that is exactly a recent reply streamed in two or more pieces is that copy and is not recorded. A piece of the
+  // reply still streaming is kept unless it is 200 characters or more: a short reply may repeat itself.
+  // ponytail: the last 8 replies of this run of the agent, in memory; a copy that comes after a restart is recorded.
+  const repeated = (session, update) => {
+    const text = update?.content?.text, id = update?.messageId;
+    if (update?.sessionUpdate !== 'agent_message_chunk' || typeof text !== 'string' || typeof id !== 'string') return false;
+    const heard = session.heard ??= [], open = heard.at(-1);
+    if (heard.some((m) => m.parts > 1 && m.text === text && (m !== open || m.id !== id || text.length >= 200))) return true;
+    if (open?.id === id) { open.text += text; open.parts += 1; } else { heard.push({ id, text, parts: 1 }); if (heard.length > 8) heard.shift(); }
+    return false;
+  };
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
   // A7 list_chats: a chat's model and context use, from its newest config and usage_update events. Read from the ledger
   // once per chat (gauge, below), then kept current here.
@@ -663,6 +677,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A name the user gave (N1, the rename route's 'renamed' event) is kept.
           if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
+        if (repeated(session, update)) return;
         emit(conversation.id, 'update', trim(agentImages(update)));
         if (session.ghost) session.ghost.refresh();
         if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);

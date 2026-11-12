@@ -65,6 +65,15 @@ test('a turn streams through the event log; reconnecting from any cursor gives t
   console.log(`PASS chat events: ${cursors.length} events, reconnect from cursor ${middle} gave ${tail.length}, none twice; restart kept history and resumed`);
 });
 
+test('a reply the agent sends a second time in one piece is recorded once', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'twice' });
+  const { seen } = await until(instance, (event) => event.type === 'turn-end');
+  // The two whole copies are gone; a reply said in one piece and then said again ('end') is two replies.
+  assert.deepEqual(seen.filter(said(id, '')).map((event) => event.data.content.text), ['one ', 'two', 'an', 'other', 'end', 'end']);
+});
+
 test('approvals and questions are answered only with options and fields the agent offered', async (t) => {
   const instance = await start(t);
   const id = await create(instance);
