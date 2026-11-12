@@ -13,6 +13,7 @@ test('sprint tools publish task, completion and review contracts', { timeout: 50
   assert.ok(open.properties.checks);
   assert.ok(schemas.some(([name]) => name === 'ready'));
   assert.ok(schemas.some(([name]) => name === 'verdict'));
+  for (const [name, description] of schemas) assert.match(description, /Do not/i, name + ' says what not to use it for');
 });
 
 test('verdict requires the current commit and an independent reviewer', { timeout: 5000 }, () => {
@@ -45,12 +46,13 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   const head = execFileSync('git', ['-C', folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const state = { task: { item: 'B1', doneMeans: 'done', checks: ['test'] } };
   const notes = []; let endTurn;
-  const chat = { lock: () => ({ on: false }), info: () => ({ parent }), sprint: () => state, startFolder: async () => folder,
+  const chat = { lock: () => ({ on: false }), info: () => ({ parent, state: 'turn' }), sprint: () => state, startFolder: async () => folder,
     setSprint: (_, patch) => Object.assign(state, patch), gauge: () => ({ context: { used: 7 } }),
     note: async (...args) => notes.push(args), turnEnded: (fn) => { endTurn = fn; }, tokenUsage: () => ({ input: 9, output: 2 }), settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
   const valid = { commit: head, results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
   assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
+  assert.equal((await createDelegate({ chat: { ...chat, info: () => ({ parent, state: 'running' }) } }).ready(valid, worker)).error, 'no-active-turn');
   assert.equal((await tools.ready({ ...valid, results: [] }, worker)).error, 'request-refused');
   assert.equal((await tools.ready({ ...valid, results: [{ check: 'test', result: ' ' }] }, worker)).error, 'request-refused');
   assert.equal((await tools.ready({ ...valid, results: [{ check: 'other', result: 'passed' }] }, worker)).error, 'request-refused');

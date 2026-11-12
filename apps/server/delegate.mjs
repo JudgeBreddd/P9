@@ -197,6 +197,7 @@ export function createDelegate({ chat, allowed }) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const info = chat.info(caller), task = chat.sprint(caller).task;
     if (!info?.parent || !task) return { error: 'no-task' };
+    if (info.state !== 'turn') return { error: 'no-active-turn' };
     if (!text(args.commit, 200) || !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) || !Array.isArray(args.results) || args.results.length !== task.checks.length || task.checks.some((check) => args.results.filter((r) => r?.check === check && typeof r.result === 'string' && text(r.result.trim(), 4000)).length !== 1)) return { error: 'request-refused' };
     const folder = await chat.startFolder(caller);
     let gitFacts;
@@ -349,7 +350,7 @@ export function createDelegate({ chat, allowed }) {
       if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     }
     const result = chat.answer(args.chat, { request: args.request, answer: args.answer }, caller);
-    return result.status === 200 ? { chat: args.chat, action: 'answered' } : { error: result.error, ...(ask.form && { form: ask.form }) };
+    return result.status === 200 ? { chat: args.chat, action: 'answered' } : { error: result.error, ...(ask.form && { guidance: CROSS_CHAT, form: ask.form }) };
   }
 
   // Peer help (SECURITY.md § Delegate, "Asking a chat beside you"). One open question per caller: with text it is asked,
