@@ -68,6 +68,8 @@ Set **Workers per chat** to limit workers not yet stopped, including idle worker
 
 An agent can list, read, wait on and message any chat in its own project; it can stop or answer requests only for chats it started, directly or through workers. The parent agent can answer a worker's question and can answer an approval after the usual check; in Unrestricted mode the approval needs no extra question.
 
+**Asking a chat beside it.** A chat's agent can also put one question to another chat of the same project and get its answer back, so it need not work out again what that chat already knows. A chat takes such questions only after you choose **Open to questions** in its menu in the sidebar (on the computer; it is off for every chat until then). The question gets a turn of its own in that chat, after whatever it is doing, and that turn is read-only: no file edits, nothing that needs approval, and no question passed on to a third chat. You see the question in that chat, marked with the chat it came from. P9 does not ask you before a stopped or long-idle chat is woken to answer, and such a chat reads its whole context again, so close a large chat to questions when you no longer want that cost. A chat with no project has no chats beside it to ask.
+
 | | P9 workers | An agent's built-in sub-agents |
 |---|---|---|
 | Visible as chats | Yes | Managed by the agent; not separate P9 chats |
