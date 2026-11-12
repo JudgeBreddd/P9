@@ -205,13 +205,14 @@ export function setupRoutes(outer) {
     outer.ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('terminal-greeting', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.show ? 'on' : 'off');
     return c.json({ show: outer.greeting() });
   });
-  // Desktop only, Settings > Delegation: who starts a sprint and a sub-agent's default provider, model and effort.
+  // Desktop only, Settings > Delegation: who starts a sprint, how many workers a chat may run, and what each one runs on.
   outer.app.get('/delegation', (c) => c.json(outer.chat.delegation()));
   outer.app.post('/delegation', async (c) => {
     const body = await outer.json(c), str = (x) => typeof x === 'string' && x.length <= 200;
-    const one = (x) => x && typeof x === 'object' && Object.keys(x).sort().join() === 'effort,model' && str(x.model) && str(x.effort);
-    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'claude,codex,provider,start' || !['off', 'ask', 'agent'].includes(body.start)
-        || !['', 'claude', 'codex'].includes(body.provider) || !one(body.claude) || !one(body.codex)) return c.json({ error: 'request-refused' }, 400);
+    const one = (x) => x && typeof x === 'object' && Object.keys(x).sort().join() === 'agent,effort,model' && str(x.model) && str(x.effort)
+      && (['', 'claude', 'codex'].includes(x.agent) || (typeof x.agent === 'string' && /^profile:[\w-]{1,80}$/.test(x.agent)));
+    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'max,start,workers' || !['off', 'ask', 'agent'].includes(body.start)
+        || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setDelegation(body));
   });
   return { signedIn };

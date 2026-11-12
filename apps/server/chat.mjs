@@ -27,7 +27,7 @@ const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
 const ID = /^[0-9a-f-]{36}$/;
 const MAX_TEXT = 100_000, MAX_EVENT = 64 * 1024;
-// A7: what a sub-agent is told when its parent has set no rules of its own (set_rules replaces it).
+// A7: what a worker is told when its parent has set no rules of its own (set_rules replaces it).
 export const DEFAULT_RULES = ['Before you start, say in one line which folder you are in and, if it is a git repository, its branch, newest commit and remote.',
   'Do not end your turn while something you started (a build, a test run, a check) is still running: wait for it.',
   'End every reply with one line that says whether the work passed, failed or is waiting, and on what.'].join('\n');
@@ -316,7 +316,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
   // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, in prefs under rules:<parent>; never set, it is
   // DEFAULT_RULES, and '' is none. It rides as its own block with every message that chat's agent sends a chat it
-  // started (a compaction in the sub-agent cannot lose it), and with no other sender's message.
+  // started (a compaction in the worker cannot lose it), and with no other sender's message.
   const rulesOf = (parent) => db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
   const rulesFor = (conversation, body) => {
     const text = conversation?.parent && senders.get(body) === conversation.parent ? rulesOf(conversation.parent) : '';
@@ -884,7 +884,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?)').run('profile:' + id, 'rules:' + id); // O48, A7
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id); // O48, A7
       gauges.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1169,10 +1169,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     restarted: () => recovered.then(() => ({ chats: [...cut], storm: starts.length >= 3 })),
     rules: (id) => rulesOf(id),
     // Settings > Delegation (SECURITY.md § Delegate), kept in prefs under 'delegation'. start: who starts a sprint ('off',
-    // 'ask' the default, 'agent'); provider and each agent's model and effort: a sub-agent's defaults ('' is the parent's own).
+    // 'ask' the default, 'agent'); max: running workers per chat (1 to 20, 5 until set); workers: one row per worker, in the
+    // order they start: agent ('' the parent's own, an agent's name, or 'profile:<id>'), model and effort ('' not set).
     delegation: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'delegation'").get()?.value ?? '{}'); } catch { v = {}; }
-      const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : ''), one = (x) => ({ model: str(x?.model), effort: str(x?.effort) });
-      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', provider: Object.hasOwn(MODES, v?.provider ?? '') ? v.provider : '', claude: one(v?.claude), codex: one(v?.codex) }; },
+      const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : ''), agent = (x) => (x === '' || Object.hasOwn(MODES, x ?? ' ') || /^profile:[\w-]{1,80}$/.test(x ?? '') ? x : '');
+      const max = Number.isInteger(v?.max) && v.max >= 1 && v.max <= 20 ? v.max : 5;
+      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max,
+        workers: Array.from({ length: max }, (_, i) => { const x = Array.isArray(v?.workers) ? v.workers[i] : null, a = agent(x?.agent); return { agent: a, model: a ? str(x?.model) : '', effort: a ? str(x?.effort) : '' }; }) }; },
+    // Which Settings row a worker started on (0 is the first); kept so a row frees only when its worker stops.
+    slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
+    setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },
     setDelegation(value) { db.prepare("INSERT INTO prefs (key, value) VALUES ('delegation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(value)); return this.delegation(); },
     setRules: (id, text) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); },
     gauge,

@@ -29,8 +29,8 @@ export const stripChats = sessions => { const live = s => s.state !== 'stopped',
 // The list: the chats a message was sent in, and the ones still open (what the tab row and History showed together).
 export const listedChats = sessions => sessions.filter(s => (s.sent || !s.hidden) && !s.archived).sort(recent);
 // A7 Delegate: a chat an agent started (its parent) sits under that chat when both are in the rows given: { s, depth } per
-// chat and, for a chat with more than three sub-agents, one { fold } row above them. They start folded; opened[id] is the
-// user's own choice, all (a search) opens every one, and the chat on screen (cur) is never folded away. A sub-agent whose
+// chat and, for a chat with more than three workers, one { fold } row above them. They start folded; opened[id] is the
+// user's own choice, all (a search) opens every one, and the chat on screen (cur) is never folded away. A worker whose
 // parent is not in the rows stays where it would be without one.
 export const nested = (rows, opened = {}, cur = [], all = false) => { const ids = new Set(rows.map(s => s.id)), out = [];
   const put = (s, depth) => { out.push({ s, depth }); const k = depth < 8 ? rows.filter(c => c.parent === s.id && c.id !== s.id) : []; if (!k.length) return;
@@ -78,9 +78,9 @@ export function installPanel(o, { focus, stopChat, busy }) {
     return `<div class="rowwrap"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
       + (live(s) ? `<button class="rstop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
       + `<button class="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
-  // A7: a zone's rows with each sub-agent under the chat that started it (nested, above).
+  // A7: a zone's rows with each worker under the chat that started it (nested, above).
   const tree = (rows, q) => nested(rows, P.subs, shown(), !!q);
-  const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} sub-agents</span></button>`;
+  const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} workers</span></button>`;
   function renderList() {
     const q = P.q.toLowerCase(), hit = t => !q || String(t).toLowerCase().includes(q), all = ordered(listedChats(o.S.sessions)), ps = projects();
     const groups = ps.map(p => ({ p, kids: all.filter(s => s.project === p.id && (hit(s.title) || hit(p.name))) })).filter(g => hit(g.p.name) || g.kids.length);

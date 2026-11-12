@@ -205,26 +205,33 @@ function delegationGroup() {
   if (!window.p9?.chat || !outer.liveChat?.on) return '';
   const d = delegation, off = d ? '' : ' disabled';
   const sel = (attr, label, aria, opts, now) => `<label class="set-pick">${label}<select data-slot="input" ${attr}${off} aria-label="${aria}">${(now && !opts.some(([v]) => v === now) ? [...opts, [now, now]] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === (now ?? '') ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
-  const row = a => { const ml = outer.lastModels[a]?.options || [], el = outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || [], own = [['', 'The parent chat\'s']];
-    return `<div class="set-row set-dg"><span><strong>${outer.names[a]} sub-agents</strong>${ml.length || el.length ? '' : `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>`}</span><span class="spacer"></span>`
-      + sel(`data-dg-model="${a}"`, 'Model', `Sub-agent model for ${outer.names[a]}`, [...own, ...ml.map(o => [o.value, o.name])], d?.[a].model) + sel(`data-dg-effort="${a}"`, 'Effort', `Sub-agent effort for ${outer.names[a]}`, [...own, ...el.map(o => [o.value, o.name])], d?.[a].effort) + '</div>'; };
-  return `<fieldset class="set-group" id="setDelegation"><legend>Delegation ${info('Delegate: a chat\'s agent can start sub-agents, each one a chat of its own. Here: who may start a sprint, and what a sub-agent runs on when the agent that starts it names nothing.', 'settings')}</legend>`
-    + '<p class="muted sm" data-dg-what>Delegate lets a chat\'s agent hand parts of a job to sub-agents. Each sub-agent is a chat of its own, listed in the sidebar under the chat that started it: you can open it, read it and type in it. Its approvals and questions also show in the chat that started it. A job split up this way is a sprint.</p>'
-    + `<div class="set-row"><span><strong>Who starts a sprint</strong><span class="muted sm">Off: agents cannot start sub-agents. Ask me first: P9 asks you in the chat before a chat's first sub-agent, in every mode. Agent decides: no question beyond the mode's own.</span></span><span class="spacer"></span>`
+  const agents = [['', 'The parent chat\'s'], ...Object.keys(modes).map(a => [a, outer.names[a]]), ...outer.profiles.map(p => ['profile:' + p.id, p.name])];
+  // One row per worker, in the order a chat's workers start. A row on a provider profile offers that profile's models.
+  const row = (w, i) => { const prof = w.agent.startsWith('profile:') ? outer.profiles.find(p => 'profile:' + p.id === w.agent) : null, a = prof ? 'claude' : w.agent;
+    const ml = prof ? prof.models.map(m => [m, m]) : [['', 'Not set'], ...(outer.lastModels[a]?.options || []).map(o => [o.value, o.name])];
+    const el = [['', 'Not set'], ...(outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || []).map(o => [o.value, o.name])];
+    return `<div class="set-row set-dg" data-dg-worker="${i}"><span><strong>Worker ${i + 1}</strong>${a && ml.length < 2 && el.length < 2 ? `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>` : ''}</span>`
+      + sel(`data-dg-agent="${i}"`, 'Agent', `Worker ${i + 1} agent`, agents, w.agent)
+      + (w.agent ? sel(`data-dg-model="${i}"`, 'Model', `Worker ${i + 1} model`, ml, w.model || (prof ? prof.models[0] : '')) + sel(`data-dg-effort="${i}"`, 'Effort', `Worker ${i + 1} effort`, el, w.effort) : '') + '</div>'; };
+  return `<fieldset class="set-group" id="setDelegation"><legend>Delegation ${info('Delegate: a chat\'s agent can start workers, each one a chat of its own. Here: who may start a sprint, how many workers a chat may run, and what each worker runs on.', 'settings')}</legend>`
+    + '<p class="muted sm" data-dg-what>Delegate lets a chat\'s agent hand parts of a job to workers. Each worker is a chat of its own, listed in the sidebar under the chat that started it: you can open it, read it and type in it. Its approvals and questions also show in the chat that started it. A job split up this way is a sprint.</p>'
+    + `<div class="set-row"><span><strong>Who starts a sprint</strong><span class="muted sm">Off: agents cannot start workers. Ask me first: P9 asks you in the chat before a chat's first worker, in every mode. Agent decides: no question beyond the mode's own.</span></span>`
     + sel('data-dg-start', '', 'Who starts a sprint', [['off', 'Off'], ['ask', 'Ask me first'], ['agent', 'Agent decides']], d?.start ?? 'ask') + '</div>'
-    + `<div class="set-row"><span><strong>A sub-agent runs on</strong><span class="muted sm">These apply when the agent that starts a sub-agent names none.</span></span><span class="spacer"></span>`
-    + sel('data-dg-provider', '', 'Sub-agent provider', [['', 'The parent chat\'s agent'], ...Object.keys(modes).map(a => [a, outer.names[a]])], d?.provider) + '</div>'
-    + Object.keys(modes).map(row).join('')
-    + (d ? '' : '<p class="muted sm" data-dg-wait>Reading from P9…</p>') + (delegationNote ? `<p class="muted sm" data-dg-note>${esc(delegationNote)}</p>` : '') + '</fieldset>';
+    + `<div class="set-row"><span><strong>Workers per chat</strong><span class="muted sm">The most workers one chat may have running at once. Each has a row below: the first worker a chat starts runs on Worker 1, the next on Worker 2. A row is free again when its worker is stopped. An agent that names its own agent, model or effort for a worker gets that one.</span></span>`
+    + sel('data-dg-max', '', 'Workers per chat', Array.from({ length: 20 }, (_, i) => [String(i + 1), String(i + 1)]), String(d?.max ?? 5)) + '</div>'
+    + (d ? d.workers.map(row).join('') : '<p class="muted sm" data-dg-wait>Reading from P9…</p>') + (delegationNote ? `<p class="muted sm" data-dg-note>${esc(delegationNote)}</p>` : '') + '</fieldset>';
 }
 // Drawn again on its own (never the whole page, which would drop what is being typed in another box).
 function drawDelegation() { const el = outer.$('#setDelegation'); if (el) { el.outerHTML = delegationGroup(); bindDelegation(); } }
 function bindDelegation() {
   const el = outer.$('#setDelegation'); if (!el) return;
   if (!delegation && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('delegation', {}).then(r => { if (r?.status === 200) { delegation = r.body; drawDelegation(); } }).catch(() => {}); }
-  const v = q => el.querySelector(q).value;
+  const v = q => el.querySelector(q)?.value ?? '';
   el.querySelectorAll('select').forEach(x => { x.onchange = async () => {
-    const want = { start: v('[data-dg-start]'), provider: v('[data-dg-provider]'), ...Object.fromEntries(Object.keys(modes).map(a => [a, { model: v(`[data-dg-model="${a}"]`), effort: v(`[data-dg-effort="${a}"]`) }])) };
+    // A row whose agent just changed starts with no model or effort: the old ones belonged to the other agent.
+    const max = Number(v('[data-dg-max]')), changed = x.dataset.dgAgent;
+    const want = { start: v('[data-dg-start]'), max, workers: Array.from({ length: max }, (_, i) => { const agent = v(`[data-dg-agent="${i}"]`), keep = agent && String(i) !== changed;
+      return { agent, model: keep ? v(`[data-dg-model="${i}"]`) : '', effort: keep ? v(`[data-dg-effort="${i}"]`) : '' }; }) };
     const r = await window.p9.chat('delegation', want).catch(() => null);
     if (r?.status === 200) { delegation = r.body; delegationNote = ''; } else delegationNote = 'Not saved: P9 did not take it. Try again in a moment.';
     drawDelegation();

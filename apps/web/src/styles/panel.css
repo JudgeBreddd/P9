@@ -94,7 +94,7 @@
 .lpanel .kids .row{font-size:12.5px;padding:5px 8px}
 .lpanel .row.showmore{color:var(--muted-foreground);font-size:12px;padding-left:23px}
 .lpanel .row.showmore:hover{color:var(--foreground)}
-/* A7 Delegate: a sub-agent's chat sits indented under the chat that started it; .subs folds more than three of them. */
+/* A7 Delegate: a worker's chat sits indented under the chat that started it; .subs folds more than three of them. */
 .lpanel :is(.rowwrap,.row.subs)[data-depth="1"]{margin-left:14px;width:calc(100% - 14px)}
 .lpanel :is(.rowwrap,.row.subs)[data-depth="2"]{margin-left:28px;width:calc(100% - 28px)}
 .lpanel :is(.rowwrap,.row.subs)[data-depth="3"]{margin-left:42px;width:calc(100% - 42px)}
