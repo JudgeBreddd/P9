@@ -299,6 +299,15 @@ test('Delegate notes: a note reaches a wider working chat and a worker\'s parent
   assert.deepEqual(await other.tool('send_chat', { chat: a.conversation, text: 'hello', when: 'note' }), { error: 'chat-not-found' });
   assert.deepEqual(await kid.tool('send_chat', { chat: other.conversation, text: 'hello', when: 'note' }), { error: 'chat-not-found' });
   assert.equal((await kid.tool('send_chat', { chat: a.conversation, text: 'x'.repeat(20001), when: 'note' })).error, 'request-refused');
+  // A prompt the agent refuses does not use up the waiting note: the next prompt carries it.
+  const heard = async () => (await events(instance, kid.conversation)).filter((e) => e.data?.content?.text === 'note:thanks').length;
+  await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'auth-required', mode: 'Plan' });
+  await until(instance, (event) => event.conversation === kid.conversation && event.type === 'error');
+  await quiet(kid.conversation);
+  const first = await heard();
+  await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Plan' });
+  for (let i = 0; i < 100 && await heard() === first; i += 1) await pause(100);
+  assert.equal(await heard(), first + 1, 'a note sent with a refused prompt was lost');
 });
 
 test('Delegate: a chat working in a wider mode takes no message from a narrower one; read_chat gets past a message longer than a page', { timeout: 180000 }, async (t) => {

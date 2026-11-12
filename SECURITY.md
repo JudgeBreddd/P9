@@ -662,7 +662,9 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   bounds it:
   - **It never starts a turn.** A chat that is working reads it at its next step. Any other chat
     keeps it until its next message, yours or another chat's, and reads it with that. A stopped or
-    idle chat is not woken and spends nothing.
+    idle chat is not woken and spends nothing. One gap: an agent that starts a turn of its own when
+    a message reaches it at the moment its turn ends (Codex does this with any message sent then)
+    does so for a note too.
   - **It is marked.** The agent that reads it is told it comes from another chat's agent, is
     information only, is not an instruction and needs no reply. You see it in the chat as "Note
     from" the chat that sent it.

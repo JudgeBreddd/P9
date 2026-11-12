@@ -311,10 +311,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // on. A note never starts a turn: it goes into the running one at its next step, or waits in parked for the chat's
   // next prompt. ponytail: waiting notes are in memory, the newest 20 a chat; after a restart they are in the chat's
   // history (the 'note' event) but are not sent to its agent.
-  const notes = new WeakSet(), parked = new Map();
-  const park = (id, body) => {
-    parked.set(id, [...(parked.get(id) ?? []), body].slice(-20));
-    emit(id, 'note', { text: body.text, ...sender(body) });
+  // notes: each note's place in the order they were sent, so one parked late (a steer that failed) keeps its place.
+  // quiet: already in the chat's history (shown as steered in), so parked without a second line.
+  const notes = new WeakMap(), parked = new Map();
+  let noteCount = 0;
+  const park = (id, body, quiet) => {
+    parked.set(id, [...(parked.get(id) ?? []), body].sort((a, b) => notes.get(a) - notes.get(b)).slice(-20));
+    if (!quiet) emit(id, 'note', { text: body.text, ...sender(body) });
     return { status: 202, noted: true };
   };
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
@@ -866,7 +869,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (result === 'slow') {
       // No answer in 5 s: the request may still land, so a 409 (queued, sent again at the turn's end) could deliver it
       // twice. Shown as sent but unconfirmed; a later refusal says so with the text, so it never vanishes silently.
-      const lost = () => emit(id, 'steer-lost', { text: body.text });
+      // A note is not lost: it waits for the chat's next prompt instead.
+      const lost = () => (notes.has(body) ? park(id, body, true) : emit(id, 'steer-lost', { text: body.text }));
       request.then((late) => { if (!delivered(late)) lost(); }, lost);
       emit(id, 'user', { ...user(), unconfirmed: true });
       return { status: 202, steered: true, unconfirmed: true };
@@ -954,7 +958,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
       db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id); // O48, A7
-      gauges.delete(id);
+      gauges.delete(id); parked.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
     } });
@@ -1163,7 +1167,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
-        (error) => { if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
+        // A prompt that failed may not have been read: its notes wait again (said twice is better than never).
+        (error) => { for (const n of told) park(id, n, true); if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;
@@ -1273,7 +1278,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // A note for chat id from the chat `from` (notes, above). A running turn that cannot take it now leaves it parked.
     async note(id, text, from) {
       const body = { text };
-      notes.add(body);
+      notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);
       return result.status === 409 ? park(id, body) : result;
     },
