@@ -5,7 +5,7 @@
 // delete leaves a folder the user chose alone and moves the chats to Chats; a gone folder shows Locate.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -445,5 +445,39 @@ test('project New chat stays clickable with notification cards at narrow widths'
       await page.locator('#projPage h1', { hasText: 'Garden' }).waitFor();
     }
   }
+  assert.deepEqual(errors, []);
+});
+
+// D1 D3 D4 (SECURITY.md § Sprint files): the project page lists a lead chat's sprint files; one opens in a text box that saves.
+test('projects: the project page lists a sprint\'s files and edits one', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'site'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
+  const lead = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
+  await call(instance, '/chat/' + lead + '/prompt', 'POST', { text: 'title Lead chat' }); await ended(instance, lead);
+  // The sprint folder sits beside projects/ in P9's own folder (open_chat makes it; the sprint-files test covers that).
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const base = (await Promise.all(bases.map((b) => stat(path.join(b, 'projects', p.id)).then(() => b, () => null)))).find(Boolean);
+  assert.ok(base, 'found P9\'s projects folder');
+  const sprint = path.join(base, 'sprints', lead);
+  await mkdir(path.join(sprint, 'roles'), { recursive: true, mode: 0o700 }); await mkdir(path.join(sprint, 'notes'), { mode: 0o700 });
+  await writeFile(path.join(sprint, 'plan.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
+  await writeFile(path.join(sprint, 'rules.md'), 'Only touch docs/.');
+  await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
+  await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const row = page.locator('[data-pj="spfile"]', { hasText: 'plan.md' });
+  await row.waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-pj="spfile"]').count(), 4);
+  await row.click();
+  const box = page.locator('[data-sp-box]');
+  await box.waitFor({ timeout: 5000 });
+  assert.match(await box.inputValue(), /Goal: the docs site\./);
+  await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
+  await until(async () => (await readFile(path.join(sprint, 'plan.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to plan.md');
+  assert.match(await readFile(path.join(sprint, 'plan.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
+  await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-files ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.deepEqual(errors, []);
 });
