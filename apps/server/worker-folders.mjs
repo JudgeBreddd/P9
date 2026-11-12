@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
-import { endTree, launchTree } from './process-tree.mjs';
+import { endTree, launchTree, system32 } from './process-tree.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -77,6 +77,10 @@ async function bytes(at) {
   }
   return total;
 }
+// The shell Node's shell: true uses, with the command line passed unchanged (launchTree's verbatim).
+export const setupShell = (command, platform = process.platform, environment = process.env) => platform === 'win32'
+  ? [environment.ComSpec || system32('cmd.exe', environment), '/d', '/s', '/c', '"' + command + '"'] : ['/bin/sh', '-c', command];
+
 // The owner's setup command, in the new folder, through their shell. Resolves to null, or the failure for the agent.
 // It runs as a process tree P9 owns (process-tree.mjs: a kill-on-close Job Object on Windows, a process group elsewhere).
 // At the cap the whole tree is stopped and the answer waits for that, bounded; a stop P9 cannot confirm is said.
@@ -86,8 +90,7 @@ function runSetup(command, cwd, limit) {
     const resolve = (value) => { if (!done) { done = true; clearTimeout(timer); finish(value); } };
     const keep = (chunk) => { tail = (tail + chunk).slice(-TAIL); };
     const minutes = Math.round(limit / 60_000) + ' minutes';
-    // The shell Node's shell: true uses, with the command line passed unchanged.
-    const shell = process.platform === 'win32' ? [process.env.ComSpec || system32('cmd.exe'), '/d', '/s', '/c', '"' + command + '"'] : ['/bin/sh', '-c', command];
+    const shell = setupShell(command);
     let proc;
     try { proc = launchTree(shell, cwd, { stdio: ['ignore', 'pipe', 'pipe'], verbatim: true }); }
     catch (error) { resolve({ error: 'setup-failed', detail: 'The setup command did not start: ' + error.message }); return; }
