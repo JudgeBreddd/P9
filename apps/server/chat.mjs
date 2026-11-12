@@ -1292,9 +1292,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     tokenUsage(id) {
       let input = 0, output = 0, samples = 0;
       for (const row of db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'turn-end'").all(id)) {
-        let usage; try { usage = JSON.parse(row.data).usage; } catch { continue; }
+        let usage; try { usage = JSON.parse(row.data).usage; } catch { return null; }
         const count = (value) => value === undefined || Number.isSafeInteger(value) && value >= 0;
-        if (!usage || !count(usage.inputTokens) || !count(usage.outputTokens)) continue;
+        if (!usage || !count(usage.inputTokens) || !count(usage.outputTokens)) return null;
         input += usage.inputTokens ?? 0; output += usage.outputTokens ?? 0; samples += 1;
       }
       return samples ? { input, output } : null;
