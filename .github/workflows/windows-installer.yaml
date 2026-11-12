@@ -57,7 +57,7 @@ jobs:
       TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
       P9_ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.sha }}
       - name: The release exists
@@ -66,8 +66,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release view "$TAG" --json tagName > /dev/null || { echo "::error::Create the GitHub release for $TAG first (a draft is fine), then run this again"; exit 1; }
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26.10.0
           cache: pnpm
@@ -91,7 +91,7 @@ jobs:
           cat dist/windows/SHA256SUMS-$P9_ARCH
           gh release upload "$TAG" dist/windows/*-$P9_ARCH.exe dist/windows/*-$P9_ARCH.exe.blockmap dist/windows/SHA256SUMS-$P9_ARCH --clobber
       # This runner's latest.yml names only its own installer: the feed job merges both and attaches it last.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.TAG != ''
         with:
           name: feed-windows-${{ matrix.arch }}
@@ -106,7 +106,7 @@ jobs:
           # BL11: the web-only packages are devDependencies, so app.asar carries only what the desktop loads.
           ls -l dist/windows/*-unpacked/resources/app.asar
       # The check build, to download from the run's page and install by hand (a tester's laptop).
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.TAG == '' && inputs.only != 'rollback'
         with:
           name: windows-installer-${{ matrix.arch }}
@@ -945,7 +945,7 @@ jobs:
           if (-not (Test-Path (Join-Path $p9 "installers\$good.exe"))) { throw "the $good installer is not kept" }
           Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Output "$good updated itself to $bad, which failed 2 starts and went back to $good on its own; the notice showed"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && env.TAG == '' && matrix.arch == 'x64'
         with:
           name: rollback-evidence
@@ -965,7 +965,7 @@ jobs:
     env:
       TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.sha }}
       - name: The release exists
@@ -973,8 +973,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release view "$TAG" --json tagName > /dev/null || { echo "::error::Create the GitHub release for $TAG first (a draft is fine), then run this again"; exit 1; }
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26.10.0
           cache: pnpm
@@ -1049,13 +1049,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" dist/linux/*.AppImage dist/linux/SHA256SUMS-linux-x64 --clobber
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.TAG != ''
         with:
           name: feed-linux-x64
           path: dist/linux/latest-linux.yml
           retention-days: 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.TAG == ''
         with:
           name: linux-appimage-x64
@@ -1073,14 +1073,14 @@ jobs:
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.sha }}
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 26.10.0
           package-manager-cache: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: feed-*
           path: feed

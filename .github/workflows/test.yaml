@@ -64,9 +64,9 @@ jobs:
       GITLEAKS: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26.10.0
           cache: pnpm
@@ -112,7 +112,7 @@ jobs:
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tests-log-${{ matrix.shard }}
           path: ${{ runner.temp }}/tests.log
@@ -120,7 +120,7 @@ jobs:
           if-no-files-found: warn
       - name: Screenshots (evidence runs)
         if: always() && inputs.evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: evidence-${{ matrix.shard }}
           path: ${{ runner.temp }}/evidence
@@ -145,9 +145,9 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26.10.0
           cache: pnpm
@@ -197,7 +197,7 @@ jobs:
           exit $LASTEXITCODE
       - name: Test output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tests-log-windows-${{ matrix.arch }}
           path: ${{ runner.temp }}/evidence/tests.log
@@ -215,7 +215,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Boot a bare Ubuntu 24.04
         run: bash scripts/bare-machine.sh boot
       - name: Install P9 on it and list what it lacked
@@ -231,7 +231,7 @@ jobs:
         run: set -o pipefail; bash scripts/bare-machine.sh boot && bash scripts/bare-machine.sh install desktop 2>&1 | tee "$RUNNER_TEMP/install-desktop.log"
       - name: Evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bare-${{ matrix.runner }}
           path: |
@@ -257,9 +257,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26.10.0
       - run: pnpm install --frozen-lockfile
@@ -302,7 +302,7 @@ jobs:
           if ($failed) { throw "$failed program(s) did not start with PATH cut to Windows' folders" }
       - name: Evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bare-${{ matrix.runner }}
           path: ${{ runner.temp }}/bare-windows
