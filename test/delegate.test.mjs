@@ -200,8 +200,8 @@ test('Delegate: a finished worker tells its running parent in one line, not whil
   // Not waiting: one line, marked as P9's, in the parent's chat.
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.from === 'p9');
-  assert.deepEqual(await notices(instance, a.conversation), ['[p9] Kid finished: late reply']);
-  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'echo:[p9] Kid finished: late reply');
+  assert.deepEqual(await notices(instance, a.conversation), ['[p9] Kid ended its turn: late reply']);
+  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'echo:[p9] Kid ended its turn: late reply');
   // A stopped parent is not woken.
   await call(instance, `/chat/${a.conversation}/stop`, 'POST', {});
   const before = (await events(instance, a.conversation)).length;
@@ -721,4 +721,21 @@ test('Delegate peer help: ask_chat asks a chat the user opened to questions; its
   await open(B, false);
   assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode' })).error, 'not-askable');
   console.log('PASS Delegate peer help: opt-in per chat, beside only, alone and read-only, approval rejected, tools read-only, mode back, cancel, a stopped helper woken unasked');
+});
+
+test('Delegate sprint task appears in the list and live events and becomes idle', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const a = await agent(t, instance);
+  const pending = a.tool('open_chat', { text: 'hello', item: 'B2', done_means: 'task visible', checks: ['inspect'] });
+  const asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', a.cursor);
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  const made = await pending;
+  await a.done(made.chat);
+  const row = (await rows(instance)).find((c) => c.id === made.chat);
+  assert.deepEqual(row.task, { item: 'B2', doneMeans: 'task visible', checks: ['inspect'] });
+  assert.equal(typeof row.idleSince, 'number');
+  const ev = await events(instance, made.chat);
+  assert.ok(ev.some((e) => e.type === 'sprint-state' && e.data.task?.item === 'B2'));
+  assert.ok(ev.some((e) => e.type === 'sprint-state' && typeof e.data.idleSince === 'number'));
+  assert.match(ev.find((e) => e.type === 'user').data.text, /Done means: task visible/);
 });
