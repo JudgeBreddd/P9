@@ -313,10 +313,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // history (the 'note' event) but are not sent to its agent.
   // notes: each note's place in the order they were sent, so one parked late (a steer that failed) keeps its place.
   // quiet: already in the chat's history (shown as steered in), so parked without a second line.
-  const notes = new WeakMap(), parked = new Map();
+  // ponytail: a chat's waiting notes are its newest 20 and at most 60,000 characters together (the newest always
+  // waits), so one prompt can carry them; older ones stay in the chat's history only.
+  const notes = new WeakMap(), parked = new Map(), resent = new WeakSet();
   let noteCount = 0;
   const park = (id, body, quiet) => {
-    parked.set(id, [...(parked.get(id) ?? []), body].sort((a, b) => notes.get(a) - notes.get(b)).slice(-20));
+    const list = [...(parked.get(id) ?? []), body].sort((a, b) => notes.get(a) - notes.get(b)).slice(-20);
+    while (list.length > 1 && list.reduce((n, x) => n + x.text.length, 0) > 60000) list.shift();
+    parked.set(id, list);
     if (!quiet) emit(id, 'note', { text: body.text, ...sender(body) });
     return { status: 202, noted: true };
   };
@@ -1168,8 +1172,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
-        // A prompt that failed may not have been read: its notes wait again (said twice is better than never).
-        (error) => { for (const n of told) park(id, n, true); if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
+        // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
+        // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
+        (error) => { for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;
