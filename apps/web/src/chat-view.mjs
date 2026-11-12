@@ -269,7 +269,7 @@ const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; 
   window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { outer.chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) outer.chatImgs.delete(hash); }); };
 function event(e, s) {
   switch (e.t) {
-    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}><div class="who">${e.ask ? 'Question from ' + esc(outer.S.sessions.find(x => x.id === e.ask)?.title ?? 'another chat') + ' · answered read-only' : 'You'}${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
+    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}><div class="who">${e.ask ? 'Question from ' + esc(outer.S.sessions.find(x => x.id === e.ask)?.title ?? 'another chat') + ' · answered read-only' : e.info ? 'Note from ' + esc(outer.S.sessions.find(x => x.id === e.info)?.title ?? 'another chat') + ' · information only' : 'You'}${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${outer.names[s.agent]}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent])}</div>`;
     case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
@@ -782,12 +782,14 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
     case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when }); break;
-    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
+    // A note from another chat that waits for this chat's next message: shown where it arrived; it started nothing.
+    case 'note': s.events.push({ t: 'user', text: d.text, when: new Date(ev.at).toTimeString().slice(0, 5), info: d.from ?? true }); break;
+    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled' && d.why !== 'noted') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     // O32: the model the resumed session is really on, so a change shows (the Model pill follows the config event after it).
     case 'resumed': notice('Resumed natively (session/resume)' + (typeof d.model === 'string' ? ' on ' + d.model : '')); if (Array.isArray(d.restoreNotice) && d.restoreNotice.length) notice('Could not restore ' + d.restoreNotice.join(', ')); s.state = 'running'; s.session = d.session; break;

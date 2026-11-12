@@ -10,6 +10,7 @@ const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TIER = { claude: { Plan: 0, Manual: 1, 'Accept edits': 2, Auto: 3, 'Bypass permissions': 4 },
   codex: { 'Read-only': 0, 'Workspace access': 2, 'Auto review': 3, 'Full access': 4 } };
 const WAIT_MS = 50_000; // ponytail: below both agents' MCP call limit as the spec read it; not measured against a real agent yet
+const NOTE_MAX = 20_000; // one note (send_chat when: 'note')
 const MAX_CHILDREN = 20, MAX_DEPTH = 3; // ponytail: a runaway guard, not a tuned limit
 const MAX_RULES = 8000;
 // Peer help (ask_chat). ponytail: both are first guesses, not measured. A helper is cold when it is stopped or went
@@ -33,8 +34,10 @@ export const DELEGATE_TOOLS = (input) => {
       + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
     input({ rules: { type: 'string', maxLength: MAX_RULES } })],
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
-      + 'or queue (after the running turn). It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends.',
-    input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue'] } }, ['chat', 'text'])],
+      + 'or queue (after the running turn). It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
+      + 'when: note passes information on and asks for nothing (a result, a branch that is ready, something you found): it never starts a turn, the chat reads it in its running turn '
+      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work.',
+    input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
@@ -173,7 +176,16 @@ export function createDelegate({ chat, allowed }) {
 
   async function sendChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
-    if (!text(args.text, 100_000) || (args.when !== undefined && !['auto', 'steer', 'queue'].includes(args.when))) return { error: 'request-refused' };
+    if (!text(args.text, 100_000) || (args.when !== undefined && !['auto', 'steer', 'queue', 'note'].includes(args.when))) return { error: 'request-refused' };
+    // A note asks for nothing and starts nothing, so it has no mode and is not held to the sender's: it reaches what
+    // send_chat reaches, and a worker's parent always (SECURITY.md § Delegate, "Notes").
+    if (args.when === 'note') {
+      if (args.text.length > NOTE_MAX) return { error: 'request-refused', detail: 'A note is at most ' + NOTE_MAX + ' characters.' };
+      if (!reach(caller, args.chat) && !(ID.test(args.chat ?? '') && chat.info(caller)?.parent === args.chat)) return { error: 'chat-not-found' };
+      const noted = await chat.note(args.chat, args.text, caller);
+      if (noted.status !== 202) return { error: 'chat-not-sendable', reason: noted.error, state: stateOf(chat.info(args.chat)) };
+      return { chat: args.chat, sent: 'as a note: ' + (noted.noted ? 'it reads it with its next message' : noted.held ? 'it reads it at its next step' : 'into its running turn') };
+    }
     if (!reach(caller, args.chat)) return { error: 'chat-not-found' };
     const target = chat.info(args.chat), picked = modeFor(caller, target);
     if (picked.error) return picked;
