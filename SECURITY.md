@@ -970,7 +970,8 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
 - **Check for updates.** Where automatic updates are off, Settings > Maintenance > Updates > Check now opens P9's newest GitHub release
   (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser (threat model row 28).
 - **Auto-update.** The installed app (Windows installer, Linux AppImage) asks GitHub for P9's
-  newest release, downloads it and asks to install it (Update now, or Later: the next time P9 opens); see Auto-update
+  newest release, downloads it and asks to install it (Update now installs; Later, or no answer, installs
+  nothing and P9 asks again the next time it opens); see Auto-update
   below (threat model row 39). A source checkout never does. On Windows, a rollback (threat model row 40) can download the
   installer of the version you had from that release on GitHub, when it was not kept.
 - **Mission Control tile icons.** A link tile with no picture and no text icon of its own shows the site's icon
@@ -1002,8 +1003,9 @@ The switch is kept in `update-channel.json` in the profile folder; anything but 
   address, that P9 checked, and when.
 - **When.** Shortly after the app starts and every few hours while it is open. A found update downloads
   in the background, then a box "P9 is ready to update" lists what it changes. Update now (or Settings >
-  Maintenance > Updates) closes P9, installs it and opens P9 again. Later keeps it for the next time P9 opens, which
-  installs it at once and says so (`update-pending.json` in the profile folder holds that version). Quitting P9 never
+  Maintenance > Updates) closes P9, installs it and opens P9 again. Later, or closing the box without an
+  answer, installs nothing: a declined update is only offered again, never applied, and P9 asks at every
+  open until Update now. Quitting P9 never
   installs anything: an installer running on the way out could end a window opened meanwhile. Installing restarts the background service on the new version, which ends a chat turn in
   progress; on Linux the restart happens the next time the AppImage starts.
 - **The list in the box.** The list items of the release's notes before their first heading, as plain text (tags
