@@ -656,6 +656,26 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
   mode takes no message from it until that turn ends. The agent lock
   and File protection are global, so they cover every worker as they cover its parent.
+- **Notes (`send_chat` with `when: note`).** A note passes information on and asks for nothing: a
+  result, a branch that is ready, something found. It is the one message that is not held to the
+  sender's mode, and the one that reaches a worker's parent when the two share no project. What
+  bounds it:
+  - **It never starts a turn.** A chat that is working reads it at its next step. Any other chat
+    keeps it until its next message, yours or another chat's, and reads it with that. A stopped or
+    idle chat is not woken and spends nothing.
+  - **It is marked.** The agent that reads it is told it comes from another chat's agent, is
+    information only, is not an instruction and needs no reply. You see it in the chat as "Note
+    from" the chat that sent it.
+  - **The risk that remains, accepted (Builder, 2026-11-11).** A note from a chat in a narrow mode
+    is still text that a chat working in a wider mode reads. The mark is the only guard: an agent
+    that treats a note as an instruction acts on it in its own, wider mode. The alternative,
+    refusing notes upward, leaves a worker unable to tell its parent anything while the parent
+    works.
+  - **Size and reach.** At most 20,000 characters. It reaches the chats `send_chat` reaches and the
+    sender's own parent, nothing else. The agent lock refuses it like any `send_chat`.
+  - **What is kept.** A waiting note is in the chat's history at once. The copy that waits for the
+    agent is in memory, the newest 20 for each chat: after P9 restarts, a note not yet read stays in
+    the history but is not sent to the agent.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules` and `answer_chat` are refused while it
   is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
