@@ -1,12 +1,13 @@
 // Worker folders (sprint spec A1, A2, A4, A6, A7; SECURITY.md § Worker folders). One clone of the repository per sprint
 // in P9's own folder, one git worktree and branch per worker, made by P9 when the worker starts. The owner's folder is
 // only read. gitFacts is what P9 reads from git by itself, for the sprint's version stamp.
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
+import { endTree, launchTree } from './process-tree.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -53,10 +54,12 @@ export async function gitFacts(folder) {
       if (typeof asked !== 'string' || !HEX.test(asked) || !await one(folder, ['rev-parse', '-q', '--verify', asked + '^{commit}'])) return false;
       if ((await git(folder, ['merge-base', '--is-ancestor', asked, main])).code === 0) return true;
       const base = await one(folder, ['merge-base', asked, main]);
-      const files = base && await names(folder, ['diff', '--no-ext-diff', '--name-only', base, asked]);
+      // --no-renames: a rename is its old name and its new name, so an unmerged rename (the main line still has the old
+      // name) never reads as merged.
+      const files = base && await names(folder, ['diff', '--no-ext-diff', '--no-renames', '--name-only', base, asked]);
       // No pathspecs: the files that differ between the commit and the main line, compared by exact name. Any git
       // failure reads as not merged (fail closed). ponytail: a file the main line changed again after the merge reads as not merged (kept, never lost).
-      const differ = files?.length ? await names(folder, ['diff', '--no-ext-diff', '--name-only', asked, main]) : null;
+      const differ = files?.length ? await names(folder, ['diff', '--no-ext-diff', '--no-renames', '--name-only', asked, main]) : null;
       return Boolean(differ) && !files.some((file) => differ.includes(file));
     },
   };
@@ -75,29 +78,33 @@ async function bytes(at) {
   return total;
 }
 // The owner's setup command, in the new folder, through their shell. Resolves to null, or the failure for the agent.
-const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
+// It runs as a process tree P9 owns (process-tree.mjs: a kill-on-close Job Object on Windows, a process group elsewhere).
+// At the cap the whole tree is stopped and the answer waits for that, bounded; a stop P9 cannot confirm is said.
 function runSetup(command, cwd, limit) {
   return new Promise((finish) => {
-    let tail = '', done = false;
-    const resolve = (value) => { if (!done) { done = true; finish(value); } };
+    let tail = '', done = false, ending = false, timer;
+    const resolve = (value) => { if (!done) { done = true; clearTimeout(timer); finish(value); } };
     const keep = (chunk) => { tail = (tail + chunk).slice(-TAIL); };
-    const child = spawn(command, { cwd, shell: true, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
-    const stopped = () => ({ error: 'setup-failed', detail: 'The setup command (Settings > Delegation) was stopped after ' + Math.round(limit / 60_000) + ' minutes. The worker was not started; its folder is kept. End of its output:\n' + tail });
-    // At the cap the whole tree ends (Windows has no process groups: taskkill /T), and the answer does not wait for a
-    // child that still holds the output pipes.
-    const timer = setTimeout(() => {
-      try {
-        if (process.platform === 'win32') spawn(system32('taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { shell: false, env: childEnv(), stdio: 'ignore', windowsHide: true }).on('error', () => {});
-        else process.kill(-child.pid, 'SIGKILL');
-      } catch { /* gone */ }
+    const minutes = Math.round(limit / 60_000) + ' minutes';
+    // The shell Node's shell: true uses, with the command line passed unchanged.
+    const shell = process.platform === 'win32' ? [process.env.ComSpec || system32('cmd.exe'), '/d', '/s', '/c', '"' + command + '"'] : ['/bin/sh', '-c', command];
+    let proc;
+    try { proc = launchTree(shell, cwd, { stdio: ['ignore', 'pipe', 'pipe'], verbatim: true }); }
+    catch (error) { resolve({ error: 'setup-failed', detail: 'The setup command did not start: ' + error.message }); return; }
+    const { child } = proc;
+    timer = setTimeout(async () => {
+      ending = true;
+      const ended = await endTree(proc);
       child.stdout.destroy(); child.stderr.destroy();
-      resolve(stopped());
+      resolve({ error: 'setup-failed', detail: ended === 'stopped'
+        ? 'The setup command (Settings > Delegation) was stopped after ' + minutes + ', with everything it started. The worker was not started; its folder is kept. End of its output:\n' + tail
+        : 'The setup command (Settings > Delegation) passed its ' + minutes + ' and P9 could not confirm that everything it started has stopped: check for it before trying again. The worker was not started; its folder is kept. End of its output:\n' + tail });
     }, limit);
     child.stdout.on('data', keep); child.stderr.on('data', keep);
-    child.on('error', (error) => { clearTimeout(timer); resolve({ error: 'setup-failed', detail: 'The setup command did not start: ' + error.message }); });
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      resolve(code === 0 ? null : signal ? stopped() : { error: 'setup-failed', detail: 'The setup command (Settings > Delegation) ended with exit code ' + code
+    child.on('error', (error) => { if (!ending) resolve({ error: 'setup-failed', detail: 'The setup command did not start: ' + error.message }); });
+    child.on('close', (code) => {
+      if (ending) return; // the cap's own answer, after the tree is confirmed stopped
+      resolve(code === 0 ? null : { error: 'setup-failed', detail: 'The setup command (Settings > Delegation) ended with exit code ' + code
         + '. The worker was not started; its folder is kept. End of its output:\n' + tail });
     });
   });

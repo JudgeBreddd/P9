@@ -66,6 +66,12 @@ test('Worker folders A7: gitFacts reads the commit, the files changed against th
   g(land, 'add', '--', ...odd); g(land, 'commit', '-qm', 'theirs'); g(land, 'push', '-q', 'origin', 'main');
   g(owner, 'fetch', '-q', 'origin');
   assert.equal(await (await gitFacts(owner)).inMain(oddCommit), false, 'an odd-named file that differs in the main line is not merged');
+  // A pure rename is its old name and its new name: unmerged, the main line still has the old one; squash-merged, neither differs.
+  g(owner, 'checkout', '-qb', 'ren', 'origin/main'); g(owner, 'mv', 'a.txt', 'renamed.txt'); g(owner, 'commit', '-qm', 'rename');
+  const renCommit = g(owner, 'rev-parse', 'HEAD');
+  assert.equal(await (await gitFacts(owner)).inMain(renCommit), false, 'an unmerged pure rename is not in the main line');
+  g(owner, 'push', '-q', 'origin', 'ren'); squash(dir, remote, 'ren', 'ren'); g(owner, 'fetch', '-q', 'origin');
+  assert.equal(await (await gitFacts(owner)).inMain(renCommit), true, 'a squash-merged rename is in the main line');
   console.log('PASS Worker folders A7');
 });
 
@@ -114,42 +120,51 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   const odd = [' lead.txt', ...(process.platform === 'win32' ? [] : ['new\nline.txt'])];
   for (const name of odd) write(path.join(oddFolder, name), 'odd\n');
   g(oddFolder, 'add', '--', ...odd); g(oddFolder, 'commit', '-qm', 'odd');
+  // A worker whose only change is a pure rename: kept until the rename is in the main line.
+  const renamed = (await folders.make(ID, 'renamed', owner)).folder;
+  g(renamed, 'mv', 'a.txt', 'renamed.txt'); g(renamed, 'commit', '-qm', 'rename');
   g(merged, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
   g(dirty, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/dirty', 'dirty');
   write(path.join(dirty, 'later.txt'), 'not saved\n');
   const result = await folders.clean(ID);
   assert.deepEqual(result.removed, ['merged']);
-  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['detached', 'not on its sprint branch'], ['dirty', 'unsaved changes'], ['moved', 'not on its sprint branch'], ['odd', 'not in the main line'], ['open', 'not in the main line']]);
+  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['detached', 'not on its sprint branch'], ['dirty', 'unsaved changes'], ['moved', 'not on its sprint branch'], ['odd', 'not in the main line'], ['open', 'not in the main line'], ['renamed', 'not in the main line']]);
   assert.ok(result.kept.every((k) => k.bytes > 0 && fs.existsSync(k.folder)));
   const clone = path.join(home, ID, 'clone');
   assert.equal(fs.existsSync(merged), false);
-  assert.deepEqual(g(clone, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n'), ['sprint/0123abcd/detached', 'sprint/0123abcd/dirty', 'sprint/0123abcd/moved', 'sprint/0123abcd/odd', 'sprint/0123abcd/open'], 'an unmerged branch is never deleted');
+  assert.deepEqual(g(clone, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n'), ['sprint/0123abcd/detached', 'sprint/0123abcd/dirty', 'sprint/0123abcd/moved', 'sprint/0123abcd/odd', 'sprint/0123abcd/open', 'sprint/0123abcd/renamed'], 'an unmerged branch is never deleted');
   for (const item of ['moved', 'detached', 'odd']) { g(clone, 'worktree', 'remove', '--force', path.join(home, ID, 'workers', item)); g(clone, 'branch', '-D', 'sprint/0123abcd/' + item); }
   // Saved and merged at last: everything goes, the clone too.
   fs.rmSync(path.join(dirty, 'later.txt'));
   g(open, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/open', 'open');
-  assert.deepEqual(await folders.clean(ID), { removed: ['dirty', 'open'], kept: [] });
+  g(renamed, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/renamed', 'renamed');
+  assert.deepEqual(await folders.clean(ID), { removed: ['dirty', 'open', 'renamed'], kept: [] });
   assert.equal(fs.existsSync(path.join(home, ID)), false);
   console.log('PASS Worker folders A6');
 });
 
-test('Worker folders A4: a setup command past its cap is stopped with everything it started, and the answer does not wait for them', { timeout: 60000 }, async (t) => {
+test('Worker folders A4: a setup command past its cap is stopped with everything it started, and the answer waits only for that stop', { timeout: 60000 }, async (t) => {
   const { dir, owner, home } = repos(t);
-  const pidFile = path.join(dir, 'grandchild.pid'), hang = path.join(dir, 'hang.mjs');
-  // The setup starts a child that keeps the output pipes open and outlives it unless the whole tree is stopped.
-  write(hang, `import { spawn } from 'node:child_process'; import fs from 'node:fs';
+  // The setup starts a child that keeps the output pipes open and outlives it unless the whole tree is stopped: once with
+  // the setup still running, once with the setup gone and only its child left.
+  for (const [item, parent] of [['live', 'setInterval(() => {}, 1000);'], ['gone', 'process.exit(0);']]) {
+    const pidFile = path.join(dir, item + '.pid'), script = path.join(dir, item + '.mjs');
+    write(script, `import { spawn } from 'node:child_process'; import fs from 'node:fs';
 const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
-fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); setInterval(() => {}, 1000);\n`);
-  const started = Date.now();
-  const result = await createWorkerFolders({ home, setupMs: 1500 }).make(ID, 'slow', owner, `node "${hang}"`);
-  assert.equal(result.error, 'setup-failed');
-  assert.match(result.detail, /was stopped after/);
-  assert.ok(Date.now() - started < 20000, 'answered at the cap, not when the pipes close');
-  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-  let alive = true;
-  for (let i = 0; i < 50 && alive; i += 1) { try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 100)); } catch { alive = false; } }
-  if (alive) process.kill(pid, 'SIGKILL');
-  assert.equal(alive, false, 'the setup command\'s own child was stopped too');
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); ${parent}\n`);
+    const started = Date.now();
+    const result = await createWorkerFolders({ home, setupMs: 3000 }).make(ID, item, owner, `node "${script}"`);
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    // At the answer the whole tree is already gone: nothing is still writing in the folder.
+    let alive = true; try { process.kill(pid, 0); } catch { alive = false; }
+    if (alive) process.kill(pid, 'SIGKILL');
+    assert.equal(alive, false, item + ': the setup command\'s own child was stopped before the answer');
+    assert.ok(Date.now() - started < 20000, item + ': answered at the cap, not when the pipes close');
+    // Windows: the Job Object ends what the shell left behind when the shell ends, so the setup that exited 0 has finished.
+    if (item === 'gone' && process.platform === 'win32') { assert.equal(result.error, undefined, result.detail); continue; }
+    assert.equal(result.error, 'setup-failed');
+    assert.match(result.detail, /was stopped after .*, with everything it started/);
+  }
   console.log('PASS Worker folders A4 timeout');
 });
 
