@@ -4,14 +4,15 @@
 // directly against a tiny daemon that a stand-in systemctl restarts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import http2 from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { chromium } from '@playwright/test';
+import net from 'node:net';
+import { chromium, _electron } from '@playwright/test';
 import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { newer } from '../apps/server/update.mjs';
 import { unitOf } from '../apps/server/windows.mjs';
@@ -284,6 +285,55 @@ test('W1: every build kind asks with both versions before it changes the server;
   assert.match(main, /message: 'P9 on ' \+ host \+ ' is ' \+ there \+ '\. This app is ' \+ here \+ '\.'/);
   assert.match(main, /buttons: \['Not now', 'Update to ' \+ here\], defaultId: 1, cancelId: 0/);
   assert.match(main, /ask: askUpdate, tell:/);
+});
+
+// W1 in the window: the app itself, connected through the stand-in ssh to a server that says an older version, raises its
+// own box. Both programs read one package.json, so the server's answers pass through a relay that rewrites its version
+// to an older one of the same length. The box is the system's: the test takes its options and answers Not now.
+test('W1 in the window: the app raises the two-versions box on connect; Not now leaves the server alone and is not asked again', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await server(t);
+  const OLD = VERSION.replace(/^(\d+)\.(\d+)/, (_, a, b) => a + '.' + (Number(b) - 1));
+  assert.ok(OLD.length === VERSION.length && newer(VERSION, OLD), OLD);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-w1-'));
+  const runtime = path.join(directory, 'server'), there = path.join(runtime, 'p9-foundation'), here = path.join(directory, 'local'), profile = path.join(directory, 'profile');
+  await mkdir(there, { recursive: true, mode: 0o700 }); await mkdir(here, { mode: 0o700 }); await mkdir(profile);
+  for (const name of await readdir(remote.state)) if (name !== 'daemon.sock') await symlink(path.join(remote.state, name), path.join(there, name));
+  const relay = net.createServer((client) => {
+    const daemonSide = net.connect(path.join(remote.state, 'daemon.sock'));
+    client.pipe(daemonSide);
+    daemonSide.on('data', (data) => client.write(Buffer.from(data.toString('latin1').replaceAll('"version":"' + VERSION + '"', '"version":"' + OLD + '"'), 'latin1')));
+    daemonSide.on('end', () => client.end());
+    for (const side of [client, daemonSide]) { side.on('error', () => { client.destroy(); daemonSide.destroy(); }); side.on('close', () => { client.destroy(); daemonSide.destroy(); }); }
+  });
+  await new Promise((resolve) => relay.listen(path.join(there, 'daemon.sock'), resolve));
+  t.after(() => relay.close());
+  const ssh = path.join(directory, 'ssh');
+  await sh(ssh, `FAKE_RUNTIME='${runtime}' FAKE_SSH_LOG='${path.join(directory, 'ssh.log')}' exec '${process.execPath}' '${path.join(root, 'test/fake-ssh.mjs')}' "$@"\n`);
+  // P9_PACKAGED: the build kind that needs no git checkout to know its version (the staged copy has none).
+  const env = { ...process.env, P9_SSH: ssh, XDG_RUNTIME_DIR: here, P9_PACKAGED: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  let page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  await app.evaluate(({ dialog }) => { globalThis.asked = []; dialog.showMessageBox = async (...args) => { globalThis.asked.push(args.at(-1)); return { response: 0 }; }; });
+  const connect = async () => {
+    await page.evaluate(() => window.p9.server('test-host')).catch(() => {});
+    await until(() => page.evaluate(() => window.p9.server().then((s) => s.connected && s.host === 'test-host')).catch(() => false), 'connected to the server');
+  };
+  await connect();
+  const asked = await until(() => app.evaluate(() => globalThis.asked.length && globalThis.asked), 'the box');
+  assert.deepEqual(asked, [{ type: 'question', title: 'Update P9 on test-host?', message: 'P9 on test-host is ' + OLD + '. This app is ' + VERSION + '.',
+    detail: 'Update the server to ' + VERSION + '? It waits for running turns to finish, then restarts. Not now leaves it on ' + OLD + '.',
+    buttons: ['Not now', 'Update to ' + VERSION], defaultId: 1, cancelId: 0, noLink: true }]);
+  // Not now: no job on the server, nothing built, nothing unpacked.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  assert.deepEqual([(await call(remote, '/update/status')).job ?? null, await lines(remote.log.pnpm), await leftovers(remote)], [null, [], []]);
+  // The same host and pair of versions is not asked again in this launch.
+  await connect();
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  assert.equal((await app.evaluate(() => globalThis.asked)).length, 1, 'asked again after Not now');
+  assert.equal((await call(remote, '/update/status')).job ?? null, null);
 });
 
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when
