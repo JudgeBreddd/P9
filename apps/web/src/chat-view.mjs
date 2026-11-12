@@ -291,6 +291,74 @@ function ask(s, own) {
     : f.kind === 'multi' ? `<div class="field">${head}${f.options.map(outer.opt).map(([v, l], j) => `<label><input type="checkbox" name="f${i}~${j}" value="${esc(v)}" ${q.vals?.[`f${i}~${j}`] !== undefined ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>` : `<div class="field">${head}<input data-slot="input" name="f${i}" value="${esc(q.vals?.['f' + i] || '')}"></div>`; }).join('')}<div class="acts">${q.unsupported ? '' : '<button data-slot="button" data-variant="default" data-size="sm" type="submit">Submit answer</button>'}<button data-slot="button" data-variant="outline" data-size="sm" type="button" data-decline>Decline</button></div></form>`; }
   return '';
 }
+// E1/I2/F3 (P9-Sprint): the card at the top right of a chat that has workers, its sprint row only. It draws what the session list
+// reports (task, ready, verdict, idleSince, parent, state) and the workers' open requests (kin, above); it keeps no state of its own
+// but whether it is folded.
+// ponytail: folded per chat for this window only (a Set), and a chat opens folded where the card would cover the text (narrow window, Split).
+const SPRINT = { folded: new Map() };
+const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null }); // the contract's optional fields: a chat without them looks as it does today
+const SP_LABEL = { working: 'Working', idle: 'Idle', asked: 'Asked', ready: 'Ready', passed: 'Passed', fix: 'Fix', stopped: 'Stopped' };
+// A verdict belongs to one exact commit (spec C): one for an older commit than the one reported ready is not a pass of this version.
+const verdictOf = k => k.verdict?.commit && k.ready?.commit && k.verdict.commit === k.ready.commit ? k.verdict : null; // no ready commit, or no commit on the verdict: nothing is verified
+function workerStatus(k) {
+  const v = verdictOf(k);
+  if (k.pending && k.state === 'running') return ['asked', null];
+  if (v) return [v.result === 'pass' ? 'passed' : 'fix', v.at ?? null];
+  if (k.ready) return ['ready', k.ready.at ?? null];
+  if (k.state === 'stopped' || k.state === 'stopping') return ['stopped', null];
+  if (k.idleSince) return ['idle', k.idleSince];
+  return [k.state === 'running' ? 'working' : 'idle', null];
+}
+const ageOf = (at, now = Date.now()) => { const m = Math.max(0, Math.floor((now - at) / 60000)); return m < 1 ? '<1 min' : m < 60 ? m + ' min' : m < 1440 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + m % 60 + ' min' : '') : Math.floor(m / 1440) + ' d'; };
+const since = at => at ? `<time data-since="${at}">${ageOf(at)}</time>` : '';
+const ring = (status, done, total) => { const R = 10, C = +(2 * Math.PI * R).toFixed(2), f = total ? done / total : 0;
+  return `<span class="sp-ring" data-status="${status}" role="img" aria-label="${done} of ${total} items passed"><svg viewBox="0 0 28 28" aria-hidden="true"><circle class="t" cx="14" cy="14" r="${R}"/><circle class="a" cx="14" cy="14" r="${R}" stroke-dasharray="${+(C * f).toFixed(2)} ${C}"/></svg><b>${done}/${total}</b></span>`; };
+// A worker's own open request, with when it came (the event's time; F3: how long it has waited).
+const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e && { k, e, kind: k.pending, at: e.at ?? null }; };
+function sprintCard(s) {
+  if (s.stub) return '';
+  const workers = kin(s.id); if (!workers.length) return '';
+  const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
+  const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.task?.item ? 1 : 0, passed = st === 'passed' ? 1 : 0;
+    return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button></li>` }; });
+  const asks = workers.filter(k => k.pending && k.state === 'running').map(askOf).filter(Boolean).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
+  const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
+  return `<aside class="sprint" data-sprint data-folded="${folded}" data-auto="${choice === undefined}" data-open-asks="${asks.length}" aria-label="Sprint">
+    <button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button>
+    <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>
+    ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
+  </aside>`;
+}
+const sprintDoor = () => { if (!window.__sprint && outer.sampleView) window.__sprint = { add: (...x) => { outer.S.sessions.push(...x); renderChats(); }, set: (id, patch) => { Object.assign(outer.S.sessions.find(x => x.id === id), patch); renderChats(); }, render: () => renderChats() }; }; // ponytail: the UI test's door (sample data is handed in only by tests)
+// Per pane: the card moves left of the cards stack only where they overlap this pane, takes the width the pane has, and (unless
+// the person chose) opens only when the text keeps 420 px beside it; the text's right padding follows while it is open.
+let spObs; // made on first use: the controller's observe() is not there yet when this module loads
+function placeSprints() {
+  spObs ||= outer.observe(() => placeSprints());
+  const cards = outer.$('#cards'), cr = cards?.querySelector('.card') && getComputedStyle(cards).visibility !== 'hidden' ? cards.getBoundingClientRect() : null;
+  if (cards) spObs.observe(cards);
+  for (const p of document.querySelectorAll('.pane')) {
+    const sp = p.querySelector(':scope > .sprint'); if (!sp) { p.style.removeProperty('--sp-pad'); continue; }
+    spObs.observe(p);
+    const pr = p.getBoundingClientRect(), over = cr && cr.left < pr.right && cr.right > pr.left;
+    let right = over ? Math.round(pr.right - cr.left + 10) : 18, top = 46;
+    // Where the cards leave this pane under 220 px beside them (a 720 px Split, an uneven one), the card goes below the stack instead.
+    if (over && pr.width - right - 10 < 220) { right = 18; top = Math.max(46, Math.round(cr.bottom - pr.top + 10)); }
+    const w = Math.max(120, Math.min(296, Math.floor(pr.width - right - 10)));
+    sp.style.setProperty('--sp-top', top + 'px'); sp.style.setProperty('--sp-room', Math.max(120, Math.floor(pr.height - top - 10)) + 'px');
+    sp.style.setProperty('--sp-right', right + 'px'); sp.style.setProperty('--sp-w', w + 'px');
+    if (sp.dataset.auto === 'true') sp.dataset.folded = String(pr.width - w - right - 14 < 420);
+    const open = sp.dataset.folded === 'false';
+    sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));
+    const room = pr.width - w - right - 14; p.style.setProperty('--sp-pad', open && room >= 420 && top === 46 ? w + right + 14 + 'px' : '20px'); // opened by choice where the text has no room, it lies over the text
+  }
+}
+// The live fields (task, ready, verdict, idleSince) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
+// Until then a batch of events marks the list stale and it is read again, a field the list no longer has cleared.
+const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent]));
+  for (const c of conversations) { const s = outer.S.sessions.find(x => x.id === c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
+  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent])); };
+setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
 const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));
 // Only a chat's latest TAIL steps are drawn (Builder, 2026-10-20: the window lagged and froze; one redraw of a 25,000-event
@@ -501,6 +569,7 @@ function pane(s, i, bare) {
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>Working directory · ${s.live && !s.project && !started(s) ? `<button class="chat-folder" data-chat-folder title="Click to start this chat in another folder">${esc(chatFolder(s))}</button>` : esc(chatFolder(s))}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
     : `<div class="col"><p class="chat-folder-readonly">${esc(chatFolder(s))}</p>${shown(s)}${pending(s)}</div>`;
   return `<section class="pane${i === 0 && outer.S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${outer.hideSteps ? ' data-quiet' : ''}${outer.FX.pull === s.id ? ' data-pulled' : ''} aria-label="${outer.names[s.agent]} chat">
+    ${(sprintDoor(), sprintCard(s))}
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span>${bare ? `<span class="name">${outer.names[s.agent]}</span>` : crumb(s)}
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${outer.hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${outer.hideSteps ? 'Show steps' : 'Hide steps'}</button>
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
@@ -536,6 +605,7 @@ function renderChats(only) {
   if (outer.side.current()?.slot === 'artifact' && ART.mode === 'panel' && outer.S.focus === 'chat' && !chatsInView().includes(ART.state?.sid)) outer.side.close('artifact', 'hidden'); // item 19
   outer.side.refresh(); // a pinned artifact shows only while its chat is in view (O28)
   chatFilesFollow(ids);
+  placeSprints();
   outer.tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
@@ -595,6 +665,9 @@ function paint(root, ss, only) {
     p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
     p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
     p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
+    p.querySelectorAll('[data-sprint-fold]').forEach(b => b.onclick = () => { SPRINT.folded.set(s.id, b.getAttribute('aria-expanded') === 'true'); renderChats(); });
+    p.querySelectorAll('[data-sprint-open]').forEach(b => b.onclick = () => { show(b.dataset.sprintOpen); outer.renderTabs(); renderChats(); });
+    p.querySelectorAll('[data-sprint-ask]').forEach(b => b.onclick = () => p.querySelector(`[data-ask="${CSS.escape(b.dataset.sprintAsk)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => outer.restartP9(b));
     // PH5: the daemon stops the chat and opens a terminal with the command typed in; the dock shows that terminal.
     p.querySelectorAll('[data-handoff]').forEach(b => b.onclick = async () => {
@@ -827,7 +900,7 @@ function applyChat(ev, into) {
       else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) outer.usageNow(); }
       else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
       break;
-    case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]), plan: planText(d.toolCall) }); s.pending = 'approval'; break;
+    case 'approval': s.events.push({ t: 'approval', at: ev.at, request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]), plan: planText(d.toolCall) }); s.pending = 'approval'; break;
     case 'question': {
       // The daemon's form (formSpec in chat.mjs) is the one P9 renders and checks; null means P9 cannot show it faithfully.
       // A required choice starts unpicked; an optional one starts on "No answer" (left out of the reply).
@@ -836,7 +909,7 @@ function applyChat(ev, into) {
         const shape = f.kind === 'choice' ? radio(f.options) : f.kind === 'boolean' ? radio([['true', 'Yes'], ['false', 'No']]) : f.kind === 'multi' ? { kind: 'multi', options: f.options } : { kind: 'text' };
         return { ...shape, key: f.key, label: f.label, hint: f.hint, required: f.required, type: f.kind };
       };
-      s.events.push({ t: 'question', request: d.request, title: d.message, unsupported: !d.form, fields: d.form ? d.form.fields.map(field) : [] }); s.pending = 'question'; break; }
+      s.events.push({ t: 'question', at: ev.at, request: d.request, title: d.message, unsupported: !d.form, fields: d.form ? d.form.fields.map(field) : [] }); s.pending = 'question'; break; }
     case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
       notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
     case 'lock-rejected': notice((d.ask ? 'Answering another chat (read-only): rejected ' : 'Agent lock: rejected ') + (d.toolCall?.title || 'a tool call')); break;
@@ -871,7 +944,9 @@ async function loadChat() {
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
   };
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); return l.body?.conversations || []; };
+  let sprintStale = false, sprintAt = 0;
   while (!outer.lifetime.signal.aborted) {
+    if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
     const l = scope ? null : await window.p9.chat('list', {});
     if (l?.status === 200) { lists(l.body); listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
     // P20: the first replay reads each open chat's newest blocks only (tailed, above).
@@ -903,15 +978,15 @@ async function loadChat() {
       const closed = !replaying && ev.type === 'closed' && outer.S.sessions.find(s => s.id === ev.conversation && !s.hidden);
       if (closed) { closed.hidden = true; untab(closed.id); }
     }
-    outer.liveChat.cursor = r.body.cursor;
+    outer.liveChat.cursor = r.body.cursor; if (!replaying && r.body.events.length) sprintStale = true;
     if (r.body.more) for (const s of outer.S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
     if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
-      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out).
-      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; } }
+      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
       outer.loadProjects?.();
       // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
       try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
