@@ -50,9 +50,9 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   const head = execFileSync('git', ['-C', folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const state = { task: { item: 'B1', doneMeans: 'done', checks: ['test'] } };
   const notes = [], cards = []; let endTurn;
-  const chat = { lock: () => ({ on: false }), info: () => ({ parent, state: 'turn' }), sprint: () => state, startFolder: async () => folder,
+  const chat = { lock: () => ({ on: false }), info: () => ({ parent, state: 'turn' }), activeTaskTurn: () => 'turn-1', sprint: () => state, startFolder: async () => folder,
     setSprint: (_, patch) => Object.assign(state, patch), gauge: () => ({ context: { used: 7 } }),
-    note: async (...args) => notes.push(args), pin: (_, data) => cards.push(data), turnEnded: (fn) => { endTurn = fn; }, tokenUsage: () => ({ input: 9, output: 2 }), settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
+    note: async (...args) => notes.push(args), pin: (_, data) => cards.push(data), turnEnded: (fn) => { endTurn ??= fn; }, settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
   const hasGitFacts = existsSync(fileURLToPath(new URL('../apps/server/worker-folders.mjs', import.meta.url)));
   const valid = { commit: 'claimed-commit', results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
@@ -80,11 +80,15 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   assert.equal(typeof result.ready.at, 'number');
   assert.equal(state.idleSince, null);
   assert.equal(cards.length, 0);
-  endTurn(worker);
+  endTurn(worker, 'turn-1', false, { inputTokens: 9, outputTokens: 2 });
   assert.equal(cards.length, 1);
   assert.match(cards[0].text, /B1/);
   assert.match(cards[0].text, /Input 9; output 2/);
   assert.match(notes[0][1], /Ready report pinned/);
+  endTurn(worker, 'turn-1', false, { inputTokens: 9, outputTokens: 2 });
+  endTurn(worker, 'turn-2', true, { inputTokens: 9, outputTokens: 2 });
+  assert.equal(cards.length, 1);
+  assert.equal(notes.length, 1);
   let release, locked = false;
   const pendingFolder = new Promise((resolve) => { release = resolve; });
   const racing = createDelegate({ chat: { ...chat, lock: () => ({ on: locked }), startFolder: () => pendingFolder } });
@@ -99,6 +103,16 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   currentState = 'running';
   releaseTurn(folder);
   assert.equal((await interruptedAttempt).error, 'no-active-turn');
+  let releaseOld, currentTurn = 'old';
+  const pendingOldFolder = new Promise((resolve) => { releaseOld = resolve; });
+  const replaced = createDelegate({ chat: { ...chat, activeTaskTurn: () => currentTurn, startFolder: () => pendingOldFolder } });
+  const oldAttempt = replaced.ready(valid, worker);
+  currentTurn = null; // the old turn ends
+  state.ready = null;
+  currentTurn = 'new'; // another starts before the old folder lookup returns
+  releaseOld(folder);
+  assert.equal((await oldAttempt).error, 'no-active-turn');
+  assert.equal(state.ready, null);
   let releaseCancel;
   const pendingCancelFolder = new Promise((resolve) => { releaseCancel = resolve; });
   const cancelled = new AbortController();

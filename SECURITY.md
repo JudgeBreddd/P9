@@ -644,7 +644,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
 `send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `set_rules`, `answer_chat` and
-`ask_chat`. The
+`ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 
@@ -686,8 +686,9 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules` and `answer_chat` are refused while it
-  is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+  is on, as are `ready` and `verdict`. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
+- **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. Until worker-folder Git facts are available, the submitted commit is explicitly a claim and changed files are unavailable. File protection does not itself prevent these P9 database records.
 - **Approvals.** An agent may answer an approval or a question asked by a chat it started,
   directly or through a worker, and by no other chat. For an approval, P9 first asks you in
   the parent's chat, naming the worker, what it asked and the answer the parent wants to give;

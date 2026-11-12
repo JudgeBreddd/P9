@@ -79,6 +79,7 @@ export const DELEGATE_TOOLS = (input) => {
 };
 
 export function createDelegate({ chat, allowed }) {
+  const readyTurns = new Map();
   const waiting = new Map(); // 'caller:chat' -> how many wait_chat calls that caller has open on that chat
   const tierOf = (provider, mode) => TIER[provider]?.[mode];
   // The widest mode of provider at or under tier.
@@ -203,31 +204,38 @@ export function createDelegate({ chat, allowed }) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const info = chat.info(caller), task = chat.sprint(caller).task;
     if (!info?.parent || !task) return { error: 'no-task' };
-    if (info.state !== 'turn') return { error: 'no-active-turn' };
+    const turn = chat.activeTaskTurn(caller);
+    if (info.state !== 'turn' || !turn) return { error: 'no-active-turn' };
+    const stillCurrent = () => chat.info(caller)?.state === 'turn' && chat.activeTaskTurn(caller) === turn;
     if (!text(args.commit, 200) || !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) || !Array.isArray(args.results) || args.results.length !== task.checks.length || task.checks.some((check) => args.results.filter((r) => r?.check === check && typeof r.result === 'string' && text(r.result.trim(), 4000)).length !== 1)) return { error: 'request-refused' };
     const folder = await chat.startFolder(caller);
+    if (!stillCurrent()) return { error: 'no-active-turn' };
     if (!folder) return { error: 'folder-unavailable' };
     if (signal?.aborted) return { error: 'cancelled' };
     let gitFacts;
     try { ({ gitFacts } = await import('./worker-folders.mjs')); }
     catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND' || error.url !== new URL('./worker-folders.mjs', import.meta.url).href) return { error: 'git-unavailable' }; }
+    if (!stillCurrent()) return { error: 'no-active-turn' };
     let facts;
     if (gitFacts) {
       try { facts = await gitFacts(folder); } catch { return { error: 'git-unavailable' }; }
+      if (!stillCurrent()) return { error: 'no-active-turn' };
       if (!facts?.commit || !Array.isArray(facts.changed)) return { error: 'git-unavailable' };
       if (facts.dirty) return { error: 'dirty-folder' };
     } else {
       let changed;
       try { changed = (await git('git', ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', 'status', '--porcelain'], { cwd: folder, timeout: 10000, env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } })).stdout; }
       catch { return { error: 'git-unavailable' }; }
+      if (!stillCurrent()) return { error: 'no-active-turn' };
       if (changed.trim()) return { error: 'dirty-folder' };
     }
     if (signal?.aborted) return { error: 'cancelled' };
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
-    if (chat.info(caller)?.state !== 'turn') return { error: 'no-active-turn' };
+    if (!stillCurrent()) return { error: 'no-active-turn' };
     const value = { commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
     if (card({ id: 'ready-' + caller, kind: 'markdown', text: report(task, value, { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER }) }).error) return { error: 'report-too-large', detail: 'The completion card exceeds 8192 bytes; reduce the reported text or changed files.' };
     chat.setSprint(caller, { ready: value, verdict: null, idleSince: null });
+    readyTurns.set(caller, turn);
     return { ready: value };
   }
   function verdict(caller, args) {
@@ -430,10 +438,13 @@ export function createDelegate({ chat, allowed }) {
   }
 
   // The adapter reports the current turn's usage only at turn end, after ready is already visible.
-  chat.turnEnded?.((id) => {
+  chat.turnEnded?.((id, turn, solo, usage) => {
+    if (solo || readyTurns.get(id) !== turn) return;
+    readyTurns.delete(id);
     const info = chat.info(id), state = chat.sprint(id);
     if (!info?.parent || !state.task || !state.ready) return;
-    const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(state.task, state.ready, chat.tokenUsage(id)) });
+    const tokens = Number.isSafeInteger(usage?.inputTokens) && usage.inputTokens >= 0 && Number.isSafeInteger(usage?.outputTokens) && usage.outputTokens >= 0 ? { input: usage.inputTokens, output: usage.outputTokens } : null;
+    const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(state.task, state.ready, tokens) });
     if (data.error) return;
     chat.pin(info.parent, data);
     chat.note(info.parent, '[p9] Ready report pinned for ' + state.task.item + '.', 'p9').catch(() => {});

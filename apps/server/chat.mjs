@@ -1182,7 +1182,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-        (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id); } catch {} } } },
+        (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
         (error) => { for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
@@ -1289,18 +1289,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)),
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
-    tokenUsage(id) {
-      let input = 0, output = 0, samples = 0;
-      for (const row of db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'turn-end'").all(id)) {
-        let usage; try { usage = JSON.parse(row.data).usage; } catch { return null; }
-        const count = (value) => Number.isSafeInteger(value) && value >= 0;
-        if (!usage || !count(usage.inputTokens) || !count(usage.outputTokens)) return null;
-        input += usage.inputTokens; output += usage.outputTokens; samples += 1;
-        if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output)) return null;
-      }
-      return samples ? { input, output } : null;
-    },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
+    activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
     sprint: sprintOf,
     setSprint,
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
