@@ -293,12 +293,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over;
     if (update?.sessionUpdate === 'compaction_update') { if (open) open.over = true; return false; }
     if (update?.sessionUpdate !== 'agent_message_chunk') return false;
-    const text = update.content?.text, id = update.messageId;
-    if (typeof text !== 'string' || typeof id !== 'string') { if (open) open.over = true; return false; }
-    if (going && open.id === id) { open.text += text; open.parts += 1; return false; }
-    const copy = heard.some((m) => m.parts > 1 && m.text === text && (m.id === id || text.length >= 200));
+    // A piece that is not text (an image, a link) belongs to its reply like any other; a reply that has one is never
+    // taken for a copy's original.
+    const id = update.messageId, text = typeof update.content?.text === 'string' ? update.content.text : null;
+    if (typeof id !== 'string') { if (open) open.over = true; return false; }
+    if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; } return false; }
+    const copy = text !== null && heard.some((m) => !m.mixed && m.parts > 1 && m.text === text && (m.id === id || text.length >= 200));
     // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
-    if (!copy || open?.id !== id) heard.push({ id, text, parts: 1 });
+    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, ...(text === null && { mixed: true }) });
     if (heard.length > 20) heard.shift();
     return copy;
   };

@@ -345,6 +345,8 @@ const connection = acp.connectAgent(stream, {
       await piece('m2', long); await piece('m2', tail);
       await piece('m1', 'one two'); await piece('r1', long + tail); // the two copies
       await piece('r1', long + tail); await piece('r1', 'more'); // what follows a copy under its new id is a reply, and is kept
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'r2', content: { type: 'resource_link', uri: 'file:///nowhere/notes.txt', name: 'notes.txt' } } });
+      await piece('r2', long + tail); // a reply that opened with a link: its text is not a first piece
       await piece('m3', 'end'); await piece('m4', 'end'); // one piece, said twice: two replies
       await piece('m5', 'al'); await piece('m5', 'pha'); await piece('m6', 'so '); await piece('m6', 'alpha'); // a short piece that equals an earlier reply
       await piece('m7', long); await piece('m7', tail); await piece('m7', long + tail); // a reply that repeats itself while it streams

@@ -38,7 +38,7 @@ async function until(instance, match, after = 0) {
   throw new Error('event-timeout: ' + JSON.stringify(seen.slice(-5)));
 }
 const said = (conversation, prefix) => (event) => event.conversation === conversation && event.type === 'update'
-  && event.data.sessionUpdate === 'agent_message_chunk' && event.data.content.text.startsWith(prefix);
+  && event.data.sessionUpdate === 'agent_message_chunk' && event.data.content.text?.startsWith(prefix); // a piece that is not text has none
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test('a turn streams through the event log; reconnecting from any cursor gives the rest once, across a restart', async (t) => {
@@ -74,7 +74,7 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   // The three whole copies are gone. Kept: a reply said in one piece and said again ('end'), a short piece that equals
   // an earlier reply ('alpha'), and a reply that repeats itself while it streams.
   assert.deepEqual(seen.filter(said(id, '')).map((event) => event.data.content.text),
-    ['one ', 'two', long, tail, long + tail, 'more', 'end', 'end', 'al', 'pha', 'so ', 'alpha', long, tail, long + tail, 'sh', 'ort']);
+    ['one ', 'two', long, tail, long + tail, 'more', long + tail, 'end', 'end', 'al', 'pha', 'so ', 'alpha', long, tail, long + tail, 'sh', 'ort']);
   // The chat takes its next message as before.
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
   const next = await until(instance, said(id, 'mode:'));
