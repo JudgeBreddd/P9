@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorkerFolders, gitFacts, setupShell } from '../apps/server/worker-folders.mjs';
+import { setupRoutes } from '../apps/server/setup-routes.mjs';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -277,4 +278,24 @@ test('Worker folders A6: the desktop\'s clean-up route refuses while the sprint 
   assert.ok(fs.existsSync(open.folder), 'the unmerged folder is kept');
   assert.equal((await call(instance, '/sprints/not-a-chat/clean', 'POST', {})).status, 400);
   console.log('PASS Worker folders clean route');
+});
+
+// The route's refusals, against a stand-in chat: a lead with a message waiting refuses (it may be about to make a worker
+// folder); a worker stopped or moved to another computer counts as finished, any other state refuses.
+test('Worker folders A6: the clean-up route refuses while the lead has a message waiting or a worker runs; stopped and moved workers are finished', { timeout: 10000 }, async () => {
+  const routes = {}, record = { get() {}, post(route, handler) { routes[route] = handler; } };
+  const ask = async (lead, workers) => {
+    let cleaned = false;
+    const chat = { info: () => lead, family: () => workers.map((state, i) => ({ id: 'w' + i, title: 'w' + i, parent: ID, state })), workers: { clean: async () => { cleaned = true; return { removed: [], kept: [] }; } } };
+    setupRoutes({ app: record, api: record, chat });
+    let status;
+    const body = await routes['/sprints/:id/clean']({ req: { param: () => ID }, json: (value, code = 200) => { status = code; return value; } });
+    return [status, body.error ?? null, cleaned];
+  };
+  const idle = { state: 'running', busy: false };
+  assert.deepEqual(await ask(idle, ['stopped', 'moved']), [200, null, true], 'stopped and moved workers are finished');
+  assert.deepEqual(await ask({ state: 'running', busy: true }, ['stopped']), [409, 'sprint-running', false], 'the lead has a message waiting');
+  assert.deepEqual(await ask({ state: 'turn', busy: false }, []), [409, 'sprint-running', false], 'the lead is in a turn');
+  for (const state of ['running', 'turn', 'idle', 'stopping', 'moving']) assert.deepEqual(await ask(idle, ['stopped', state]), [409, 'sprint-running', false], 'a worker ' + state);
+  assert.deepEqual(await ask(null, []), [200, null, true], 'a deleted lead starts no worker');
 });

@@ -845,7 +845,7 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
 - **Who cleans up, and from where.** Only you, from the desktop window: "Clean up worker folders" on the sprint's
   section of its project page. It is a desktop-only route; the phone, a signed-in phone session and agents have no way
   to call it, and P9 never runs it on its own. It refuses while any worker the sprint's lead started is still running
-  (anything but stopped), and while the lead is in a turn or has a message waiting, since it may be making a worker
+  (anything but stopped, or moved to another computer), and while the lead is in a turn or has a message waiting, since it may be making a worker
   folder that moment (a new folder has nothing of its own yet, so it would read as merged). It removes only what the
   rule above allows, and answers with each folder removed and each folder kept, with why and its size. Written before
   the code (sprint spec A6). What remains: you can restart a stopped worker while clean-up runs; its folder is then
