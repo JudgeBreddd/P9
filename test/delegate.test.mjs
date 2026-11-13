@@ -925,7 +925,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   const passed = await reviewer.tool('verdict', { chat: made.chat, commit: head, result: 'pass', note: 'checked' });
   assert.equal(passed.verdict?.by, rev.chat, 'a sibling reviewer records a verdict after a ready that went through: ' + JSON.stringify(passed));
   // Finding 4: an agent without steering (Claude's today) cannot take a steer into its running turn; the refusal names queue.
-  fs.writeFileSync(path.join(made.folder, 'no-steering'), '');
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // read in the agent's own folder at its start, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
   await a.tool('send_chat', { chat: made.chat, text: 'slow' });
   await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
