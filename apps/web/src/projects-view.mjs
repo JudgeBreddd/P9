@@ -225,7 +225,7 @@ export function installProjects(o, api) {
   });
   // A1, A4: the project's sprint source and setup command (desktop only; the daemon checks the address again).
   async function saveSprintSet() {
-    const r = await call('sprintSettings', { id: cur.id, source: $('#pjSpSource').value.trim(), setup: $('#pjSpSetup').value });
+    const r = await call('sprintSettings', { id: cur.id, source: $('#pjSpSource').value.trim(), setup: $('#pjSpSetup').value }, { quiet: true });
     if (r.status !== 200) return failed(r);
     cur = { ...cur, sprint: r.body.project.sprint }; $('#pjSpSource').value = cur.sprint.source;
     const s = $('#pjSprintSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200);
