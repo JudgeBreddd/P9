@@ -242,3 +242,39 @@ test('Worker folders: open_chat with worktree: true starts the worker in a workt
   assert.equal((await call(instance, '/chat')).body.conversations.filter((c) => c.parent === a.conversation).length, 1, 'no second worker');
   console.log('PASS Worker folders open_chat');
 });
+
+// SECURITY.md § Worker folders, "Who cleans up": the desktop's route cleans one sprint with the store's own rules, and
+// refuses while a worker of that sprint runs or while its lead is in a turn.
+test('Worker folders A6: the desktop\'s clean-up route refuses while the sprint runs, then removes the merged folder and keeps the unmerged one, saying why', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const repo = path.join(instance.workspace, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); write(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance), clean = () => call(instance, '/sprints/' + a.conversation + '/clean', 'POST', {});
+  const done = await a.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'done' });
+  const open = await a.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'open' });
+  assert.equal(done.error ?? open.error, undefined, JSON.stringify([done, open]));
+  write(path.join(open.folder, 'o.txt'), 'o\n'); g(open.folder, 'add', 'o.txt'); g(open.folder, 'commit', '-qm', 'not merged');
+  const running = await clean();
+  assert.equal(running.status, 409, JSON.stringify(running.body));
+  assert.equal(running.body.error, 'sprint-running');
+  assert.ok(fs.existsSync(done.folder) && fs.existsSync(open.folder), 'nothing removed while workers run');
+  for (const w of [done, open]) assert.equal((await a.tool('stop_chat', { chat: w.chat, close: true })).action, 'stopped');
+  // The lead in a turn may be making a worker folder: refused too.
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'slow' });
+  const conv = async () => (await call(instance, '/chat')).body.conversations.find((c) => c.id === a.conversation);
+  for (let i = 0; i < 100 && (await conv()).state !== 'turn'; i += 1) await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await clean()).body.error, 'sprint-running', 'the lead is in a turn');
+  await call(instance, `/chat/${a.conversation}/cancel`, 'POST', {});
+  for (let i = 0; i < 100 && (await conv()).state === 'turn'; i += 1) await new Promise((r) => setTimeout(r, 100));
+  const result = await clean();
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.deepEqual(result.body.removed, ['done']);
+  assert.deepEqual(result.body.kept.map((k) => [k.item, k.why]), [['open', 'not in the main line']]);
+  assert.ok(result.body.kept[0].bytes > 0);
+  assert.equal(fs.existsSync(done.folder), false, 'the merged folder is gone');
+  assert.ok(fs.existsSync(open.folder), 'the unmerged folder is kept');
+  assert.equal((await call(instance, '/sprints/not-a-chat/clean', 'POST', {})).status, 400);
+  console.log('PASS Worker folders clean route');
+});

@@ -24,6 +24,11 @@ export function installProjects(o, api) {
   // Sprint file drafts, '<lead> <name>' -> { text, hash }: typed and not saved yet; hash is the file as it was when typing
   // began. spNote: a draft's save that was refused ('changed': someone else's edit came first; 'failed'). spSaving: saves
   // go one at a time, so each one names the file the one before it wrote.
+  // cleaned: lead -> what "Clean up worker folders" last answered (SECURITY.md § Worker folders, "Who cleans up").
+  const cleaned = new Map();
+  const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
+    ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
+    : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
   const drafts = new Map(), spNote = new Map(); let spSaving = Promise.resolve(true);
   const say = (txt, level = 'ok') => o.toast({ kind: 'project', txt, level }, true);
   const failed = r => say(ERR[r.body?.error] || 'That did not work (' + (r.body?.error || r.status) + ').', 'warn');
@@ -96,7 +101,8 @@ export function installProjects(o, api) {
   function sprintHtml(sp) {
     const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker' };
     const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this worker gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this worker with the sprint rules' : 'the worker keeps it itself');
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2><span class="muted">its files, kept in P9</span><span class="saved" data-sp-saved role="status">Saved</span></div>
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2><span class="muted">its files, kept in P9</span><span class="saved" data-sp-saved role="status">Saved</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button></div>
+      ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
       ${[...sp.files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
         return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz">${esc(what(f.name))}${f.gone ? ' · deleted, your text not saved' : drafts.has(sp.lead + ' ' + f.name) ? ' · not saved' : ''}</span></button>`
           + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false">${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
@@ -172,6 +178,7 @@ export function installProjects(o, api) {
     if (k === 'add') return picker.click();
     // A file whose save was refused stays open with its draft: nothing switches over unsaved text.
     if (k === 'spfile') { clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); } const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return fillBox(); }
+    if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
     if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }
     if (k === 'rm') { const r = await call('removeProjectFile', { id: cur.id, name: b.dataset.name }); if (r.status !== 200) return failed(r); cur = { ...cur, files: r.body.files }; return renderPage(); }

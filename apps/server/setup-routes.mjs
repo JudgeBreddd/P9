@@ -215,5 +215,17 @@ export function setupRoutes(outer) {
         || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setDelegation(body));
   });
+  // Desktop only (SECURITY.md § Worker folders, "Who cleans up"): one sprint's worker folders, by the store's own rules
+  // (worker-folders.mjs clean). Refused while a worker the lead started is not stopped, and while the lead is in a turn or
+  // has a message waiting: it may be making a worker folder, which has nothing of its own yet and would read as merged.
+  outer.app.post('/sprints/:id/clean', async (c) => {
+    const id = c.req.param('id'), lead = outer.chat.info(id);
+    const running = outer.chat.family().filter((x) => x.parent === id && !['stopped', 'moved'].includes(x.state)).map((x) => x.title || x.id);
+    if (running.length || lead?.state === 'turn' || lead?.busy) {
+      return c.json({ error: 'sprint-running', running, detail: running.length ? 'Stop its workers first: ' + running.join(', ') + '.' : 'Its lead is working; wait for its turn to end.' }, 409);
+    }
+    const result = await outer.chat.workers.clean(id);
+    return c.json(result, result.error === 'request-refused' ? 400 : result.error ? 500 : 200);
+  });
   return { signedIn };
 }
