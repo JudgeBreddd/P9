@@ -42,7 +42,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md (notes/<chat ID>.md without a key) is the worker\'s own. Follow it with wait_chat.',
     input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
       item: { type: 'string' }, done_means: { type: 'string' }, checks: { type: 'array', items: { type: 'string' } },
-      title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -' },
+      title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' },
       provider: { type: 'string', enum: ['claude', 'codex'] }, model: { type: 'string', description: 'A model that agent offers.' },
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
       folder: { type: 'string', description: 'Where it starts, relative to the workspace.' },
@@ -129,6 +129,8 @@ export function createDelegate({ chat, allowed }) {
         || (args.provider !== undefined && !Object.hasOwn(TIER, args.provider)) || (args.model !== undefined && !text(args.model, 200))
         || (args.effort !== undefined && !text(args.effort, 200)) || (args.folder !== undefined && typeof args.folder !== 'string') || (args.worktree !== undefined && (typeof args.worktree !== 'boolean' || (args.worktree && args.key === undefined)))
         || (args.rules !== undefined && (typeof args.rules !== 'string' || args.rules.length > MAX_RULES))) return { error: 'request-refused' };
+    // A worker without a key keeps notes/<chat ID>.md: a key shaped like a chat ID could name another worker's notes.
+    if (args.key !== undefined && ID.test(args.key)) return { error: 'request-refused', detail: 'A key cannot be shaped like a chat ID: workers without a key keep their notes under their chat ID.' };
     const taskGiven = ['item', 'done_means', 'checks'].some((k) => args[k] !== undefined);
     if (taskGiven && (!text(args.item, 200) || !text(args.done_means, 4000) || !Array.isArray(args.checks) || !args.checks.length || args.checks.length > 50 || args.checks.some((c) => !text(c, 4000)))) return { error: 'request-refused' };
     const family = chat.family(), set = chat.delegation();

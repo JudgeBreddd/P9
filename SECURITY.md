@@ -853,7 +853,8 @@ Written before the code (sprint spec D1, D3, D4).
 
 - **Only these names.** `sprint.md`, `rules.md`, `roles/<key>.instructions.md`, `roles/<key>.rules.md` and
   `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
-  ID). P9 reads or writes no other name there. If a folder on
+  ID; `open_chat` refuses a key shaped like a chat ID, so two workers never share notes). P9 reads or writes no other
+  name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
   (a temp file, then a rename).
 - **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker, and a notes outline for every
@@ -862,11 +863,16 @@ Written before the code (sprint spec D1, D3, D4).
   change is still read until the first `set_rules`). A keyed worker's `roles/<key>.rules.md` follows them, under the
   same rule: only with a message its lead's agent sends. `roles/<key>.instructions.md` and the notes file's full path
   ride once, as their own block after the rules, with the worker's first message from its lead that reaches the agent
-  (the transcript keeps a hash, as for the rules). Until then P9 keeps that block in its database, so a failed start
-  or a P9 restart does not lose it. Like the rules, this text comes from the lead or from you, so it widens nothing the
+  (the transcript keeps a hash, as for the rules). P9 keeps that block in its database until the agent confirms it got
+  the message: the turn ended, or the steer went in. A failed start, a failed prompt or a P9 restart before that does
+  not lose it, and messages sent while one carrying it is still unconfirmed leave it out. A P9 restart during a turn
+  that already read it sends it once more with the next message. Like the rules, this text comes from the lead or from you, so it widens nothing the
   worker may do.
 - **Who can edit them.** You can edit them on the project page, for a lead chat that is in that project. A save names
-  the file as the page opened it; if an agent changed it since, P9 refuses the save and the page keeps your text. That is the
+  the file as the page opened it; if an agent changed or deleted it since, P9 refuses the save and the page keeps your
+  text (for a deleted file, until you save it again or discard it). P9 checks the file right before its rename, as
+  the Files editor does; an agent's write that lands after that last check and before the rename is still replaced.
+  No lock exists that the agents' own editors would honour. That is the
   same route family as project instructions, so a signed-in phone can edit them too. The lead's and workers' agents
   edit them with their own file tools, under their own mode and your approvals. P9 gives them no write of its own.
 - **Removal.** Clean-up of a sprint's worker folders (§ Worker folders) removes the clone and the worker folders

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
 import { createSprintFiles, hashOf, MAX_FILE } from '../apps/server/sprint-files.mjs';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
@@ -42,6 +43,25 @@ test('Sprint files: fixed names only, no links, whole writes, made once and neve
   assert.equal(files.write(LEAD, 'sprint.md', 'x'.repeat(MAX_FILE + 1)), false, 'over the cap');
   assert.equal(files.write(LEAD, 'sprint.md', 'bad \ud800'), false, 'not well formed');
   assert.deepEqual(fs.readdirSync(path.join(home, LEAD)).filter((f) => f.includes('p9-tmp')), [], 'no temp file left');
+  // The project page's save names the hash it opened (a known SHA-256): a file changed or deleted since is not replaced.
+  assert.equal(hashOf('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  assert.equal(files.write(LEAD, 'sprint.md', 'page', hashOf('old')), 'changed');
+  assert.equal(files.read(LEAD, 'sprint.md'), 'mine');
+  assert.equal(files.write(LEAD, 'sprint.md', 'page', ''), 'changed', "'' is for a file that is not there");
+  assert.equal(files.write(LEAD, 'rules.md', 'made again', ''), true);
+  assert.equal(files.read(LEAD, 'rules.md'), 'made again'); fs.rmSync(path.join(home, LEAD, 'rules.md'));
+  // A writer that lands after the first check, while the save writes its temp file: still not replaced.
+  const real = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', function (file, ...rest) {
+    real.call(fs, file, ...rest);
+    if (String(file).includes('.p9-tmp-')) real.call(fs, path.join(home, LEAD, 'sprint.md'), 'the lead\'s edit');
+  });
+  syncBuiltinESMExports();
+  try { assert.equal(files.write(LEAD, 'sprint.md', 'page', hashOf('mine')), 'changed'); }
+  finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(files.read(LEAD, 'sprint.md'), "the lead's edit");
+  assert.deepEqual(fs.readdirSync(path.join(home, LEAD)).filter((f) => f.includes('p9-tmp')), [], 'its temp file removed');
+  assert.equal(files.write(LEAD, 'sprint.md', 'mine', hashOf("the lead's edit")), true);
   // A link in place of a folder or a file is refused, read and write.
   const outside = path.join(dir, 'outside'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'w2.md'), 'secret');
   fs.symlinkSync(outside, path.join(home, LEAD, 'roles-link'));
@@ -212,4 +232,71 @@ test('Sprint files: a worker\'s instructions and notes path wait for a message t
   assert.equal(log().length, 3);
   assert.match(log()[2], /\]\n\n\[P9: your notes file is [^\n]*notes[\\/]w2\.md\. /);
   console.log('PASS Sprint files start block: kept through a failed start, a retry and a restart; sent once');
+});
+
+test('Sprint files: a prompt that failed after its session started keeps the start block for the next message', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const carried = (key) => log().filter((l) => new RegExp(`notes file is [^\\n]*notes[\\\\/]${key}\\.md\\. `).test(l)).length;
+  // The session started and the prompt went out, but it failed (the stand-in answers auth-required): sent again next time.
+  const first = await a.tool('open_chat', { text: 'auth-required', title: 'One', key: 'w1' });
+  assert.equal(first.error, undefined, JSON.stringify(first));
+  await a.done(first.chat);
+  assert.equal(carried('w1'), 1, 'the failed prompt carried it');
+  await a.tool('send_chat', { chat: first.chat, text: 'next' });
+  assert.equal((await a.done(first.chat)).last, 'echo:next');
+  assert.equal(carried('w1'), 2, 'the message after the failed one carried it again');
+  await a.tool('send_chat', { chat: first.chat, text: 'third' });
+  assert.equal((await a.done(first.chat)).last, 'echo:third');
+  assert.equal(carried('w1'), 2, 'confirmed: not again');
+  console.log('PASS Sprint files start block: kept after a failed prompt, then sent once');
+});
+
+test('Sprint files: a steer still unconfirmed when its turn ends keeps the next message from sending the start block again', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const carried = (key) => log().filter((l) => new RegExp(`notes file is [^\\n]*notes[\\\\/]${key}\\.md\\. `).test(l)).length;
+  // A steer that carries it is confirmed only after the turn ended (slow-steering: 6 s, past P9's 5 s wait). The parent's
+  // next message, sent meanwhile, leaves it out; the late confirmation clears it. Delivered once.
+  fs.writeFileSync(path.join(instance.workspace, 'signed-out'), '');
+  const second = await a.tool('open_chat', { text: 'hi', title: 'Two', key: 'w2' });
+  assert.ok(second.error && second.chat, JSON.stringify(second));
+  fs.rmSync(path.join(instance.workspace, 'signed-out'));
+  fs.writeFileSync(path.join(instance.workspace, 'slow-steering'), '');
+  assert.equal((await call(instance, `/chat/${second.chat}/prompt`, 'POST', { text: 'late' })).status, 202, 'the user\'s message: no start block');
+  const steered = await a.tool('send_chat', { chat: second.chat, text: 'steered' });
+  assert.equal(steered.sent, 'into its running turn', JSON.stringify(steered));
+  assert.equal(carried('w2'), 1, 'the steer carried it');
+  await a.tool('send_chat', { chat: second.chat, text: 'meanwhile' });
+  // The steer's text lands at 6 s and is echoed by whichever turn runs next, so only the start of each answer is fixed.
+  assert.match((await a.done(second.chat)).last, /^echo:meanwhile/);
+  await new Promise((resolve) => setTimeout(resolve, 2000)); // past the steer's late confirmation
+  fs.rmSync(path.join(instance.workspace, 'slow-steering'));
+  await a.tool('send_chat', { chat: second.chat, text: 'after' });
+  assert.match((await a.done(second.chat)).last, /^echo:after/);
+  assert.equal(carried('w2'), 1, 'delivered once: ' + JSON.stringify(log().slice(-3)));
+  console.log('PASS Sprint files start block: once across a late-confirmed steer');
+});
+
+test('Sprint files: a key shaped like a chat ID is refused, so two workers never share a notes file', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  // A key shaped like a chat ID would share an unkeyed worker's notes/<chat ID>.md: refused, nothing made.
+  const alias0 = await a.tool('open_chat', { text: 'yo', title: 'Unkeyed' });
+  await a.done(alias0.chat);
+  assert.ok(fs.existsSync(path.join(alias0.sprint, 'notes', alias0.chat + '.md')));
+  const alias = await a.tool('open_chat', { text: 'x', title: 'Alias', key: alias0.chat });
+  assert.equal(alias.error, 'request-refused', JSON.stringify(alias));
+  assert.ok(!(await a.tool('list_chats')).chats.some((c) => c.title === 'Alias'), 'no second worker made');
+  console.log('PASS Sprint files: chat-ID keys refused');
 });

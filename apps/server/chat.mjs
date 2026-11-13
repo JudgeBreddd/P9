@@ -376,14 +376,19 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const sprintFiles = createSprintFiles({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
   const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
   // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
-  // and sent after the rules of each message from its parent until one reaches the agent (startSent): a failed start
-  // or a daemon restart before that keeps it.
-  const startSent = (id) => db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id);
+  // and sent after the rules of each message from its parent until one is confirmed to have reached the agent
+  // (startSent: the prompt's turn ended, or the steer was injected). sending: chats whose block is on its way; the
+  // messages sent meanwhile leave it out, and a failure (startLost) frees it for the next one. A failed start, a failed
+  // prompt or a daemon restart before confirmation keeps it. ponytail: a restart while a turn that already read it is
+  // still running sends it once more with the next message (said twice beats never).
+  const sending = new Set();
+  const startSent = (id) => { sending.delete(id); db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id); };
+  const startLost = (id) => sending.delete(id);
   const rulesFor = (conversation, body) => {
     const mine = conversation?.parent && senders.get(body) === conversation.parent;
     const own = mine && conversation.key ? (sprintFiles.read(conversation.parent, `roles/${conversation.key}.rules.md`) ?? '').trim() : '';
     const text = mine ? [rulesOf(conversation.parent), own].filter(Boolean).join('\n\n') : '';
-    const start = mine ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
+    const start = mine && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
     const all = (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
     return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
   };
@@ -887,23 +892,24 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
     const rules = rulesFor(row(id), body);
+    if (rules?.started) sending.add(id);
     const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }) });
     const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)],
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
-    try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { return refused(409, 'turn-running'); }
+    try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
     if (result === 'slow') {
       // No answer in 5 s: the request may still land, so a 409 (queued, sent again at the turn's end) could deliver it
       // twice. Shown as sent but unconfirmed; a later refusal says so with the text, so it never vanishes silently.
       // A note is not lost: it waits for the chat's next prompt instead.
       // A note whose steer was lost may have been read already: it counts as its one resend, so a prompt that
       // fails after it is dropped, never parked a second time.
-      const lost = () => (notes.has(body) ? (resent.add(body), park(id, body, true)) : emit(id, 'steer-lost', { text: body.text }));
+      const lost = () => { if (rules?.started) startLost(id); return notes.has(body) ? (resent.add(body), park(id, body, true)) : emit(id, 'steer-lost', { text: body.text }); };
       request.then((late) => { if (!delivered(late)) lost(); else if (rules?.started) startSent(id); }, lost);
       emit(id, 'user', { ...user(), unconfirmed: true });
       return { status: 202, steered: true, unconfirmed: true };
     }
-    if (!delivered(result)) return refused(409, 'turn-running');
+    if (!delivered(result)) { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
     if (rules?.started) startSent(id);
     emit(id, 'user', user());
     // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
@@ -1196,13 +1202,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // answers another chat: they wait for the chat's own next message.
       const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
       const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
-      if (rules?.started) startSent(id); // sent from here on: a later failure is the turn's, not a missed delivery
-      session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
+      if (rules?.started) sending.add(id);
+      // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
+      new Promise((resolve) => resolve(session.agent.prompt({ sessionId: session.sessionId, prompt }))).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-        (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
+        (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
-        (error) => { for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
+        (error) => { if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;

@@ -31,13 +31,19 @@ export function createSprintFiles({ home }) {
     return file;
   };
   const read = (lead, name) => { const file = fileOf(lead, name); try { return file ? readFileSync(file, 'utf8') : null; } catch { return null; } };
-  // Whole or not at all: a temp file beside it, renamed over the old one.
-  function write(lead, name, text) {
+  // Whole or not at all: a temp file beside it, renamed over the old one. expect (the project page's save): the hash the
+  // file must still have, '' for one that must not exist; checked before and again right before the rename, else
+  // 'changed' and nothing written. ponytail: a writer landing between that last check and the rename is still replaced,
+  // as in packages/files guardedSave; no compare-and-rename syscall exists, and the agents' editors honour no lock.
+  function write(lead, name, text, expect) {
     const file = fileOf(lead, name);
     if (!file || typeof text !== 'string' || text.length > MAX_FILE || !text.isWellFormed()) return false;
+    const same = () => { const now = read(lead, name); return expect === '' ? now === null : now !== null && hashOf(now) === expect; };
+    if (expect !== undefined && !same()) return 'changed';
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const temporary = file + '.p9-tmp-' + randomUUID();
     writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' });
+    if (expect !== undefined && !same()) { try { unlinkSync(temporary); } catch { /* gone */ } return 'changed'; }
     try { renameSync(temporary, file); } catch (error) { try { unlinkSync(temporary); } catch { /* gone */ } throw error; }
     return true;
   }

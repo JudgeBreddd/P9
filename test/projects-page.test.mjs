@@ -5,7 +5,8 @@
 // delete leaves a folder the user chose alone and moves the chats to Chats; a gone folder shows Locate.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -500,5 +501,34 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'sprint.md', 'back to sprint.md');
   await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-files ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // A worker deletes its notes file while the user has it open and types: the save is refused twice (two switches), the
+  // file stays listed and open with the user's text, and Save it again makes it again; away and back, the text is there.
+  const notesRow = page.locator('[data-pj="spfile"]', { hasText: 'notes/w1.md' }), notesFile = path.join(sprint, 'notes', 'w1.md');
+  const rulesRow = page.locator('[data-pj="spfile"]', { hasText: 'rules.md' });
+  await notesRow.click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'notes/w1.md', 'notes open');
+  await rm(notesFile);
+  await box.press('Control+End'); await box.pressSequentially('Doing: kept\n');
+  for (const attempt of [1, 2]) {
+    await rulesRow.click();
+    await note.getByText('deleted in P9 after you opened it').waitFor({ timeout: 10000 });
+    assert.equal(await page.locator('[data-sp-box]').getAttribute('data-name'), 'notes/w1.md', 'refused save ' + attempt + ' switched files');
+    assert.match(await box.inputValue(), /Doing: kept\n$/);
+    assert.match(await notesRow.textContent(), /deleted, your text not saved/);
+  }
+  assert.equal(existsSync(notesFile), false);
+  await note.getByRole('button', { name: 'Save it again' }).click();
+  await until(async () => existsSync(notesFile) && (await readFile(notesFile, 'utf8')).endsWith('Doing: kept\n'), 'Save it again made the file');
+  await rulesRow.click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'saved: it switches');
+  await notesRow.click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'notes/w1.md', 'back to notes');
+  assert.match(await box.inputValue(), /Doing: kept\n$/);
+  // Deleted again, typed again: Discard my text drops the draft and the row.
+  await rm(notesFile);
+  await box.press('Control+End'); await box.pressSequentially('more\n');
+  await rulesRow.click();
+  await note.getByRole('button', { name: 'Discard my text' }).click();
+  await until(async () => (await notesRow.count()) === 0, 'discarded: the deleted file is no longer listed');
   assert.deepEqual(errors, []);
 });
