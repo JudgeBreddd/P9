@@ -94,6 +94,12 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   assert.equal((await a.tool('open_chat', { text: 'x', mode: 'nope' })).error, 'request-refused');
   assert.equal((await a.tool('open_chat', { text: 'x', key: 'Not A Key' })).error, 'request-refused');
   assert.equal((await a.tool('open_chat', { text: '' })).error, 'request-refused');
+  // F7: an item without its done_means and checks is refused with words that name the three fields.
+  const half = await a.tool('open_chat', { text: 'x', item: 'One item' });
+  assert.equal(half.error, 'request-refused');
+  assert.match(half.detail, /item, done_means and checks go together/);
+  assert.match(half.detail, /Missing: done_means, checks\.$/, 'it names the fields that were left out');
+  assert.match((await a.tool('open_chat', { text: 'x', item: 'One item', done_means: 'd', checks: [] })).detail, /All three were given/);
   assert.equal((await rows(instance)).length, 2);
   // A folder outside the workspace: you allow the start, and the folder check a chat of your own gets still refuses it.
   for (const folder of ['../', '/etc']) {
@@ -216,6 +222,64 @@ test('Delegate: a finished worker tells its running parent in one line, not whil
   assert.equal((await notices(instance, a.conversation)).length, 1, 'a stopped parent was sent a notice');
   assert.ok(!(await events(instance, a.conversation)).slice(before).some((e) => e.type === 'connected'), 'a stopped parent was started');
   console.log('PASS Delegate notice: none while waited on, one line to a running parent, none to a stopped one');
+});
+
+test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), out = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'cwd', title: 'Kid' });
+  await a.done(made.chat);
+  const archived = async (id) => (await rows(instance)).find((c) => c.id === id)?.archived;
+  // Only the chat that started it: a chat beside it reads it but cannot archive it, and a chat outside does not see it.
+  assert.equal((await b.tool('archive_chat', { chat: made.chat })).error, 'not-a-descendant');
+  assert.equal((await b.tool('archive_chat', { chat: a.conversation })).error, 'not-a-descendant', 'never a chat beside it');
+  assert.equal((await out.tool('archive_chat', { chat: made.chat })).error, 'chat-not-found');
+  assert.equal((await a.tool('archive_chat', { chat: made.chat, archived: 'yes' })).error, 'request-refused');
+  assert.equal(await archived(made.chat), false, 'nothing refused changed it');
+  // A working chat is stopped first: nothing runs out of sight.
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'chat-working');
+  await a.tool('stop_chat', { chat: made.chat });
+  await a.done(made.chat);
+  // Waiting on an answer is not finished either.
+  await a.tool('send_chat', { chat: made.chat, text: 'ask' });
+  const asked = await a.tool('wait_chat', { chat: made.chat });
+  assert.equal(asked.waiting?.kind, 'question');
+  assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'chat-working', 'a chat waiting on an answer');
+  await a.tool('answer_chat', { chat: made.chat, request: asked.waiting.request, answer: { action: 'accept', content: { colour: 'red' } } });
+  await a.done(made.chat);
+  assert.deepEqual(await a.tool('archive_chat', { chat: made.chat }), { chat: made.chat, action: 'archived' });
+  assert.equal(await archived(made.chat), true);
+  // Out of the sidebar, so no agent starts a turn in it: not its starter, not a chat beside it. A note starts nothing.
+  const before = (await events(instance, made.chat)).filter((e) => e.type === 'user').length;
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'again' })).error, 'chat-archived');
+  assert.equal((await b.tool('send_chat', { chat: made.chat, text: 'from b' })).error, 'chat-archived');
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'user').length, before, 'the refused sends reached nothing');
+  assert.equal((await b.tool('ask_chat', { chat: made.chat, text: 'a question' })).error, 'chat-archived', 'a question would start a turn in it');
+  const ends = async (id) => (await events(instance, id)).filter((e) => e.type === 'turn-end').length, turns = await ends(made.chat);
+  assert.match((await a.tool('send_chat', { chat: made.chat, text: 'for later', when: 'note' })).sent, /^as a note/, 'a note is still taken');
+  await pause(500);
+  assert.equal(await ends(made.chat), turns, 'a note started a turn in an archived chat');
+  assert.ok(!(await a.tool('list_chats')).chats.some((c) => c.id === made.chat), 'an archived chat leaves the list');
+  assert.ok((await a.tool('read_chat', { chat: made.chat })).messages.length, 'its messages are still there');
+  assert.deepEqual(await a.tool('archive_chat', { chat: made.chat, archived: false }), { chat: made.chat, action: 'unarchived' });
+  assert.equal(await archived(made.chat), false);
+  // P9's own line at a worker's turn end starts nothing in an archived parent either; brought back, it is told again.
+  assert.equal((await call(instance, `/chat/${a.conversation}/archive`, 'POST', { archived: true })).status, 200);
+  const told = (await notices(instance, a.conversation)).length;
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'late' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', (await events(instance, made.chat)).at(-1).cursor);
+  await pause(500);
+  assert.equal((await notices(instance, a.conversation)).length, told, 'an archived parent was sent a turn-end line');
+  await call(instance, `/chat/${a.conversation}/archive`, 'POST', { archived: false });
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.from === 'p9', (await events(instance, a.conversation)).at(-1).cursor);
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'agent-lock-on');
+  assert.equal(await archived(made.chat), false);
+  console.log('PASS Delegate F2 archive_chat');
 });
 
 test('Delegate: chats in one project read and message each other but stop only their own workers; a worker starts in its parent\'s project', { timeout: 120000 }, async (t) => {
@@ -601,6 +665,17 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   await set({ start: 'agent', max: 2, workers: picks.slice(0, 2) });
   assert.equal((await a.tool('open_chat', { text: 'config', title: 'Over' })).error, 'too-many-chats');
   assert.equal((await a.tool('read_chat', { chat: third.chat })).error, undefined);
+  // F8: a stopped worker gave up its place. Over the limit it is not started again (a note is still taken); an idle
+  // worker keeps its place and takes a message; with room again the stopped one starts.
+  const back = await a.tool('send_chat', { chat: first.chat, text: 'config' });
+  assert.equal(back.error, 'too-many-chats', 'a stopped worker was started again past the limit: ' + JSON.stringify(back));
+  assert.match((await a.tool('send_chat', { chat: first.chat, text: 'for later', when: 'note' })).sent ?? '', /^as a note/);
+  assert.equal((await a.tool('send_chat', { chat: third.chat, text: 'config' })).error, undefined, 'an idle worker was refused for the limit');
+  await a.done(third.chat);
+  await set({ start: 'agent', max: 5, workers: picks });
+  await a.tool('stop_chat', { chat: gone.chat, close: true });
+  assert.equal((await a.tool('send_chat', { chat: first.chat, text: 'config' })).sent, 'started a turn');
+  await a.done(first.chat);
   console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, Worker 3 ran on its row (opus/high), haiku/low from the call won, an unlisted pick was passed over, a sixth worker was refused at 5, a stopped worker freed its row for a Codex worker, a profile row gave its worker the profile');
 });
 

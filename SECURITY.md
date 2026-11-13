@@ -643,8 +643,8 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `set_rules`, `answer_chat` and
-`ask_chat`, and record task completion and review with `ready` and `verdict`. The
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `set_rules`,
+`answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 
@@ -653,6 +653,18 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   chat started, directly or through a worker. A general chat (no project) reaches only the chats
   it started. `stop_chat` reaches only the chats the caller started: a chat cannot stop its parent
   or a chat beside it. A chat outside that reach is answered as if it did not exist.
+- **Archiving.** `archive_chat` moves a chat the caller started to Archived, or back. It is the
+  sidebar's Archive and nothing more: the chat, its messages and its files stay, and you can
+  open it or unarchive it from the Archived page. Like `stop_chat` it reaches only the chats the
+  caller started, so an agent cannot hide its parent, a chat beside it or any chat of yours. A
+  chat that is working or waiting on an answer is refused (`chat-working`), and so is one that
+  is still stopping or whose stop P9 could not confirm (`chat-not-settled`): only an idle or
+  stopped chat is archived. While a chat is archived, `send_chat` and `ask_chat` refuse it
+  (`chat-archived`), so no agent starts a turn in a chat that is out of the sidebar, and P9 does not either: its
+  own line at a worker's turn end, and its line after a restart, skip an archived chat. A note
+  still reaches it and starts nothing, and you can still open and message it yourself from
+  the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
+  mode. No tool deletes a chat.
 - **A worker is never wider than its parent.** It starts in the parent's mode unless a narrower
   one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. A message from
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
@@ -685,7 +697,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
-- **The agent lock.** `open_chat`, `send_chat`, `set_rules` and `answer_chat` are refused while it
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `archive_chat` and `answer_chat` are refused while it
   is on, as are `ready` and `verdict`. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
@@ -750,7 +762,11 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   may have running at once, and one row per worker: an agent (the parent's own, Claude, Codex, or
   one of your provider profiles), a model and an effort. A chat's new worker takes the first row
   no running worker of that chat holds, and keeps it until it is stopped. Past the limit
-  `open_chat` is refused (`too-many-chats`); lowering the limit stops nothing. What the call
+  `open_chat` is refused (`too-many-chats`); lowering the limit stops nothing. A stopped worker
+  has given up its place: `send_chat` to it starts it again only while its parent is under the
+  limit, and is refused the same way otherwise (a note is still taken). A worker that is idle
+  or waiting on an answer keeps its place, so a message to it is never refused for the limit.
+  What the call
   names still wins over the row, then the row, then the parent's own: the rows are your
   defaults, not a fence, and the tool's text tells the agent to name its own only when you asked.
   A pick the agent no longer lists, or a profile you removed, is passed over.
