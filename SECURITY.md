@@ -835,13 +835,25 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   off, Delegation is on, the worker limit allows one more and the chat's mode is the same; if not, the worker is not
   started and the folder is kept for the next try. A folder P9 cannot resolve is refused before git runs. It runs without asking you each time: typing it is
   the permission, in every mode except while the agent lock is on, which refuses `open_chat` first.
-- **Clean-up never loses work.** Cleaning a sprint's folders removes a worker folder only when it has nothing
+- **Clean-up removes a whole worker folder, and keeps one only for work git can see.** Cleaning a sprint's folders removes a worker folder only when it has nothing
   unsaved, it is still on its own sprint branch, and that branch's newest commit is in the main line (or, after a
   squash merge, every file it changed is the same in the main line, compared by exact file name, a rename as both its old and new
-  name). Its branch is
+  name). "Nothing unsaved" looks only at what git tracks or would track: a changed tracked file, or a new file git
+  does not ignore. Removing a folder removes everything in it, including files git ignores (build output, a local env
+  file or database, anything not committed and not tracked); P9 does not look for them and does not keep a folder for
+  them, and the "Clean up worker folders" button says so beside it. Its branch is
   deleted with it, and only if the branch has not moved since that check. A folder switched to another branch or
   detached is kept with its branch. Clean-up waits for any worker folder being made in the same sprint. Anything else is kept and listed with its size and why it was kept.
   P9 never deletes a branch that is not in the main line, and never removes the clone while a worker folder is in it.
+- **Who cleans up, and from where.** Only you, from the desktop window: "Clean up worker folders" on the sprint's
+  section of its project page. It is a desktop-only route; the phone, a signed-in phone session and agents have no way
+  to call it, and P9 never runs it on its own. It refuses while any worker the sprint's lead started is still running
+  (anything but stopped, or moved to another computer), and while the lead is in a turn or has a message waiting, since it may be making a worker
+  folder that moment (a new folder has nothing of its own yet, so it would read as merged). It removes only what the
+  rule above allows, and answers with each folder removed and each folder kept, with why and its size. Written before
+  the code (sprint spec A6). What remains: you can restart a stopped worker while clean-up runs; its folder is then
+  removed only if it still has nothing unsaved and its work is in the main line, so nothing git tracks or would track is lost, and its next start
+  is refused because the folder is gone.
 - **Disk.** One clone per sprint plus one worktree (and whatever the setup command installs) per worker, in P9's own
   folder, until cleaned up.
 

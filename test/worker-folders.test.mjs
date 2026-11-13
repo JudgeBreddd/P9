@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorkerFolders, gitFacts, setupShell } from '../apps/server/worker-folders.mjs';
+import { setupRoutes } from '../apps/server/setup-routes.mjs';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -126,6 +127,10 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   g(merged, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
   g(dirty, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/dirty', 'dirty');
   write(path.join(dirty, 'later.txt'), 'not saved\n');
+  // A file git ignores does not keep a folder: the merged folder goes with it (SECURITY.md says so, and the button).
+  write(path.resolve(merged, g(merged, 'rev-parse', '--git-path', 'info/exclude')), 'local.env\n');
+  write(path.join(merged, 'local.env'), 'KEY=1\n');
+  assert.equal(g(merged, 'status', '--porcelain'), '', 'git sees nothing unsaved');
   const result = await folders.clean(ID);
   assert.deepEqual(result.removed, ['merged']);
   assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['detached', 'not on its sprint branch'], ['dirty', 'unsaved changes'], ['moved', 'not on its sprint branch'], ['odd', 'not in the main line'], ['open', 'not in the main line'], ['renamed', 'not in the main line']]);
@@ -241,4 +246,60 @@ test('Worker folders: open_chat with worktree: true starts the worker in a workt
   assert.ok(fs.existsSync(folder3), 'the prepared folder is kept');
   assert.equal((await call(instance, '/chat')).body.conversations.filter((c) => c.parent === a.conversation).length, 1, 'no second worker');
   console.log('PASS Worker folders open_chat');
+});
+
+// SECURITY.md § Worker folders, "Who cleans up": the desktop's route cleans one sprint with the store's own rules, and
+// refuses while a worker of that sprint runs or while its lead is in a turn.
+test('Worker folders A6: the desktop\'s clean-up route refuses while the sprint runs, then removes the merged folder and keeps the unmerged one, saying why', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const repo = path.join(instance.workspace, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); write(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance), clean = () => call(instance, '/sprints/' + a.conversation + '/clean', 'POST', {});
+  const done = await a.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'done' });
+  const open = await a.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'open' });
+  assert.equal(done.error ?? open.error, undefined, JSON.stringify([done, open]));
+  write(path.join(open.folder, 'o.txt'), 'o\n'); g(open.folder, 'add', 'o.txt'); g(open.folder, 'commit', '-qm', 'not merged');
+  const running = await clean();
+  assert.equal(running.status, 409, JSON.stringify(running.body));
+  assert.equal(running.body.error, 'sprint-running');
+  assert.ok(fs.existsSync(done.folder) && fs.existsSync(open.folder), 'nothing removed while workers run');
+  for (const w of [done, open]) assert.equal((await a.tool('stop_chat', { chat: w.chat, close: true })).action, 'stopped');
+  // The lead in a turn may be making a worker folder: refused too.
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'slow' });
+  const conv = async () => (await call(instance, '/chat')).body.conversations.find((c) => c.id === a.conversation);
+  for (let i = 0; i < 100 && (await conv()).state !== 'turn'; i += 1) await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await clean()).body.error, 'sprint-running', 'the lead is in a turn');
+  await call(instance, `/chat/${a.conversation}/cancel`, 'POST', {});
+  for (let i = 0; i < 100 && (await conv()).state === 'turn'; i += 1) await new Promise((r) => setTimeout(r, 100));
+  const result = await clean();
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.deepEqual(result.body.removed, ['done']);
+  assert.deepEqual(result.body.kept.map((k) => [k.item, k.why]), [['open', 'not in the main line']]);
+  assert.ok(result.body.kept[0].bytes > 0);
+  assert.equal(fs.existsSync(done.folder), false, 'the merged folder is gone');
+  assert.ok(fs.existsSync(open.folder), 'the unmerged folder is kept');
+  assert.equal((await call(instance, '/sprints/not-a-chat/clean', 'POST', {})).status, 400);
+  console.log('PASS Worker folders clean route');
+});
+
+// The route's refusals, against a stand-in chat: a lead with a message waiting refuses (it may be about to make a worker
+// folder); a worker stopped or moved to another computer counts as finished, any other state refuses.
+test('Worker folders A6: the clean-up route refuses while the lead has a message waiting or a worker runs; stopped and moved workers are finished', { timeout: 10000 }, async () => {
+  const routes = {}, record = { get() {}, post(route, handler) { routes[route] = handler; } };
+  const ask = async (lead, workers) => {
+    let cleaned = false;
+    const chat = { info: () => lead, family: () => workers.map((state, i) => ({ id: 'w' + i, title: 'w' + i, parent: ID, state })), workers: { clean: async () => { cleaned = true; return { removed: [], kept: [] }; } } };
+    setupRoutes({ app: record, api: record, chat });
+    let status;
+    const body = await routes['/sprints/:id/clean']({ req: { param: () => ID }, json: (value, code = 200) => { status = code; return value; } });
+    return [status, body.error ?? null, cleaned];
+  };
+  const idle = { state: 'running', busy: false };
+  assert.deepEqual(await ask(idle, ['stopped', 'moved']), [200, null, true], 'stopped and moved workers are finished');
+  assert.deepEqual(await ask({ state: 'running', busy: true }, ['stopped']), [409, 'sprint-running', false], 'the lead has a message waiting');
+  assert.deepEqual(await ask({ state: 'turn', busy: false }, []), [409, 'sprint-running', false], 'the lead is in a turn');
+  for (const state of ['running', 'turn', 'idle', 'stopping', 'moving']) assert.deepEqual(await ask(idle, ['stopped', state]), [409, 'sprint-running', false], 'a worker ' + state);
+  assert.deepEqual(await ask(null, []), [200, null, true], 'a deleted lead starts no worker');
 });

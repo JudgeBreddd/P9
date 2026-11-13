@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -530,5 +531,50 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await rulesRow.click();
   await note.getByRole('button', { name: 'Discard my text' }).click();
   await until(async () => (await notesRow.count()) === 0, 'discarded: the deleted file is no longer listed');
+  assert.deepEqual(errors, []);
+});
+
+// SECURITY.md § Worker folders, "Who cleans up": the sprint's section has Clean up worker folders. It refuses while the
+// lead is in a turn, then removes the merged worker folder and keeps the unmerged one, and the page says which and why.
+test('projects: Clean up worker folders on the sprint section says what it removed and what it kept', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' });
+  const repo = path.join(instance.workspace, 'site');
+  await mkdir(repo); g(repo, 'init', '-q', '-b', 'main'); await writeFile(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
+  const lead = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
+  await call(instance, '/chat/' + lead + '/prompt', 'POST', { text: 'title Lead chat' }); await ended(instance, lead);
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const base = (await Promise.all(bases.map((b) => stat(path.join(b, 'projects', p.id)).then(() => b, () => null)))).find(Boolean);
+  // A sprint's folder as open_chat leaves it (worker-folders.test.mjs covers the making): a clone, two worker folders on
+  // their sprint branches, one with nothing of its own (merged) and one with a commit not in the main line.
+  const sprint = path.join(base, 'sprints', lead), clone = path.join(sprint, 'clone'), branch = (item) => 'sprint/' + lead.slice(0, 8) + '/' + item;
+  await mkdir(sprint, { recursive: true, mode: 0o700 }); await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n');
+  g(sprint, 'clone', '-q', '--no-checkout', '--', repo, clone);
+  for (const item of ['done', 'open']) g(clone, 'worktree', 'add', '-q', '-b', branch(item), path.join(sprint, 'workers', item), 'origin/main');
+  const open = path.join(sprint, 'workers', 'open');
+  await writeFile(path.join(clone, '.git', 'info', 'exclude'), 'local.env\n'); await writeFile(path.join(sprint, 'workers', 'done', 'local.env'), 'KEY=1\n');
+  await writeFile(path.join(open, 'o.txt'), 'o\n'); g(open, 'add', 'o.txt'); g(open, 'commit', '-qm', 'not merged');
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const button = page.getByRole('button', { name: 'Clean up worker folders' }), said = page.locator('[data-sp-clean]');
+  await button.waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-sp-ignored]').textContent(), 'Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.', 'it says ignored files go too');
+  assert.ok(await page.locator('[data-sp-ignored]').isVisible(), 'beside the button, on screen');
+  await call(instance, '/chat/' + lead + '/prompt', 'POST', { text: 'slow' });
+  await until(async () => (await conv(instance, lead)).state === 'turn', 'the lead is in a turn');
+  await button.click();
+  await said.getByText('Not cleaned: Its lead is working').waitFor({ timeout: 10000 });
+  assert.ok(existsSync(path.join(sprint, 'workers', 'done')), 'nothing removed while the lead works');
+  await call(instance, '/chat/' + lead + '/cancel', 'POST', {});
+  await until(async () => (await conv(instance, lead)).state !== 'turn', 'the turn ended');
+  await page.getByRole('button', { name: 'Clean up worker folders' }).click();
+  await said.getByText('Removed: done.').waitFor({ timeout: 20000 });
+  assert.match(await said.textContent(), /^Removed: done\. Kept: open \(not in the main line, [\d.]+ (B|KB|MB)\)\.$/);
+  assert.equal(existsSync(path.join(sprint, 'workers', 'done')), false, 'the merged folder is gone');
+  assert.ok(existsSync(open), 'the unmerged folder is kept');
+  assert.ok(existsSync(path.join(sprint, 'sprint.md')), 'the sprint files stay');
+  await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-clean ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.deepEqual(errors, []);
 });
