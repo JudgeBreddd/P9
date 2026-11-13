@@ -219,6 +219,8 @@ function delegationGroup() {
     + sel('data-dg-start', '', 'Who starts a sprint', [['off', 'Off'], ['ask', 'Ask me first'], ['agent', 'Agent decides']], d?.start ?? 'ask') + '</div>'
     + `<div class="set-row"><span><strong>Workers per chat</strong><span class="muted sm">The most workers one chat may have running at once. Each has a row below: the first worker a chat starts runs on Worker 1, the next on Worker 2. A row is free again when its worker is stopped. An agent that names its own agent, model or effort for a worker gets that one.</span></span>`
     + sel('data-dg-max', '', 'Workers per chat', Array.from({ length: 20 }, (_, i) => [String(i + 1), String(i + 1)]), String(d?.max ?? 5)) + '</div>'
+    + `<div class="set-row set-setup"><span><strong>Worker folder setup</strong><span class="muted sm">When an agent gives a worker its own folder (a git worktree P9 makes), P9 runs this command there first, through your shell, and starts the worker when it ends well; for example <code>pnpm install</code>. Only you set it. Empty: nothing runs.</span></span>`
+    + `<input type="text" data-slot="input" data-dg-setup maxlength="2000" spellcheck="false" aria-label="Worker folder setup command" value="${esc(d?.setup ?? '')}"${off}></div>`
     + (d ? d.workers.map(row).join('') : '<p class="muted sm" data-dg-wait>Reading from P9…</p>') + (delegationNote ? `<p class="muted sm" data-dg-note>${esc(delegationNote)}</p>` : '') + '</fieldset>';
 }
 // Drawn again on its own (never the whole page, which would drop what is being typed in another box).
@@ -227,10 +229,10 @@ function bindDelegation() {
   const el = outer.$('#setDelegation'); if (!el) return;
   if (!delegation && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('delegation', {}).then(r => { if (r?.status === 200) { delegation = r.body; drawDelegation(); } }).catch(() => {}); }
   const v = q => el.querySelector(q)?.value ?? '';
-  el.querySelectorAll('select').forEach(x => { x.onchange = async () => {
+  el.querySelectorAll('select, [data-dg-setup]').forEach(x => { x.onchange = async () => {
     // A row whose agent just changed starts with no model or effort: the old ones belonged to the other agent.
     const max = Number(v('[data-dg-max]')), changed = x.dataset.dgAgent;
-    const want = { start: v('[data-dg-start]'), max, workers: Array.from({ length: max }, (_, i) => { const agent = v(`[data-dg-agent="${i}"]`), keep = agent && String(i) !== changed;
+    const want = { start: v('[data-dg-start]'), max, setup: v('[data-dg-setup]'), workers: Array.from({ length: max }, (_, i) => { const agent = v(`[data-dg-agent="${i}"]`), keep = agent && String(i) !== changed;
       return { agent, model: keep ? v(`[data-dg-model="${i}"]`) : '', effort: keep ? v(`[data-dg-effort="${i}"]`) : '' }; }) };
     const r = await window.p9.chat('delegation', want).catch(() => null);
     if (r?.status === 200) { delegation = r.body; delegationNote = ''; } else delegationNote = 'Not saved: P9 did not take it. Try again in a moment.';

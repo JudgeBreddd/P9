@@ -157,6 +157,10 @@ jobs:
       - name: Windows host and process-tree tests
         if: ${{ !cancelled() && !inputs.files }}
         run: node --test test/windows-process-tree.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      - name: Windows worker setup stop test
+        if: ${{ !cancelled() && !inputs.files }}
+        # 0.1.9 A4: a worker folder's setup command past its cap ends with its whole Job Object, live or exited parent.
+        run: node --test --test-name-pattern="past its cap" test/worker-folders.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
       - name: Windows terminal test
         if: ${{ !cancelled() && !inputs.files }}
         run: node --test test/windows-terminal.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE

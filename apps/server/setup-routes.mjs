@@ -211,7 +211,7 @@ export function setupRoutes(outer) {
     const body = await outer.json(c), str = (x) => typeof x === 'string' && x.length <= 200;
     const one = (x) => x && typeof x === 'object' && Object.keys(x).sort().join() === 'agent,effort,model' && str(x.model) && str(x.effort)
       && (['', 'claude', 'codex'].includes(x.agent) || (typeof x.agent === 'string' && /^profile:[\w-]{1,80}$/.test(x.agent)));
-    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'max,start,workers' || !['off', 'ask', 'agent'].includes(body.start)
+    if (!body || typeof body !== 'object' || !['max,start,workers', 'max,setup,start,workers'].includes(Object.keys(body).sort().join()) || (body.setup !== undefined && (typeof body.setup !== 'string' || body.setup.length > 2000)) || !['off', 'ask', 'agent'].includes(body.start)
         || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setDelegation(body));
   });

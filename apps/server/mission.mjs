@@ -9,11 +9,10 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, lockedName, WALK_SKIP } from '../../packages/files/index.mjs';
 const SPACE = { space: true }; // P11: Mission's reads of the folders a space names see _private (packages/files spaceLocked)
-import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
+import { launchTree, endTree, stopScopes, system32, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 import { ID, web, problem, unknownFields, extras, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
-const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
 
 const ITEM = /^[\w.-]{1,120}\.md$/;
 // The answer line: empty "A.", or "A:" holding only an _italic placeholder_ (some live _tyler items use that form).
