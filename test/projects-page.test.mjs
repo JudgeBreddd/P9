@@ -553,11 +553,14 @@ test('projects: Clean up worker folders on the sprint section says what it remov
   g(sprint, 'clone', '-q', '--no-checkout', '--', repo, clone);
   for (const item of ['done', 'open']) g(clone, 'worktree', 'add', '-q', '-b', branch(item), path.join(sprint, 'workers', item), 'origin/main');
   const open = path.join(sprint, 'workers', 'open');
+  await writeFile(path.join(clone, '.git', 'info', 'exclude'), 'local.env\n'); await writeFile(path.join(sprint, 'workers', 'done', 'local.env'), 'KEY=1\n');
   await writeFile(path.join(open, 'o.txt'), 'o\n'); g(open, 'add', 'o.txt'); g(open, 'commit', '-qm', 'not merged');
   const { page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
   const button = page.getByRole('button', { name: 'Clean up worker folders' }), said = page.locator('[data-sp-clean]');
   await button.waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-sp-ignored]').textContent(), 'Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.', 'it says ignored files go too');
+  assert.ok(await page.locator('[data-sp-ignored]').isVisible(), 'beside the button, on screen');
   await call(instance, '/chat/' + lead + '/prompt', 'POST', { text: 'slow' });
   await until(async () => (await conv(instance, lead)).state === 'turn', 'the lead is in a turn');
   await button.click();

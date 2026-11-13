@@ -127,6 +127,10 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   g(merged, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
   g(dirty, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/dirty', 'dirty');
   write(path.join(dirty, 'later.txt'), 'not saved\n');
+  // A file git ignores does not keep a folder: the merged folder goes with it (SECURITY.md says so, and the button).
+  write(path.resolve(merged, g(merged, 'rev-parse', '--git-path', 'info/exclude')), 'local.env\n');
+  write(path.join(merged, 'local.env'), 'KEY=1\n');
+  assert.equal(g(merged, 'status', '--porcelain'), '', 'git sees nothing unsaved');
   const result = await folders.clean(ID);
   assert.deepEqual(result.removed, ['merged']);
   assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['detached', 'not on its sprint branch'], ['dirty', 'unsaved changes'], ['moved', 'not on its sprint branch'], ['odd', 'not in the main line'], ['open', 'not in the main line'], ['renamed', 'not in the main line']]);

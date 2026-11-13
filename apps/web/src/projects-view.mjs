@@ -102,6 +102,7 @@ export function installProjects(o, api) {
     const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker' };
     const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this worker gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this worker with the sprint rules' : 'the worker keeps it itself');
     return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2><span class="muted">its files, kept in P9</span><span class="saved" data-sp-saved role="status">Saved</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button></div>
+      <p class="hint" data-sp-ignored>Clean up removes a finished worker's whole folder, including files git ignores, such as build output or a local .env.</p>
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
       ${[...sp.files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
         return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz">${esc(what(f.name))}${f.gone ? ' · deleted, your text not saved' : drafts.has(sp.lead + ' ' + f.name) ? ' · not saved' : ''}</span></button>`
