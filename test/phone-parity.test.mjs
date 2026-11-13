@@ -671,3 +671,68 @@ test('O55 round 3: a send that stalled while the turn started is retried as the 
   assert.equal(ops[0].split(' ')[0], ops[1].split(' ')[0], 'the same operation ID, not a steer with a new one: ' + ops.join(' | '));
   assert.equal(users, 1, 'the message shows once');
 });
+
+// Round 4: the pending send's identity is what the user did, and it ends only with a definitive answer. Both failed on the round 3 head.
+test('O55 round 4: timeout, then outcome-unknown, then a changed turn state, then another retry: the same ID and body throughout', { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  let calls = 0; const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push(request.headers()['x-p9-op'] + ' ' + request.postData()); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    calls++;
+    if (calls === 1) { // the daemon runs it, the answer is held past the deadline
+      const request = route.request(), real = await route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } });
+      await held; return route.fulfill({ response: real }).catch(() => {});
+    }
+    // ponytail: the daemon's own outcome-unknown (the first try still running) is simulated, as in the round 3 body tests.
+    if (calls === 2) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'outcome-unknown' }) });
+    return route.continue();
+  });
+  await page.fill('#prompt', 'slow');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
+  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 10000 }); // the turn is running now: the box would build a steer
+  await page.click('#midTurn [data-when="steer"]');
+  await page.waitForFunction(() => /still working on your first try/.test(document.querySelector('#composerNote').textContent), null, { timeout: 15000 });
+  assert.equal(await page.inputValue('#prompt'), 'slow', 'outcome-unknown is not an answer: the draft stays');
+  await page.click('#midTurn [data-when="steer"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await page.waitForTimeout(2000);
+  const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('slow').length - 1, 0));
+  assert.equal(posts.length, 3, 'three posts: ' + posts.join(' | '));
+  assert.deepEqual([...new Set(posts)].length, 1, 'the same ID and the same body each time: ' + posts.join(' | '));
+  assert.equal(users, 1, 'the message shows once');
+});
+
+test('O55 round 4: a send that applied a picked effort keeps its identity when the adapter\'s config catches up, and the retry is the same operation', { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  let first = true; const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push(request.headers()['x-p9-op'] + ' ' + request.postData()); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const request = route.request(), real = await route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } });
+    await held; await route.fulfill({ response: real }).catch(() => {});
+  });
+  await page.click('#modePill');
+  await page.waitForSelector('#sheet[open] #pickers select[data-config="effort"]', { timeout: 10000 });
+  await page.selectOption('#pickers select[data-config="effort"]', 'high');
+  await page.keyboard.press('Escape');
+  await page.fill('#prompt', 'effort retry');
+  await page.click('#composer button[type="submit"]');
+  // The daemon applied the effort before its answer stalled: the page's picker now reports it as current, so the screen no longer differs.
+  await page.waitForFunction(() => document.querySelector('#pickers select[data-config="effort"]')?.dataset.current === 'high', null, { timeout: 30000 });
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await page.waitForTimeout(2000);
+  const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('effort retry').length - 1, 0));
+  assert.equal(posts.length, 2, 'two posts: ' + posts.join(' | '));
+  assert.equal(posts[0], posts[1], 'the same ID and the same body (the picked effort included): ' + posts.join(' | '));
+  assert.equal(users, 1, 'the message shows once');
+});

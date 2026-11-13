@@ -817,11 +817,12 @@ async function submitFromBox(event: Event) {
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
-  // Round 3 review: a send that got no answer stays one submission, with its first body and operation ID, until the daemon answers it.
-  // Rebuilding it from the screen (the turn may have ended or started since) would change the body, so a new ID, and a second delivery.
-  const draft = JSON.stringify([id, body, images.map((image) => image.data)]);
-  if (inFlight?.draft !== draft) inFlight = null;
-  const again = !!inFlight;
+  // Round 3 and 4 review: a send that got no answer stays one submission, with its first wire body and operation ID, until the daemon
+  // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
+  // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
+  const draft = JSON.stringify([text, images.map((image) => image.data), picks.get(id) ?? 0]);
+  if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
+  const again = inFlight.has(id);
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
   // fit this phone's storage): they stay attached and the box says why.
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
@@ -840,10 +841,12 @@ async function submitFromBox(event: Event) {
     if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
   }
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
-  const sent = again ? inFlight!.sent : { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
-  inFlight = { draft, sent };
+  const sent = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
+  inFlight.set(id, { draft, sent });
   const result = await mutate(prompt, sent, SEND_DEADLINE);
-  inFlight = null; // answered: the next send is a new submission
+  // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
+  if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
+  inFlight.delete(id);
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
@@ -860,7 +863,10 @@ async function submitFromBox(event: Event) {
 // A send that gets no answer keeps its text, images and operation ID; tapping send again is the same operation.
 // ponytail: the interrupt's wait for the turn to end (up to 20 s of reads) still holds the guard; each read is short.
 const SEND_DEADLINE = 30000;
-let inFlight: { draft: string; sent: Json } | null = null; // the send that last got no answer
+// ponytail: in memory, one per chat, until answered (a reload loses it; the kept operation ID then holds only if the rebuilt body is identical).
+const inFlight = new Map<string, { draft: string; sent: Json }>(); // per chat: the send that got no answer
+const picks = new Map<string, number>(); // per chat: how many times the user changed a picker (a change event is the user's; the adapter's own updates fire none)
+document.addEventListener('change', (event) => { if ((event.target as Element).closest?.('#mode, #model, #pickers')) { const id = one<HTMLSelectElement>('#conversation').value; picks.set(id, (picks.get(id) ?? 0) + 1); } }, true);
 const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 let submitting = false;
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
