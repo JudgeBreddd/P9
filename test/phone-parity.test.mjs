@@ -537,6 +537,7 @@ test('O55 round 1: two taps while the first send is still in flight send the mes
   await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
   // The first answer to the mid-turn send is held back, so the second tap lands while the first is still in flight.
   let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release); // a step before the release that fails must not leave the route held
   let first = true; const posts = [];
   page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push(JSON.parse(request.postData()).when ?? 'now'); });
   await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { if (first) { first = false; await held; } await route.continue(); });
@@ -552,7 +553,43 @@ test('O55 round 1: two taps while the first send is still in flight send the mes
   const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('only once').length - 1, 0));
   t.diagnostic('O55r1 posts: ' + posts.join(',') + ' queued rows before release: ' + queuedAtOnce + ' users: ' + users);
   assert.equal(users, 1, 'the message shows once in the chat, not twice; prompt posts: ' + posts.join(',') + '; queued rows before release: ' + queuedAtOnce);
-  const replies = await page.evaluate(() => document.querySelectorAll('#events article[data-kind="agent"]').length);
-  assert.ok(replies <= 2, 'one reply to it, not one per duplicate: ' + replies);
+  await page.waitForFunction(() => [...document.querySelectorAll('#events article[data-kind="agent"]')].some((el) => el.textContent.includes('only once')), null, { timeout: 40000 });
+  const replies = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="agent"]')].reduce((sum, el) => sum + el.textContent.split('only once').length - 1, 0));
+  assert.equal(replies, 1, 'exactly one reply to it, not one per duplicate: ' + replies);
   assert.equal(await page.inputValue('#prompt'), '', 'the box is empty');
+});
+
+test('O55 round 2: a send that never gets its answer lets go at the deadline, keeps the draft, and the retry sends it once', { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  // The daemon gets the first send and runs it, but its answer is held past the phone's deadline (the connection stays open).
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  let first = true; const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op']); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    // (route.fetch cannot resolve the .localhost name, so it goes to the loopback address with the page's own Host.)
+    const request = route.request(), real = await route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } });
+    await held; await route.fulfill({ response: real }).catch(() => {});
+  });
+  await page.fill('#prompt', 'stalled once');
+  await page.click('#composer button[type="submit"]');
+  // Not before the deadline: the box is shut to a second tap meanwhile, and the text is still there.
+  await page.waitForFunction(() => !document.querySelector('#composerNote').hidden, null, { timeout: 60000 });
+  assert.match(await page.textContent('#composerNote'), /Not sent yet/);
+  assert.equal(await page.inputValue('#prompt'), 'stalled once', 'the draft is kept');
+  // The guard has let go: the same send again is the same operation, so the daemon replays what it already did.
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('#events article[data-kind="agent"]')].some((el) => el.textContent.includes('stalled once')), null, { timeout: 15000 });
+  await page.waitForTimeout(2000);
+  release();
+  const count = (kind) => page.evaluate((k) => [...document.querySelectorAll('#events article[data-kind="' + k + '"]')].reduce((sum, el) => sum + el.textContent.split('stalled once').length - 1, 0), kind);
+  t.diagnostic('O55r2 ops: ' + ops.join(','));
+  assert.equal(ops.length, 2, 'two posts');
+  assert.equal(ops[0], ops[1], 'the retry reuses the operation ID');
+  assert.equal(await count('user'), 1, 'the message shows once');
+  assert.equal(await count('agent'), 1, 'one reply');
 });

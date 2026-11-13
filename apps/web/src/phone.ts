@@ -134,7 +134,7 @@ function keepPending(key: string, value?: Pending) {
   localStorage.setItem('p9-pending', JSON.stringify(all));
   return all;
 }
-async function mutate(path: string, body: Json) {
+async function mutate(path: string, body: Json, deadline = 0) {
   if (!online()) throw new Error('offline');
   const key = path + '\n' + JSON.stringify(body);
   const stored = keepPending('')[key];
@@ -148,13 +148,19 @@ async function mutate(path: string, body: Json) {
   // A reopened app keeps its cookie and, for the session's 12 hours, its CSRF token (csrfToken); with neither, log in again for a fresh one.
   const csrf = csrfToken();
   if (!csrf) throw relogin();
-  let response: Response;
-  try { response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
-  catch (error) { throw error; }
-  const result = await response.json().catch(() => ({}));
+  // A deadline (the sends: round 2 review) ends a request that is open but never answers, so the composer is not shut for good.
+  // The ID stays kept, so the retry is the same operation and the daemon replays a send that did arrive instead of running it twice.
+  const stop = new AbortController(), timer = deadline ? setTimeout(() => stop.abort(), deadline) : 0;
+  let response: Response, result: Json;
+  try {
+    response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body), signal: stop.signal });
+    result = await response.json().catch(() => ({}));
+  } catch (error) { throw stop.signal.aborted ? new Error('timeout') : error; }
+  finally { clearTimeout(timer); }
   if (response.status === 401) throw relogin();
   // Any answer, 503 included, is final for this ID (the daemon replays it); only a lost request keeps it for the retry (R1-7).
-  keepPending(key);
+  // 'outcome-unknown' is the daemon still running the first try of this ID: not an answer, so the ID stays for the next retry.
+  if (result.error !== 'outcome-unknown') keepPending(key);
   return { status: response.status, body: result };
 }
 let openId = ''; // the chat on the chat screen; '' is the Chats list
@@ -800,9 +806,9 @@ async function submitFromBox(event: Event) {
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
   if (id && submitter?.dataset.stop === 'true') {
     // No turn to stop (it just ended): 409 no-turn, and the events say so.
-    const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
-    await fetchEvents(); render(); return;
+    void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   const text = (art ?? input.value).trim();
   if (!id || (!text && !images.length)) return false;
@@ -820,15 +826,15 @@ async function submitFromBox(event: Event) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
     // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended.
     note('Stopping this turn, then sending.');
-    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
     for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await fetchEvents(1000); await new Promise((done) => setTimeout(done, 250)); }
     if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
   }
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }, SEND_DEADLINE);
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
+  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -839,12 +845,21 @@ async function submitFromBox(event: Event) {
 }
 // Round 1 review: two taps while the first send is still in flight both read the same box and sent the message twice (also
 // through the queue fallback above). One submit at a time; a second tap does nothing until the first has settled.
-// ponytail: a fetch that never answers keeps the box shut until it fails; the browser's own network error ends it.
+// Round 2 review: the guard must always let go, so a send has a deadline (SEND_DEADLINE, in mutate) and the read after it is not awaited.
+// A send that gets no answer keeps its text, images and operation ID; tapping send again is the same operation.
+// ponytail: the interrupt's wait for the turn to end (up to 20 s of reads) still holds the guard; each read is short.
+const SEND_DEADLINE = 30000;
 let submitting = false;
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   if (submitting) { event.preventDefault(); return false; }
   submitting = true;
-  try { return await submitFromBox(event); } finally { submitting = false; }
+  try { return await submitFromBox(event); }
+  catch (error) {
+    if ((error as Error).message !== 'timeout') throw error;
+    note(`Not sent yet: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Your message is still in the box. Tap send to try again; it will not go twice.`);
+    return false;
+  }
+  finally { submitting = false; }
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
 function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }
