@@ -22,6 +22,7 @@ import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
+import { createSprintFiles } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -368,13 +369,28 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
-  // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, in prefs under rules:<parent>; never set, it is
-  // DEFAULT_RULES, and '' is none. It rides as its own block with every message that chat's agent sends a chat it
-  // started (a compaction in the worker cannot lose it), and with no other sender's message.
-  const rulesOf = (parent) => db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
+  // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, the sprint folder's rules.md (D3; before it, prefs
+  // under rules:<parent>, still read until the first set_rules); never set, it is DEFAULT_RULES, and '' is none. It rides
+  // as its own block with every message that chat's agent sends a chat it started (a compaction in the worker cannot lose
+  // it), and with no other sender's message. A keyed worker's roles/<key>.rules.md follows it.
+  const sprintFiles = createSprintFiles({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
+  const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
+  // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
+  // and sent after the rules of each message from its parent until one is confirmed to have reached the agent
+  // (startSent: the prompt's turn ended, or the steer was injected). sending: chats whose block is on its way; the
+  // messages sent meanwhile leave it out, and a failure (startLost) frees it for the next one. A failed start, a failed
+  // prompt or a daemon restart before confirmation keeps it. ponytail: a restart while a turn that already read it is
+  // still running sends it once more with the next message (said twice beats never).
+  const sending = new Set();
+  const startSent = (id) => { sending.delete(id); db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id); };
+  const startLost = (id) => sending.delete(id);
   const rulesFor = (conversation, body) => {
-    const text = conversation?.parent && senders.get(body) === conversation.parent ? rulesOf(conversation.parent) : '';
-    return text ? { hash: createHash('sha256').update(text).digest('hex').slice(0, 12), text: `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` } : null;
+    const mine = conversation?.parent && senders.get(body) === conversation.parent;
+    const own = mine && conversation.key ? (sprintFiles.read(conversation.parent, `roles/${conversation.key}.rules.md`) ?? '').trim() : '';
+    const text = mine ? [rulesOf(conversation.parent), own].filter(Boolean).join('\n\n') : '';
+    const start = mine && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
+    const all = (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
+    return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
   };
   // A message another chat's agent sent (send_chat, open_chat) says so to the agent that gets it, as its own leading block:
   // without it the text reads as the user's (Builder, 2026-11-11: a helper chat took a peer's questions for his).
@@ -876,23 +892,25 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
     const rules = rulesFor(row(id), body);
+    if (rules?.started) sending.add(id);
     const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }) });
     const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)],
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
-    try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { return refused(409, 'turn-running'); }
+    try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
     if (result === 'slow') {
       // No answer in 5 s: the request may still land, so a 409 (queued, sent again at the turn's end) could deliver it
       // twice. Shown as sent but unconfirmed; a later refusal says so with the text, so it never vanishes silently.
       // A note is not lost: it waits for the chat's next prompt instead.
       // A note whose steer was lost may have been read already: it counts as its one resend, so a prompt that
       // fails after it is dropped, never parked a second time.
-      const lost = () => (notes.has(body) ? (resent.add(body), park(id, body, true)) : emit(id, 'steer-lost', { text: body.text }));
-      request.then((late) => { if (!delivered(late)) lost(); }, lost);
+      const lost = () => { if (rules?.started) startLost(id); return notes.has(body) ? (resent.add(body), park(id, body, true)) : emit(id, 'steer-lost', { text: body.text }); };
+      request.then((late) => { if (!delivered(late)) lost(); else if (rules?.started) startSent(id); }, lost);
       emit(id, 'user', { ...user(), unconfirmed: true });
       return { status: 202, steered: true, unconfirmed: true };
     }
-    if (!delivered(result)) return refused(409, 'turn-running');
+    if (!delivered(result)) { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
+    if (rules?.started) startSent(id);
     emit(id, 'user', user());
     // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
     // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
@@ -972,10 +990,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
 
   // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).
   const workers = createWorkerFolders({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
-  const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
+  const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id); // O48, A7
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id); // O48, A7
       gauges.delete(id); parked.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1184,12 +1202,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // answers another chat: they wait for the chat's own next message.
       const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
       const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
-      session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
+      if (rules?.started) sending.add(id);
+      // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
+      new Promise((resolve) => resolve(session.agent.prompt({ sessionId: session.sessionId, prompt }))).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-        (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
+        (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
-        (error) => { for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
+        (error) => { if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;
@@ -1337,7 +1357,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
     setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },
     setDelegation(value) { db.prepare("INSERT INTO prefs (key, value) VALUES ('delegation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(value)); return this.delegation(); },
-    setRules: (id, text) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); },
+    setRules: (id, text) => { if (sprintFiles.write(id, 'rules.md', text)) db.prepare('DELETE FROM prefs WHERE key = ?').run('rules:' + id);
+      else db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); }, // no state folder: prefs, as before
+    sprintFiles,
+    startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),
     // A folder a chat asked for, as its full path once it passes the "Start in" check (row 24), else null.

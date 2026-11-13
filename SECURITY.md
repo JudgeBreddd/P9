@@ -710,6 +710,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   parent's agent wrote, so the worker reads them as its parent's instructions, not yours; they
   widen nothing a worker may do. A message you type, and P9's own `[p9]` lines, carry none.
   The transcript keeps a hash of the rules sent, and the text is in the parent's tool call.
+  The rules are the sprint folder's `rules.md` (see "Sprint files" below).
 - **Folders.** A worker's folder passes the same check as a folder the parent asks for itself:
   inside the workspace or a folder you allowed; any absolute folder only in Unrestricted mode.
 - **Tokens.** Each worker gets its own token the way every chat does. Tokens live in memory
@@ -843,6 +844,39 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   P9 never deletes a branch that is not in the main line, and never removes the clone while a worker folder is in it.
 - **Disk.** One clone per sprint plus one worktree (and whatever the setup command installs) per worker, in P9's own
   folder, until cleaned up.
+
+## Sprint files
+
+A sprint's plan, rules, role files and workers' notes are plain files in the sprint's folder, `sprints/<lead chat
+id>/` (the same folder as its worker folders, 0700). The lead's agent, its workers and you all read and edit them.
+Written before the code (sprint spec D1, D3, D4).
+
+- **Only these names.** `sprint.md`, `rules.md`, `roles/<key>.instructions.md`, `roles/<key>.rules.md` and
+  `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
+  ID; `open_chat` refuses a key shaped like a chat ID, so two workers never share notes). P9 reads or writes no other
+  name there. If a folder on
+  the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
+  (a temp file, then a rename).
+- **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker, and a notes outline for every
+  worker. For a worker with a key it also makes empty role files. It never writes over a file that is already there.
+- **What reaches an agent.** `rules.md` is the sprint rules (`set_rules` writes it; a value kept from before this
+  change is still read until the first `set_rules`). A keyed worker's `roles/<key>.rules.md` follows them, under the
+  same rule: only with a message its lead's agent sends. `roles/<key>.instructions.md` and the notes file's full path
+  ride once, as their own block after the rules, with the worker's first message from its lead that reaches the agent
+  (the transcript keeps a hash, as for the rules). P9 keeps that block in its database until the agent confirms it got
+  the message: the turn ended, or the steer went in. A failed start, a failed prompt or a P9 restart before that does
+  not lose it, and messages sent while one carrying it is still unconfirmed leave it out. A P9 restart during a turn
+  that already read it sends it once more with the next message. Like the rules, this text comes from the lead or from you, so it widens nothing the
+  worker may do.
+- **Who can edit them.** You can edit them on the project page, for a lead chat that is in that project. A save names
+  the file as the page opened it; if an agent changed or deleted it since, P9 refuses the save and the page keeps your
+  text (for a deleted file, until you save it again or discard it). P9 checks the file right before its rename, as
+  the Files editor does; an agent's write that lands after that last check and before the rename is still replaced.
+  No lock exists that the agents' own editors would honour. That is the
+  same route family as project instructions, so a signed-in phone can edit them too. The lead's and workers' agents
+  edit them with their own file tools, under their own mode and your approvals. P9 gives them no write of its own.
+- **Removal.** Clean-up of a sprint's worker folders (§ Worker folders) removes the clone and the worker folders
+  only; these files stay. P9 never deletes them. Deleting the lead chat leaves them too.
 
 ## Agent modes
 

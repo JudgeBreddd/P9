@@ -59,6 +59,7 @@
 .ppage .instr-all:hover{color:var(--foreground)}
 .ppage textarea{width:100%;min-height:120px;resize:vertical;font:inherit;font-size:13.5px;line-height:1.6}
 .ppage .saved{font-size:11.5px;color:var(--ok);opacity:0}
+.ppage .sp-box{min-height:240px;margin:4px 0 8px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px}
 .ppage .saved.on{opacity:1}
 @media (prefers-reduced-motion:no-preference){.ppage .saved{transition:opacity .2s}}
 @media (max-width:700px){.ppage{padding:24px 18px 40px}.ppage .ph{flex-direction:column;gap:10px}}

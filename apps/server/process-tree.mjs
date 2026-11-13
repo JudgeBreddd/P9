@@ -20,7 +20,7 @@ export const SLICE = 'p9.slice';
 export const hasUserBus = () => process.platform === 'linux' && !!process.env.XDG_RUNTIME_DIR
   && existsSync(path.join(process.env.XDG_RUNTIME_DIR, 'bus'));
 
-const lookup = (environment, name) => Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+export const lookup = (environment, name) => Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
 // A Windows system program by its full path, so a PATH entry of the same name is never run instead.
 export const system32 = (file, environment = process.env) => path.win32.join(lookup(environment, 'SystemRoot') || 'C:\\Windows', 'System32', file);
 

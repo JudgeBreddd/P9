@@ -143,10 +143,11 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   console.log('PASS Worker folders A6');
 });
 
-test('Worker folders A4: the setup shell on Windows without ComSpec is System32\\cmd.exe; with ComSpec, that shell; elsewhere /bin/sh', () => {
+test('Worker folders A4: the setup shell on Windows without ComSpec is System32\\cmd.exe; with ComSpec, that shell; elsewhere /bin/sh', { timeout: 10000 }, () => {
   assert.deepEqual(setupShell('npm ci & echo ok', 'win32', { SystemRoot: 'D:\\Win' }), ['D:\\Win\\System32\\cmd.exe', '/d', '/s', '/c', '"npm ci & echo ok"']);
   assert.deepEqual(setupShell('x', 'win32', {}), ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', '"x"']);
   assert.deepEqual(setupShell('x', 'win32', { ComSpec: 'E:\\cmd.exe', SystemRoot: 'D:\\Win' })[0], 'E:\\cmd.exe');
+  assert.deepEqual(setupShell('x', 'win32', { COMSPEC: 'E:\\cmd.exe' }), ['E:\\cmd.exe', '/d', '/s', '/c', '"x"']);
   assert.deepEqual(setupShell('x', 'linux', {}), ['/bin/sh', '-c', 'x']);
 });
 
