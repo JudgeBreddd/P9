@@ -21,6 +21,7 @@ import { listDirectory } from '../../packages/files/index.mjs';
 import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
+import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -388,6 +389,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // a path a client sent; a chat no longer in an In P9 project starts in the workspace.
   const startOf = async (conversation) => {
     if (conversation.folder === IN_P9) return await projects.filesStart(conversation.project) ?? (await folderCheck(''), folderPath(''));
+    // A worker folder (SECURITY.md § Worker folders): found from the chat's parent and key, never a path a client sent.
+    if (conversation.folder === WORKER) return await workers.where(conversation.parent, conversation.key) ?? Promise.reject(new Error('unsafe-path'));
     await folderCheck(conversation.folder ?? '');
     return folderPath(conversation.folder);
   };
@@ -960,6 +963,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
 
   // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).
+  const workers = createWorkerFolders({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
@@ -1063,7 +1067,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body.profile !== undefined && (body.provider !== 'claude' || !chosen || !chosen.models.includes(body.model))) return refused(400, 'request-refused');
       const profile = chosen && { id: chosen.id, name: chosen.name, model: body.model };
       const folder = body.folder ?? (project ? projects.startFolder(project) : '');
-      const there = () => (body.folder === undefined ? startOf({ folder, project: project?.id }).then(() => true, () => false) : folderThere(folder));
+      const there = () => (body.folder === undefined || body.folder === WORKER ? startOf({ folder, project: project?.id, parent: lineage?.parent, key: lineage?.key }).then(() => true, () => false) : folderThere(folder));
       if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
       const id = randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
       try { db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project, parent, key) VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null, lineage?.parent ?? null, lineage?.key ?? null); }
@@ -1312,7 +1316,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     delegation: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'delegation'").get()?.value ?? '{}'); } catch { v = {}; }
       const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : ''), agent = (x) => (x === '' || Object.hasOwn(MODES, x ?? ' ') || /^profile:[\w-]{1,80}$/.test(x ?? '') ? x : '');
       const max = Number.isInteger(v?.max) && v.max >= 1 && v.max <= 20 ? v.max : 5;
-      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max,
+      // setup: the owner's command run in each new worker folder before its worker starts; left out when empty (A4).
+      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max, ...(typeof v?.setup === 'string' && v.setup && v.setup.length <= 2000 && { setup: v.setup }),
         workers: Array.from({ length: max }, (_, i) => { const x = Array.isArray(v?.workers) ? v.workers[i] : null, a = agent(x?.agent); return { agent: a, model: a ? str(x?.model) : '', effort: a ? str(x?.effort) : '' }; }) }; },
     // Which Settings row a worker started on (0 is the first); kept so a row frees only when its worker stops.
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
@@ -1321,6 +1326,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     setRules: (id, text) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),
+    // A folder a chat asked for, as its full path once it passes the "Start in" check (row 24), else null.
+    checkedFolder: (folder) => folderCheck(folder).then(() => folderPath(folder), () => null),
+    workers,
     modes: MODES,
     // The newest reply's text, whole (preview() keeps its first line): the chunks since the prompt or tool call before it.
     reply(id) {

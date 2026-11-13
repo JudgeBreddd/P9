@@ -696,6 +696,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   it gave; that is an instruction to the agent, not a check P9 makes. Every answer is recorded in
   the worker's chat with the chat that gave it. The approval also stays in the worker's own
   chat, where you can answer it yourself.
+- **Ready and verdict.** A worker that was given a task with checks ends it with `ready`: its commit, one result
+  per check and its weakest part. A chat's agent marks another chat's ready commit with `verdict` (pass or fix, with a
+  note). Both write only P9's own sprint record for that chat, never a file, so they work in every mode, read-only
+  ones too; the agent lock refuses both. `ready` needs a parent and a task, and a folder with nothing unsaved; where
+  git can be read the commit and changed files are git's, not the agent's word. `verdict` reaches only a chat the
+  caller could message, never its own work, a chat below it or a chat above it in its line, and only at the commit
+  that chat marked ready: a newer commit makes the verdict stale.
 - **Sprint rules.** A parent has one text of rules, at most 8,000 characters, that P9 sends as
   its own block with every message that parent's agent sends a chat it started. Until the parent
   sets them (`set_rules`, or `rules` on `open_chat`) P9 sends a short default: state the folder
@@ -787,6 +794,55 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   never sees the key, but it chooses the task of a chat that can read it.
 - **Not on the phone.** The phone listener has no MCP server, so nothing here is reachable from
   it. The phone shows workers in its chat list like any chat.
+
+## Worker folders
+
+A chat that starts a worker with `open_chat` may ask for the worker to get its own folder (`worktree: true`, with a
+`key`). P9 then makes the folder itself, with git, before the worker starts. Written before the code (sprint spec K1).
+
+- **Where they live.** One clone of the repository per sprint (a sprint is the chat that started the workers), in
+  `sprints/<that chat's id>/` beside the ledger (0700, like `projects/`). Each worker gets a git worktree of that clone
+  in `workers/<key>/`, on its own branch `sprint/<first 8 of the chat id>/<key>`, started from the main line. The
+  key is checked by `open_chat`'s rule and again as a branch name before any path or branch is made.
+- **Your own folder is never touched.** The clone is made from the folder the worker would have started in (the
+  `folder` passed, else the parent's), which must be a git repository and passes the same folder check as before.
+  P9 only reads there (`git clone` from it, and its `origin` address): no branch switch, no file added, unsaved work
+  left as it is. The clone's `origin` is then set to that folder's own `origin`, so a push goes where yours go, with
+  your own git sign-in. If the folder has no `origin`, the clone's `origin` stays your folder.
+- **Where a worker starts.** The chat's record holds a marker, not a path. At every start P9 finds the folder again
+  from the chat's parent and key, and refuses it if it is not a real folder inside the sprint's own folder (a link,
+  or gone). A chat a client makes with that marker has no parent and is refused. The agent then works in that folder
+  in its own mode, like any chat; its approvals are asked as before.
+- **P9 running git.** P9 runs `git` itself only in its own sprint folders, plus the two reads above in your folder.
+  Every run has an empty environment plus the usual allow list, no terminal prompt (`GIT_TERMINAL_PROMPT=0`), hooks
+  off (`core.hooksPath` set to the null device), `core.fsmonitor` off and no external diff, so a hook or a
+  file-system monitor written into the clone does not run as P9. What remains: a clean or smudge filter set in the
+  clone's own git config runs when P9 reads the folder's state. That config sits outside every worker folder, so an
+  agent writes it only by editing outside its folder, which its mode asks you for; in Unrestricted mode nothing is
+  asked, as for every other command an agent runs there.
+- **What P9 reads from git (for the sprint's version stamp).** For a worker folder: the current commit, the files
+  changed against the main line, whether anything is unsaved, and whether a commit is in the main line. It reads; it
+  never fetches on its own except when it cleans up (below), and a fetch uses your git sign-in like a push.
+- **The setup command.** One command you type in Settings > Delegation, run in each new worker folder before its
+  worker starts (for example installing packages). Only you set it: no agent tool and no file in the repository can
+  set or change it, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
+  environment, for at most 15 minutes, as a process tree P9 owns (Windows: a kill-on-close Job Object, which also ends
+  what the shell leaves running when it exits; elsewhere a process group). At that limit the whole tree is stopped and
+  P9 waits, briefly, for the stop to be confirmed before it answers or starts anything else in that sprint; a stop it
+  cannot confirm is told to the agent as such. If it fails or runs out of time the worker is not started, the folder is
+  kept, and the agent is told the exit code and the end of its output. Clone and setup can take minutes, so after them P9 checks again that the agent lock is
+  off, Delegation is on, the worker limit allows one more and the chat's mode is the same; if not, the worker is not
+  started and the folder is kept for the next try. A folder P9 cannot resolve is refused before git runs. It runs without asking you each time: typing it is
+  the permission, in every mode except while the agent lock is on, which refuses `open_chat` first.
+- **Clean-up never loses work.** Cleaning a sprint's folders removes a worker folder only when it has nothing
+  unsaved, it is still on its own sprint branch, and that branch's newest commit is in the main line (or, after a
+  squash merge, every file it changed is the same in the main line, compared by exact file name, a rename as both its old and new
+  name). Its branch is
+  deleted with it, and only if the branch has not moved since that check. A folder switched to another branch or
+  detached is kept with its branch. Clean-up waits for any worker folder being made in the same sprint. Anything else is kept and listed with its size and why it was kept.
+  P9 never deletes a branch that is not in the main line, and never removes the clone while a worker folder is in it.
+- **Disk.** One clone per sprint plus one worktree (and whatever the setup command installs) per worker, in P9's own
+  folder, until cleaned up.
 
 ## Agent modes
 
