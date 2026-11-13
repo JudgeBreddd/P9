@@ -218,6 +218,37 @@ test('Delegate: a finished worker tells its running parent in one line, not whil
   console.log('PASS Delegate notice: none while waited on, one line to a running parent, none to a stopped one');
 });
 
+test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), out = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'cwd', title: 'Kid' });
+  await a.done(made.chat);
+  const archived = async (id) => (await rows(instance)).find((c) => c.id === id)?.archived;
+  // Only the chat that started it: a chat beside it reads it but cannot archive it, and a chat outside does not see it.
+  assert.equal((await b.tool('archive_chat', { chat: made.chat })).error, 'not-a-descendant');
+  assert.equal((await b.tool('archive_chat', { chat: a.conversation })).error, 'not-a-descendant', 'never a chat beside it');
+  assert.equal((await out.tool('archive_chat', { chat: made.chat })).error, 'chat-not-found');
+  assert.equal((await a.tool('archive_chat', { chat: made.chat, archived: 'yes' })).error, 'request-refused');
+  assert.equal(await archived(made.chat), false, 'nothing refused changed it');
+  // A working chat is stopped first: nothing runs out of sight.
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'chat-working');
+  await a.tool('stop_chat', { chat: made.chat });
+  await a.done(made.chat);
+  assert.deepEqual(await a.tool('archive_chat', { chat: made.chat }), { chat: made.chat, action: 'archived' });
+  assert.equal(await archived(made.chat), true);
+  assert.ok(!(await a.tool('list_chats')).chats.some((c) => c.id === made.chat), 'an archived chat leaves the list');
+  assert.ok((await a.tool('read_chat', { chat: made.chat })).messages.length, 'its messages are still there');
+  assert.deepEqual(await a.tool('archive_chat', { chat: made.chat, archived: false }), { chat: made.chat, action: 'unarchived' });
+  assert.equal(await archived(made.chat), false);
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'agent-lock-on');
+  assert.equal(await archived(made.chat), false);
+  console.log('PASS Delegate F2 archive_chat');
+});
+
 test('Delegate: chats in one project read and message each other but stop only their own workers; a worker starts in its parent\'s project', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
