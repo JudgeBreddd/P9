@@ -44,7 +44,7 @@ async function addNew(folder, name, bytes) {
 // Step 1b (threat model row N1b): the stored folder of a chat that starts in its In P9 project's own files/. Not a path:
 // ':' is refused in every workspace-relative folder, and it is never absolute, so no client can send it as one.
 export const IN_P9 = ':project-files';
-export function createProjects({ home, workspace, folderCheck, db, row, emit, stop, recovered, remove }) {
+export function createProjects({ home, workspace, folderCheck, db, row, emit, stop, recovered, remove, sprintFiles }) {
   const folderOf = (id) => path.join(home, id);
   const filesOf = (id) => path.join(home, id, 'files');
   async function record(id) {
@@ -89,6 +89,9 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     if (value.work.kind === 'p9') entries = [];
     else try { entries = await folderCheck(value.work.folder); } catch { entries = null; }
     const chats = db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE project = ?').get(value.id).n;
+    // D1, D3, D4: each chat in the project that has a sprint folder, with its files' text (SECURITY.md § Sprint files).
+    const sprints = full && sprintFiles ? db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id)
+      .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: sprintFiles.list(c.id) })) : [];
     // Two projects may use one work folder (N1 spec, 2026-11-08): the others using it, for the dialog to name.
     const where = value.work.kind === 'p9' ? null : path.resolve(workspace, value.work.folder);
     const sharedWith = [];
@@ -99,7 +102,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     return { id: value.id, name: value.name, about: value.about, archived: value.archived === true, created: value.created,
       work: { kind: value.work.kind, folder: value.work.kind === 'p9' ? null : value.work.folder }, found: entries !== null,
       agentFiles: (entries ?? []).filter((entry) => !entry.dir && AGENT_FILES.includes(entry.name)).map((entry) => entry.name), chats,
-      ...(full && { instructions: await instructions(value.id), files: await files(value.id), sharedWith }) };
+      ...(full && { instructions: await instructions(value.id), files: await files(value.id), sharedWith, sprints }) };
   }
 
   const store = {
@@ -211,6 +214,20 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if (!(await lstat(target).catch(() => null))?.isFile()) return refused(404, 'unknown-file');
       await unlink(target);
       return { status: 200, files: await files(id) };
+    },
+    // One sprint file, from the project page: the lead chat must be in this project, the name one of the sprint's.
+    // hash: the file as the page opened it (list's hash), '' to make one again that was deleted since. The lead and the
+    // workers edit these files too: one changed since is not replaced (sprintFiles.write checks it, last right before
+    // its rename), and 409 sends the files as they are now; the page keeps the user's text.
+    async sprintFile(id, body) {
+      const value = await record(id);
+      if (!value) return refused(404, 'unknown-project');
+      if (!only(body, ['lead', 'name', 'text', 'hash']) || typeof body.lead !== 'string' || !ID.test(body.lead) || typeof body.text !== 'string' || typeof body.hash !== 'string') return refused(400, 'request-refused');
+      if (row(body.lead)?.project !== id || !sprintFiles?.exists(body.lead)) return refused(404, 'unknown-sprint');
+      const saved = sprintFiles.write(body.lead, body.name, body.text, body.hash);
+      if (saved === 'changed') return { status: 409, error: 'sprint-file-changed', files: sprintFiles.list(body.lead) };
+      if (!saved) return refused(400, 'request-refused');
+      return { status: 200, files: sprintFiles.list(body.lead) };
     },
     record,
     startFolder,

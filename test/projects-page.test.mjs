@@ -5,7 +5,8 @@
 // delete leaves a folder the user chose alone and moves the chats to Chats; a gone folder shows Locate.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -445,5 +446,89 @@ test('project New chat stays clickable with notification cards at narrow widths'
       await page.locator('#projPage h1', { hasText: 'Garden' }).waitFor();
     }
   }
+  assert.deepEqual(errors, []);
+});
+
+// D1 D3 D4 (SECURITY.md § Sprint files): the project page lists a lead chat's sprint files; one opens in a text box that saves.
+test('projects: the project page lists a sprint\'s files and edits one', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'site'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
+  const lead = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
+  await call(instance, '/chat/' + lead + '/prompt', 'POST', { text: 'title Lead chat' }); await ended(instance, lead);
+  // The sprint folder sits beside projects/ in P9's own folder (open_chat makes it; the sprint-files test covers that).
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const base = (await Promise.all(bases.map((b) => stat(path.join(b, 'projects', p.id)).then(() => b, () => null)))).find(Boolean);
+  assert.ok(base, 'found P9\'s projects folder');
+  const sprint = path.join(base, 'sprints', lead);
+  await mkdir(path.join(sprint, 'roles'), { recursive: true, mode: 0o700 }); await mkdir(path.join(sprint, 'notes'), { mode: 0o700 });
+  await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
+  await writeFile(path.join(sprint, 'rules.md'), 'Only touch docs/.');
+  await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
+  await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const row = page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' });
+  await row.waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-pj="spfile"]').count(), 4);
+  await row.click();
+  const box = page.locator('[data-sp-box]');
+  await box.waitFor({ timeout: 5000 });
+  assert.match(await box.inputValue(), /Goal: the docs site\./);
+  await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
+  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to sprint.md');
+  assert.match(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
+  // The lead edits the plan after the page opened it; the user types, then opens another file. The save is refused: the
+  // lead's text stays on disk, sprint.md stays open with the user's text, and the page says so with a way on.
+  await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the lead\'s.\n');
+  await box.press('Control+End'); await box.pressSequentially('- [ ] w4: mine\n');
+  await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
+  const note = page.locator('[data-sp-note]');
+  await note.getByText('changed in P9 after you opened it').waitFor({ timeout: 10000 });
+  assert.equal(await row.getAttribute('aria-expanded'), 'true', 'a refused save switched files');
+  assert.match(await box.inputValue(), /w4: mine\n$/);
+  assert.equal(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), '# Plan\n\nGoal: the lead\'s.\n');
+  await note.getByRole('button', { name: 'Save mine over it' }).click();
+  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).endsWith('w4: mine\n'), 'Save mine over it saved');
+  assert.equal(await note.textContent(), '');
+  // Two saves started at once: the second goes after the first and names the file the first wrote, so it is not refused.
+  await box.evaluate(async (b) => { for (const text of ['first save\n', 'second save\n']) { b.value = text; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); await new Promise((r) => setTimeout(r, 0)); } });
+  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')) === 'second save\n', 'the second of two overlapping saves landed');
+  await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'a saved file switches');
+  assert.equal(await page.locator('[data-sp-box]').inputValue(), 'Only touch docs/.');
+  await page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'sprint.md', 'back to sprint.md');
+  await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-files ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // A worker deletes its notes file while the user has it open and types: the save is refused twice (two switches), the
+  // file stays listed and open with the user's text, and Save it again makes it again; away and back, the text is there.
+  const notesRow = page.locator('[data-pj="spfile"]', { hasText: 'notes/w1.md' }), notesFile = path.join(sprint, 'notes', 'w1.md');
+  const rulesRow = page.locator('[data-pj="spfile"]', { hasText: 'rules.md' });
+  await notesRow.click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'notes/w1.md', 'notes open');
+  await rm(notesFile);
+  await box.press('Control+End'); await box.pressSequentially('Doing: kept\n');
+  for (const attempt of [1, 2]) {
+    await rulesRow.click();
+    await note.getByText('deleted in P9 after you opened it').waitFor({ timeout: 10000 });
+    assert.equal(await page.locator('[data-sp-box]').getAttribute('data-name'), 'notes/w1.md', 'refused save ' + attempt + ' switched files');
+    assert.match(await box.inputValue(), /Doing: kept\n$/);
+    assert.match(await notesRow.textContent(), /deleted, your text not saved/);
+  }
+  assert.equal(existsSync(notesFile), false);
+  await note.getByRole('button', { name: 'Save it again' }).click();
+  await until(async () => existsSync(notesFile) && (await readFile(notesFile, 'utf8')).endsWith('Doing: kept\n'), 'Save it again made the file');
+  await rulesRow.click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'saved: it switches');
+  await notesRow.click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'notes/w1.md', 'back to notes');
+  assert.match(await box.inputValue(), /Doing: kept\n$/);
+  // Deleted again, typed again: Discard my text drops the draft and the row.
+  await rm(notesFile);
+  await box.press('Control+End'); await box.pressSequentially('more\n');
+  await rulesRow.click();
+  await note.getByRole('button', { name: 'Discard my text' }).click();
+  await until(async () => (await notesRow.count()) === 0, 'discarded: the deleted file is no longer listed');
   assert.deepEqual(errors, []);
 });

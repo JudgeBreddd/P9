@@ -2,12 +2,12 @@
 // in P9's own folder, one git worktree and branch per worker, made by P9 when the worker starts. The owner's folder is
 // only read. gitFacts is what P9 reads from git by itself, for the sprint's version stamp.
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
-import { endTree, launchTree, system32 } from './process-tree.mjs';
+import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -79,7 +79,7 @@ async function bytes(at) {
 }
 // The shell Node's shell: true uses, with the command line passed unchanged (launchTree's verbatim).
 export const setupShell = (command, platform = process.platform, environment = process.env) => platform === 'win32'
-  ? [environment.ComSpec || system32('cmd.exe', environment), '/d', '/s', '/c', '"' + command + '"'] : ['/bin/sh', '-c', command];
+  ? [lookup(environment, 'ComSpec') || system32('cmd.exe', environment), '/d', '/s', '/c', '"' + command + '"'] : ['/bin/sh', '-c', command];
 
 // The owner's setup command, in the new folder, through their shell. Resolves to null, or the failure for the agent.
 // It runs as a process tree P9 owns (process-tree.mjs: a kill-on-close Job Object on Windows, a process group elsewhere).
@@ -207,8 +207,12 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS }) {
         removed.push(item);
       } else kept.push({ item, folder, branch, bytes: await bytes(folder), why: why ?? 'git would not remove it' });
     }
-    // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it.
-    if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) await rm(dirOf(sprint), { recursive: true, force: true });
+    // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it. The
+    // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
+    if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) {
+      for (const part of ['workers', 'ready', 'clone']) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
+      await rmdir(dirOf(sprint)).catch(() => {});
+    }
     return { removed, kept };
   }
 

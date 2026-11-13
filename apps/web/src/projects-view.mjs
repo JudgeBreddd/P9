@@ -20,7 +20,11 @@ export function installProjects(o, api) {
   const call = (action, body, opts) => o.liveChat.call(action, body, opts);
   const find = id => o.S.sessions.find(s => s.id === id);
   // cur: the shown project as GET /projects/<id> gives it (instructions, files, agentFiles, sharedWith).
-  let cur = null, edit = false, saveT = 0;
+  let cur = null, edit = false, saveT = 0, sprintOpen = ''; // sprintOpen: '<lead> <name>' of the sprint file shown in its box
+  // Sprint file drafts, '<lead> <name>' -> { text, hash }: typed and not saved yet; hash is the file as it was when typing
+  // began. spNote: a draft's save that was refused ('changed': someone else's edit came first; 'failed'). spSaving: saves
+  // go one at a time, so each one names the file the one before it wrote.
+  const drafts = new Map(), spNote = new Map(); let spSaving = Promise.resolve(true);
   const say = (txt, level = 'ok') => o.toast({ kind: 'project', txt, level }, true);
   const failed = r => say(ERR[r.body?.error] || 'That did not work (' + (r.body?.error || r.status) + ').', 'warn');
 
@@ -84,8 +88,23 @@ export function installProjects(o, api) {
       <section class="sec" data-drop-files aria-labelledby="pjFilesH"><div class="sh2"><h2 id="pjFilesH">${mine ? 'Files' : 'Added files'}</h2><span class="muted">${mine ? 'handed to every chat in this project' : 'kept in P9, handed to every chat in this project'}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="add">${svg.plus}Add files</button></div>
         ${files.map(x => `<div class="crow file">${svg.files}<span class="t" title="${esc(x.name)}">${esc(x.name)}</span><span class="sz">${size(x.size)}</span><button class="rm" data-pj="rm" data-name="${esc(x.name)}" title="Remove ${esc(x.name)}" aria-label="Remove ${esc(x.name)}">${svg.x}</button></div>`).join('')
           || '<p class="hint">Drop files here, or Add files. Every chat in this project gets them.</p>'}</section>
+      ${(p.sprints ?? []).map(sprintHtml).join('')}
     </div>`;
   }
+  // D1, D3, D4: a sprint's files, kept in P9; its lead and workers edit them too. One open at a time, saved as you type.
+  function sprintHtml(sp) {
+    const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker' };
+    const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this worker gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this worker with the sprint rules' : 'the worker keeps it itself');
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2><span class="muted">its files, kept in P9</span><span class="saved" data-sp-saved role="status">Saved</span></div>
+      ${[...sp.files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
+        return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz">${esc(what(f.name))}${f.gone ? ' · deleted, your text not saved' : drafts.has(sp.lead + ' ' + f.name) ? ' · not saved' : ''}</span></button>`
+          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false">${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
+  }
+  // A draft whose file was deleted since (a worker, the lead): still listed, with its text, until saved again or discarded.
+  const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id)).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
+  const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id); };
+  const spNoteHtml = id => (spNote.get(id) !== 'failed' && isGone(id) ? 'This file was deleted in P9 after you opened it (the lead or a worker removed it). Your text is still here, not saved. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spmine">Save it again</button> <button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sptheirs">Discard my text</button>' : null) ?? ({ changed: 'This file changed in P9 after you opened it (the lead or a worker edited it). Your text is still here, not saved. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spmine">Save mine over it</button> <button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sptheirs">Show theirs</button>',
+    failed: 'Not saved. Your text is still here. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spretry">Try again</button>' })[spNote.get(id)] ?? '';
   function archivedHtml() {
     const ps = (o.S.projects || []).filter(p => p.archived), cs = o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden));
     const row = (label, attr) => `<div class="crow arch"><span class="t">${label}</span><button data-slot="button" data-variant="ghost" data-size="sm" ${attr}>Unarchive</button></div>`;
@@ -150,6 +169,10 @@ export function installProjects(o, api) {
     if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
     if (k === 'edit') { if (edit) { clearTimeout(saveT); await saveInstr(); } edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
     if (k === 'add') return picker.click();
+    // A file whose save was refused stays open with its draft: nothing switches over unsaved text.
+    if (k === 'spfile') { clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); } const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return fillBox(); }
+    if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
+    if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }
     if (k === 'rm') { const r = await call('removeProjectFile', { id: cur.id, name: b.dataset.name }); if (r.status !== 200) return failed(r); cur = { ...cur, files: r.body.files }; return renderPage(); }
     if (k === 'open') { o.files.scope = 'project'; if (!o.S.files) $('[data-tool=files]')?.click(); else o.renderTree(); return; }
     if (k === 'locate') { const f = await pick(); if (f === undefined) return; const r = await call('locateProject', { id: cur.id, folder: f }); if (r.status !== 200) return failed(r); refresh(r.body.project); return say(`Found it: ${where(f)}`); }
@@ -187,7 +210,37 @@ export function installProjects(o, api) {
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
     const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) return failed(r);
     cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
-  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); } });
+  // The open file's box shows its draft, or the file: set as a value, since morph may keep a box another file typed in.
+  const fillBox = () => { const box = page.querySelector('[data-sp-box]'); if (!box) return;
+    box.value = drafts.get(sprintOpen)?.text ?? cur.sprints?.find(x => x.lead === box.dataset.lead)?.files.find(x => x.name === box.dataset.name)?.text ?? box.value; box.focus(); };
+  // The open file's draft, saved after the one before it. true: nothing left unsaved. mine: over whatever is there now
+  // (after a 'changed' refusal, the user chose it). A reply for a page or file no longer shown changes nothing there.
+  const saveSprint = (mine = false) => (spSaving = spSaving.then(() => saveOpen(mine), () => saveOpen(mine)));
+  async function saveOpen(mine) {
+    const id = sprintOpen, d = drafts.get(id), project = cur; if (!d || !project) return true;
+    const sp = project.sprints?.find(x => id.startsWith(x.lead + ' ')), name = id.slice(id.indexOf(' ') + 1), f = sp?.files.find(x => x.name === name);
+    if (!sp) return true;
+    if (!mine && f && f.hash === d.hash && f.text === d.text) { drafts.delete(id); return true; }
+    // A file deleted since: refused as changed (the draft stays, listed); mine makes it again ('' = must not exist).
+    const r = await call('sprintFile', { id: project.id, lead: sp.lead, name, text: d.text, hash: mine ? f?.hash ?? '' : d.hash }, { quiet: true });
+    const here = cur?.id === project.id ? cur.sprints?.find(x => x.lead === sp.lead) : null; // the page may have reloaded meanwhile
+    for (const x of new Set([sp, here])) if (x && r.body?.files) x.files = r.body.files;
+    const now = sp.files.find(x => x.name === name), shown = !!here && sprintOpen === id;
+    if (r.status === 200) {
+      spNote.delete(id);
+      if (drafts.get(id) === d) drafts.delete(id); else if (drafts.has(id)) drafts.get(id).hash = now?.hash; // typed meanwhile: that text builds on this save
+      const s = shown && page.querySelector(`[data-sprint="${CSS.escape(sp.lead)}"] [data-sp-saved]`); if (s) { s.classList.add('on'); setTimeout(() => s.classList.remove('on'), 1200); }
+    } else {
+      spNote.set(id, r.status === 409 && r.body?.error === 'sprint-file-changed' ? 'changed' : 'failed');
+      if (spNote.get(id) === 'failed') failed(r);
+    }
+    const note = shown && page.querySelector('[data-sp-note]'); if (note) note.innerHTML = spNoteHtml(id);
+    return r.status === 200;
+  }
+  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); }
+    if (e.target.matches('[data-sp-box]')) { const id = e.target.dataset.lead + ' ' + e.target.dataset.name, f = cur?.sprints?.find(x => x.lead === e.target.dataset.lead)?.files.find(x => x.name === e.target.dataset.name);
+      drafts.set(id, { text: e.target.value, hash: drafts.get(id)?.hash ?? f?.hash }); clearTimeout(saveT); saveT = setTimeout(saveSprint, 600); } });
+  page.addEventListener('focusout', e => { if (e.target.matches?.('[data-sp-box]')) { clearTimeout(saveT); saveSprint(); } });
   page.addEventListener('dragover', e => { if (e.target.closest('[data-drop-files]') && e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.target.closest('[data-drop-files]').setAttribute('data-over', ''); } });
   page.addEventListener('dragleave', e => e.target.closest?.('[data-drop-files]')?.removeAttribute('data-over'));
   page.addEventListener('drop', e => { const z = e.target.closest('[data-drop-files]'); if (!z || !e.dataTransfer.files.length) return; e.preventDefault(); z.removeAttribute('data-over'); addFiles([...e.dataTransfer.files]); });

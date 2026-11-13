@@ -522,6 +522,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/projects/:id', async (c) => reply(c, await chat.projects.update(c.req.param('id'), await json(c))));
   api.post('/projects/:id/locate', async (c) => reply(c, await chat.projects.relocate(c.req.param('id'), await json(c))));
   api.post('/projects/:id/delete', async (c) => reply(c, await chat.projects.remove(c.req.param('id'), await json(c))));
+  api.post('/projects/:id/sprint-file', async (c) => reply(c, await chat.projects.sprintFile(c.req.param('id'), await json(c))));
   api.post('/projects/:id/files', async (c) => reply(c, await chat.projects.addFile(c.req.param('id'), await json(c))));
   api.post('/projects/:id/files/remove', async (c) => { const body = await json(c);
     return reply(c, body && typeof body === 'object' && Object.keys(body).join() === 'name' ? await chat.projects.removeFile(c.req.param('id'), body.name) : { status: 400, error: 'request-refused' }); });
