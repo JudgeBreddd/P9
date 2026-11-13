@@ -736,3 +736,41 @@ test('O55 round 4: a send that applied a picked effort keeps its identity when t
   assert.equal(posts[0], posts[1], 'the same ID and the same body (the picked effort included): ' + posts.join(' | '));
   assert.equal(users, 1, 'the message shows once');
 });
+
+// Round 5: the pending send's identity is the settings the user chose and that took effect. A cancelled warning, a no-op pick and an
+// away-and-back change none of them, so the retry is still the same submission. Each failed on the round 4 head (it counted change events).
+for (const how of ['a cancelled mode warning', 'a pick of the value already selected', 'a model changed away and back']) test(`O55 round 5: ${how} between the stalled send and its retry leaves the same ID and body`, { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'codex');
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  let first = true; const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push(request.headers()['x-p9-op'] + ' ' + request.postData()); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const request = route.request(), real = await route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } });
+    await held; await route.fulfill({ response: real }).catch(() => {});
+  });
+  await page.fill('#prompt', 'slow');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
+  if (how.includes('warning')) {
+    await pickMode(page, 'Full access');
+    await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
+    await page.click('#looseDlg button[value="no"]');
+    await page.waitForFunction(() => document.querySelector('#mode').value === '', null, { timeout: 5000 }); // Chromium closes the dialog a frame late
+  } else await page.evaluate((away) => { // what the model menu does: set the value and fire change
+    const model = document.querySelector('#model'), pick = (value) => { model.value = value; model.dispatchEvent(new Event('change')); }, now = model.value;
+    if (away) { pick([...model.options].find((option) => option.value !== now).value); pick(now); } else pick(now);
+  }, how.includes('away'));
+  // The daemon ran the first send, so the turn is going now: the box would build a steer from the screen.
+  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 10000 });
+  await page.click('#midTurn [data-when="steer"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await page.waitForTimeout(2000);
+  const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('slow').length - 1, 0));
+  assert.equal(posts.length, 2, 'two posts: ' + posts.join(' | '));
+  assert.equal(posts[0], posts[1], 'the same ID and the same body: ' + posts.join(' | '));
+  assert.equal(users, 1, 'the message shows once');
+});

@@ -820,7 +820,7 @@ async function submitFromBox(event: Event) {
   // Round 3 and 4 review: a send that got no answer stays one submission, with its first wire body and operation ID, until the daemon
   // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
   // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
-  const draft = JSON.stringify([text, images.map((image) => image.data), picks.get(id) ?? 0]);
+  const draft = JSON.stringify([text, images.map((image) => image.data), chosenKey(id)]);
   if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
   const again = inFlight.has(id);
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
@@ -865,8 +865,20 @@ async function submitFromBox(event: Event) {
 const SEND_DEADLINE = 30000;
 // ponytail: in memory, one per chat, until answered (a reload loses it; the kept operation ID then holds only if the rebuilt body is identical).
 const inFlight = new Map<string, { draft: string; sent: Json }>(); // per chat: the send that got no answer
-const picks = new Map<string, number>(); // per chat: how many times the user changed a picker (a change event is the user's; the adapter's own updates fire none)
-document.addEventListener('change', (event) => { if ((event.target as Element).closest?.('#mode, #model, #pickers')) { const id = one<HTMLSelectElement>('#conversation').value; picks.set(id, (picks.get(id) ?? 0) + 1); } }, true);
+// Round 5 review: the identity of a pending send holds the settings the user chose and that took effect, never a count of events (a
+// cancelled warning, a no-op pick or an away-and-back would raise it) and never the adapter's own redraws (they set values, not choices).
+// Per chat and setting: `base` is what it was before the user's first change, so a setting changed back to it is as if never touched.
+const chosen = new Map<string, Map<string, { base: string; value: string }>>();
+function choose(id: string, key: string, value: string, base: string) {
+  const own = chosen.get(id) ?? chosen.set(id, new Map()).get(id)!;
+  own.set(key, { base: own.get(key)?.base ?? base, value });
+}
+const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
+// The model and the agent's own pickers have no warning: a change is accepted when it fires. (Mode is recorded in its own handler, once its warning is confirmed.)
+document.addEventListener('change', (event) => {
+  const pick = event.target as HTMLSelectElement;
+  if (pick.matches?.('#model, #pickers select')) choose(one<HTMLSelectElement>('#conversation').value, pick.id === 'model' ? 'model' : 'config:' + pick.dataset.config, pick.value, pick.dataset.current ?? '');
+}, true);
 const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 let submitting = false;
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
@@ -1013,7 +1025,7 @@ const loose = one<HTMLDialogElement>('#looseDlg');
 let answer: ((value: string) => void) | undefined;
 loose.addEventListener('close', () => { if (!loose.open) { answer?.(loose.returnValue); answer = undefined; } });
 one<HTMLSelectElement>('#mode').onchange = async (event) => {
-  const mode = event.target as HTMLSelectElement, pick = mode.value, agent = provider(one<HTMLSelectElement>('#conversation').value);
+  const mode = event.target as HTMLSelectElement, pick = mode.value, id = one<HTMLSelectElement>('#conversation').value, agent = provider(id);
   if (pick in LOOSE && !localStorage.getItem('p9-mode-ok:' + pick)) {
     one('#looseT').textContent = `Turn on ${pick} for ${agent === 'codex' ? 'Codex' : 'Claude'}?`; one('#looseP').textContent = (LOOSE as Record<string, string>)[pick];
     answer?.('no');
@@ -1021,6 +1033,7 @@ one<HTMLSelectElement>('#mode').onchange = async (event) => {
     if (value === 'never') localStorage.setItem('p9-mode-ok:' + pick, '1');
     else if (value !== 'yes') { mode.value = mode.dataset.was ?? ''; pill(); return; }
   }
+  choose(id, 'mode', pick, mode.dataset.was ?? ''); // accepted: after the warning was confirmed, never on Cancel
   mode.value = mode.dataset.was = pick; pill();
   if (pick && agent) localStorage.setItem('p9-mode:' + agent, pick);
 };
