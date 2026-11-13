@@ -50,7 +50,7 @@ export function installProjects(o, api) {
   }
 
   // ---- The page ----
-  async function openProject(id) {
+  async function openProject(id, sprintLead) {
     if (o.S.focus !== 'chat' && !o.focusOn('chat')) return;
     api.closeMenu(); api.setOpen(id, true); edit = false;
     o.S.view = { kind: 'project', id }; if (o.S.focus !== 'chat') o.setFocus('chat');
@@ -59,6 +59,7 @@ export function installProjects(o, api) {
     const r = await call('project', { id });
     if (r.status === 200 && o.S.view?.id === id) { cur = r.body.project; renderPage(); }
     else if (r.status === 404) { o.S.view = null; o.loadProjects(); o.renderTabs(); }
+    if (sprintLead && o.S.view?.id === id) page.querySelector(`[data-sprint="${CSS.escape(sprintLead)}"]`)?.scrollIntoView({ block: 'start' });
     page.focus({ preventScroll: true }); // the page, not the editable name: a stray key must not rename the project
   }
   const instrText = s => { const l = s.split('\n'), rest = l.slice(3);

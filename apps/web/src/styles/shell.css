@@ -260,7 +260,11 @@ select option::checkmark{color:var(--primary)}
 .pane.focus{box-shadow:inset 0 2px 0 var(--primary)}
 /* ---- P9-Sprint card (E1/I2/F3): fixed at the pane's top right, over the transcript; the theme's own tokens only ---- */
 .sprint{position:absolute;z-index:4;top:var(--sp-top,46px);right:var(--sp-right,18px);width:var(--sp-w,296px);max-height:min(58%,460px,var(--sp-room,460px));display:flex;flex-direction:column;border:1px solid var(--border);border-radius:calc(var(--radius) + 2px);background:color-mix(in oklch,var(--card) 94%,transparent);backdrop-filter:blur(10px);box-shadow:0 8px 28px -12px rgb(0 0 0/.55);overflow:hidden;font-size:12.5px}
-.sprint .sp-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:0;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
+.sprint .sp-headbar{display:flex;align-items:center}
+.sprint .sp-files{flex:none;margin-right:8px;padding:4px 6px;border:0;border-radius:4px;background:none;color:var(--muted-foreground);font:inherit;cursor:pointer}
+.sprint .sp-files:hover:not(:disabled){background:var(--accent);color:var(--foreground)}
+.sprint .sp-files:disabled{opacity:.5;cursor:default}
+.sprint .sp-head{min-width:0;display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:0;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
 .sprint .sp-head:hover{background:var(--accent)}
 .sprint .sp-head .eyebrow{flex:none}
 .sprint .sp-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted-foreground);font-size:11.5px}
@@ -296,9 +300,7 @@ select option::checkmark{color:var(--primary)}
 .sprint .sp-akind{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--warn)}
 .sprint .sp-akind[data-blocking="true"]::after{content:" · blocking";font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted-foreground)}
 .sprint .sp-wait{color:var(--muted-foreground);font-size:11px;white-space:nowrap}
-.sprint :is(.sp-head,.sp-row,.sp-asks button):focus-visible{outline:2px solid var(--ring,var(--primary));outline-offset:-2px}
-/* Where the card sits and whether it opens is worked out per pane in chat-view.mjs (placeSprints): it moves left of the needs-you cards only where they really overlap this pane, and the text keeps its room. */
-.pane:has(>.sprint[data-folded="false"]) .hist{padding-right:var(--sp-pad,20px)}
+.sprint :is(.sp-head,.sp-files,.sp-row,.sp-asks button):focus-visible{outline:2px solid var(--ring,var(--primary));outline-offset:-2px}
 @media (prefers-reduced-motion:reduce){.sprint .sp-ring[data-status="working"]{animation:none}.sprint .sp-head>svg{transition:none}}
 .ptool{display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--border);font-size:12.5px}
 .ptool .name{font-weight:600}
