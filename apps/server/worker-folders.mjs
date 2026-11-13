@@ -18,19 +18,20 @@ const TAIL = 2000;
 const SETUP_FROM = 'the project\'s, else Settings > Delegation';
 
 // A1, a sprint's source as an address (SECURITY.md § Worker folders): https://, ssh:// or user@host:path, nothing else.
-// The host starts with a letter or digit, so no part git or ssh could read as an option; no spaces or control characters.
+// The user name, the host and the path after user@host: never start with '-', so no part git or ssh could read as an
+// option; no spaces or control characters.
 // protocols is the test's door (file, for a clone with no network); the address clone's git gets the same list.
 export function remoteOk(address, protocols = ['https', 'ssh']) {
   if (typeof address !== 'string' || !address || address.length > 2000 || /[\s\0-\x1f\x7f]/.test(address) || address.startsWith('-')) return false;
   const url = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/i.exec(address);
-  if (url) return protocols.includes(url[1].toLowerCase()) && (url[1].toLowerCase() === 'file' ? url[2].startsWith('/') : /^([\w.~-]+(:[^@/]*)?@)?[a-z0-9][\w.-]*(:\d+)?\//i.test(url[2]) && (url[1].toLowerCase() !== 'https' || !/^[^/]*@/.test(url[2])));
-  return protocols.includes('ssh') && !address.includes('::') && /^[\w.-]+@[a-z0-9][\w.-]*:[^:]/i.test(address);
+  if (url) return protocols.includes(url[1].toLowerCase()) && (url[1].toLowerCase() === 'file' ? url[2].startsWith('/') : /^([\w.~][\w.~-]*(:[^@/]*)?@)?[a-z0-9][\w.-]*(:\d+)?\//i.test(url[2]) && (url[1].toLowerCase() !== 'https' || !/^[^/]*@/.test(url[2])));
+  return protocols.includes('ssh') && !address.includes('::') && /^[\w.][\w.-]*@[a-z0-9][\w.-]*:[^:-]/i.test(address);
 }
 
 // Every git P9 runs: allow-listed environment, never a prompt, no hooks, no file-system monitor, no external diff.
 // ponytail: a clean or smudge filter in the repository's own config still runs on status (SECURITY.md says so).
 export function git(cwd, args, { timeout = 60_000 } = {}) {
-  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
+  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', SSH_ASKPASS_REQUIRE: 'never', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
   const safe = ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', '-c', 'core.pager=cat'];
   return new Promise((resolve) => execFile('git', [...safe, ...args], { cwd, env, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
     (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, out: String(stdout), err: String(stderr) })));

@@ -306,7 +306,7 @@ test('Worker folders A6: the clean-up route refuses while the lead has a message
 
 test('Worker folders A1: a sprint clones from an address the owner set, without reading a folder; only https and ssh forms pass, and git is held to the same transports', { timeout: 60000 }, async (t) => {
   for (const ok of ['https://example.com/a/b.git', 'ssh://git@example.com/a/b.git', 'ssh://git@example.com:22/a.git', 'git@example.com:a/b.git']) assert.equal(remoteOk(ok), true, ok);
-  for (const bad of ['ext::sh -c id', 'ext::sh', 'file:///etc', 'http://example.com/a', 'git://example.com/a', '-oProxyCommand=x', 'git@-host:x', 'ssh://-oProxyCommand=x/y', 'host:path', 'a@b::c',
+  for (const bad of ['ext::sh -c id', 'ext::sh', 'file:///etc', 'http://example.com/a', 'git://example.com/a', '-oProxyCommand=x', 'git@-host:x', 'ssh://-oProxyCommand=x/y', 'ssh://-user@example.com/x', 'git@example.com:-x', '-git@example.com:x', 'host:path', 'a@b::c',
     'https://example.com/a b', 'https://user:pw@example.com/a', 'https://example.com', '/abs/folder', '', 7, null, 'https://example.com/' + 'a'.repeat(2000)]) assert.equal(remoteOk(bad), false, String(bad).slice(0, 40));
   const { remote, owner, home } = repos(t);
   const before = ownerState(owner), address = 'file://' + remote.split(path.sep).join('/').replace(/^(?!\/)/, '/');
@@ -365,7 +365,8 @@ test('Worker folders A1 A4: a project\'s sprint source and setup command are set
   assert.equal((await set({ source: 'https://p9-test.invalid/none.git', setup: '' })).body.project.sprint.source, 'https://p9-test.invalid/none.git');
   const b = await agent(t, instance);
   await call(instance, `/chat/${b.conversation}/project`, 'POST', { project: project.id });
-  const far = await b.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'item-1' });
+  assert.equal((await b.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'item-1' })).error, 'folder-refused', 'a folder is not quietly dropped for the address');
+  const far = await b.tool('open_chat', { text: 'cwd', worktree: true, key: 'item-1' });
   assert.equal(far.error, 'clone-failed', JSON.stringify(far));
   assert.equal(fs.existsSync(path.join(path.dirname(path.dirname(made.folder)), '..', b.conversation, 'clone')), false);
   console.log('PASS Worker folders project sprint settings');

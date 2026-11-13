@@ -814,12 +814,17 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   desktop). A lead chat in that project then gets its sprint clone straight from the address, and your folder is not
   read at all. Only you set it, and only from the desktop window: no agent tool, no file in the repository and no
   phone request can set or change it. P9 takes three forms only: `https://…`, `ssh://…` and `user@host:path`, with
-  no spaces or control characters and nothing that starts with `-`; anything else is refused when you save it and
+  no spaces or control characters, and no address, user name, host or `user@host:` path that starts with `-`; anything else is refused when you save it and
   again before git runs. For that clone git is also told to use no transport but https and ssh
   (`protocol.allow=never` with those two allowed), so an address form that would run a command (`ext::`) or read a
   local path (`file://`) is refused by git itself even if the first check were wrong. Sign-in is your own git
   sign-in, never a prompt: an address that needs a password P9 cannot get fails, and the agent is told git's own
-  message. The clone is made once per sprint: a source changed later is used by the next sprint, not by one whose
+  message. For ssh that means a key ssh can use on its own: P9's git is not given your ssh agent (`SSH_AUTH_SOCK`
+  is not passed) and is told never to open a password window (`SSH_ASKPASS_REQUIRE=never`), so a key that needs
+  its passphrase typed, or that only the agent holds, fails. An `open_chat` that also passes a `folder` is refused
+  (`folder-refused`) and not quietly pointed at the address. The project's setup command is read each time a worker
+  folder is made, from the project the lead chat is in at that moment: changing it, or moving the lead chat to
+  another project, applies to the next worker of a sprint already running, in the clone that sprint already has. The clone is made once per sprint: a source changed later is used by the next sprint, not by one whose
   clone exists. What remains: P9 downloads whatever that address serves into its own folder, and the workers'
   agents then read and run it in their own modes, as they would in any folder you point a chat at.
 - **Where a worker starts.** The chat's record holds a marker, not a path. At every start P9 finds the folder again
