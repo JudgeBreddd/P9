@@ -22,7 +22,7 @@ import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
-import { createSprintFiles } from './sprint-files.mjs';
+import { createSprintFiles, notesLine } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -384,6 +384,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const sending = new Set();
   const startSent = (id) => { sending.delete(id); db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id); };
   const startLost = (id) => sending.delete(id);
+  // A worker's notes file, found from its stored parent and key (a worker without a key: its chat ID), never from a request.
+  const notesOf = (id) => { const c = row(id); return c?.parent && ID.test(c.parent) ? { lead: c.parent, name: `notes/${c.key ?? id}.md` } : null; };
+  // A compaction the agent reports (sprint spec D4): a worker is told its notes path again, with its next message from
+  // its lead, once per compaction. P9 does not ask for compaction_update, so the Claude and Codex adapters send a
+  // "Compact conversation" tool call instead; both are read. A start block still unsent already has the line.
+  // ponytail: the compactions seen are kept in memory, so one reported again after a daemon restart tells it once more.
+  const compacted = (session, id, update) => {
+    const kind = update?.sessionUpdate, key = kind === 'compaction_update' ? update.compactionId : kind === 'tool_call' && update.title === 'Compact conversation' ? update.toolCallId : null;
+    if (typeof key !== 'string') return;
+    const seen = session.compactions ??= new Set();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const at = notesOf(id), file = at && sprintFiles.fileOf(at.lead, at.name);
+    if (file) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, notesLine(file));
+  };
   const rulesFor = (conversation, body) => {
     const mine = conversation?.parent && senders.get(body) === conversation.parent;
     const own = mine && conversation.key ? (sprintFiles.read(conversation.parent, `roles/${conversation.key}.rules.md`) ?? '').trim() : '';
@@ -749,6 +764,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A name the user gave (N1, the rename route's 'renamed' event) is kept.
           if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
+        compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
         emit(conversation.id, 'update', trim(agentImages(update)));
         if (session.ghost) session.ghost.refresh();
@@ -1360,6 +1376,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     setRules: (id, text) => { if (sprintFiles.write(id, 'rules.md', text)) db.prepare('DELETE FROM prefs WHERE key = ?').run('rules:' + id);
       else db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); }, // no state folder: prefs, as before
     sprintFiles,
+    // The window's Notes button: this worker's notes file as it is now, read by the same rules as the project page.
+    workerNotes: (id) => { const at = notesOf(id), text = at && sprintFiles.read(at.lead, at.name); return text === null || text === undefined ? { status: 404, error: 'no-notes' } : { status: 200, name: at.name, text }; },
     startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),

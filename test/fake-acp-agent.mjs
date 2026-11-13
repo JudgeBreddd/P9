@@ -66,7 +66,7 @@ const png = (w, h) => {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 };
-let mode = 'unset', model = process.env.ANTHROPIC_MODEL ?? 'default', cwd = '', mcpServers = null, folder = '';
+let squeezes = 0, mode = 'unset', model = process.env.ANTHROPIC_MODEL ?? 'default', cwd = '', mcpServers = null, folder = '';
 // claude-home (Send to server, D14): a transcript where Claude Code keeps one, <home>/.claude/projects/<folder>/<id>.jsonl,
 // and a resume only of a session whose transcript is there (claude-agent-acp's findTranscript searches every folder).
 // The home is the test's (XDG_STATE_HOME, which the daemon passes on); never HOME, so a test cannot write a real one.
@@ -295,6 +295,15 @@ const connection = acp.connectAgent(stream, {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.01, currency: 'USD' } } });
       }, 1500);
       return { stopReason: 'end_turn' };
+    }
+    // "squeeze": a compaction inside the turn, as P9 sees it from the real adapters (the "Compact conversation" tool call and its
+    // update, one id) or, for "squeezeu", as a compaction_update (in progress, then completed); a number after it is the id.
+    const squeeze = /^squeeze(u?)(\d*)/.exec(text);
+    if (squeeze) {
+      const id = 'sq' + (squeeze[2] || ++squeezes);
+      if (squeeze[1]) for (const status of ['in_progress', 'completed']) await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'compaction_update', compactionId: id, status } });
+      else { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: id, title: 'Compact conversation', kind: 'think', status: 'in_progress' } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed' } }); }
     }
     // "spend <n>": a turn that cost n dollars and n thousand input tokens, as the real adapters report it (O35's usage test).
     const spend = /^spend (\d+)/.exec(text);

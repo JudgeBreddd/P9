@@ -730,6 +730,8 @@ export async function createDesktop({ state, open } = {}) {
     installAgents: ({ claude, codex, ...rest }) => typeof claude === 'boolean' && typeof codex === 'boolean' && !Object.keys(rest).length
       && ['POST', '/setup/agents', { claude, codex }],
     adminTerminal: ({ id, ...rest }) => ['tmux', 'ssh'].includes(id) && !Object.keys(rest).length && ['POST', '/setup/admin-terminal', { id }],
+    // A worker's notes file (SECURITY.md § Sprint files): read-only; the daemon builds the name from the chat's parent and key.
+    notes: ({ id: chat, ...rest }) => uuid(chat) && !Object.keys(rest).length && ['GET', `/chat/${chat}/notes`],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
