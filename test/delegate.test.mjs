@@ -98,6 +98,8 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   const half = await a.tool('open_chat', { text: 'x', item: 'One item' });
   assert.equal(half.error, 'request-refused');
   assert.match(half.detail, /item, done_means and checks go together/);
+  assert.match(half.detail, /Missing: done_means, checks\.$/, 'it names the fields that were left out');
+  assert.match((await a.tool('open_chat', { text: 'x', item: 'One item', done_means: 'd', checks: [] })).detail, /All three were given/);
   assert.equal((await rows(instance)).length, 2);
   // A folder outside the workspace: you allow the start, and the folder check a chat of your own gets still refuses it.
   for (const folder of ['../', '/etc']) {
@@ -241,8 +243,20 @@ test('Delegate F2: archive_chat archives and brings back a chat the caller start
   assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'chat-working');
   await a.tool('stop_chat', { chat: made.chat });
   await a.done(made.chat);
+  // Waiting on an answer is not finished either.
+  await a.tool('send_chat', { chat: made.chat, text: 'ask' });
+  const asked = await a.tool('wait_chat', { chat: made.chat });
+  assert.equal(asked.waiting?.kind, 'question');
+  assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'chat-working', 'a chat waiting on an answer');
+  await a.tool('answer_chat', { chat: made.chat, request: asked.waiting.request, answer: { action: 'accept', content: { colour: 'red' } } });
+  await a.done(made.chat);
   assert.deepEqual(await a.tool('archive_chat', { chat: made.chat }), { chat: made.chat, action: 'archived' });
   assert.equal(await archived(made.chat), true);
+  // Out of the sidebar, so no agent starts a turn in it: not its starter, not a chat beside it. A note starts nothing.
+  const before = (await events(instance, made.chat)).filter((e) => e.type === 'user').length;
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'again' })).error, 'chat-archived');
+  assert.equal((await b.tool('send_chat', { chat: made.chat, text: 'from b' })).error, 'chat-archived');
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'user').length, before, 'the refused sends reached nothing');
   assert.ok(!(await a.tool('list_chats')).chats.some((c) => c.id === made.chat), 'an archived chat leaves the list');
   assert.ok((await a.tool('read_chat', { chat: made.chat })).messages.length, 'its messages are still there');
   assert.deepEqual(await a.tool('archive_chat', { chat: made.chat, archived: false }), { chat: made.chat, action: 'unarchived' });

@@ -657,8 +657,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   sidebar's Archive and nothing more: the chat, its messages and its files stay, and you can
   open it or unarchive it from the Archived page. Like `stop_chat` it reaches only the chats the
   caller started, so an agent cannot hide its parent, a chat beside it or any chat of yours. A
-  chat that is working or waiting on an answer is refused (`chat-working`): it is stopped first,
-  so nothing runs out of sight. No tool deletes a chat.
+  chat that is working or waiting on an answer is refused (`chat-working`), and so is one that
+  is still stopping or whose stop P9 could not confirm (`chat-not-settled`): only an idle or
+  stopped chat is archived. While a chat is archived, `send_chat` and `ask_chat` refuse it
+  (`chat-archived`), so no agent starts a turn in a chat that is out of the sidebar; a note
+  still reaches it and starts nothing, and you can still open and message it yourself from
+  the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
+  mode. No tool deletes a chat.
 - **A worker is never wider than its parent.** It starts in the parent's mode unless a narrower
   one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. A message from
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider

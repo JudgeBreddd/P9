@@ -134,7 +134,10 @@ export function createDelegate({ chat, allowed }) {
     // A worker without a key keeps notes/<chat ID>.md: a key shaped like a chat ID could name another worker's notes.
     if (args.key !== undefined && ID.test(args.key)) return { error: 'request-refused', detail: 'A key cannot be shaped like a chat ID: workers without a key keep their notes under their chat ID.' };
     const taskGiven = ['item', 'done_means', 'checks'].some((k) => args[k] !== undefined);
-    if (taskGiven && (!text(args.item, 200) || !text(args.done_means, 4000) || !Array.isArray(args.checks) || !args.checks.length || args.checks.length > 50 || args.checks.some((c) => !text(c, 4000)))) return { error: 'request-refused', detail: 'item, done_means and checks go together: give all three (item up to 200 characters, done_means up to 4,000, checks 1 to 50 lines), or none of them.' };
+    if (taskGiven && (!text(args.item, 200) || !text(args.done_means, 4000) || !Array.isArray(args.checks) || !args.checks.length || args.checks.length > 50 || args.checks.some((c) => !text(c, 4000)))) {
+      const missing = ['item', 'done_means', 'checks'].filter((k) => args[k] === undefined); // field names only, never what was sent
+      return { error: 'request-refused', detail: 'item, done_means and checks go together: give all three (item up to 200 characters, done_means up to 4,000, checks 1 to 50 lines), or none of them.' + (missing.length ? ' Missing: ' + missing.join(', ') + '.' : ' All three were given; one is empty or too long.') };
+    }
     const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };
@@ -287,6 +290,10 @@ export function createDelegate({ chat, allowed }) {
     return { verdict: value };
   }
 
+  // An archived chat is out of the sidebar, so no agent starts a turn in it (SECURITY.md § Delegate, "Archiving").
+  const shelved = (id) => chat.list().some((c) => c.id === id && c.archived);
+  const SHELVED = { error: 'chat-archived', detail: 'It is archived. Bring it back first: archive_chat with archived: false.' };
+
   async function sendChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!text(args.text, 100_000) || (args.when !== undefined && !['auto', 'steer', 'queue', 'note'].includes(args.when))) return { error: 'request-refused' };
@@ -300,6 +307,7 @@ export function createDelegate({ chat, allowed }) {
       return { chat: args.chat, sent: 'as a note: ' + (noted.noted ? 'it reads it with its next message' : noted.held ? 'it reads it at its next step' : 'into its running turn') };
     }
     if (!reach(caller, args.chat)) return { error: 'chat-not-found' };
+    if (shelved(args.chat)) return SHELVED;
     const target = chat.info(args.chat), picked = modeFor(caller, target);
     if (picked.error) return picked;
     // A message to a working chat joins the turn it is in, or the next one with whatever else waits, in that turn's mode
@@ -384,6 +392,8 @@ export function createDelegate({ chat, allowed }) {
     if (args.archived !== undefined && typeof args.archived !== 'boolean') return { error: 'request-refused' };
     const archived = args.archived ?? true, info = chat.info(args.chat);
     if (archived && (stateOf(info) === 'working' || info.asks.length)) return { error: 'chat-working', detail: 'Stop it first (stop_chat), or wait for its turn to end.' };
+    // Still stopping or moving, or a stop P9 could not confirm: it may yet run, so it stays where the user sees it.
+    if (archived && (['stopping', 'moving'].includes(info.state) || stateOf(info) === 'failed')) return { error: 'chat-not-settled', state: info.state, detail: 'Only an idle or stopped chat is archived.' };
     const result = chat.projects.chats.archive(args.chat, { archived });
     return result.status === 200 ? { chat: args.chat, action: archived ? 'archived' : 'unarchived' } : { error: result.error };
   }
@@ -445,6 +455,7 @@ export function createDelegate({ chat, allowed }) {
       const beside = (it = reach(caller, target)) => !!it && !it.mine && !below(it.family, target).includes(caller);
       if (!found) return { error: 'chat-not-found' };
       if (!beside(found)) return { error: 'not-a-peer', detail: 'ask_chat is for a chat beside you. For a chat you started use send_chat and wait_chat; your parent reads your reply when your turn ends.' };
+      if (shelved(args.chat)) return SHELVED;
       if (!chat.askable(args.chat)) return { error: 'not-askable', detail: 'The user has not opened that chat to questions (its tab menu, Open to questions). Work it out yourself or ask the user.' };
       const it = chat.info(args.chat); // no ask before waking a stopped or long-idle helper: the user opening it to questions is the yes
       if (stateOf(it) === 'failed') return { error: 'chat-not-askable', reason: it.state };
