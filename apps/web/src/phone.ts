@@ -794,7 +794,7 @@ one<HTMLElement>('#queued').onclick = async (event) => {
 // keyboard closing and the layout jumping under the finger to eat the tap (focus moves on mousedown, which a tap
 // also fires).
 for (const button of document.querySelectorAll<HTMLButtonElement>('#composer button[type="submit"], button[form="composer"]')) for (const type of ['pointerdown', 'mousedown']) button.addEventListener(type, (event) => event.preventDefault());
-one<HTMLFormElement>('#composer').onsubmit = async (event) => {
+async function submitFromBox(event: Event) {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
@@ -836,6 +836,15 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
     else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = input.value.replace(text, '').trim(); label(); note(); renderQueue(); void drain(); return true; }
   }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
+}
+// Round 1 review: two taps while the first send is still in flight both read the same box and sent the message twice (also
+// through the queue fallback above). One submit at a time; a second tap does nothing until the first has settled.
+// ponytail: a fetch that never answers keeps the box shut until it fails; the browser's own network error ends it.
+let submitting = false;
+one<HTMLFormElement>('#composer').onsubmit = async (event) => {
+  if (submitting) { event.preventDefault(); return false; }
+  submitting = true;
+  try { return await submitFromBox(event); } finally { submitting = false; }
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
 function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }

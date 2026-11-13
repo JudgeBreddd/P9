@@ -529,3 +529,30 @@ test('O55: a mid-turn send the agent cannot steer waits for the turn to end, and
   await said('after the turn'); // sent as the next prompt once the tool call and the turn end
   assert.equal(await page.inputValue('#prompt'), '', 'the box is still empty once it has gone');
 });
+
+test('O55 round 1: two taps while the first send is still in flight send the message once, also through the queue fallback', { timeout: 180000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  await writeFile(path.join(server.workspace, 'no-steering'), '');
+  await newChat(page, 'claude');
+  await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
+  // The first answer to the mid-turn send is held back, so the second tap lands while the first is still in flight.
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  let first = true; const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push(JSON.parse(request.postData()).when ?? 'now'); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { if (first) { first = false; await held; } await route.continue(); });
+  await page.fill('#prompt', 'only once');
+  await page.click('#composer button[type="submit"]');
+  await page.click('#composer button[type="submit"]'); // the same text is still in the box: the first has not answered
+  await page.waitForTimeout(500);
+  const queuedAtOnce = await page.locator('#queued article').count();
+  release();
+  await page.waitForFunction(() => [...document.querySelectorAll('#events article')].some((el) => el.textContent.includes('only once')), null, { timeout: 40000 });
+  await page.waitForTimeout(3000); // a duplicate would have gone out by now
+  // The daemon may join held messages into one prompt, so count the text, not the articles.
+  const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('only once').length - 1, 0));
+  t.diagnostic('O55r1 posts: ' + posts.join(',') + ' queued rows before release: ' + queuedAtOnce + ' users: ' + users);
+  assert.equal(users, 1, 'the message shows once in the chat, not twice; prompt posts: ' + posts.join(',') + '; queued rows before release: ' + queuedAtOnce);
+  const replies = await page.evaluate(() => document.querySelectorAll('#events article[data-kind="agent"]').length);
+  assert.ok(replies <= 2, 'one reply to it, not one per duplicate: ' + replies);
+  assert.equal(await page.inputValue('#prompt'), '', 'the box is empty');
+});
