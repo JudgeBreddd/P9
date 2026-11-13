@@ -477,6 +477,27 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
   await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to sprint.md');
   assert.match(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
+  // The lead edits the plan after the page opened it; the user types, then opens another file. The save is refused: the
+  // lead's text stays on disk, sprint.md stays open with the user's text, and the page says so with a way on.
+  await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the lead\'s.\n');
+  await box.press('Control+End'); await box.pressSequentially('- [ ] w4: mine\n');
+  await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
+  const note = page.locator('[data-sp-note]');
+  await note.getByText('changed in P9 after you opened it').waitFor({ timeout: 10000 });
+  assert.equal(await row.getAttribute('aria-expanded'), 'true', 'a refused save switched files');
+  assert.match(await box.inputValue(), /w4: mine\n$/);
+  assert.equal(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), '# Plan\n\nGoal: the lead\'s.\n');
+  await note.getByRole('button', { name: 'Save mine over it' }).click();
+  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).endsWith('w4: mine\n'), 'Save mine over it saved');
+  assert.equal(await note.textContent(), '');
+  // Two saves started at once: the second goes after the first and names the file the first wrote, so it is not refused.
+  await box.evaluate(async (b) => { for (const text of ['first save\n', 'second save\n']) { b.value = text; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); await new Promise((r) => setTimeout(r, 0)); } });
+  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')) === 'second save\n', 'the second of two overlapping saves landed');
+  await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'a saved file switches');
+  assert.equal(await page.locator('[data-sp-box]').inputValue(), 'Only touch docs/.');
+  await page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'sprint.md', 'back to sprint.md');
   await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-files ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.deepEqual(errors, []);

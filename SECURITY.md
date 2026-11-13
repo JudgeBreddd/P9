@@ -852,18 +852,21 @@ id>/` (the same folder as its worker folders, 0700). The lead's agent, its worke
 Written before the code (sprint spec D1, D3, D4).
 
 - **Only these names.** `sprint.md`, `rules.md`, `roles/<key>.instructions.md`, `roles/<key>.rules.md` and
-  `notes/<key>.md`, where `key` follows `open_chat`'s key rule. P9 reads or writes no other name there. If a folder on
+  `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
+  ID). P9 reads or writes no other name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
   (a temp file, then a rename).
-- **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker. For a worker with a key it
-  makes empty role files and a notes outline. It never writes over a file that is already there.
+- **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker, and a notes outline for every
+  worker. For a worker with a key it also makes empty role files. It never writes over a file that is already there.
 - **What reaches an agent.** `rules.md` is the sprint rules (`set_rules` writes it; a value kept from before this
   change is still read until the first `set_rules`). A keyed worker's `roles/<key>.rules.md` follows them, under the
   same rule: only with a message its lead's agent sends. `roles/<key>.instructions.md` and the notes file's full path
-  ride once, as their own block after the rules, with the worker's first message from its lead (the transcript keeps
-  a hash, as for the rules). Like the rules, this text comes from the lead or from you, so it widens nothing the
+  ride once, as their own block after the rules, with the worker's first message from its lead that reaches the agent
+  (the transcript keeps a hash, as for the rules). Until then P9 keeps that block in its database, so a failed start
+  or a P9 restart does not lose it. Like the rules, this text comes from the lead or from you, so it widens nothing the
   worker may do.
-- **Who can edit them.** You can edit them on the project page, for a lead chat that is in that project. That is the
+- **Who can edit them.** You can edit them on the project page, for a lead chat that is in that project. A save names
+  the file as the page opened it; if an agent changed it since, P9 refuses the save and the page keeps your text. That is the
   same route family as project instructions, so a signed-in phone can edit them too. The lead's and workers' agents
   edit them with their own file tools, under their own mode and your approvals. P9 gives them no write of its own.
 - **Removal.** Clean-up of a sprint's worker folders (§ Worker folders) removes the clone and the worker folders

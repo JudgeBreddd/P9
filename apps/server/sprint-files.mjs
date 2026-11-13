@@ -4,7 +4,7 @@
 // with every lead message); roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent
 // with the sprint rules to that worker); notes/<key>.md (the worker keeps it itself: Now and Log).
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -12,6 +12,8 @@ const KEY = '[a-z0-9][a-z0-9._-]{0,63}'; // open_chat's key rule
 const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles/${KEY}\\.(?:instructions|rules)\\.md|notes/${KEY}\\.md)$`);
 export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
+// What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
+export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {
@@ -48,9 +50,11 @@ export function createSprintFiles({ home }) {
     write,
     // D1: the sprint's folder and its plan, made at the lead's first worker.
     ensure(lead) { start(lead, 'sprint.md', PLAN); return folderOf(lead); },
-    // D3, D4: a keyed worker's role files and its notes. Returns the notes file's full path.
-    ensureWorker(lead, key) {
-      start(lead, `roles/${key}.instructions.md`, ''); start(lead, `roles/${key}.rules.md`, ''); start(lead, `notes/${key}.md`, NOTES);
+    // D3, D4: a worker's notes, under its key or its chat ID (a worker without a key); roles: a keyed worker's role files
+    // too. Returns the notes file's full path.
+    ensureWorker(lead, key, roles = true) {
+      if (roles) { start(lead, `roles/${key}.instructions.md`, ''); start(lead, `roles/${key}.rules.md`, ''); }
+      start(lead, `notes/${key}.md`, NOTES);
       return fileOf(lead, `notes/${key}.md`);
     },
     // Every file of a sprint with its text, in a fixed order: plan, rules, then roles and notes by name.
@@ -61,7 +65,7 @@ export function createSprintFiles({ home }) {
       for (const dir of ['roles', 'notes']) {
         try { for (const f of readdirSync(path.join(folder, dir)).sort()) names.push(dir + '/' + f); } catch { /* none */ }
       }
-      return names.map((name) => ({ name, text: read(lead, name) })).filter((f) => f.text !== null);
+      return names.map((name) => ({ name, text: read(lead, name) })).filter((f) => f.text !== null).map((f) => ({ ...f, hash: hashOf(f.text) }));
     },
     exists: (lead) => { const folder = folderOf(lead); try { return !!folder && lstatSync(folder).isDirectory(); } catch { return false; } },
   };

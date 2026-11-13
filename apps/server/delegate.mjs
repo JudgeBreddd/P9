@@ -39,7 +39,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours, so name one only when the user asked for it; mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
       + 'than yours, never wider. The same key from you returns the chat it made before instead of a second one. The user is asked first, except in Unrestricted mode. '
       + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID, the folder it works in and your sprint\'s folder: sprint.md there is your plan to fill in, rules.md your sprint rules, '
-      + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md is the worker\'s own. Follow it with wait_chat.',
+      + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md (notes/<chat ID>.md without a key) is the worker\'s own. Follow it with wait_chat.',
     input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
       item: { type: 'string' }, done_means: { type: 'string' }, checks: { type: 'array', items: { type: 'string' } },
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -' },
@@ -195,12 +195,8 @@ export function createDelegate({ chat, allowed }) {
     };
     const changed = still();
     if (changed) return changed;
-    // The sprint's files (SECURITY.md § Sprint files): the plan at the first worker; a keyed worker's role files and notes.
-    // Its instructions and where its notes are ride once, with its first message; its role rules with every lead message.
-    const sprint = chat.sprintFiles.ensure(caller), notes = args.key ? chat.sprintFiles.ensureWorker(caller, args.key) : null;
-    const said = args.key ? (chat.sprintFiles.read(caller, `roles/${args.key}.instructions.md`) ?? '').trim() : '';
-    const start = (said ? `[P9: your instructions, from your sprint's roles/${args.key}.instructions.md.\n${said}]\n\n` : '')
-      + (notes ? `[P9: your notes file is ${notes}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n` : '');
+    // The sprint's files (SECURITY.md § Sprint files): the plan at the first worker.
+    const sprint = chat.sprintFiles.ensure(caller);
     // A worker folder (SECURITY.md § Worker folders): made after the user allowed the worker, before it starts. A folder
     // P9 cannot resolve is refused here, never handed to git (which would run in the daemon's own folder).
     let own = null;
@@ -217,7 +213,12 @@ export function createDelegate({ chat, allowed }) {
     chat.setSlot(made.conversation, at);
     if (args.item) chat.setSprint(made.conversation, { task: { item: args.item, doneMeans: args.done_means, checks: args.checks } });
     if (args.rules !== undefined) chat.setRules(caller, args.rules);
-    chat.startNote(made.conversation, start);
+    // Every worker's notes file, under its key or, with none, its chat ID; a keyed worker's role files too. Its
+    // instructions and where its notes are ride with its first delivered message; its role rules with every lead message.
+    const notes = chat.sprintFiles.ensureWorker(caller, args.key ?? made.conversation, Boolean(args.key));
+    const said = args.key ? (chat.sprintFiles.read(caller, `roles/${args.key}.instructions.md`) ?? '').trim() : '';
+    chat.startNote(made.conversation, (said ? `[P9: your instructions, from your sprint's roles/${args.key}.instructions.md.\n${said}]\n\n` : '')
+      + (notes ? `[P9: your notes file is ${notes}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n` : ''));
     const sent = await chat.prompt(made.conversation, { text: args.item ? `Item: ${args.item}\nDone means: ${args.done_means}\nChecks:\n${args.checks.map((c) => '- ' + c).join('\n')}\n\n${args.text}` : args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
     if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', chat: made.conversation, detail: 'The chat was made, but the message was not sent; send_chat can try again.' };
     return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation), ...(sprint && { sprint }) };

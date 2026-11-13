@@ -8,6 +8,7 @@ import { link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink } from 
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createDirectory, lockedName } from '../../packages/files/index.mjs';
+import { hashOf } from './sprint-files.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_NAME = 120, MAX_ABOUT = 4000, MAX_INSTRUCTIONS = 32000, MAX_FILE = 4 * 1024 * 1024, MAX_FILES = 200;
@@ -216,11 +217,18 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       return { status: 200, files: await files(id) };
     },
     // One sprint file, from the project page: the lead chat must be in this project, the name one of the sprint's.
+    // hash: the file as the page opened it (list's hash). The lead and the workers edit these files too: one changed
+    // since is not replaced, and 409 sends the files as they are now; the page keeps the user's text.
     async sprintFile(id, body) {
       const value = await record(id);
       if (!value) return refused(404, 'unknown-project');
-      if (!only(body, ['lead', 'name', 'text']) || typeof body.lead !== 'string' || !ID.test(body.lead) || typeof body.text !== 'string') return refused(400, 'request-refused');
+      if (!only(body, ['lead', 'name', 'text', 'hash']) || typeof body.lead !== 'string' || !ID.test(body.lead) || typeof body.text !== 'string' || typeof body.hash !== 'string') return refused(400, 'request-refused');
       if (row(body.lead)?.project !== id || !sprintFiles?.exists(body.lead)) return refused(404, 'unknown-sprint');
+      // ponytail: read and write are one synchronous step for the daemon; an agent's write landing between them, in the
+      // same millisecond, is still replaced. A lock the agents' own editors would honour does not exist.
+      if (!sprintFiles.fileOf(body.lead, body.name)) return refused(400, 'request-refused');
+      const now = sprintFiles.read(body.lead, body.name); // gone since it was opened: changed too
+      if (now === null || hashOf(now) !== body.hash) return { status: 409, error: 'sprint-file-changed', files: sprintFiles.list(body.lead) };
       if (!sprintFiles.write(body.lead, body.name, body.text)) return refused(400, 'request-refused');
       return { status: 200, files: sprintFiles.list(body.lead) };
     },

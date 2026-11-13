@@ -375,17 +375,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // it), and with no other sender's message. A keyed worker's roles/<key>.rules.md follows it.
   const sprintFiles = createSprintFiles({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
   const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
-  // firstNotes: a worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), sent once, after the rules
-  // of the first message from its parent.
-  const firstNotes = new Map();
+  // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
+  // and sent after the rules of each message from its parent until one reaches the agent (startSent): a failed start
+  // or a daemon restart before that keeps it.
+  const startSent = (id) => db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id);
   const rulesFor = (conversation, body) => {
     const mine = conversation?.parent && senders.get(body) === conversation.parent;
     const own = mine && conversation.key ? (sprintFiles.read(conversation.parent, `roles/${conversation.key}.rules.md`) ?? '').trim() : '';
     const text = mine ? [rulesOf(conversation.parent), own].filter(Boolean).join('\n\n') : '';
-    const start = mine ? firstNotes.get(conversation.id) ?? '' : '';
-    if (start) firstNotes.delete(conversation.id);
+    const start = mine ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
     const all = (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
-    return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all } : null;
+    return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
   };
   // A message another chat's agent sent (send_chat, open_chat) says so to the agent that gets it, as its own leading block:
   // without it the text reads as the user's (Builder, 2026-11-11: a helper chat took a peer's questions for his).
@@ -899,11 +899,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // A note whose steer was lost may have been read already: it counts as its one resend, so a prompt that
       // fails after it is dropped, never parked a second time.
       const lost = () => (notes.has(body) ? (resent.add(body), park(id, body, true)) : emit(id, 'steer-lost', { text: body.text }));
-      request.then((late) => { if (!delivered(late)) lost(); }, lost);
+      request.then((late) => { if (!delivered(late)) lost(); else if (rules?.started) startSent(id); }, lost);
       emit(id, 'user', { ...user(), unconfirmed: true });
       return { status: 202, steered: true, unconfirmed: true };
     }
     if (!delivered(result)) return refused(409, 'turn-running');
+    if (rules?.started) startSent(id);
     emit(id, 'user', user());
     // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
     // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
@@ -986,7 +987,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id); // O48, A7
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id); // O48, A7
       gauges.delete(id); parked.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1195,6 +1196,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // answers another chat: they wait for the chat's own next message.
       const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
       const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
+      if (rules?.started) startSent(id); // sent from here on: a later failure is the turn's, not a missed delivery
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
@@ -1351,7 +1353,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     setRules: (id, text) => { if (sprintFiles.write(id, 'rules.md', text)) db.prepare('DELETE FROM prefs WHERE key = ?').run('rules:' + id);
       else db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); }, // no state folder: prefs, as before
     sprintFiles,
-    startNote: (id, text) => { if (text) firstNotes.set(id, text); },
+    startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),
     // A folder a chat asked for, as its full path once it passes the "Start in" check (row 24), else null.
