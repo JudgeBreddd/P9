@@ -4,6 +4,7 @@
 // the project's chats start: In P9, a folder the user already has (linked), or one new folder P9 made for it (new).
 // Nothing here writes, moves or deletes anything in a work folder: the only write that names one is createDirectory for
 // "new folder somewhere else". A chat's project is the conversations.project column, set only by the user.
+import { remoteOk } from './worker-folders.mjs';
 import { link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -102,10 +103,26 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     return { id: value.id, name: value.name, about: value.about, archived: value.archived === true, created: value.created,
       work: { kind: value.work.kind, folder: value.work.kind === 'p9' ? null : value.work.folder }, found: entries !== null,
       agentFiles: (entries ?? []).filter((entry) => !entry.dir && AGENT_FILES.includes(entry.name)).map((entry) => entry.name), chats,
-      ...(full && { instructions: await instructions(value.id), files: await files(value.id), sharedWith, sprints }) };
+      ...(full && { instructions: await instructions(value.id), files: await files(value.id), sharedWith, sprints, sprint: sprintOf(value) }) };
   }
 
+  // A1, A4: a project's sprint source (a repository address, '' = the folder a worker would start in) and its own setup
+  // command ('' = the one in Settings > Delegation). Written only by the desktop-only route (SECURITY.md § Worker folders).
+  const sprintOf = (value) => ({ source: typeof value.sprint?.source === 'string' && remoteOk(value.sprint.source) ? value.sprint.source : '',
+    setup: typeof value.sprint?.setup === 'string' && value.sprint.setup.length <= 2000 ? value.sprint.setup : '' });
+
   const store = {
+    async sprintSet(id) { const value = await record(id); return value ? sprintOf(value) : null; },
+    async setSprintSet(id, body) {
+      const value = await record(id);
+      if (!value) return refused(404, 'unknown-project');
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join() !== 'setup,source' || !text(body.setup, 2000) || typeof body.source !== 'string') return refused(400, 'request-refused');
+      const source = body.source.trim();
+      if (source && !remoteOk(source)) return refused(400, 'source-refused');
+      const next = { ...value, sprint: { source, setup: body.setup } };
+      await save(next);
+      return { status: 200, project: await view(next) };
+    },
     async list() {
       const names = home ? await readdir(home).catch(() => []) : [];
       const out = [];

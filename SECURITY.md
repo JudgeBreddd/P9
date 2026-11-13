@@ -810,6 +810,18 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   P9 only reads there (`git clone` from it, and its `origin` address): no branch switch, no file added, unsaved work
   left as it is. The clone's `origin` is then set to that folder's own `origin`, so a push goes where yours go, with
   your own git sign-in. If the folder has no `origin`, the clone's `origin` stays your folder.
+- **A sprint from an address.** A project can name a repository address as its sprint source (the project page, on the
+  desktop). A lead chat in that project then gets its sprint clone straight from the address, and your folder is not
+  read at all. Only you set it, and only from the desktop window: no agent tool, no file in the repository and no
+  phone request can set or change it. P9 takes three forms only: `https://…`, `ssh://…` and `user@host:path`, with
+  no spaces or control characters and nothing that starts with `-`; anything else is refused when you save it and
+  again before git runs. For that clone git is also told to use no transport but https and ssh
+  (`protocol.allow=never` with those two allowed), so an address form that would run a command (`ext::`) or read a
+  local path (`file://`) is refused by git itself even if the first check were wrong. Sign-in is your own git
+  sign-in, never a prompt: an address that needs a password P9 cannot get fails, and the agent is told git's own
+  message. The clone is made once per sprint: a source changed later is used by the next sprint, not by one whose
+  clone exists. What remains: P9 downloads whatever that address serves into its own folder, and the workers'
+  agents then read and run it in their own modes, as they would in any folder you point a chat at.
 - **Where a worker starts.** The chat's record holds a marker, not a path. At every start P9 finds the folder again
   from the chat's parent and key, and refuses it if it is not a real folder inside the sprint's own folder (a link,
   or gone). A chat a client makes with that marker has no parent and is refused. The agent then works in that folder
@@ -824,9 +836,11 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
 - **What P9 reads from git (for the sprint's version stamp).** For a worker folder: the current commit, the files
   changed against the main line, whether anything is unsaved, and whether a commit is in the main line. It reads; it
   never fetches on its own except when it cleans up (below), and a fetch uses your git sign-in like a push.
-- **The setup command.** One command you type in Settings > Delegation, run in each new worker folder before its
-  worker starts (for example installing packages). Only you set it: no agent tool and no file in the repository can
-  set or change it, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
+- **The setup command.** One command you type, run in each new worker folder before its worker starts (for example
+  installing packages). A project can have its own (the project page, on the desktop: the same desktop-only route
+  as its sprint source); a lead chat in a project without one, or in no project, gets the one in Settings >
+  Delegation. Only you set either: no agent tool, no file in the repository and no phone request can set or change
+  them, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
   environment, for at most 15 minutes, as a process tree P9 owns (Windows: a kill-on-close Job Object, which also ends
   what the shell leaves running when it exits; elsewhere a process group). At that limit the whole tree is stopped and
   P9 waits, briefly, for the stop to be confirmed before it answers or starts anything else in that sprint; a stop it

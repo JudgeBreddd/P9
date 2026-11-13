@@ -13,6 +13,7 @@ export const projectRoutes = (uuid) => {
     sprintFile: ({ id, lead, name, text, hash, ...rest }) => uuid(id) && uuid(lead) && typeof name === 'string' && typeof text === 'string' && typeof hash === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-file', { lead, name, text, hash }],
     // SECURITY.md § Worker folders, "Who cleans up": a desktop-only daemon route; lead is the sprint's lead chat.
     cleanSprint: ({ lead, ...rest }) => uuid(lead) && !Object.keys(rest).length && ['POST', '/sprints/' + lead + '/clean', {}],
+    sprintSettings: ({ id, source, setup, ...rest }) => uuid(id) && typeof source === 'string' && typeof setup === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-settings', { source, setup }],
     removeProjectFile: ({ id, name, ...rest }) => uuid(id) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files/remove', { name }],
     startedIn: ({ folder, ...rest }) => typeof folder === 'string' && folder.length <= 4096 && !Object.keys(rest).length && ['GET', '/chat/started-in?' + new URLSearchParams({ folder })],
     moveChat: ({ id, project, ...rest }) => uuid(id) && (project === null || uuid(project)) && !Object.keys(rest).length && ['POST', `/chat/${id}/project`, { project }],
