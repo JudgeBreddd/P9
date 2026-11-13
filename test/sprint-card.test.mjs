@@ -58,6 +58,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   ];
   await page.evaluate(w => window.__sprint.add(...w), ws);
   await page.locator('.sprint').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('.sprint').getAttribute('data-folded'), 'true', 'the card covers the centered column at this width');
   // The narrowest window P9 allows (720 px): a chat nobody has opened the card on starts folded, the question form stays usable, and
   // opening the card keeps it inside the pane and apart from the needs-you cards.
   await sizeTo(app, 720, 800); await page.waitForTimeout(500);
@@ -75,6 +76,19 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   await sizeTo(app, 1400, 900); await page.waitForTimeout(500);
   // Opened here: it folds by default only in a narrow window.
   if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]');
+  const colLeft = () => page.locator('.pane .hist .col').first().evaluate(e => e.getBoundingClientRect().left);
+  const openedLeft = await colLeft();
+  const centres = await page.locator('.pane').first().evaluate(p => { const mid = e => { const r = e.getBoundingClientRect(); return r.left + r.width / 2; }; return [mid(p.querySelector('.hist .col')), mid(p.querySelector('.composer'))]; });
+  assert.ok(Math.abs(centres[0] - centres[1]) < 1, 'chat and composer are not aligned');
+  await page.click('[data-sprint-fold]');
+  const foldedLeft = await colLeft();
+  assert.ok(Math.abs(openedLeft - foldedLeft) < 1, `chat moved from ${foldedLeft} to ${openedLeft}`);
+  await page.click('[data-sprint-fold]');
+  const withCards = await colLeft();
+  await page.locator('#cards').evaluate(e => { e.style.visibility = 'hidden'; });
+  await page.waitForTimeout(200);
+  assert.ok(Math.abs((await colLeft()) - withCards) < 1, 'notification cards moved the chat');
+  await page.locator('#cards').evaluate(e => { e.style.visibility = ''; });
   const rows = await page.evaluate(() => [...document.querySelectorAll('.sprint .sp-row')].map(r => [r.dataset.sprintOpen, r.dataset.status, r.querySelector('.sp-item').textContent, r.querySelector('.sp-st time')?.textContent ?? '']));
   assert.deepEqual(rows.map(r => r.slice(0, 3).join('|')), [
     'w-work|working|A1 login form', 'w-idle|idle|A2 test the form', 'w-asked|asked|B1 schema', 'w-ready|ready|B2 api', 'w-passed|passed|C1 docs',
@@ -197,4 +211,63 @@ test('Sprint card: a new worker, its ready, its verdict and its next turn reach 
   assert.equal(await row('w-1').locator('.sp-st time').textContent(), '12 min');
   await send([lead, w()], [{ type: 'note', conversation: 'lead-1', data: { text: 'busy' } }]);
   await is('w-1', 'working', 'idleSince dropped');
+});
+
+test('Sprint files button explains when the lead has no project', { timeout: 60000 }, async (t) => {
+  const { page } = await launch(t);
+  await page.locator('#navList .row[data-chat="s-claude-2"]').click();
+  await page.evaluate(w => window.__sprint.add(w), worker('w-files', 'Files worker'));
+  const button = page.locator('.sprint [data-sprint-files]');
+  await button.waitFor({ timeout: 5000 });
+  assert.equal(await button.isDisabled(), true);
+  assert.match(await button.getAttribute('title'), /project/i);
+  await page.evaluate(() => window.__sprint.set('s-claude-2', { project: 'missing-project' }));
+  assert.equal(await button.isDisabled(), true, 'an unknown project must not open');
+});
+
+test('Sprint files button opens the lead section in its project', { timeout: 60000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await app.evaluate(({ ipcMain }) => {
+    const now = Date.now();
+    const conv = (id, extra = {}) => ({ id, provider: 'claude', title: id, folder: '~', created: now, state: 'running', sent: 1, used: now, project: 'project1', archived: false, parent: null, ...extra });
+    const project = { id: 'project1', name: 'Project', work: { kind: 'p9', folder: '' }, files: Array.from({ length: 30 }, (_, i) => ({ name: `file${i}.txt`, size: 1 })), sprints: [{ lead: 'lead1', title: 'Lead', files: [{ name: 'sprint.md', text: 'Plan', size: 4 }] }] };
+    ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (_e, action) => {
+      if (action === 'list') return { status: 200, body: { conversations: [conv('lead1'), conv('worker1', { parent: 'lead1' })], lists: {} } };
+      if (action === 'projects') return { status: 200, body: { projects: [project] } };
+      if (action === 'project') return { status: 200, body: { project } };
+      if (action === 'events') { await new Promise(resolve => setTimeout(resolve, 100)); return { status: 200, body: { events: [], cursor: 0, more: false } }; }
+      if (action === 'profiles') return { status: 200, body: { profiles: [] } };
+      return { status: 404, body: {} };
+    });
+  });
+  await page.reload();
+  await page.locator('#navList [data-chat="lead1"]').click({ timeout: 15000 });
+  await page.locator('.sprint [data-sprint-files]').waitFor({ timeout: 5000 });
+  await shotAt(page, app, 'sprint-files-button');
+  await page.locator('.sprint [data-sprint-files]').click({ timeout: 5000 });
+  const section = page.locator('#projPage [data-sprint="lead1"]');
+  await section.waitFor({ timeout: 10000 });
+  assert.equal(await section.locator('[data-pj="spfile"] .t').first().innerText(), 'sprint.md');
+  assert.ok(await page.locator('#projPage').evaluate(e => e.scrollTop) > 100, 'the project page did not scroll');
+  assert.equal(await section.evaluate(e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; }), true);
+  await shotAt(page, app, 'sprint-files-section');
+});
+
+test('Sprint card stays open when displaced left of the centered column', { timeout: 60000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await sizeTo(app, 2000, 900);
+  await page.locator('#navList .row[data-chat="s-claude-2"]').click();
+  await page.evaluate(w => window.__sprint.add(w), worker('w-displaced', 'Worker'));
+  await page.locator('.sprint').waitFor({ timeout: 5000 });
+  await page.evaluate(() => {
+    const p = document.querySelector('.pane').getBoundingClientRect();
+    const cards = document.querySelector('#cards');
+    cards.style.position = 'fixed'; cards.style.left = (p.left + 320) + 'px'; cards.style.right = '14px'; cards.style.width = 'auto';
+  });
+  await page.waitForTimeout(500);
+  const geometry = await page.evaluate(() => { const p = document.querySelector('.pane'), sp = p.querySelector('.sprint'), col = p.querySelector('.hist .col'); const r = sp.getBoundingClientRect(), c = col.getBoundingClientRect(); return { folded: sp.dataset.folded, right: r.right, left: c.left }; });
+  assert.equal(geometry.folded, 'false', 'the card has room to the left of the text');
+  assert.ok(geometry.right <= geometry.left, 'the card overlaps the text');
+  await shotAt(page, app, 'sprint-card-displaced');
 });

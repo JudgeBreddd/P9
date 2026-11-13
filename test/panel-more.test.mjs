@@ -142,3 +142,25 @@ test('panel: help with no project, Show more, Ctrl Tab, Split, drag with Undo, w
   assert.deepEqual([...one.errors, ...two.errors, ...three.errors], []);
   console.log('PASS panel-more: help line with no project, Show more 5 then 7, Ctrl Tab both ways, Split on the last two, drag onto a project and Undo agreed with the daemon, width kept over a restart, Needs you in the header, row marks and the time on hover, fold under 1000 px, strip head from agent-icons');
 });
+
+test('worker toggle follows an open group', { timeout: 5000 }, async () => {
+  const { nested } = await import('../apps/web/src/panel.mjs');
+  const rows = [{ id: 'lead' }, ...Array.from({ length: 4 }, (_, i) => ({ id: `worker${i}`, parent: 'lead' }))];
+  const opened = nested(rows, { lead: true });
+  assert.equal(opened.at(-1).fold, 'lead');
+  assert.equal(opened[1].s.id, 'worker0');
+  assert.equal(nested(rows, { lead: false })[1].fold, 'lead');
+});
+
+ test('project cut preserves workers of the first five chats', { timeout: 5000 }, async () => {
+  const { nested, cutTree } = await import('../apps/web/src/panel.mjs');
+  const chats = Array.from({ length: 7 }, (_, i) => ({ id: `chat${i}` }));
+  const workers = Array.from({ length: 4 }, (_, i) => ({ id: `worker${i}`, parent: 'chat0' }));
+  const result = cutTree(nested([...chats, ...workers], { chat0: true }), false);
+  assert.equal(result.count, 7);
+  const closed = cutTree(nested([...chats, ...workers], { chat0: false }), false);
+  assert.equal(closed.rows[1].fold, 'chat0');
+  assert.equal(closed.count - 5, 2);
+  assert.deepEqual(result.rows.filter(e => e.s).map(e => e.s.id), ['chat0', 'worker0', 'worker1', 'worker2', 'worker3', 'chat1', 'chat2', 'chat3', 'chat4']);
+  assert.equal(result.rows.at(-1).s.id, 'chat4');
+});

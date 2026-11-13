@@ -29,16 +29,22 @@ export const stripChats = sessions => { const live = s => s.state !== 'stopped',
 // The list: the chats a message was sent in, and the ones still open (what the tab row and History showed together).
 export const listedChats = sessions => sessions.filter(s => (s.sent || !s.hidden) && !s.archived).sort(recent);
 // A7 Delegate: a chat an agent started (its parent) sits under that chat when both are in the rows given: { s, depth } per
-// chat and, for a chat with more than three workers, one { fold } row above them. They start folded; opened[id] is the
+// chat and, for a chat with more than three workers, one { fold } row after an open group or before a closed one. They start folded; opened[id] is the
 // user's own choice, all (a search) opens every one, and the chat on screen (cur) is never folded away. A worker whose
 // parent is not in the rows stays where it would be without one.
 export const nested = (rows, opened = {}, cur = [], all = false) => { const ids = new Set(rows.map(s => s.id)), out = [];
   const put = (s, depth) => { out.push({ s, depth }); const k = depth < 8 ? rows.filter(c => c.parent === s.id && c.id !== s.id) : []; if (!k.length) return;
     const open = all || k.some(c => cur.includes(c.id)) || (opened[s.id] ?? k.length <= 3);
-    if (k.length > 3 && !all) out.push({ fold: s.id, n: k.length, open, depth: depth + 1 });
-    if (open) for (const c of k) put(c, depth + 1); };
+    if (k.length > 3 && !all && !open) out.push({ fold: s.id, n: k.length, open, depth: depth + 1 });
+    if (open) for (const c of k) put(c, depth + 1);
+    if (k.length > 3 && !all && open) out.push({ fold: s.id, n: k.length, open, depth: depth + 1 }); };
   for (const s of rows) if (!s.parent || s.parent === s.id || !ids.has(s.parent)) put(s, 0);
   return out; };
+export const cutTree = (ents, expanded) => {
+  const count = ents.filter(e => e.s && e.depth === 0).length;
+  let seen = 0;
+  return { count, rows: expanded ? ents : ents.filter(e => { if (e.s && e.depth === 0) seen++; return seen <= 5; }) };
+};
 // A chat's project is the id the daemon gives it, never its folder (spec). An id no longer in the list puts it in Chats.
 export const projectOf = (s, projects) => (s.project && projects.find(p => p.id === s.project)) || null;
 // Times: short and one width, so titles line up.
@@ -91,10 +97,10 @@ export function installPanel(o, { focus, stopChat, busy }) {
     h += groups.map(({ p, kids }) => {
       // A search opens every project with a match, closed ones too (point 5). The count is the chats the row lists when
       // open (listedChats, as the New project offer), not the daemon's count, which takes in hidden and archived chats too.
-      const open = isOpen(p.id) || !!q, ents = tree(kids, q), cut = !q && ents.length > 5, rows = cut && !P.more[p.id] ? ents.slice(0, 5) : ents, gone = p.found === false;
+      const open = isOpen(p.id) || !!q, ents = tree(kids, q), { count: roots, rows } = cutTree(ents, !!q || !!P.more[p.id]), cut = !q && roots > 5, gone = p.found === false;
       return `<div data-zone="${esc(p.id)}"><div class="rowwrap"><button class="row proj" data-proj="${esc(p.id)}" aria-expanded="${open}" aria-current="${o.S.view?.kind === 'project' && o.S.view.id === p.id && o.S.focus === 'chat'}" title="${esc(p.name)}${gone ? ' · folder not found' : ''}"${gone ? ' data-missing' : ''}><span class="chev" data-toggle="${esc(p.id)}">${svg.chev}</span><span class="fold">${gone ? I.alert : I.folder}</span><span class="t">${hl(p.name)}</span><span class="n">${all.filter(s => s.project === p.id).length}</span></button>`
         + `<button class="padd" data-newin="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}">${svg.plus}</button></div>`
-        + (open ? `<div class="kids">${rows.map(treeRow).join('')}${cut ? `<button class="row showmore" data-showmore="${esc(p.id)}">${P.more[p.id] ? 'Show fewer' : `Show ${ents.length - 5} more`}</button>` : ''}${kids.length ? '' : '<p class="none">No chats yet.</p>'}</div>` : '') + '</div>';
+        + (open ? `<div class="kids">${rows.map(treeRow).join('')}${cut ? `<button class="row showmore" data-showmore="${esc(p.id)}">${P.more[p.id] ? 'Show fewer' : `Show ${roots - 5} more`}</button>` : ''}${kids.length ? '' : '<p class="none">No chats yet.</p>'}</div>` : '') + '</div>';
     }).join('');
     if (!q || general.length) h += `<div data-zone=""><div class="sh"><h3>Chats <span class="n">${general.length || ''}</span></h3></div>${tree(general, q).map(treeRow).join('')}</div>`;
     if (q && !groups.length && !general.length) h = `<p class="none">Nothing matches “${esc(P.q)}”.</p>`;

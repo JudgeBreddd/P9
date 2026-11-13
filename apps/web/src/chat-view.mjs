@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
-import { phoneDialogBody } from './phone-link.mjs'; import { LABEL } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
+import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
 const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
@@ -318,27 +318,28 @@ const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e &
 function sprintCard(s) {
   if (s.stub) return '';
   const workers = kin(s.id); if (!workers.length) return '';
+  const project = projectOf(s, (outer.S.projects || []).filter(p => !p.archived));
   const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
   const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.task?.item ? 1 : 0, passed = st === 'passed' ? 1 : 0;
     return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button></li>` }; });
   const asks = workers.filter(k => k.pending && k.state === 'running').map(askOf).filter(Boolean).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
   const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
   return `<aside class="sprint" data-sprint data-folded="${folded}" data-auto="${choice === undefined}" data-open-asks="${asks.length}" aria-label="Sprint">
-    <button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button>
+    <div class="sp-headbar"><button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button><button type="button" class="sp-files" data-sprint-files ${project ? 'title="Open sprint files"' : 'disabled title="This chat has no project"'}>Files</button></div>
     <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>
     ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
   </aside>`;
 }
 const sprintDoor = () => { if (!window.__sprint && outer.sampleView) window.__sprint = { add: (...x) => { outer.S.sessions.push(...x); renderChats(); }, set: (id, patch) => { Object.assign(outer.S.sessions.find(x => x.id === id), patch); renderChats(); }, render: () => renderChats() }; }; // ponytail: the UI test's door (sample data is handed in only by tests)
 // Per pane: the card moves left of the cards stack only where they overlap this pane, takes the width the pane has, and (unless
-// the person chose) opens only when the text keeps 420 px beside it; the text's right padding follows while it is open.
+// the person chose) opens only when it does not cover the centered text column.
 let spObs; // made on first use: the controller's observe() is not there yet when this module loads
 function placeSprints() {
   spObs ||= outer.observe(() => placeSprints());
   const cards = outer.$('#cards'), cr = cards?.querySelector('.card') && getComputedStyle(cards).visibility !== 'hidden' ? cards.getBoundingClientRect() : null;
   if (cards) spObs.observe(cards);
   for (const p of document.querySelectorAll('.pane')) {
-    const sp = p.querySelector(':scope > .sprint'); if (!sp) { p.style.removeProperty('--sp-pad'); continue; }
+    const sp = p.querySelector(':scope > .sprint'); if (!sp) continue;
     spObs.observe(p);
     const pr = p.getBoundingClientRect(), over = cr && cr.left < pr.right && cr.right > pr.left;
     let right = over ? Math.round(pr.right - cr.left + 10) : 18, top = 46;
@@ -347,10 +348,12 @@ function placeSprints() {
     const w = Math.max(120, Math.min(296, Math.floor(pr.width - right - 10)));
     sp.style.setProperty('--sp-top', top + 'px'); sp.style.setProperty('--sp-room', Math.max(120, Math.floor(pr.height - top - 10)) + 'px');
     sp.style.setProperty('--sp-right', right + 'px'); sp.style.setProperty('--sp-w', w + 'px');
-    if (sp.dataset.auto === 'true') sp.dataset.folded = String(pr.width - w - right - 14 < 420);
+    if (sp.dataset.auto === 'true') {
+      const colWidth = Math.min(760, pr.width - 40), colLeft = (pr.width - colWidth) / 2, colRight = (pr.width + colWidth) / 2;
+      sp.dataset.folded = String(pr.width - right - w < colRight && pr.width - right > colLeft);
+    }
     const open = sp.dataset.folded === 'false';
     sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));
-    const room = pr.width - w - right - 14; p.style.setProperty('--sp-pad', open && room >= 420 && top === 46 ? w + right + 14 + 'px' : '20px'); // opened by choice where the text has no room, it lies over the text
   }
 }
 // The live fields (task, ready, verdict, idleSince) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
@@ -666,6 +669,7 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
     p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
     p.querySelectorAll('[data-sprint-fold]').forEach(b => b.onclick = () => { SPRINT.folded.set(s.id, b.getAttribute('aria-expanded') === 'true'); renderChats(); });
+    p.querySelectorAll('[data-sprint-files]').forEach(b => b.onclick = () => outer.openProject?.(s.project, s.id));
     p.querySelectorAll('[data-sprint-open]').forEach(b => b.onclick = () => { show(b.dataset.sprintOpen); outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-ask]').forEach(b => b.onclick = () => p.querySelector(`[data-ask="${CSS.escape(b.dataset.sprintAsk)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => outer.restartP9(b));
