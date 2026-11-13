@@ -41,7 +41,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID, the folder it works in and your sprint\'s folder: sprint.md there is your plan to fill in, rules.md your sprint rules, '
       + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md (notes/<chat ID>.md without a key) is the worker\'s own. Follow it with wait_chat.',
     input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
-      item: { type: 'string' }, done_means: { type: 'string' }, checks: { type: 'array', items: { type: 'string' } },
+      item: { type: 'string', description: 'The plan item this worker builds. Give item, done_means and checks together, or none of them.' }, done_means: { type: 'string', description: 'What done means for the item. Needs item and checks.' }, checks: { type: 'array', items: { type: 'string' }, description: 'The checks the worker reports against, 1 to 50. Needs item and done_means.' },
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' },
       provider: { type: 'string', enum: ['claude', 'codex'] }, model: { type: 'string', description: 'A model that agent offers.' },
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
@@ -134,7 +134,7 @@ export function createDelegate({ chat, allowed }) {
     // A worker without a key keeps notes/<chat ID>.md: a key shaped like a chat ID could name another worker's notes.
     if (args.key !== undefined && ID.test(args.key)) return { error: 'request-refused', detail: 'A key cannot be shaped like a chat ID: workers without a key keep their notes under their chat ID.' };
     const taskGiven = ['item', 'done_means', 'checks'].some((k) => args[k] !== undefined);
-    if (taskGiven && (!text(args.item, 200) || !text(args.done_means, 4000) || !Array.isArray(args.checks) || !args.checks.length || args.checks.length > 50 || args.checks.some((c) => !text(c, 4000)))) return { error: 'request-refused' };
+    if (taskGiven && (!text(args.item, 200) || !text(args.done_means, 4000) || !Array.isArray(args.checks) || !args.checks.length || args.checks.length > 50 || args.checks.some((c) => !text(c, 4000)))) return { error: 'request-refused', detail: 'item, done_means and checks go together: give all three (item up to 200 characters, done_means up to 4,000, checks 1 to 50 lines), or none of them.' };
     const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };

@@ -94,6 +94,10 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   assert.equal((await a.tool('open_chat', { text: 'x', mode: 'nope' })).error, 'request-refused');
   assert.equal((await a.tool('open_chat', { text: 'x', key: 'Not A Key' })).error, 'request-refused');
   assert.equal((await a.tool('open_chat', { text: '' })).error, 'request-refused');
+  // F7: an item without its done_means and checks is refused with words that name the three fields.
+  const half = await a.tool('open_chat', { text: 'x', item: 'One item' });
+  assert.equal(half.error, 'request-refused');
+  assert.match(half.detail, /item, done_means and checks go together/);
   assert.equal((await rows(instance)).length, 2);
   // A folder outside the workspace: you allow the start, and the folder check a chat of your own gets still refuses it.
   for (const folder of ['../', '/etc']) {
