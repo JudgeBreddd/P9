@@ -818,7 +818,8 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   again before git runs. For that clone git is also told to use no transport but https and ssh
   (`protocol.allow=never` with those two allowed), so an address form that would run a command (`ext::`) or read a
   local path (`file://`) is refused by git itself even if the first check were wrong. Sign-in is your own git
-  sign-in, never a prompt: an address that needs a password P9 cannot get fails, and the agent is told git's own
+  sign-in, never a terminal prompt from P9 (a credential helper or `core.askPass` in your own git settings can still
+  open its own window on an https address): an address that needs a password P9 cannot get fails, and the agent is told git's own
   message. For ssh that means a key ssh can use on its own: P9's git is not given your ssh agent (`SSH_AUTH_SOCK`
   is not passed) and is told never to open a password window (`SSH_ASKPASS_REQUIRE=never`), so a key that needs
   its passphrase typed, or that only the agent holds, fails. An `open_chat` that also passes a `folder` is refused

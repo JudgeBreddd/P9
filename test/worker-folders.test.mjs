@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createWorkerFolders, gitFacts, remoteOk, setupShell } from '../apps/server/worker-folders.mjs';
+import { createWorkerFolders, git, gitFacts, remoteOk, setupShell } from '../apps/server/worker-folders.mjs';
 import { setupRoutes } from '../apps/server/setup-routes.mjs';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
@@ -309,6 +309,10 @@ test('Worker folders A1: a sprint clones from an address the owner set, without 
   for (const bad of ['ext::sh -c id', 'ext::sh', 'file:///etc', 'http://example.com/a', 'git://example.com/a', '-oProxyCommand=x', 'git@-host:x', 'ssh://-oProxyCommand=x/y', 'ssh://-user@example.com/x', 'git@example.com:-x', '-git@example.com:x', 'host:path', 'a@b::c',
     'https://example.com/a b', 'https://user:pw@example.com/a', 'https://example.com', '/abs/folder', '', 7, null, 'https://example.com/' + 'a'.repeat(2000)]) assert.equal(remoteOk(bad), false, String(bad).slice(0, 40));
   const { remote, owner, home } = repos(t);
+  // What P9's git and the ssh under it are given: no prompt in a terminal, no password window, no agent socket.
+  const given = (await git(remote, ['-c', 'alias.given=!env', 'given'])).out;
+  for (const line of ['GIT_TERMINAL_PROMPT=0', 'SSH_ASKPASS_REQUIRE=never']) assert.ok(given.split('\n').includes(line), line);
+  assert.doesNotMatch(given, /^(SSH_ASKPASS|GIT_ASKPASS|SSH_AUTH_SOCK)=/m);
   const before = ownerState(owner), address = 'file://' + remote.split(path.sep).join('/').replace(/^(?!\/)/, '/');
   // The shipped rule refuses a local path before git runs: nothing is made.
   const shipped = await createWorkerFolders({ home }).make(ID, 'item-a', null, '', address);
