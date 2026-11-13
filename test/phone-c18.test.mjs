@@ -176,6 +176,11 @@ test('c18 row 66: the phone turns the agent lock and File protection on and off 
   assert.equal((await post('/files', { path: 'phone-made.txt', content: 'x' })).status, 404);
   assert.deepEqual([(await server.remote('/delegation', { session })).status, (await post('/delegation', { start: 'agent', max: 20, workers: [] })).status], [404, 404], 'Settings > Delegation is the desktop\'s');
   assert.equal((await post('/sprints/' + (await server.desk('/chat', 'POST', { provider: 'claude' })).body.conversation + '/clean', {})).status, 404, 'worker-folder clean-up is the desktop\'s');
+  // A project the phone itself made: its sprint source and setup command are still the desktop's to set.
+  const mine = (await post('/projects', { name: 'Phone made', work: { kind: 'p9' } })).body.project;
+  assert.deepEqual(mine.sprint, { source: '', setup: '' });
+  assert.equal((await post('/projects/' + mine.id + '/sprint-settings', { source: '', setup: 'echo x' })).status, 404, 'no sprint settings route on the phone');
+  assert.equal((await post('/projects/' + mine.id, { sprint: { source: '', setup: 'echo x' } })).status, 400, 'and the project update route does not take them');
   console.log('PASS c18 row 66: phone lock on/off, protection off/on, settings row saved with .bak; no session 401, bad CSRF 403, bad body 400, nothing changed');
 });
 

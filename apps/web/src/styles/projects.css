@@ -58,6 +58,10 @@
 .ppage .instr-all{margin-top:6px;padding:0;border:0;background:none;font:inherit;font-size:12.5px;color:var(--muted-foreground);cursor:pointer;border-radius:4px}
 .ppage .instr-all:hover{color:var(--foreground)}
 .ppage textarea{width:100%;min-height:120px;resize:vertical;font:inherit;font-size:13.5px;line-height:1.6}
+.ppage .spset{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:13px}
+.ppage .spset span{flex:none;width:112px;color:var(--muted-foreground)}
+.ppage .spset input{flex:1;min-width:0;font-size:12.5px}
+.ppage .spset+.hint{margin:4px 0 0 122px}
 .ppage .saved{font-size:11.5px;color:var(--ok);opacity:0}
 .ppage .sp-box{min-height:240px;margin:4px 0 8px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px}
 .ppage .saved.on{opacity:1}

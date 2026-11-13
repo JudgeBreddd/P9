@@ -7,7 +7,7 @@ import { svg, esc } from './helpers.mjs';
 import { PANEL_ICONS, LABEL, listedChats, stateOf } from './panel.mjs';
 
 const ERR = { 'folder-exists': 'A folder with that name is already there. Change the name or the parent.', 'folder-refused': 'P9 can\'t use that folder. Pick another.',
-  'file-exists': 'A file with that name is already added.', 'too-many-files': 'This project has the most files it can hold (200).', 'request-refused': 'P9 refused that. Check the name and try again.', 'unknown-conversation': 'That chat is no longer there.' };
+  'file-exists': 'A file with that name is already added.', 'source-refused': 'P9 clones only from an https:// or ssh:// address, or user@host:path. Check the address.', 'too-many-files': 'This project has the most files it can hold (200).', 'request-refused': 'P9 refused that. Check the name and try again.', 'unknown-conversation': 'That chat is no longer there.' };
 const where = f => f === '' ? 'Workspace' : f;
 const slug = s => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
 const size = n => n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
@@ -94,6 +94,11 @@ export function installProjects(o, api) {
       <section class="sec" data-drop-files aria-labelledby="pjFilesH"><div class="sh2"><h2 id="pjFilesH">${mine ? 'Files' : 'Added files'}</h2><span class="muted">${mine ? 'handed to every chat in this project' : 'kept in P9, handed to every chat in this project'}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="add">${svg.plus}Add files</button></div>
         ${files.map(x => `<div class="crow file">${svg.files}<span class="t" title="${esc(x.name)}">${esc(x.name)}</span><span class="sz">${size(x.size)}</span><button class="rm" data-pj="rm" data-name="${esc(x.name)}" title="Remove ${esc(x.name)}" aria-label="Remove ${esc(x.name)}">${svg.x}</button></div>`).join('')
           || '<p class="hint">Drop files here, or Add files. Every chat in this project gets them.</p>'}</section>
+      ${window.p9 && p.sprint ? `<section class="sec" aria-labelledby="pjSprintH"><div class="sh2"><h2 id="pjSprintH">Sprint setup</h2><span class="muted">for sprints a chat in this project leads</span><span class="saved" id="pjSprintSaved" role="status">Saved</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spset">Save</button></div>
+        <label class="spset"><span>Clone from</span><input data-slot="input" class="mono" id="pjSpSource" maxlength="2000" spellcheck="false" autocomplete="off" placeholder="https://… or git@host:owner/repo.git" value="${esc(p.sprint.source)}"></label>
+        <p class="hint">Empty: each sprint is cloned from the folder its workers would start in${mine ? '' : ' (this project\'s work folder)'}, and that folder is only read. With an address here, P9 clones from the address instead and does not read your folder at all. Signing in is your own git sign-in.</p>
+        <label class="spset"><span>Setup command</span><input data-slot="input" class="mono" id="pjSpSetup" maxlength="2000" spellcheck="false" autocomplete="off" placeholder="for example: pnpm install" value="${esc(p.sprint.setup)}"></label>
+        <p class="hint">Runs in each new worker folder before its worker starts. Empty: the one in Settings &gt; Delegation is used. Only you set these, here on the desktop; no agent can.</p></section>` : ''}
       ${(p.sprints ?? []).map(sprintHtml).join('')}
     </div>`;
   }
@@ -126,7 +131,7 @@ export function installProjects(o, api) {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
     page.hidden = !on; chats.hidden = on;
     if (!on) { if (v?.kind === 'project' && !cur) return; page.innerHTML = ''; return; }
-    if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea')) return;
+    if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());
   }
   const refresh = p => { if (p) cur = p; o.loadProjects(); renderPage(); };
@@ -177,6 +182,7 @@ export function installProjects(o, api) {
     if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
     if (k === 'edit') { if (edit) { clearTimeout(saveT); await saveInstr(); } edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
     if (k === 'add') return picker.click();
+    if (k === 'spset') return saveSprintSet();
     // A file whose save was refused stays open with its draft: nothing switches over unsaved text.
     if (k === 'spfile') { clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); } const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return fillBox(); }
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
@@ -207,6 +213,7 @@ export function installProjects(o, api) {
   }, { signal: o.lifetime.signal });
   // Name and about save when they lose the focus; Enter ends the name, Escape puts it back.
   page.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.matches?.('#pjSpSource, #pjSpSetup')) { e.preventDefault(); return saveSprintSet(); }
     if (e.target.id === 'pjName' && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
     if ((e.target.id === 'pjName' || e.target.id === 'pjAbout') && e.key === 'Escape') { e.stopPropagation(); e.target.textContent = e.target.id === 'pjName' ? cur.name : cur.about; e.target.blur(); }
   });
@@ -216,6 +223,13 @@ export function installProjects(o, api) {
     if (t.id === 'pjName') { if (!v) t.textContent = cur.name; else if (v !== cur.name) update({ name: v }); }
     if (t.id === 'pjAbout' && v !== (cur.about || '')) update({ about: v });
   });
+  // A1, A4: the project's sprint source and setup command (desktop only; the daemon checks the address again).
+  async function saveSprintSet() {
+    const r = await call('sprintSettings', { id: cur.id, source: $('#pjSpSource').value.trim(), setup: $('#pjSpSetup').value });
+    if (r.status !== 200) return failed(r);
+    cur = { ...cur, sprint: r.body.project.sprint }; $('#pjSpSource').value = cur.sprint.source;
+    const s = $('#pjSprintSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200);
+  }
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
     const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) return failed(r);
     cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
