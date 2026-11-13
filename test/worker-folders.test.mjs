@@ -248,6 +248,28 @@ test('Worker folders: open_chat with worktree: true starts the worker in a workt
   console.log('PASS Worker folders open_chat');
 });
 
+// Dogfood 3.5: the sprint's clone already came from one repository; a worker asked from another (absolute) one was
+// silently given the first. It is refused with a detail, and a worker from the first repository still starts.
+test('Worker folders: a sprint has one repository; open_chat from a folder of another one is refused, never given the sprint clone', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const make = (name) => { const repo = path.join(instance.workspace, name); fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); write(path.join(repo, name + '.txt'), name + '\n'); g(repo, 'add', '.'); g(repo, 'commit', '-qm', name); return repo; };
+  const first = make('first'), other = make('other');
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const one = await a.tool('open_chat', { text: 'x', folder: 'first', worktree: true, key: 'one' });
+  assert.equal(one.error, undefined, JSON.stringify(one));
+  assert.ok(fs.existsSync(path.join(one.folder, 'first.txt')));
+  const refused = await a.tool('open_chat', { text: 'x', folder: other, worktree: true, key: 'two' });
+  assert.equal(refused.error, 'other-repository', JSON.stringify(refused));
+  assert.match(refused.detail, /one repository/);
+  assert.ok(!refused.detail.includes(other) && !refused.detail.includes(first), 'the detail names no path');
+  assert.equal(fs.existsSync(path.join(path.dirname(one.folder), 'two')), false, 'no folder was made from the sprint clone');
+  const same = await a.tool('open_chat', { text: 'x', folder: first, worktree: true, key: 'three' });
+  assert.equal(same.error, undefined, 'the same repository, named absolute: ' + JSON.stringify(same));
+  console.log('PASS Worker folders one repository per sprint');
+});
+
 // SECURITY.md § Worker folders, "Who cleans up": the desktop's route cleans one sprint with the store's own rules, and
 // refuses while a worker of that sprint runs or while its lead is in a turn.
 test('Worker folders A6: the desktop\'s clean-up route refuses while the sprint runs, then removes the merged folder and keeps the unmerged one, saying why', { timeout: 120000 }, async (t) => {
