@@ -434,7 +434,7 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 #pillMenu .pm-note{margin:6px 10px 4px;font-size:11px;line-height:1.4}
 #setDlg :is(.set-defaults,.set-dg){flex-wrap:wrap}
 /* Delegation: a pick keeps its words on one line; a provider's Model and Effort sit together on the line under its name. */
-#setDelegation .set-pick{flex:none;white-space:nowrap}#setDelegation .set-row>span:first-child{flex:1;min-width:0}#setDelegation .set-dg>span:first-child{flex:1 0 100%}#setDelegation .set-row>.spacer{display:none}.set-pick{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground)}
+#setDelegation .set-pick{flex:none;white-space:nowrap}#setDelegation .set-row>span:first-child{flex:1;min-width:0}#setDelegation .set-dg>span:first-child{flex:1 0 100%}#setDelegation .set-row>.spacer{display:none}#setDelegation .set-setup{flex-wrap:wrap}#setDelegation .set-setup>span:first-child{flex:1 0 100%}#setDelegation .set-setup>input{flex:1;min-width:0}.set-pick{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground)}
 .composer .send[data-working]{background:var(--destructive);color:#fff}
 .attach{display:flex;gap:6px;padding:8px 14px 0}
 .attach .att{position:relative}
