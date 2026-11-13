@@ -714,7 +714,8 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   note). Both write only P9's own sprint record for that chat, never a file, so they work in ordinary read-only modes too; solo peer-answer turns allow only read tools, and the agent lock refuses both. `ready` needs a parent and a task, and a folder with nothing unsaved; where
   git can be read the commit and changed files are git's, not the agent's word. `verdict` reaches only a chat the
   caller could message, never its own work, a chat below it or a chat above it in its line, and only at the commit
-  that chat marked ready: a newer commit makes the verdict stale.
+  that chat marked ready: a newer commit makes the verdict stale. Before a ready goes through it is refused
+  (`not-ready`); said only to a chat the reach rule already lets read that chat, so it reveals nothing new.
 - **Sprint rules.** A parent has one text of rules, at most 8,000 characters, that P9 sends as
   its own block with every message that parent's agent sends a chat it started. Until the parent
   sets them (`set_rules`, or `rules` on `open_chat`) P9 sends a short default: state the folder
@@ -825,7 +826,9 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   `folder` passed, else the parent's), which must be a git repository and passes the same folder check as before.
   P9 only reads there (`git clone` from it, and its `origin` address): no branch switch, no file added, unsaved work
   left as it is. The clone's `origin` is then set to that folder's own `origin`, so a push goes where yours go, with
-  your own git sign-in. If the folder has no `origin`, the clone's `origin` stays your folder.
+  your own git sign-in. If the folder has no `origin`, the clone's `origin` stays your folder. A sprint has one
+  repository: once its clone exists, a worker asked from a folder whose `origin` (or, with none, whose own path) is not
+  the clone's is refused (`other-repository`), never given the clone of the first.
 - **A sprint from an address.** A project can name a repository address as its sprint source (the project page, on the
   desktop). A lead chat in that project then gets its sprint clone straight from the address, and your folder is not
   read at all. Only you set it, and only from the desktop window: no agent tool, no file in the repository and no

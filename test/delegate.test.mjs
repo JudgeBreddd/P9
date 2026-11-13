@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { once } from 'node:events';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
+import { DELEGATE_TOOLS } from '../apps/server/delegate.mjs';
 // The real MCP SDK client, as in mcp.test.mjs: the tools are called the way an agent's adapter calls them.
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -873,4 +874,77 @@ test('Delegate ready emits one parent report after the worker turn ends', { time
   assert.equal(answer.reply, 'mode:plan');
   assert.equal((await reports()).length, 1, 'a peer answer must not pin the report again');
   assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'note' && e.data.text?.includes('Ready report pinned for B4.')).length, 1, 'a peer answer must not send a second ready note');
+});
+
+// Dogfood 3.5, second attempt: each refusal a lead or worker met says what to do.
+test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready says not-ready, then passes from a sibling; a steer into a turn without steering names queue; too-many-chats names close: true', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Dogfood', work: { kind: 'new', parent: '', name: 'dogfood' } })).body.project.id;
+  const a = await agent(t, instance, { project });
+  const made = await a.tool('open_chat', { text: 'first', key: 'work', item: 'D1', done_means: 'done', checks: ['tests pass'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  const rev = await a.tool('open_chat', { text: 'mcp', key: 'review' });
+  const reviewer = await connect(t, instance, rev.chat);
+  await a.done(rev.chat);
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n!.gitignore\n');
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['init', '-q', '-b', 'main', made.folder]);
+  execFileSync('git', ['-C', made.folder, 'add', '.']);
+  execFileSync('git', ['-C', made.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', made.folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  // Finding 3: a sibling reviewer before any ready: not chat-not-found, but not-ready with who calls what.
+  const early = await reviewer.tool('verdict', { chat: made.chat, commit: head, result: 'pass', note: 'x' });
+  assert.equal(early.error, 'not-ready', JSON.stringify(early));
+  assert.match(early.detail, /ready/);
+  assert.equal((await a.tool('verdict', { chat: made.chat, commit: head, result: 'pass', note: 'x' })).error, 'self-review');
+  // Finding 2: each refusal names the field at fault, never what was sent.
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
+  const secret = 'SENT-TEXT-' + 'z'.repeat(8);
+  const cases = [
+    [{ commit: head, weakest: 'w' }, /results/],
+    [{ commit: head, results: [{ check: secret, result: 'ok' }], weakest: 'w' }, /results\[\]\.check/],
+    [{ commit: head, results: [{ check: 'tests pass', result: ' ' }], weakest: 'w' }, /results\[\]\.result/],
+    [{ commit: head, results: [{ check: 'tests pass', result: 'ok' }], weakest: ' ' }, /weakest/],
+    [{ results: [{ check: 'tests pass', result: 'ok' }], weakest: 'w' }, /commit/],
+  ];
+  for (const [args, field] of cases) {
+    const got = await kid.tool('ready', args);
+    assert.equal(got.error, 'request-refused', JSON.stringify(got));
+    assert.match(got.detail ?? '', field, JSON.stringify(got));
+    assert.ok(!got.detail.includes(secret), 'the detail repeats nothing that was sent');
+  }
+  const ok = await kid.tool('ready', { commit: head, results: [{ check: 'tests pass', result: 'ok' }], weakest: 'w' });
+  assert.ok(ok.ready, JSON.stringify(ok));
+  await a.tool('stop_chat', { chat: made.chat });
+  await a.done(made.chat);
+  const passed = await reviewer.tool('verdict', { chat: made.chat, commit: head, result: 'pass', note: 'checked' });
+  assert.equal(passed.verdict?.by, rev.chat, 'a sibling reviewer records a verdict after a ready that went through: ' + JSON.stringify(passed));
+  // Finding 4: an agent without steering (Claude's today) cannot take a steer into its running turn; the refusal names queue.
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
+  await a.tool('stop_chat', { chat: made.chat, close: true });
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
+  for (const when of ['steer', 'auto']) {
+    const got = await a.tool('send_chat', { chat: made.chat, text: 'hi', when });
+    assert.equal(got.reason, 'turn-running', JSON.stringify(got));
+    assert.match(got.detail ?? '', /when: queue/, when + ': ' + JSON.stringify(got));
+  }
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'mode', when: 'queue' })).sent, 'waiting for the turn to end');
+  const send = DELEGATE_TOOLS((p) => p).find(([name]) => name === 'send_chat')[1];
+  assert.match(send, /queue/);
+  assert.match(send, /cannot take a message into its running turn/);
+  await a.tool('stop_chat', { chat: made.chat });
+  // Finding 5: too-many-chats says how an idle worker gives up its place.
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: [] });
+  const over = await a.tool('open_chat', { text: 'x', key: 'three' });
+  assert.equal(over.error, 'too-many-chats', JSON.stringify(over));
+  assert.match(over.detail, /stop_chat with close: true/);
+  await a.tool('stop_chat', { chat: rev.chat, close: true });
+  assert.equal((await a.tool('open_chat', { text: 'x', key: 'three' })).error, undefined, 'close: true freed the place');
+  console.log('PASS Delegate dogfood 3.5');
 });
