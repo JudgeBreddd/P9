@@ -882,7 +882,9 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Dogfood', work: { kind: 'new', parent: '', name: 'dogfood' } })).body.project.id;
   const a = await agent(t, instance, { project });
-  const made = await a.tool('open_chat', { text: 'mcp', key: 'work', item: 'D1', done_means: 'done', checks: ['tests pass'] });
+  const made = await a.tool('open_chat', { text: 'first', key: 'work', item: 'D1', done_means: 'done', checks: ['tests pass'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
   const kid = await connect(t, instance, made.chat);
   await a.done(made.chat);
   const rev = await a.tool('open_chat', { text: 'mcp', key: 'review' });
