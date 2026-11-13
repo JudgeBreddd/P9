@@ -257,10 +257,25 @@ test('Delegate F2: archive_chat archives and brings back a chat the caller start
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'again' })).error, 'chat-archived');
   assert.equal((await b.tool('send_chat', { chat: made.chat, text: 'from b' })).error, 'chat-archived');
   assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'user').length, before, 'the refused sends reached nothing');
+  assert.equal((await b.tool('ask_chat', { chat: made.chat, text: 'a question' })).error, 'chat-archived', 'a question would start a turn in it');
+  const ends = async (id) => (await events(instance, id)).filter((e) => e.type === 'turn-end').length, turns = await ends(made.chat);
+  assert.match((await a.tool('send_chat', { chat: made.chat, text: 'for later', when: 'note' })).sent, /^as a note/, 'a note is still taken');
+  await pause(500);
+  assert.equal(await ends(made.chat), turns, 'a note started a turn in an archived chat');
   assert.ok(!(await a.tool('list_chats')).chats.some((c) => c.id === made.chat), 'an archived chat leaves the list');
   assert.ok((await a.tool('read_chat', { chat: made.chat })).messages.length, 'its messages are still there');
   assert.deepEqual(await a.tool('archive_chat', { chat: made.chat, archived: false }), { chat: made.chat, action: 'unarchived' });
   assert.equal(await archived(made.chat), false);
+  // P9's own line at a worker's turn end starts nothing in an archived parent either; brought back, it is told again.
+  assert.equal((await call(instance, `/chat/${a.conversation}/archive`, 'POST', { archived: true })).status, 200);
+  const told = (await notices(instance, a.conversation)).length;
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'late' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', (await events(instance, made.chat)).at(-1).cursor);
+  await pause(500);
+  assert.equal((await notices(instance, a.conversation)).length, told, 'an archived parent was sent a turn-end line');
+  await call(instance, `/chat/${a.conversation}/archive`, 'POST', { archived: false });
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.from === 'p9', (await events(instance, a.conversation)).at(-1).cursor);
   await call(instance, '/agent-lock', 'POST', { on: true });
   assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'agent-lock-on');
   assert.equal(await archived(made.chat), false);

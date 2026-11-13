@@ -510,11 +510,11 @@ export function createDelegate({ chat, allowed }) {
   });
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
-  // § Delegate). Only a parent whose agent is running: an idle-since-start or stopped chat is never started by this.
+  // § Delegate). Only a parent whose agent is running: an idle-since-start, stopped or archived chat is never started by this.
   chat.settled((id, ok) => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
     if (chat.sprint(id).ready) return;
-    if (!parent || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
+    if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + lastLine(chat.reply(id)).slice(0, 400) : ' failed; read_chat shows why.');
     chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }) }, undefined, 'p9')
       .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});
@@ -531,6 +531,7 @@ export function createDelegate({ chat, allowed }) {
       tops.set(root.id, [...(tops.get(root.id) ?? []), root === c ? 'this chat' : c.title]);
     }
     if (!storm) for (const [id, titles] of tops) {
+      if (shelved(id)) continue; // an archived chat is started by nothing, P9's own lines included
       chat.prompt(id, { text: `[p9] P9 restarted. Interrupted mid-turn: ${titles.slice(0, 20).join(', ').slice(0, 1000)}. Not resent.` }, undefined, 'p9').catch(() => {});
     }
   }).catch(() => {});

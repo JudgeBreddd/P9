@@ -660,7 +660,8 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   chat that is working or waiting on an answer is refused (`chat-working`), and so is one that
   is still stopping or whose stop P9 could not confirm (`chat-not-settled`): only an idle or
   stopped chat is archived. While a chat is archived, `send_chat` and `ask_chat` refuse it
-  (`chat-archived`), so no agent starts a turn in a chat that is out of the sidebar; a note
+  (`chat-archived`), so no agent starts a turn in a chat that is out of the sidebar, and P9 does not either: its
+  own line at a worker's turn end, and its line after a restart, skip an archived chat. A note
   still reaches it and starts nothing, and you can still open and message it yourself from
   the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
   mode. No tool deletes a chat.
