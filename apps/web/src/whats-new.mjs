@@ -2,15 +2,16 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.7',
+  version: '0.1.9-beta.8',
   changes: [
-    "Sprint files: a sprint's plan, rules, role files and notes live in its folder and are edited on the project page.",
-    "Worker folders: each sprint worker gets its own branch and folder, with a setup command and a safe clean-up.",
-    "Delegated chats show their task and review state.",
-    "A chat's card shows its sprint row.",
-    "The update popup never forces an update.",
-    "Phone: a message sent while the agent is working is queued instead of staying in the box.",
-    "Fixes: the Open on setting is saved, and the doctor no longer shows a stale library line.",
-    "The guide covers peer help's asking side, worker folders, a task on a worker and the sprint card.",
+    "The sprint card lies over the chat: the chat text stays in the middle and no longer moves aside.",
+    "The sprint card has a Files button that opens the sprint's plan, instructions and rules.",
+    "Sidebar: a chat's workers open below it, and Show workers shows all of them.",
+    "A sprint can start from a repository address, and each project names its own setup command.",
+    "Worker folders have a Clean up button. It says plainly that git-ignored files go with a folder.",
+    "A worker's notes can be read in its chat, and it is told where they are again after a compaction.",
+    "Agents can archive a chat they started. The limit on workers also holds for a stopped worker.",
+    "Delegate refusals say what was wrong and what to do next.",
+    "Settings explains Delegate and has a Sprints section.",
   ],
 };
