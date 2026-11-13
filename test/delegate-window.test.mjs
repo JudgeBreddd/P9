@@ -178,3 +178,61 @@ test('Delegate window: workers indented under their chat and folded past three; 
   assert.deepEqual(errors, [], 'page errors: ' + errors.join(' | '));
   console.log('PASS Delegate window: 3 workers indented, 4 folded behind "Show 4 workers"; Kid 1\'s approval and Kid 2\'s question answered from the parent chat; Settings > Delegation saved ask, 3 workers: Claude opus, Codex, a provider profile');
 });
+
+test('Delegate window: a completed worker pins its report in the parent chat', { timeout: 120000 }, async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Release work' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const made = await a.tool('open_chat', { text: 'first', item: 'B4', done_means: 'report is visible', checks: ['Tests pass'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await tools(t, instance, made.chat);
+  await a.done(made.chat);
+  writeFileSync(path.join(instance.workspace, '.gitignore'), '*\n!note.txt\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', instance.workspace]);
+  execFileSync('git', ['-C', instance.workspace, 'add', '.']);
+  execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  const ready = await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest: 'Live provider not checked' });
+  assert.ok(ready.ready, JSON.stringify(ready));
+  await a.done(made.chat);
+  const pinned = page.locator(`.pane[data-id="${parent}"] .card-pin[data-card="ready-${made.chat}"]`);
+  await pinned.waitFor({ timeout: 20000 });
+  await until(async () => (await pinned.innerText()).includes('Live provider not checked'), 'completion card');
+  assert.equal(await pinned.locator('.eyebrow').textContent(), 'Worker report');
+  assert.equal(await pinned.getAttribute('data-card'), 'ready-' + made.chat);
+  await shot(page, 'completion-card');
+  assert.deepEqual(errors, []);
+});
+
+test('Delegate window: New chat does not crash while the daemon is connecting', { timeout: 90000, skip: process.platform === 'win32' }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-delay-')), 'profile');
+  process.kill(instance.child.pid, 'SIGSTOP');
+  let paused = true;
+  const resume = () => { if (paused) { paused = false; try { process.kill(instance.child.pid, 'SIGCONT'); } catch {} } };
+  t.after(resume);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { resume(); await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow(), errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  try {
+    await until(() => page.evaluate(() => typeof document.querySelector('#newBtn')?.onclick === 'function'), 'New chat handler');
+    await page.locator('#newBtn').click();
+    await page.locator('#chats > .pane').first().waitFor({ timeout: 15000 });
+    assert.deepEqual(errors, []);
+    await shot(page, 'connecting-chat');
+  } finally { resume(); }
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  console.log('CONNECTING_CHAT_PANES_AFTER ' + await page.locator('#chats > .pane').count());
+});

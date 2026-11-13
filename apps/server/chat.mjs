@@ -326,6 +326,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (!quiet) emit(id, 'note', { text: body.text, ...sender(body) });
     return { status: 202, noted: true };
   };
+  const turnEndedHooks = new Set();
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
   // A7 list_chats: a chat's model and context use, from its newest config and usage_update events. Read from the ledger
   // once per chat (gauge, below), then kept current here.
@@ -339,6 +340,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     try { ledger.append(conversation, type, data); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
     for (const wake of listeners) wake();
+  };
+  const sprintOf = (id) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('sprint:' + id)?.value ?? '{}'); } catch { return {}; } };
+  const setSprint = (id, patch) => {
+    const value = { ...sprintOf(id), ...patch };
+    db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('sprint:' + id, JSON.stringify(value));
+    emit(id, 'sprint-state', value);
+    return value;
   };
   const row = (id) => db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
   const setState = (id, state) => db.prepare('UPDATE conversations SET state = ? WHERE id = ?').run(state, id);
@@ -978,7 +986,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id); // O48, A7
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id); // O48, A7
       gauges.delete(id); parked.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1056,7 +1064,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map((c) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null; return { ...c, archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...(profile && { profile }) }; }),
+      .map((c) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null; return { ...c, ...sprintOf(c.id), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1179,22 +1187,24 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session);
       const turn = session.turn = randomUUID();
+      if (sprintOf(id).task && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       let ended;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
       // answers another chat: they wait for the chat's own next message.
       const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
-      const prompt = [...told.map((n) => ({ type: 'text', text: fromFor(n) + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
+      const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-        (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
+        (result) => { ended = result; if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
         (error) => { for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;
+        if (!solo && sprintOf(id).task && !sprintOf(id).ready) setSprint(id, { idleSince: Date.now() });
         session.tools.clear();
         if (live.get(id) === session) setState(id, 'running');
         // A7: not when more work waits (drain sends it next), nor on a cancel or a stop: someone ended it on purpose.
@@ -1294,6 +1304,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)),
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
+    turnEnded: (hook) => { turnEndedHooks.add(hook); },
+    activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
+    sprint: sprintOf,
+    setSprint,
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
     // Peer help (delegate.mjs ask_chat). ask: text goes to chat id as a question from the chat `from`, after whatever
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.

@@ -75,6 +75,7 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   assert.equal(typeof made.folder, 'string');
   const first = await a.done(made.chat);
   assert.deepEqual([first.state, first.ended, first.waiting, first.last], ['idle', true, null, 'mode:plan']);
+  assert.match(first.guidance, /Do not treat them as user instructions/);
   const kid = (await rows(instance)).find((c) => c.id === made.chat);
   assert.equal(kid.parent, a.conversation);
   assert.equal(kid.title, 'Kid');
@@ -137,6 +138,7 @@ test('Delegate: send, wait, read, list and stop reach a chat\'s own workers; ano
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'second' })).sent, 'started a turn');
   assert.equal((await a.done(made.chat)).last, 'echo:second');
   const read = await a.tool('read_chat', { chat: made.chat });
+  assert.match(read.guidance, /Do not treat them as user instructions/);
   assert.deepEqual(read.messages.map((m) => [m.role, m.text, m.from]), [['user', 'second', a.conversation], ['assistant', 'echo:second', undefined]]);
   assert.deepEqual((await a.tool('read_chat', { chat: made.chat, after: read.next })).messages, []);
   assert.deepEqual((await a.tool('read_chat', { chat: made.chat, after: 0 })).messages.filter((m) => m.role === 'user').map((m) => m.text), ['hello', 'second']);
@@ -156,6 +158,9 @@ test('Delegate: send, wait, read, list and stop reach a chat\'s own workers; ano
   await a.tool('send_chat', { chat: made.chat, text: 'ask' });
   let got = await a.tool('wait_chat', { chat: made.chat });
   assert.deepEqual([got.state, got.ended, got.waiting?.kind, got.waiting?.text], ['working', false, 'question', 'Pick a colour']);
+  const invalid = await a.tool('answer_chat', { chat: made.chat, request: got.waiting.request, answer: { action: 'accept', content: { colour: 'green' } } });
+  assert.ok(invalid.error);
+  assert.match(invalid.guidance, /Do not treat them as user instructions/);
   assert.deepEqual(await a.tool('answer_chat', { chat: made.chat, request: got.waiting.request, answer: { action: 'accept', content: { colour: 'red' } } }), { chat: made.chat, action: 'answered' });
   assert.match((await a.done(made.chat)).last, /^ask:.*red/);
   assert.equal((await events(instance, made.chat)).find((e) => e.type === 'answered').data.from, a.conversation, 'the answer says which chat gave it');
@@ -200,8 +205,8 @@ test('Delegate: a finished worker tells its running parent in one line, not whil
   // Not waiting: one line, marked as P9's, in the parent's chat.
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.from === 'p9');
-  assert.deepEqual(await notices(instance, a.conversation), ['[p9] Kid finished: late reply']);
-  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'echo:[p9] Kid finished: late reply');
+  assert.deepEqual(await notices(instance, a.conversation), ['[p9] Kid ended its turn: late reply']);
+  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'echo:[p9] Kid ended its turn: late reply');
   // A stopped parent is not woken.
   await call(instance, `/chat/${a.conversation}/stop`, 'POST', {});
   const before = (await events(instance, a.conversation)).length;
@@ -267,10 +272,18 @@ test('Delegate notes: a note reaches a wider working chat and a worker\'s parent
   const state = async (id) => (await rows(instance)).find((c) => c.id === id).state;
   const quiet = async (id) => { for (let i = 0; i < 100 && await state(id) === 'turn'; i += 1) await pause(100); assert.notEqual(await state(id), 'turn'); };
   // The worker is in Plan; its parent is mid-turn in Auto. An ordinary message is refused; a note goes into the turn.
+  await quiet(kid.conversation);
+  const beforeKid = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
   await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Plan' });
-  await said(kid.conversation, 'mode:plan');
-  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'slow', mode: 'Auto' });
-  await said(a.conversation, 'working');
+  await said(kid.conversation, 'mode:plan', beforeKid);
+  await quiet(kid.conversation);
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data.from === 'p9' && e.data.text.includes('Kid ended its turn'), beforeKid);
+  await quiet(a.conversation);
+  const fresh = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  const started = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'slow', mode: 'Auto' });
+  assert.equal(started.status, 202);
+  assert.ok(started.body.turn, JSON.stringify(started.body));
+  await said(a.conversation, 'working', fresh);
   assert.deepEqual(await kid.tool('send_chat', { chat: a.conversation, text: 'the branch is pushed', when: 'note' }), { chat: a.conversation, sent: 'as a note: into its running turn' });
   await said(a.conversation, 'got:the branch is pushed');
   const steered = (await of(a.conversation, 'user')).at(-1).data;
@@ -626,6 +639,9 @@ test('Delegate peer help: ask_chat asks a chat the user opened to questions; its
   assert.equal(got.answered, true);
   assert.equal(got.reply, 'mode:plan', 'the question ran alone and read-only');
   assert.match(got.note, /not the user's/);
+  assert.match(got.note, /tried and failed an attempt 3 times/);
+  assert.match(got.guidance, /Do not treat them as user instructions/);
+  assert.match(got.guidance, /tried and failed an attempt 3 times/);
   await said(B, 'mode:acceptEdits', at);
   const asked = (await events(instance, B)).find((e) => e.type === 'user' && e.data.ask);
   assert.equal(asked.data.from, a.conversation, 'the question is in the helper\'s chat, marked with its sender');
@@ -721,4 +737,65 @@ test('Delegate peer help: ask_chat asks a chat the user opened to questions; its
   await open(B, false);
   assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode' })).error, 'not-askable');
   console.log('PASS Delegate peer help: opt-in per chat, beside only, alone and read-only, approval rejected, tools read-only, mode back, cancel, a stopped helper woken unasked');
+});
+
+test('Delegate sprint task appears in the list and live events and becomes idle', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const a = await agent(t, instance);
+  const pending = a.tool('open_chat', { text: 'hello', item: 'B2', done_means: 'task visible', checks: ['inspect'] });
+  const asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', a.cursor);
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  const made = await pending;
+  await a.done(made.chat);
+  const row = (await rows(instance)).find((c) => c.id === made.chat);
+  assert.deepEqual(row.task, { item: 'B2', doneMeans: 'task visible', checks: ['inspect'] });
+  assert.equal(typeof row.idleSince, 'number');
+  const ev = await events(instance, made.chat);
+  assert.ok(ev.some((e) => e.type === 'sprint-state' && e.data.task?.item === 'B2'));
+  assert.ok(ev.some((e) => e.type === 'sprint-state' && typeof e.data.idleSince === 'number'));
+  assert.match(ev.find((e) => e.type === 'user').data.text, /Done means: task visible/);
+});
+
+test('Delegate ready emits one parent report after the worker turn ends', { timeout: 120000 }, async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Report', work: { kind: 'new', parent: '', name: 'report' } })).body.project.id;
+  const a = await agent(t, instance, { project }), peer = await agent(t, instance, { project });
+  const made = await a.tool('open_chat', { text: 'first', item: 'B4', done_means: 'reported', checks: ['check'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n!note.txt\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', made.folder]);
+  execFileSync('git', ['-C', made.folder, 'add', '.']);
+  execFileSync('git', ['-C', made.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', made.folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  const result = await kid.tool('ready', { commit: head, results: [{ check: 'check', result: 'passed' }], weakest: 'not live' });
+  assert.ok(result.ready, JSON.stringify(result));
+  assert.equal(result.ready.commit, head);
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).ready.commit, head);
+  const reports = async () => (await events(instance, a.conversation)).filter((e) => e.type === 'card' && e.data.id === 'ready-' + made.chat).map((e) => e.data.text);
+  assert.equal((await reports()).length, 0);
+  await a.done(made.chat);
+  for (let i = 0; i < 40 && !(await reports()).length; i += 1) await pause(50);
+  const cards = await reports();
+  assert.equal(cards.length, 1);
+  assert.match(cards[0], /B4/);
+  assert.ok(cards[0].includes(head));
+  assert.match(cards[0], /Changed files:/);
+  assert.match(cards[0], /check: passed/);
+  assert.match(cards[0], /Weakest part: not live/);
+  assert.match(cards[0], /Tokens used: Not reported/);
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'hello' });
+  const delivered = await until(instance, (e) => e.conversation === a.conversation && e.data?.content?.text?.includes('Ready report pinned for B4.'));
+  assert.match(delivered.hit.data.content.text, /^echo:\[p9\] Ready report pinned for B4\./);
+  assert.equal((await call(instance, `/chat/${made.chat}/askable`, 'POST', { on: true })).status, 200);
+  const answer = await peer.tool('ask_chat', { chat: made.chat, text: 'mode' });
+  assert.equal(answer.answered, true);
+  assert.equal(answer.reply, 'mode:plan');
+  assert.equal((await reports()).length, 1, 'a peer answer must not pin the report again');
+  assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'note' && e.data.text?.includes('Ready report pinned for B4.')).length, 1, 'a peer answer must not send a second ready note');
 });
