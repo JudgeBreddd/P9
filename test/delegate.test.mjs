@@ -665,6 +665,17 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   await set({ start: 'agent', max: 2, workers: picks.slice(0, 2) });
   assert.equal((await a.tool('open_chat', { text: 'config', title: 'Over' })).error, 'too-many-chats');
   assert.equal((await a.tool('read_chat', { chat: third.chat })).error, undefined);
+  // F8: a stopped worker gave up its place. Over the limit it is not started again (a note is still taken); an idle
+  // worker keeps its place and takes a message; with room again the stopped one starts.
+  const back = await a.tool('send_chat', { chat: first.chat, text: 'config' });
+  assert.equal(back.error, 'too-many-chats', 'a stopped worker was started again past the limit: ' + JSON.stringify(back));
+  assert.match((await a.tool('send_chat', { chat: first.chat, text: 'for later', when: 'note' })).sent ?? '', /^as a note/);
+  assert.equal((await a.tool('send_chat', { chat: third.chat, text: 'config' })).error, undefined, 'an idle worker was refused for the limit');
+  await a.done(third.chat);
+  await set({ start: 'agent', max: 5, workers: picks });
+  await a.tool('stop_chat', { chat: gone.chat, close: true });
+  assert.equal((await a.tool('send_chat', { chat: first.chat, text: 'config' })).sent, 'started a turn');
+  await a.done(first.chat);
   console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, Worker 3 ran on its row (opus/high), haiku/low from the call won, an unlisted pick was passed over, a sixth worker was refused at 5, a stopped worker freed its row for a Codex worker, a profile row gave its worker the profile');
 });
 

@@ -315,6 +315,12 @@ export function createDelegate({ chat, allowed }) {
     if (stateOf(target) === 'working' && !(tierOf(target.provider, target.mode) <= picked.ceiling)) {
       return { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' };
     }
+    // F8: a stopped worker gave up its place, so starting it again needs a free one, like open_chat. A worker that is
+    // idle or waiting on an answer still holds its place and is never refused here.
+    if (target.parent && ['stopped', 'moved'].includes(target.state)) {
+      const set = chat.delegation();
+      if (running(target.parent, chat.family()) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
+    }
     const sent = await chat.prompt(args.chat, { text: args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)) };
     return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn' };
