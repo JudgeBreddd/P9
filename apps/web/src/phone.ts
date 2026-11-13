@@ -154,7 +154,8 @@ async function mutate(path: string, body: Json, deadline = 0) {
   let response: Response, result: Json;
   try {
     response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body), signal: stop.signal });
-    result = await response.json().catch(() => ({}));
+    // Only an unreadable body (not JSON) is an empty answer; an abort or a network failure while reading it is not an answer at all (round 3 review).
+    result = await response.json().catch((error) => { if (error instanceof SyntaxError) return {}; throw error; });
   } catch (error) { throw stop.signal.aborted ? new Error('timeout') : error; }
   finally { clearTimeout(timer); }
   if (response.status === 401) throw relogin();
@@ -816,23 +817,33 @@ async function submitFromBox(event: Event) {
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
+  // Round 3 review: a send that got no answer stays one submission, with its first body and operation ID, until the daemon answers it.
+  // Rebuilding it from the screen (the turn may have ended or started since) would change the body, so a new ID, and a second delivery.
+  const draft = JSON.stringify([id, body, images.map((image) => image.data)]);
+  if (inFlight?.draft !== draft) inFlight = null;
+  const again = !!inFlight;
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
   // fit this phone's storage): they stay attached and the box says why.
-  if (!navigator.onLine || asking(id) || queued(id).length) {
+  if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
+  if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
-  if (submitter?.dataset.when === 'now' && running(id)) {
+  if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
     // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended.
     note('Stopping this turn, then sending.');
     const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
-    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await fetchEvents(1000); await new Promise((done) => setTimeout(done, 250)); }
+    // Each read has its own deadline (a stalled one counts as "still running"), so the wait ends after about 25 s and the guard lets go.
+    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await within(fetchEvents(1000), 5000).catch(() => {}); await new Promise((done) => setTimeout(done, 250)); }
     if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
   }
-  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }, SEND_DEADLINE);
+  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
+  const sent = again ? inFlight!.sent : { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
+  inFlight = { draft, sent };
+  const result = await mutate(prompt, sent, SEND_DEADLINE);
+  inFlight = null; // answered: the next send is a new submission
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
@@ -849,6 +860,8 @@ async function submitFromBox(event: Event) {
 // A send that gets no answer keeps its text, images and operation ID; tapping send again is the same operation.
 // ponytail: the interrupt's wait for the turn to end (up to 20 s of reads) still holds the guard; each read is short.
 const SEND_DEADLINE = 30000;
+let inFlight: { draft: string; sent: Json } | null = null; // the send that last got no answer
+const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 let submitting = false;
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   if (submitting) { event.preventDefault(); return false; }
@@ -856,7 +869,8 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   try { return await submitFromBox(event); }
   catch (error) {
     if ((error as Error).message !== 'timeout') throw error;
-    note(`Not sent yet: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Your message is still in the box. Tap send to try again; it will not go twice.`);
+    note(((event as SubmitEvent).submitter as HTMLButtonElement | null)?.dataset.stop === 'true' ? `Not stopped: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Tap Stop to try again.`
+      : `Not sent yet: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Your message is still in the box. Tap send to try again; it will not go twice.`);
     return false;
   }
   finally { submitting = false; }

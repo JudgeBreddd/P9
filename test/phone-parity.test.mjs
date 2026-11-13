@@ -593,3 +593,81 @@ test('O55 round 2: a send that never gets its answer lets go at the deadline, ke
   assert.equal(await count('user'), 1, 'the message shows once');
   assert.equal(await count('agent'), 1, 'one reply');
 });
+
+// Round 3: three ways the send's recovery could still fail. Each of these failed on the round 2 head.
+test('O55 round 3: Interrupt with a stalled event read lets go of the composer, keeps the draft, and a later send goes', { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await page.fill('#prompt', 'do this instead');
+  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 5000 });
+  // Interrupt's own reads of the chat (wait=1000) never answer; the cancel itself does.
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  await page.route((url) => url.pathname.endsWith('/chat/events') && url.search.includes('wait=1000'), async (route) => { await held; await route.abort().catch(() => {}); });
+  await page.click('#midTurn [data-when="now"]');
+  // Either the turn ended and the message went, or the box says it is still stopping and keeps the text: never locked.
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '' || (!document.querySelector('#composerNote').hidden && !/^Stopping/.test(document.querySelector('#composerNote').textContent)), null, { timeout: 60000 });
+  await page.fill('#prompt', 'later one');
+  await page.evaluate(() => document.querySelector('#composer').requestSubmit());
+  // Sent or queued behind the turn, the box empties; a locked composer would leave the text there.
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+});
+
+for (const status of [202, 409]) test(`O55 round 3: a ${status} whose body never finishes is not an answer: the draft stays and the retry is the same operation`, { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  // The first send reaches the daemon; the phone sees the status line and then a body that never ends.
+  await page.evaluate((code) => {
+    const real = window.fetch.bind(window); let first = true;
+    window.fetch = async (input, init = {}) => {
+      if (!String(input).endsWith('/prompt') || !first) return real(input, init);
+      first = false;
+      await real(input, { ...init, signal: undefined });
+      const body = new ReadableStream({ start(controller) { init.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError'))); } });
+      return new Response(body, { status: code, headers: { 'content-type': 'application/json' } });
+    };
+  }, status);
+  const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op']); });
+  await page.fill('#prompt', 'half answered');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
+  assert.equal(await page.inputValue('#prompt'), 'half answered', 'the draft is kept: no complete answer came');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await said(page, 'echo:half answered');
+  await page.waitForTimeout(2000);
+  assert.equal(ops.length, 2, 'two posts');
+  assert.equal(ops[0], ops[1], 'the retry reuses the operation ID');
+  const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('half answered').length - 1, 0));
+  assert.equal(users, 1, 'the message shows once');
+});
+
+test('O55 round 3: a send that stalled while the turn started is retried as the same submission, not as a steer', { timeout: 180000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  let first = true; const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op'] + ' ' + (JSON.parse(request.postData()).when ?? 'now')); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const request = route.request(), real = await route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } });
+    await held; await route.fulfill({ response: real }).catch(() => {});
+  });
+  await page.fill('#prompt', 'slow');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
+  // The daemon ran the first send, so the turn is going now: the box would build a steer from the screen.
+  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 10000 });
+  await page.click('#midTurn [data-when="steer"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await page.waitForTimeout(2000);
+  const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('slow').length - 1, 0));
+  assert.equal(ops.length, 2, 'two posts: ' + ops.join(' | '));
+  assert.equal(ops[0].split(' ')[0], ops[1].split(' ')[0], 'the same operation ID, not a steer with a new one: ' + ops.join(' | '));
+  assert.equal(users, 1, 'the message shows once');
+});
