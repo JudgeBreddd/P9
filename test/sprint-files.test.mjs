@@ -279,6 +279,43 @@ test('Sprint files: after a compaction the worker is told its notes path again, 
   console.log('PASS Sprint files: notes path again after a compaction, notes read through the chat');
 });
 
+test('Sprint files: a chat with no parent is not told a notes path', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const w = await a.tool('open_chat', { text: 'hello', title: 'One', key: 'w1' });
+  await a.done(w.chat);
+  // The lead has no parent. Even with a file where its own ID would put one, its notes route has nothing, before and after a compaction.
+  fs.writeFileSync(path.join(w.sprint, `notes/${a.conversation}.md`), '## Now\nDoing: not a worker\n');
+  assert.equal((await call(instance, `/chat/${a.conversation}/notes`)).status, 404);
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'squeeze' });
+  assert.equal((await call(instance, `/chat/${a.conversation}/notes`)).status, 404);
+  assert.equal((await call(instance, `/chat/${w.chat}/notes`)).status, 200, 'its worker still reads its own');
+  console.log('PASS Sprint files: a chat with no parent is not told a notes path');
+});
+
+test('Sprint files: notes path told once per compaction, not with every message after it', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const told = (entry) => /\[P9: your notes file is [^\n]*notes[\\/]w1\.md\. /.test(entry);
+  const w = await a.tool('open_chat', { text: 'hello', title: 'One', key: 'w1' });
+  await a.done(w.chat);
+  const send = async (text) => { await a.tool('send_chat', { chat: w.chat, text }); await a.done(w.chat); };
+  await send('squeeze9');
+  await send('after');
+  assert.equal(log().length, 3); assert.ok(told(log()[2]), log()[2]);
+  // The same compaction reported again (id sq9) is the same compaction: nothing more is told.
+  await send('squeeze9');
+  await send('after again');
+  assert.equal(log().length, 5); assert.ok(!told(log()[4]), log()[4]);
+  console.log('PASS Sprint files: notes path told once per compaction');
+});
+
 test('Sprint files: a prompt that failed after its session started keeps the start block for the next message', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
