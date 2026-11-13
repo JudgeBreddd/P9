@@ -58,6 +58,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   ];
   await page.evaluate(w => window.__sprint.add(...w), ws);
   await page.locator('.sprint').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('.sprint').getAttribute('data-folded'), 'true', 'the card covers the centered column at this width');
   // The narrowest window P9 allows (720 px): a chat nobody has opened the card on starts folded, the question form stays usable, and
   // opening the card keeps it inside the pane and apart from the needs-you cards.
   await sizeTo(app, 720, 800); await page.waitForTimeout(500);
