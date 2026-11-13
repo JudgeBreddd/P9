@@ -116,6 +116,17 @@ function openChatFiles(sid) {
     onClose: why => { if (why === 'close') localStorage.removeItem(cfKey(sid)); queueMicrotask(() => renderChats()); } }); // 'hidden' and 'replaced' keep it remembered
   renderChats();
 }
+// A worker's notes (sprint spec D4), read-only, as the file is now: read again each time the button opens it.
+let notesSid = null;
+function openNotes(s) {
+  notesSid = s.id;
+  outer.side.open('worker-notes', { title: 'Notes · ' + s.title, focuses: ['chat'], defaultWidth: w => w / 3, render: b => {
+    const pre = b.appendChild(document.createElement('pre')); pre.dataset.notesText = ''; pre.style.cssText = 'margin:0;padding:12px;white-space:pre-wrap;overflow:auto;height:100%;font:12px/1.5 var(--font-mono,monospace)';
+    pre.textContent = 'Reading the notes…';
+    window.p9.chat('notes', { id: s.id }).then(r => { pre.textContent = r?.status === 200 ? r.body.text || '(empty)' : r?.status === 404 ? 'This worker has no notes file yet.' : 'The notes could not be read.'; }, () => { pre.textContent = 'The notes could not be read.'; }); },
+    onClose: () => queueMicrotask(() => renderChats()) });
+  renderChats();
+}
 function renderChatFiles() {
   const b = outer.side.body; if (outer.side.current()?.slot !== 'chat-files') return;
   const s = outer.S.sessions.find(x => x.id === CF.sid), all = s ? chatItems(s) : [], changes = CF.tab === 'changes';
@@ -579,6 +590,7 @@ function pane(s, i, bare) {
       ${(n => n && !bare ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-chat-files aria-pressed="${outer.side.current()?.slot === 'chat-files' && CF.sid === s.id}" title="Artifacts and files this chat made" aria-label="Artifacts and files (${n})">${svg.files}<span>${n}</span></button>` : '')(s.stub ? 0 : chatItems(s).length)}
       <span class="state" data-s="${s.pending && s.state === 'running' ? 'needs' : esc(s.state)}">${s.pending && s.state === 'running' ? LABEL.needs : stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
+      ${s.live && s.parent ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-notes aria-pressed="${outer.side.current()?.slot === 'worker-notes' && notesSid === s.id}" title="This worker's notes file, read-only">Notes</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !outer.serverInfo?.host
         ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.profile ? 'disabled ' : s.leaving ? 'disabled ' : s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.profile ? 'A chat on a provider profile stays on this computer: its key is not sent to a remote' : s.leaving ? 'Moving this chat to the remote' : s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(outer.serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
@@ -711,6 +723,7 @@ function paint(root, ss, only) {
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); outer.renderTabs(); renderChats(); };
     const cf = p.querySelector('[data-chat-files]'); if (cf) cf.onclick = () => outer.side.current()?.slot === 'chat-files' && CF.sid === s.id ? outer.side.close('chat-files') : openChatFiles(s.id);
     p.querySelector('[data-steps]').onclick = () => { outer.hideSteps = !outer.hideSteps; localStorage.setItem('p9-hide-steps', outer.hideSteps ? '1' : '0'); renderChats(); };
+    const nt = p.querySelector('[data-notes]'); if (nt) nt.onclick = () => outer.side.current()?.slot === 'worker-notes' && notesSid === s.id ? outer.side.close('worker-notes') : openNotes(s);
     const ph = p.querySelector('[data-phone]'); if (ph) ph.onclick = () => continueOnPhone(s);
   });
 }

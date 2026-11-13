@@ -14,6 +14,8 @@ export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
 // What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
 export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
+// What a worker is told about its notes file, at its start and again after each compaction.
+export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {

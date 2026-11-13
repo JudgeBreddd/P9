@@ -234,6 +234,51 @@ test('Sprint files: a worker\'s instructions and notes path wait for a message t
   console.log('PASS Sprint files start block: kept through a failed start, a retry and a restart; sent once');
 });
 
+test('Sprint files: after a compaction the worker is told its notes path again, once per compaction; a worker\'s notes read through its chat', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const w = await a.tool('open_chat', { text: 'hello', title: 'One', key: 'w1' });
+  await a.done(w.chat);
+  assert.equal(log().length, 1);
+  const told = (entry) => /\[P9: your notes file is [^\n]*notes[\\/]w1\.md\. /.test(entry);
+  const send = async (text) => { await a.tool('send_chat', { chat: w.chat, text }); await a.done(w.chat); };
+  await send('plain');
+  assert.equal(log().length, 2); assert.ok(!told(log()[1]), 'no compaction: no second telling');
+  // A compaction as the real adapters report it (a tool call and its update, one id): the next message carries the line, once.
+  await send('squeeze');
+  assert.equal(log().length, 3); assert.ok(!told(log()[2]), 'the message of the compacting turn was built before it');
+  await send('after');
+  assert.equal(log().length, 4); assert.ok(told(log()[3]), log()[3]);
+  await send('again');
+  assert.equal(log().length, 5); assert.ok(!told(log()[4]), 'told once for one compaction');
+  // A second compaction, reported as a compaction_update (in progress, then completed: one compaction): told once more.
+  await send('squeezeu');
+  await send('after two');
+  assert.ok(told(log()[6]), log()[6]);
+  await send('and one more');
+  assert.ok(!told(log()[7]));
+  assert.equal(log().length, 8);
+  // Not a worker: the lead's own compaction tells nothing and its notes route has nothing.
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'squeeze' });
+  assert.equal((await call(instance, `/chat/${a.conversation}/notes`)).status, 404);
+  // The window reads the worker's notes as they are now; the path comes from the chat, not the request.
+  const sprint = w.sprint;
+  assert.equal(fs.existsSync(path.join(sprint, 'notes/w1.md')), true);
+  fs.writeFileSync(path.join(sprint, 'notes/w1.md'), '## Now\nDoing: reading\n');
+  const got = await call(instance, `/chat/${w.chat}/notes`);
+  assert.equal(got.status, 200); assert.deepEqual(got.body, { name: 'notes/w1.md', text: '## Now\nDoing: reading\n' });
+  fs.writeFileSync(path.join(sprint, 'notes/w1.md'), 'changed');
+  assert.equal((await call(instance, `/chat/${w.chat}/notes`)).body.text, 'changed');
+  assert.equal((await call(instance, '/chat/not-an-id/notes')).status, 404);
+  fs.rmSync(path.join(sprint, 'notes/w1.md'));
+  assert.equal((await call(instance, `/chat/${w.chat}/notes`)).status, 404);
+  console.log('PASS Sprint files: notes path again after a compaction, notes read through the chat');
+});
+
 test('Sprint files: a prompt that failed after its session started keeps the start block for the next message', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });

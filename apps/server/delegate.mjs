@@ -9,6 +9,7 @@ import { childEnv } from './child-env.mjs';
 import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
+import { notesLine } from './sprint-files.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -229,7 +230,7 @@ export function createDelegate({ chat, allowed }) {
     const notes = chat.sprintFiles.ensureWorker(caller, args.key ?? made.conversation, Boolean(args.key));
     const said = args.key ? (chat.sprintFiles.read(caller, `roles/${args.key}.instructions.md`) ?? '').trim() : '';
     chat.startNote(made.conversation, (said ? `[P9: your instructions, from your sprint's roles/${args.key}.instructions.md.\n${said}]\n\n` : '')
-      + (notes ? `[P9: your notes file is ${notes}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n` : ''));
+      + (notes ? notesLine(notes) : ''));
     const sent = await chat.prompt(made.conversation, { text: args.item ? `Item: ${args.item}\nDone means: ${args.done_means}\nChecks:\n${args.checks.map((c) => '- ' + c).join('\n')}\n\n${args.text}` : args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
     if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', chat: made.conversation, detail: 'The chat was made, but the message was not sent; send_chat can try again.' };
     return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation), ...(sprint && { sprint }) };

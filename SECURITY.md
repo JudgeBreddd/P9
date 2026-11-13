@@ -916,6 +916,14 @@ Written before the code (sprint spec D1, D3, D4).
   not lose it, and messages sent while one carrying it is still unconfirmed leave it out. A P9 restart during a turn
   that already read it sends it once more with the next message. Like the rules, this text comes from the lead or from you, so it widens nothing the
   worker may do.
+  After a compaction the agent reports (an ACP `compaction_update`, or the "Compact conversation" tool call the Claude
+  and Codex adapters send a client that did not ask for those updates, as P9 does not), a worker's notes-path line is put
+  back in that database block, once per compaction (by the compaction's id, kept in memory), and rides with the next
+  message from its lead like the first one; a chat that was not started by another chat never gets it.
+- **Reading a worker's notes in its chat.** `GET /chat/<id>/notes` returns the text of that chat's own notes file, for
+  a chat that has a parent: P9 builds the name `notes/<key>.md` (or `notes/<chat id>.md`) from the chat's stored parent
+  and key, never from the request, and reads it by the same rules as above (that name only, no links, whole file). The
+  window shows it as plain text, read-only. It is the same text the project page already shows, on the same listeners.
 - **Who can edit them.** You can edit them on the project page, for a lead chat that is in that project. A save names
   the file as the page opened it; if an agent changed or deleted it since, P9 refuses the save and the page keeps your
   text (for a deleted file, until you save it again or discard it). P9 checks the file right before its rename, as

@@ -500,6 +500,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return c.json({ ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } });
   });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
+  api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));
   api.get('/chat/:id/folder', async (c) => reply(c, await chat.folder(c.req.param('id'))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
