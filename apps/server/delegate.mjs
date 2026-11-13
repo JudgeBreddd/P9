@@ -46,16 +46,16 @@ export const DELEGATE_TOOLS = (input) => {
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' },
       provider: { type: 'string', enum: ['claude', 'codex'] }, model: { type: 'string', description: 'A model that agent offers.' },
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
-      folder: { type: 'string', description: 'Where it starts, relative to the workspace.' },
+      folder: { type: 'string', description: 'Where it starts, relative to the workspace. With worktree, every worker of your sprint comes from one repository: a folder of another is refused.' },
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
     ['ready', 'Finish your assigned task after reporting each check and the weakest part. Do not use this for an unfinished task.', input({ commit: { type: 'string' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
-    ['verdict', 'Review a worker at its ready commit. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
+    ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
     ['set_rules', 'Replace your sprint rules: one text, at most ' + MAX_RULES + ' characters, that P9 sends along with every message you send a chat you started, so a worker '
       + 'keeps them through a long task. Until you set them, P9 sends its own short default (state the folder and branch first, wait for what you started, end with pass or fail). '
       + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
     input({ rules: { type: 'string', maxLength: MAX_RULES } })],
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
-      + 'or queue (after the running turn). It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
+      + 'or queue (after the running turn). An agent without steering cannot take a message into its running turn: while it works, auto and steer are refused (turn-running) and only queue reaches it. It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
       + 'when: note passes information on and asks for nothing (a result, a branch that is ready, something you found): it never starts a turn, the chat reads it in its running turn '
       + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] } }, ['chat', 'text'])],
@@ -65,7 +65,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
       + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
     input({ chat, after: { type: 'integer', minimum: 0 }, view: { type: 'string', enum: ['messages', 'activity'] } }, ['chat'])],
-    ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether. A chat the user stops takes the chats it started with it.',
+    ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether, which frees their places. A chat the user stops takes the chats it started with it.',
       input({ chat, close: { type: 'boolean' } }, ['chat'])],
     ['archive_chat', 'Move a chat you started to Archived when its work is done (archived: false brings it back). Nothing is deleted: the user can open or unarchive it. A chat that is working or waiting on an answer is refused: stop it first.',
       input({ chat, archived: { type: 'boolean' } }, ['chat'])],
@@ -122,7 +122,7 @@ export function createDelegate({ chat, allowed }) {
   };
 
   const OFF = { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
-  const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. Stop one you no longer need, or wait for one to end.' });
+  const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' });
   const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
   const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
   async function openChat(caller, args, signal) {
@@ -248,7 +248,13 @@ export function createDelegate({ chat, allowed }) {
     const turn = chat.activeTaskTurn(caller);
     if (info.state !== 'turn' || !turn) return { error: 'no-active-turn' };
     const stillCurrent = () => chat.info(caller)?.state === 'turn' && chat.activeTaskTurn(caller) === turn;
-    if (!text(args.commit, 200) || !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) || !Array.isArray(args.results) || args.results.length !== task.checks.length || task.checks.some((check) => args.results.filter((r) => r?.check === check && typeof r.result === 'string' && text(r.result.trim(), 4000)).length !== 1)) return { error: 'request-refused' };
+    // The field at fault, by name only: never what was sent (dogfood 3.5: three bare refusals told the worker nothing).
+    const fault = !text(args.commit, 200) ? 'commit: 1 to 200 characters'
+      : !Array.isArray(args.results) || args.results.length !== task.checks.length ? 'results: one { check, result } for each check of your task, no more'
+        : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once (they are in the message that gave you the task)'
+          : args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank'
+            : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null;
+    if (fault) return { error: 'request-refused', detail: 'Refused at ' + fault + '.' };
     const folder = await chat.startFolder(caller);
     if (!stillCurrent()) return { error: 'no-active-turn' };
     if (!folder) return { error: 'folder-unavailable' };
@@ -281,9 +287,12 @@ export function createDelegate({ chat, allowed }) {
   }
   function verdict(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
-    const found = reach(caller, args.chat), target = chat.sprint(args.chat), family = chat.family();
-    if (!found || !target.ready) return { error: 'chat-not-found' };
-    if (caller === args.chat || below(family, args.chat).includes(caller) || below(family, caller).includes(args.chat)) return { error: 'self-review' };
+    const found = reach(caller, args.chat), family = chat.family();
+    if (!found) return { error: 'chat-not-found' };
+    if (caller === args.chat || below(family, args.chat).includes(caller) || below(family, caller).includes(args.chat)) return { error: 'self-review', detail: 'A verdict comes from a chat beside the worker (another worker of the same lead, or a chat of its project), never from the worker, a chat above it or a chat below it.' };
+    // Reached, so the caller may already read it: saying it has no ready record tells it nothing new (dogfood 3.5).
+    const target = chat.sprint(args.chat);
+    if (!target.ready) return { error: 'not-ready', detail: 'That chat has no ready commit: it has not called ready, or its ready was refused. Call verdict after its ready goes through, with the commit ready returned.' };
     if (args.commit !== target.ready.commit) return { error: 'stale-commit' };
     if (!['pass', 'fix'].includes(args.result) || !text(args.note, 4000)) return { error: 'request-refused' };
     const value = { by: caller, commit: args.commit, result: args.result, note: args.note, at: Date.now() };
@@ -323,7 +332,7 @@ export function createDelegate({ chat, allowed }) {
       if (running(target.parent, chat.family()) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
     }
     const sent = await chat.prompt(args.chat, { text: args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
-    if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)) };
+    if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };
     return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn' };
   }
 

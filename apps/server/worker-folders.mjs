@@ -141,7 +141,15 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
   // would have started in. With an address the owner's folder is not read at all.
   async function cloneFor(sprint, source, address = '') {
     const clone = path.join(dirOf(sprint), 'clone');
-    if (await realDir(clone, 2)) return { clone };
+    if (await realDir(clone, 2)) {
+      // One repository per sprint (dogfood 3.5): a folder of another one is refused, never handed this clone. Its
+      // origin is the folder's own origin, else the folder itself, as the clone below was made.
+      if (address || typeof source !== 'string' || !path.isAbsolute(source)) return { clone };
+      const top = await one(source, ['rev-parse', '--show-toplevel']);
+      const from = top && ((await one(top, ['remote', 'get-url', 'origin'])) || top);
+      if (from && from === await one(clone, ['remote', 'get-url', 'origin'])) return { clone };
+      return { error: 'other-repository', detail: 'This sprint\'s worker folders all come from one clone, made from another repository: a sprint has one repository. Leave folder out, name a folder of that repository, or start this work from another chat.' };
+    }
     if (address) {
       if (!remoteOk(address, protocols)) return { error: 'source-refused', detail: 'The project\'s sprint source is not an address P9 clones from (https://, ssh:// or user@host:path).' };
       await mkdir(dirOf(sprint), { recursive: true, mode: 0o700 });
