@@ -134,7 +134,7 @@ function keepPending(key: string, value?: Pending) {
   localStorage.setItem('p9-pending', JSON.stringify(all));
   return all;
 }
-async function mutate(path: string, body: Json) {
+async function mutate(path: string, body: Json, deadline = 0) {
   if (!online()) throw new Error('offline');
   const key = path + '\n' + JSON.stringify(body);
   const stored = keepPending('')[key];
@@ -148,13 +148,20 @@ async function mutate(path: string, body: Json) {
   // A reopened app keeps its cookie and, for the session's 12 hours, its CSRF token (csrfToken); with neither, log in again for a fresh one.
   const csrf = csrfToken();
   if (!csrf) throw relogin();
-  let response: Response;
-  try { response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
-  catch (error) { throw error; }
-  const result = await response.json().catch(() => ({}));
+  // A deadline (the sends: round 2 review) ends a request that is open but never answers, so the composer is not shut for good.
+  // The ID stays kept, so the retry is the same operation and the daemon replays a send that did arrive instead of running it twice.
+  const stop = new AbortController(), timer = deadline ? setTimeout(() => stop.abort(), deadline) : 0;
+  let response: Response, result: Json;
+  try {
+    response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body), signal: stop.signal });
+    // Only an unreadable body (not JSON) is an empty answer; an abort or a network failure while reading it is not an answer at all (round 3 review).
+    result = await response.json().catch((error) => { if (error instanceof SyntaxError) return {}; throw error; });
+  } catch (error) { throw stop.signal.aborted ? new Error('timeout') : error; }
+  finally { clearTimeout(timer); }
   if (response.status === 401) throw relogin();
   // Any answer, 503 included, is final for this ID (the daemon replays it); only a lost request keeps it for the retry (R1-7).
-  keepPending(key);
+  // 'outcome-unknown' is the daemon still running the first try of this ID: not an answer, so the ID stays for the next retry.
+  if (result.error !== 'outcome-unknown') keepPending(key);
   return { status: response.status, body: result };
 }
 let openId = ''; // the chat on the chat screen; '' is the Chats list
@@ -794,15 +801,15 @@ one<HTMLElement>('#queued').onclick = async (event) => {
 // keyboard closing and the layout jumping under the finger to eat the tap (focus moves on mousedown, which a tap
 // also fires).
 for (const button of document.querySelectorAll<HTMLButtonElement>('#composer button[type="submit"], button[form="composer"]')) for (const type of ['pointerdown', 'mousedown']) button.addEventListener(type, (event) => event.preventDefault());
-one<HTMLFormElement>('#composer').onsubmit = async (event) => {
+async function submitFromBox(event: Event) {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
   if (id && submitter?.dataset.stop === 'true') {
     // No turn to stop (it just ended): 409 no-turn, and the events say so.
-    const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
-    await fetchEvents(); render(); return;
+    void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   const text = (art ?? input.value).trim();
   if (!id || (!text && !images.length)) return false;
@@ -810,26 +817,81 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
+  // Round 3 and 4 review: a send that got no answer stays one submission, with its first wire body and operation ID, until the daemon
+  // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
+  // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
+  const draft = JSON.stringify([text, images.map((image) => image.data), chosenKey(id)]);
+  if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
+  const again = inFlight.has(id);
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
   // fit this phone's storage): they stay attached and the box says why.
-  if (!navigator.onLine || asking(id) || queued(id).length) {
+  if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
+  if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
-  if (submitter?.dataset.when === 'now' && running(id)) {
+  if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
     // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended.
     note('Stopping this turn, then sending.');
-    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
-    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await fetchEvents(1000); await new Promise((done) => setTimeout(done, 250)); }
+    // Each read has its own deadline (a stalled one counts as "still running"), so the wait ends after about 25 s and the guard lets go.
+    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await within(fetchEvents(1000), 5000).catch(() => {}); await new Promise((done) => setTimeout(done, 250)); }
     if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
   }
-  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
+  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
+  const sent = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
+  inFlight.set(id, { draft, sent });
+  const result = await mutate(prompt, sent, SEND_DEADLINE);
+  // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
+  if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
+  inFlight.delete(id);
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
+  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
+  // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
+  else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
+    if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = input.value.replace(text, '').trim(); label(); note(); renderQueue(); void drain(); return true; }
+  }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
+}
+// Round 1 review: two taps while the first send is still in flight both read the same box and sent the message twice (also
+// through the queue fallback above). One submit at a time; a second tap does nothing until the first has settled.
+// Round 2 review: the guard must always let go, so a send has a deadline (SEND_DEADLINE, in mutate) and the read after it is not awaited.
+// A send that gets no answer keeps its text, images and operation ID; tapping send again is the same operation.
+// ponytail: the interrupt's wait for the turn to end (up to 20 s of reads) still holds the guard; each read is short.
+const SEND_DEADLINE = 30000;
+// ponytail: in memory, one per chat, until answered (a reload loses it; the kept operation ID then holds only if the rebuilt body is identical).
+const inFlight = new Map<string, { draft: string; sent: Json }>(); // per chat: the send that got no answer
+// Round 5 review: the identity of a pending send holds the settings the user chose and that took effect, never a count of events (a
+// cancelled warning, a no-op pick or an away-and-back would raise it) and never the adapter's own redraws (they set values, not choices).
+// Per chat and setting: `base` is what it was before the user's first change, so a setting changed back to it is as if never touched.
+const chosen = new Map<string, Map<string, { base: string; value: string }>>();
+function choose(id: string, key: string, value: string, base: string) {
+  const own = chosen.get(id) ?? chosen.set(id, new Map()).get(id)!;
+  own.set(key, { base: own.get(key)?.base ?? base, value });
+}
+const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
+// The model and the agent's own pickers have no warning: a change is accepted when it fires. (Mode is recorded in its own handler, once its warning is confirmed.)
+document.addEventListener('change', (event) => {
+  const pick = event.target as HTMLSelectElement;
+  if (pick.matches?.('#model, #pickers select')) choose(one<HTMLSelectElement>('#conversation').value, pick.id === 'model' ? 'model' : 'config:' + pick.dataset.config, pick.value, pick.dataset.current ?? '');
+}, true);
+const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
+let submitting = false;
+one<HTMLFormElement>('#composer').onsubmit = async (event) => {
+  if (submitting) { event.preventDefault(); return false; }
+  submitting = true;
+  try { return await submitFromBox(event); }
+  catch (error) {
+    if ((error as Error).message !== 'timeout') throw error;
+    note(((event as SubmitEvent).submitter as HTMLButtonElement | null)?.dataset.stop === 'true' ? `Not stopped: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Tap Stop to try again.`
+      : `Not sent yet: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Your message is still in the box. Tap send to try again; it will not go twice.`);
+    return false;
+  }
+  finally { submitting = false; }
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
 function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }
@@ -963,7 +1025,7 @@ const loose = one<HTMLDialogElement>('#looseDlg');
 let answer: ((value: string) => void) | undefined;
 loose.addEventListener('close', () => { if (!loose.open) { answer?.(loose.returnValue); answer = undefined; } });
 one<HTMLSelectElement>('#mode').onchange = async (event) => {
-  const mode = event.target as HTMLSelectElement, pick = mode.value, agent = provider(one<HTMLSelectElement>('#conversation').value);
+  const mode = event.target as HTMLSelectElement, pick = mode.value, id = one<HTMLSelectElement>('#conversation').value, agent = provider(id);
   if (pick in LOOSE && !localStorage.getItem('p9-mode-ok:' + pick)) {
     one('#looseT').textContent = `Turn on ${pick} for ${agent === 'codex' ? 'Codex' : 'Claude'}?`; one('#looseP').textContent = (LOOSE as Record<string, string>)[pick];
     answer?.('no');
@@ -971,6 +1033,7 @@ one<HTMLSelectElement>('#mode').onchange = async (event) => {
     if (value === 'never') localStorage.setItem('p9-mode-ok:' + pick, '1');
     else if (value !== 'yes') { mode.value = mode.dataset.was ?? ''; pill(); return; }
   }
+  choose(id, 'mode', pick, mode.dataset.was ?? ''); // accepted: after the warning was confirmed, never on Cancel
   mode.value = mode.dataset.was = pick; pill();
   if (pick && agent) localStorage.setItem('p9-mode:' + agent, pick);
 };
