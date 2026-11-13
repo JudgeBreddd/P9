@@ -241,9 +241,12 @@ test('Sprint files button opens the lead section in its project', { timeout: 600
   });
   await page.reload();
   await page.locator('#navList [data-chat="lead1"]').click({ timeout: 15000 });
+  await page.locator('.sprint [data-sprint-files]').waitFor({ timeout: 5000 });
+  await shotAt(page, app, 'sprint-files-button');
   await page.locator('.sprint [data-sprint-files]').click({ timeout: 5000 });
   const section = page.locator('#projPage [data-sprint="lead1"]');
   await section.waitFor({ timeout: 10000 });
-  assert.equal(await section.locator('[data-pj="spfile"]').first().innerText(), 'sprint.md');
+  assert.equal(await section.locator('[data-pj="spfile"] .t').first().innerText(), 'sprint.md');
   assert.equal(await section.evaluate(e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; }), true);
+  await shotAt(page, app, 'sprint-files-section');
 });
