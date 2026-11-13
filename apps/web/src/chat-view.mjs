@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
-import { phoneDialogBody } from './phone-link.mjs'; import { LABEL } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
+import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
 const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
@@ -318,13 +318,14 @@ const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e &
 function sprintCard(s) {
   if (s.stub) return '';
   const workers = kin(s.id); if (!workers.length) return '';
+  const project = projectOf(s, (outer.S.projects || []).filter(p => !p.archived));
   const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
   const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.task?.item ? 1 : 0, passed = st === 'passed' ? 1 : 0;
     return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button></li>` }; });
   const asks = workers.filter(k => k.pending && k.state === 'running').map(askOf).filter(Boolean).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
   const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
   return `<aside class="sprint" data-sprint data-folded="${folded}" data-auto="${choice === undefined}" data-open-asks="${asks.length}" aria-label="Sprint">
-    <div class="sp-headbar"><button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button><button type="button" class="sp-files" data-sprint-files ${s.project ? 'title="Open sprint files"' : 'disabled title="This chat has no project"'}>Files</button></div>
+    <div class="sp-headbar"><button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button><button type="button" class="sp-files" data-sprint-files ${project ? 'title="Open sprint files"' : 'disabled title="This chat has no project"'}>Files</button></div>
     <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>
     ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
   </aside>`;
@@ -348,8 +349,8 @@ function placeSprints() {
     sp.style.setProperty('--sp-top', top + 'px'); sp.style.setProperty('--sp-room', Math.max(120, Math.floor(pr.height - top - 10)) + 'px');
     sp.style.setProperty('--sp-right', right + 'px'); sp.style.setProperty('--sp-w', w + 'px');
     if (sp.dataset.auto === 'true') {
-      const colWidth = Math.min(760, pr.width - 40), colRight = (pr.width + colWidth) / 2;
-      sp.dataset.folded = String(pr.width - right - w < colRight);
+      const colWidth = Math.min(760, pr.width - 40), colLeft = (pr.width - colWidth) / 2, colRight = (pr.width + colWidth) / 2;
+      sp.dataset.folded = String(pr.width - right - w < colRight && pr.width - right > colLeft);
     }
     const open = sp.dataset.folded === 'false';
     sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));

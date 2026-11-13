@@ -221,6 +221,8 @@ test('Sprint files button explains when the lead has no project', { timeout: 600
   await button.waitFor({ timeout: 5000 });
   assert.equal(await button.isDisabled(), true);
   assert.match(await button.getAttribute('title'), /project/i);
+  await page.evaluate(() => window.__sprint.set('s-claude-2', { project: 'missing-project' }));
+  assert.equal(await button.isDisabled(), true, 'an unknown project must not open');
 });
 
 test('Sprint files button opens the lead section in its project', { timeout: 60000 }, async (t) => {
@@ -228,7 +230,7 @@ test('Sprint files button opens the lead section in its project', { timeout: 600
   await app.evaluate(({ ipcMain }) => {
     const now = Date.now();
     const conv = (id, extra = {}) => ({ id, provider: 'claude', title: id, folder: '~', created: now, state: 'running', sent: 1, used: now, project: 'project1', archived: false, parent: null, ...extra });
-    const project = { id: 'project1', name: 'Project', work: { kind: 'p9', folder: '' }, files: [], sprints: [{ lead: 'lead1', title: 'Lead', files: [{ name: 'sprint.md', text: 'Plan', size: 4 }] }] };
+    const project = { id: 'project1', name: 'Project', work: { kind: 'p9', folder: '' }, files: Array.from({ length: 30 }, (_, i) => ({ name: `file${i}.txt`, size: 1 })), sprints: [{ lead: 'lead1', title: 'Lead', files: [{ name: 'sprint.md', text: 'Plan', size: 4 }] }] };
     ipcMain.removeHandler('p9:chat');
     ipcMain.handle('p9:chat', async (_e, action) => {
       if (action === 'list') return { status: 200, body: { conversations: [conv('lead1'), conv('worker1', { parent: 'lead1' })], lists: {} } };
@@ -247,6 +249,25 @@ test('Sprint files button opens the lead section in its project', { timeout: 600
   const section = page.locator('#projPage [data-sprint="lead1"]');
   await section.waitFor({ timeout: 10000 });
   assert.equal(await section.locator('[data-pj="spfile"] .t').first().innerText(), 'sprint.md');
+  assert.ok(await page.locator('#projPage').evaluate(e => e.scrollTop) > 100, 'the project page did not scroll');
   assert.equal(await section.evaluate(e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; }), true);
   await shotAt(page, app, 'sprint-files-section');
+});
+
+test('Sprint card stays open when displaced left of the centered column', { timeout: 60000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await sizeTo(app, 2000, 900);
+  await page.locator('#navList .row[data-chat="s-claude-2"]').click();
+  await page.evaluate(w => window.__sprint.add(w), worker('w-displaced', 'Worker'));
+  await page.locator('.sprint').waitFor({ timeout: 5000 });
+  await page.evaluate(() => {
+    const p = document.querySelector('.pane').getBoundingClientRect();
+    const cards = document.querySelector('#cards');
+    cards.style.position = 'fixed'; cards.style.left = (p.left + 320) + 'px'; cards.style.right = '14px'; cards.style.width = 'auto';
+  });
+  await page.waitForTimeout(500);
+  const geometry = await page.evaluate(() => { const p = document.querySelector('.pane'), sp = p.querySelector('.sprint'), col = p.querySelector('.hist .col'); const r = sp.getBoundingClientRect(), c = col.getBoundingClientRect(); return { folded: sp.dataset.folded, right: r.right, left: c.left }; });
+  assert.equal(geometry.folded, 'false', 'the card has room to the left of the text');
+  assert.ok(geometry.right <= geometry.left, 'the card overlaps the text');
+  await shotAt(page, app, 'sprint-card-displaced');
 });
