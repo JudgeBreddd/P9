@@ -243,7 +243,7 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
   await app.evaluate(({ ipcMain }) => {
     const now = Date.now(), project = { id: 'project1', name: 'Workers', work: { kind: 'p9', folder: '' }, files: [] };
     const conv = (id, extra = {}) => ({ id, provider: 'claude', title: id, folder: '~', created: now, state: 'running', sent: 1, used: now, project: 'project1', archived: false, parent: null, ...extra });
-    const rows = [conv('lead', { used: now + 100 }), ...Array.from({ length: 4 }, (_, i) => conv('worker' + i, { parent: 'lead' })), ...Array.from({ length: 6 }, (_, i) => conv('chat' + i))];
+    const rows = [conv('lead', { used: now - 100 }), ...Array.from({ length: 4 }, (_, i) => conv('worker' + i, { parent: 'lead' })), ...Array.from({ length: 6 }, (_, i) => conv('chat' + i))];
     ipcMain.removeHandler('p9:chat');
     ipcMain.handle('p9:chat', async (_e, action) => {
       if (action === 'list') return { status: 200, body: { conversations: rows, lists: {} } };
@@ -256,11 +256,16 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
   });
   await page.reload();
   const zone = page.locator('#navList [data-zone="project1"]');
+  const projectRow = zone.locator('[data-proj="project1"]');
+  await projectRow.waitFor({ timeout: 15000 });
+  if (await projectRow.getAttribute('aria-expanded') !== 'true') await zone.locator('[data-toggle="project1"]').click();
+  await shot(page, 'sidebar-project-before');
   await zone.locator('[data-subs="lead"]').click({ timeout: 15000 });
   for (let i = 0; i < 4; i++) await zone.locator(`[data-chat="worker${i}"]`).waitFor({ timeout: 5000 });
   assert.equal(await zone.locator('[data-showmore]').innerText(), 'Show 2 more');
+  await page.waitForFunction(() => { const els = [...document.querySelectorAll('#navList [data-zone="project1"] .kids > .rowwrap, #navList [data-zone="project1"] .kids > .subs')]; const order = els.map(e => e.matches('.subs') ? 'toggle' : e.querySelector('[data-chat]')?.dataset.chat); const at = order.indexOf('lead'); return at >= 0 && order[at + 5] === 'toggle'; }, null, { timeout: 5000 });
   const order = await zone.locator('.kids > .rowwrap, .kids > .subs').evaluateAll(els => els.map(e => e.matches('.subs') ? 'toggle' : e.querySelector('[data-chat]')?.dataset.chat));
+  await shot(page, 'sidebar-project-cut-workers');
   assert.deepEqual(order.slice(order.indexOf('lead') + 1, order.indexOf('lead') + 5).sort(), ['worker0', 'worker1', 'worker2', 'worker3']);
   assert.equal(order[order.indexOf('lead') + 5], 'toggle');
-  await shot(page, 'sidebar-project-cut-workers');
 });

@@ -158,6 +158,9 @@ test('worker toggle follows an open group', { timeout: 5000 }, async () => {
   const workers = Array.from({ length: 4 }, (_, i) => ({ id: `worker${i}`, parent: 'chat0' }));
   const result = cutTree(nested([...chats, ...workers], { chat0: true }), false);
   assert.equal(result.count, 7);
+  const closed = cutTree(nested([...chats, ...workers], { chat0: false }), false);
+  assert.equal(closed.rows[1].fold, 'chat0');
+  assert.equal(closed.count - 5, 2);
   assert.deepEqual(result.rows.filter(e => e.s).map(e => e.s.id), ['chat0', 'worker0', 'worker1', 'worker2', 'worker3', 'chat1', 'chat2', 'chat3', 'chat4']);
   assert.equal(result.rows.at(-1).s.id, 'chat4');
 });
