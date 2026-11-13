@@ -227,5 +227,8 @@ export function setupRoutes(outer) {
     const result = await outer.chat.workers.clean(id);
     return c.json(result, result.error === 'request-refused' ? 400 : result.error ? 500 : 200);
   });
+  // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
+  // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
+  outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));
   return { signedIn };
 }

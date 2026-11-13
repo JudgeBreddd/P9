@@ -110,6 +110,19 @@ test('projects: New project (three places, adopt offer, shared folder), the page
   await page.locator('#projPage .crow.file [data-pj=rm]').click();
   await until(async () => !(await call(instance, '/projects/' + garden.id)).project.files.length, 'file removed');
 
+  // A1, A4: Sprint setup. A refused address says so and saves nothing; a good one and a setup command are saved.
+  await page.locator('#pjSpSource').fill('ext::sh -c id');
+  await page.locator('#projPage [data-pj=spset]').click();
+  await page.locator('.toast', { hasText: 'P9 clones only from' }).first().waitFor({ timeout: 5000 });
+  assert.deepEqual((await call(instance, '/projects/' + garden.id)).project.sprint, { source: '', setup: '' });
+  await page.locator('#pjSpSource').fill(' https://example.com/garden/beds.git ');
+  await page.locator('#pjSpSetup').fill('pnpm install');
+  await page.locator('#pjSpSetup').press('Enter');
+  await until(async () => (await call(instance, '/projects/' + garden.id)).project.sprint.setup === 'pnpm install', 'sprint setup saved');
+  assert.deepEqual((await call(instance, '/projects/' + garden.id)).project.sprint, { source: 'https://example.com/garden/beds.git', setup: 'pnpm install' });
+  await page.locator('#pjSpSetup').scrollIntoViewIfNeeded();
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-setup ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+
   // MC-18: a chat moved into the project shows the project's work folder, not its own; a chat in no project keeps its own.
   assert.equal((await call(instance, '/chat/' + moved + '/project', 'POST', { project: garden.id })).status, 200);
   // The chat in no project first, so the tree is off 'garden' (Open left it there) before the project's chat is checked.

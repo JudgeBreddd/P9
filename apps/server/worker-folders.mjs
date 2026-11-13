@@ -15,11 +15,23 @@ const HEX = /^[0-9a-f]{4,64}$/i;
 export const WORKER = ':worker-folder'; // a chat's folder value: found again from its parent and key at every start
 const SETUP_MS = 15 * 60_000; // ponytail: one cap for every setup command; a project whose install takes longer needs a setting
 const TAIL = 2000;
+const SETUP_FROM = 'the project\'s, else Settings > Delegation';
+
+// A1, a sprint's source as an address (SECURITY.md § Worker folders): https://, ssh:// or user@host:path, nothing else.
+// The user name, the host and the path after user@host: never start with '-', so no part git or ssh could read as an
+// option; no spaces or control characters.
+// protocols is the test's door (file, for a clone with no network); the address clone's git gets the same list.
+export function remoteOk(address, protocols = ['https', 'ssh']) {
+  if (typeof address !== 'string' || !address || address.length > 2000 || /[\s\0-\x1f\x7f]/.test(address) || address.startsWith('-')) return false;
+  const url = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/i.exec(address);
+  if (url) return protocols.includes(url[1].toLowerCase()) && (url[1].toLowerCase() === 'file' ? url[2].startsWith('/') : /^([\w.~][\w.~-]*(:[^@/]*)?@)?[a-z0-9][\w.-]*(:\d+)?\//i.test(url[2]) && (url[1].toLowerCase() !== 'https' || !/^[^/]*@/.test(url[2])));
+  return protocols.includes('ssh') && !address.includes('::') && /^[\w.][\w.-]*@[a-z0-9][\w.-]*:[^:-]/i.test(address);
+}
 
 // Every git P9 runs: allow-listed environment, never a prompt, no hooks, no file-system monitor, no external diff.
 // ponytail: a clean or smudge filter in the repository's own config still runs on status (SECURITY.md says so).
 export function git(cwd, args, { timeout = 60_000 } = {}) {
-  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
+  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', SSH_ASKPASS_REQUIRE: 'never', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
   const safe = ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', '-c', 'core.pager=cat'];
   return new Promise((resolve) => execFile('git', [...safe, ...args], { cwd, env, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
     (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, out: String(stdout), err: String(stderr) })));
@@ -100,21 +112,21 @@ function runSetup(command, cwd, limit) {
       const ended = await endTree(proc);
       child.stdout.destroy(); child.stderr.destroy();
       resolve({ error: 'setup-failed', detail: ended === 'stopped'
-        ? 'The setup command (Settings > Delegation) was stopped after ' + minutes + ', with everything it started. The worker was not started; its folder is kept. End of its output:\n' + tail
-        : 'The setup command (Settings > Delegation) passed its ' + minutes + ' and P9 could not confirm that everything it started has stopped: check for it before trying again. The worker was not started; its folder is kept. End of its output:\n' + tail });
+        ? 'The setup command (' + SETUP_FROM + ') was stopped after ' + minutes + ', with everything it started. The worker was not started; its folder is kept. End of its output:\n' + tail
+        : 'The setup command (' + SETUP_FROM + ') passed its ' + minutes + ' and P9 could not confirm that everything it started has stopped: check for it before trying again. The worker was not started; its folder is kept. End of its output:\n' + tail });
     }, limit);
     child.stdout.on('data', keep); child.stderr.on('data', keep);
     child.on('error', (error) => { if (!ending) resolve({ error: 'setup-failed', detail: 'The setup command did not start: ' + error.message }); });
     child.on('close', (code) => {
       if (ending) return; // the cap's own answer, after the tree is confirmed stopped
-      resolve(code === 0 ? null : { error: 'setup-failed', detail: 'The setup command (Settings > Delegation) ended with exit code ' + code
+      resolve(code === 0 ? null : { error: 'setup-failed', detail: 'The setup command (' + SETUP_FROM + ') ended with exit code ' + code
         + '. The worker was not started; its folder is kept. End of its output:\n' + tail });
     });
   });
 }
 
 // home: <ownership>/sprints. A sprint is the id of the chat that started the workers.
-export function createWorkerFolders({ home, setupMs = SETUP_MS }) {
+export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['https', 'ssh'] }) {
   const busy = new Map(); // one make or clean per sprint at a time: two workers never clone twice, clean never races a make
   const queued = (sprint, work) => {
     const run = (busy.get(sprint) ?? Promise.resolve()).then(work);
@@ -125,10 +137,23 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS }) {
   const branchOf = (sprint, item) => 'sprint/' + sprint.slice(0, 8) + '/' + item;
   const valid = async (sprint, item) => home && ID.test(sprint ?? '') && KEY.test(item ?? '') && (await git(undefined, ['check-ref-format', '--branch', branchOf(sprint, item)])).code === 0;
 
-  // A1: the sprint's clone, made once from the folder the worker would have started in.
-  async function cloneFor(sprint, source) {
+  // A1: the sprint's clone, made once: from the address the owner set for the project, else from the folder the worker
+  // would have started in. With an address the owner's folder is not read at all.
+  async function cloneFor(sprint, source, address = '') {
     const clone = path.join(dirOf(sprint), 'clone');
     if (await realDir(clone, 2)) return { clone };
+    if (address) {
+      if (!remoteOk(address, protocols)) return { error: 'source-refused', detail: 'The project\'s sprint source is not an address P9 clones from (https://, ssh:// or user@host:path).' };
+      await mkdir(dirOf(sprint), { recursive: true, mode: 0o700 });
+      const part = path.join(dirOf(sprint), 'clone.part-' + randomBytes(4).toString('hex'));
+      // Only these transports, whatever the address says (ext:: would run a command, file:// would read a local path).
+      const only = ['-c', 'protocol.allow=never', ...protocols.flatMap((name) => ['-c', 'protocol.' + name + '.allow=always'])];
+      const made = await git(dirOf(sprint), [...only, 'clone', '--quiet', '--no-checkout', '--', address, part], { timeout: 10 * 60_000 });
+      if (made.code !== 0) { await rm(part, { recursive: true, force: true }); return { error: 'clone-failed', detail: made.err.slice(-TAIL) }; }
+      if ((await git(part, ['remote', 'set-head', 'origin', '--auto'])).code !== 0) await git(part, ['remote', 'set-head', 'origin', '--delete']);
+      await rename(part, clone);
+      return { clone };
+    }
     // Never git's own default: with no folder git would run in the daemon's working directory.
     if (typeof source !== 'string' || !path.isAbsolute(source)) return { error: 'folder-refused', detail: 'The worker\'s folder is not one P9 may use.' };
     const top = await one(source, ['rev-parse', '--show-toplevel']);
@@ -149,14 +174,14 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS }) {
   }
 
   // A2 (and A4): the worker's folder and branch. The same sprint and item return the folder made before.
-  async function make(sprint, item, source, setup = '') {
+  async function make(sprint, item, source, setup = '', address = '') {
     if (!await valid(sprint, item)) return { error: 'request-refused', detail: 'A worker folder needs a key of a-z 0-9 . _ - that is also a git branch name.' };
     return queued(sprint, async () => {
       const folder = path.join(dirOf(sprint), 'workers', item), branch = branchOf(sprint, item);
       // ready/<item>: written once the setup command passed, so a folder whose setup failed runs it again next time.
       const ready = path.join(dirOf(sprint), 'ready', item);
       if (await realDir(folder, 3) && await lstat(ready).then((s) => s.isFile(), () => false)) return { folder, branch };
-      const { clone, error, detail } = await cloneFor(sprint, source);
+      const { clone, error, detail } = await cloneFor(sprint, source, address);
       if (error) return { error, detail };
       const main = await mainOf(clone);
       if (!main) return { error: 'no-main-line', detail: 'The repository has no main or master branch, here or on its origin.' };

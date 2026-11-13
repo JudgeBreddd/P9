@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createWorkerFolders, gitFacts, setupShell } from '../apps/server/worker-folders.mjs';
+import { createWorkerFolders, git, gitFacts, remoteOk, setupShell } from '../apps/server/worker-folders.mjs';
 import { setupRoutes } from '../apps/server/setup-routes.mjs';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
@@ -302,4 +302,76 @@ test('Worker folders A6: the clean-up route refuses while the lead has a message
   assert.deepEqual(await ask({ state: 'turn', busy: false }, []), [409, 'sprint-running', false], 'the lead is in a turn');
   for (const state of ['running', 'turn', 'idle', 'stopping', 'moving']) assert.deepEqual(await ask(idle, ['stopped', state]), [409, 'sprint-running', false], 'a worker ' + state);
   assert.deepEqual(await ask(null, []), [200, null, true], 'a deleted lead starts no worker');
+});
+
+test('Worker folders A1: a sprint clones from an address the owner set, without reading a folder; only https and ssh forms pass, and git is held to the same transports', { timeout: 60000 }, async (t) => {
+  for (const ok of ['https://example.com/a/b.git', 'ssh://git@example.com/a/b.git', 'ssh://git@example.com:22/a.git', 'git@example.com:a/b.git']) assert.equal(remoteOk(ok), true, ok);
+  for (const bad of ['ext::sh -c id', 'ext::sh', 'file:///etc', 'http://example.com/a', 'git://example.com/a', '-oProxyCommand=x', 'git@-host:x', 'ssh://-oProxyCommand=x/y', 'ssh://-user@example.com/x', 'git@example.com:-x', '-git@example.com:x', 'host:path', 'a@b::c',
+    'https://example.com/a b', 'https://user:pw@example.com/a', 'https://example.com', '/abs/folder', '', 7, null, 'https://example.com/' + 'a'.repeat(2000)]) assert.equal(remoteOk(bad), false, String(bad).slice(0, 40));
+  const { remote, owner, home } = repos(t);
+  // What P9's git and the ssh under it are given: no prompt in a terminal, no password window, no agent socket.
+  const given = (await git(remote, ['-c', 'alias.given=!env', 'given'])).out;
+  for (const line of ['GIT_TERMINAL_PROMPT=0', 'SSH_ASKPASS_REQUIRE=never']) assert.ok(given.split('\n').includes(line), line);
+  assert.doesNotMatch(given, /^(SSH_ASKPASS|GIT_ASKPASS|SSH_AUTH_SOCK)=/m);
+  const before = ownerState(owner), address = 'file://' + remote.split(path.sep).join('/').replace(/^(?!\/)/, '/');
+  // The shipped rule refuses a local path before git runs: nothing is made.
+  const shipped = await createWorkerFolders({ home }).make(ID, 'item-a', null, '', address);
+  assert.equal(shipped.error, 'source-refused');
+  assert.equal(fs.existsSync(path.join(home, ID, 'clone')), false);
+  // The test's door (file allowed): the clone comes straight from the address, with no folder given at all.
+  const folders = createWorkerFolders({ home, protocols: ['file'] });
+  const a = await folders.make(ID, 'item-a', null, 'echo ready> setup.txt', address);
+  assert.equal(a.error, undefined, a.detail);
+  assert.equal(g(a.folder, 'remote', 'get-url', 'origin'), address, 'origin is the address');
+  assert.equal(g(a.folder, 'rev-parse', 'HEAD'), g(remote, 'rev-parse', 'main'), 'started from the address\'s main line');
+  assert.equal(g(a.folder, 'branch', '--show-current'), 'sprint/0123abcd/item-a');
+  assert.equal(fs.readFileSync(path.join(a.folder, 'setup.txt'), 'utf8').trim(), 'ready');
+  assert.equal(ownerState(owner), before, 'the owner\'s folder was not touched');
+  // git itself is held to https and ssh. The owner's own git settings rewrite an ssh address to a local path here: the
+  // address passes P9's check, and git refuses the transport it ends on (without the pin this clone succeeds).
+  const fakeHome = path.join(path.dirname(home), 'git-home');
+  write(path.join(fakeHome, '.gitconfig'), `[url "${address}"]\n\tinsteadOf = ssh://git@p9-test.invalid/repo.git\n`);
+  const kept = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+  process.env.HOME = fakeHome; delete process.env.XDG_CONFIG_HOME;
+  t.after(() => { for (const [key, value] of Object.entries(kept)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  const other = ID.replace('1', '3');
+  const held = await createWorkerFolders({ home }).make(other, 'x', null, '', 'ssh://git@p9-test.invalid/repo.git');
+  assert.equal(held.error, 'clone-failed', JSON.stringify(held));
+  assert.match(held.detail, /transport 'file' not allowed/);
+  assert.equal(fs.readdirSync(path.join(home, other)).filter((name) => name.startsWith('clone')).length, 0, 'nothing is left of the refused clone');
+  console.log('PASS Worker folders A1 address');
+});
+
+test('Worker folders A1 A4: a project\'s sprint source and setup command are set on the desktop route only, checked there, and used by open_chat', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const repo = path.join(instance.workspace, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); write(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [], setup: 'echo all> setup.txt' });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'repo' } })).body.project;
+  assert.deepEqual(project.sprint, { source: '', setup: '' });
+  const set = (body, id = project.id) => call(instance, '/projects/' + id + '/sprint-settings', 'POST', body);
+  for (const bad of [{ source: 'ext::sh -c id', setup: '' }, { source: 'file:///etc', setup: '' }, { source: '-x', setup: '' }]) assert.deepEqual([(await set(bad)).status, (await set(bad)).body.error], [400, 'source-refused'], bad.source);
+  for (const bad of [{ source: '' }, { source: '', setup: 7 }, { source: '', setup: 'x'.repeat(2001) }, { source: '', setup: '', more: 1 }, []]) assert.equal((await set(bad)).status, 400, JSON.stringify(bad).slice(0, 60));
+  assert.equal((await set({ source: '', setup: '' }, ID)).status, 404);
+  // No other project route writes it.
+  assert.equal((await call(instance, '/projects/' + project.id, 'POST', { sprint: { source: 'https://example.com/a.git', setup: 'x' } })).status, 400);
+  const a = await agent(t, instance);
+  assert.equal((await call(instance, `/chat/${a.conversation}/project`, 'POST', { project: project.id })).status, 200);
+  // The project's own setup command wins over the one in Settings > Delegation.
+  assert.deepEqual((await set({ source: '', setup: 'echo mine> setup.txt' })).body.project.sprint, { source: '', setup: 'echo mine> setup.txt' });
+  const made = await a.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'item-1' });
+  assert.equal(made.error, undefined, JSON.stringify(made));
+  assert.equal(fs.readFileSync(path.join(made.folder, 'setup.txt'), 'utf8').trim(), 'mine');
+  // A rename keeps the settings.
+  assert.deepEqual((await call(instance, '/projects/' + project.id, 'POST', { name: 'Site 2' })).body.project.sprint, { source: '', setup: 'echo mine> setup.txt' });
+  // With an address the folder is not what gets cloned: a second lead's sprint fails on the unreachable address.
+  assert.equal((await set({ source: 'https://p9-test.invalid/none.git', setup: '' })).body.project.sprint.source, 'https://p9-test.invalid/none.git');
+  const b = await agent(t, instance);
+  await call(instance, `/chat/${b.conversation}/project`, 'POST', { project: project.id });
+  assert.equal((await b.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'item-1' })).error, 'folder-refused', 'a folder is not quietly dropped for the address');
+  const far = await b.tool('open_chat', { text: 'cwd', worktree: true, key: 'item-1' });
+  assert.equal(far.error, 'clone-failed', JSON.stringify(far));
+  assert.equal(fs.existsSync(path.join(path.dirname(path.dirname(made.folder)), '..', b.conversation, 'clone')), false);
+  console.log('PASS Worker folders project sprint settings');
 });

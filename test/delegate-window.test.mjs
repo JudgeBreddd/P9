@@ -134,7 +134,14 @@ test('Delegate window: workers indented under their chat and folded past three; 
   await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
   const group = page.locator('#setDelegation');
   await group.scrollIntoViewIfNeeded();
-  assert.match(await group.locator('[data-dg-what]').innerText(), /hand parts of a job to workers/);
+  assert.match(await group.locator('[data-dg-what]').innerText(), /hand parts of a job, or a whole build, to workers/);
+  // F5: sprints have their own section, which says where each sprint setting lives.
+  const sprints = page.locator('#setSprint');
+  await sprints.scrollIntoViewIfNeeded();
+  assert.deepEqual(await sprints.locator('.set-row strong').allInnerTexts(), ['A branch per worker', 'A plan written down', 'Ready means checked', 'Where you follow it', 'Sprint settings']);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT f5-sprints ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await group.scrollIntoViewIfNeeded();
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT f5-delegation ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await until(async () => await group.locator('[data-dg-start]').inputValue() === 'agent' && !(await group.locator('[data-dg-start]').isDisabled()), 'the daemon\'s value in Settings');
   assert.deepEqual(await group.locator('[data-dg-start] option').allInnerTexts(), ['Off', 'Ask me first', 'Agent decides']);
   await group.locator('[data-dg-start]').selectOption('ask');
