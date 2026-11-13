@@ -48,7 +48,7 @@ test('Worker notes: the header of a worker chat has a Notes button that reads it
   await page.locator('.pane[data-id="lead-1"]').waitFor({ timeout: 15000 });
   await send([lead, conv('w-1', { title: 'Builder', parent: 'lead-1' })]);
   assert.equal(await page.locator('.pane[data-id="lead-1"] [data-notes]').count(), 0, 'a Notes button on a chat that is not a worker');
-  await page.evaluate(() => document.querySelector('#navList .row[data-chat="w-1"]')?.click());
+  await page.locator('#navList .row[data-chat="w-1"]').click({ timeout: 15000 }); // the list reaches the page from the daemon: wait for the row
   const button = page.locator('.pane[data-id="w-1"] [data-notes]');
   await button.waitFor({ timeout: 15000 });
   await button.click();
