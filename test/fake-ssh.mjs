@@ -70,7 +70,10 @@ for (const forward of forwards) {
   if (!tcp) rmSync(local, { force: true }); // StreamLocalBindUnlink=yes
   const listener = net.createServer(socket => {
     const far = net.connect(remote);
-    socket.pipe(far).pipe(socket);
+    // FAKE_SSH_DELAY_MS: each chunk, each way, arrives that much later (a real tunnel's latency; pets-load.test.mjs).
+    const delay = Number(process.env.FAKE_SSH_DELAY_MS) || 0;
+    const relay = (from, to) => delay ? from.on('data', d => setTimeout(() => to.write(d), delay)).on('end', () => setTimeout(() => to.end(), delay)) : from.pipe(to);
+    relay(socket, far); relay(far, socket);
     far.on('error', () => socket.destroy());
     socket.on('error', () => far.destroy());
   });
