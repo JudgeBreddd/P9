@@ -116,7 +116,10 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   }
   // Operation IDs are never forgotten: after a week only the stored reply is dropped, so a later retry is refused
   // (operation-expired) instead of running again. A row is an ID and a hash, about 150 bytes.
-  db.prepare("UPDATE operations SET state = 'expired', body = NULL WHERE at < ? AND state != 'expired'").run(Date.now() - WEEK);
+  // Again each day for a daemon that runs for weeks (finding 19); a timer that finds the database closed stops itself.
+  const expire = () => db.prepare("UPDATE operations SET state = 'expired', body = NULL WHERE at < ? AND state != 'expired'").run(Date.now() - WEEK);
+  expire();
+  const daily = setInterval(() => { try { expire(); } catch { clearInterval(daily); } }, 24 * 3600 * 1000).unref();
   // E2: one chat's events (or a few chats') without reading the rest. An index, not a schema change: an older build
   // opens the file unchanged and SQLite keeps the index up to date for it, so it stays outside MIGRATIONS.
   db.exec('CREATE INDEX IF NOT EXISTS events_conversation ON events (conversation, cursor)');
@@ -192,9 +195,10 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   };
   return {
     db,
-    append(conversation, type, data) {
+    // text: data already serialized by the caller (chat.mjs trim()), else it is serialized here.
+    append(conversation, type, data, text) {
       const at = Date.now();
-      const cursor = Number(statements.append.run(conversation, type, JSON.stringify(data), at).lastInsertRowid);
+      const cursor = Number(statements.append.run(conversation, type, text ?? JSON.stringify(data), at).lastInsertRowid);
       // The watcher (telemetry.mjs, set by main.mjs) sees each event as written; it never fails or delays the append.
       try { this?.tap?.({ cursor, conversation, type, data, at }); } catch {}
       return cursor;

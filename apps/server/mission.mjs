@@ -310,17 +310,29 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return records.map((record) => (record.args ? { ...record, args: record.args.map((arg) => (arg?.choices === 'plans' ? { ...arg, choices: list } : arg)) } : record));
   };
   // The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
+  // Both files are still read each call (a guarded read hashes what it reads); they are parsed again only when either hash,
+  // the space file or the settings changed (finding 13). Callers never change what it returns.
+  const parsed = { key: null, settings: null, combined: null };
   async function registry() {
     if (!settings) throw new Error('settings-missing');
-    const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file), { content: '{}' })).content, settings.page_schemes);
-    let space = { sections: [], invalid: [] };
+    const regFile = await settingFile('registry', (file) => readFile(workspace, file), { content: '{}', hash: 'none' });
+    let spaceText = null, spaceHash = 'none';
     // The space picker's scratch space (settings.space_name) is shown instead of the main one; the main file is not read then.
     const file = spaceFile(settings, drafts);
     if (file || settings.space_name) {
-      try { space = parseSpace((await readFile(...spaceAt(workspace, file))).content); }
-      catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
+      try { ({ content: spaceText, hash: spaceHash } = await readFile(...spaceAt(workspace, file))); }
+      catch { spaceText = null; spaceHash = 'unreadable'; }
     }
-    const combined = combine(reg, space);
+    const key = JSON.stringify([regFile.hash, spaceHash, file ?? null]);
+    if (parsed.key !== key || parsed.settings !== settings) {
+      const reg = parseRegistry(regFile.content, settings.page_schemes);
+      let space = { sections: [], invalid: [] };
+      if (spaceText !== null || spaceHash === 'unreadable') {
+        try { space = parseSpace(spaceText); } catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
+      }
+      Object.assign(parsed, { key, settings, combined: combine(reg, space) });
+    }
+    const combined = parsed.combined;
     return { ...combined, scripts: await named(combined.scripts), apps: await named(combined.apps) };
   }
   async function queue() {
@@ -651,12 +663,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   // Windows opens a URL through its protocol handler, never cmd's start, which would parse an & in the URL (D1).
   const open = (url) => windows ? app([system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url], root()) : transient(['xdg-open', url], root());
   const notStarted = { status: 502, error: 'could-not-start' };
-  async function resolve(kind, id, body, allowedKeys) {
+  // reg: the registry the caller has read already (tile()), so a request reads it once.
+  async function resolve(kind, id, body, allowedKeys, reg) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 404, error: 'unknown-id' };
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowedKeys.includes(key))) {
       return { status: 400, error: 'request-refused' };
     }
-    const item = (await registry())[kind].find((record) => record.id === id);
+    const item = (reg ?? await registry())[kind].find((record) => record.id === id);
     if (!item) return { status: 404, error: 'unknown-id' };
     const declared = item.args?.length ?? 0;
     const args = body.args ?? [];
@@ -836,7 +849,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (script.args?.length || script.confirm || script.terminal || script.detach) {
       return { status: 409, error: 'not-a-data-script', detail: script.title + ' takes arguments or is marked confirm, terminal or detach, so a tile never runs it.' };
     }
-    const target = await resolve('scripts', script.id, {}, []);
+    const target = await resolve('scripts', script.id, {}, [], reg);
     if (target.error) return target;
     const key = createHash('sha256').update(JSON.stringify([id, target.argv, target.cwd])).digest('hex');
     return { ...target, script, key, card: 'html' in item };
