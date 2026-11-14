@@ -125,6 +125,11 @@ export async function createDesktop({ state, open } = {}) {
   // Lets the freeze record read the stack a hung page is stuck in (with the Document-Policy header serve() sends).
   app.commandLine.appendSwitch('enable-features', 'DocumentPolicyIncludeJSCallStacksInCrashReports');
   await app.whenReady();
+  // F3 (list 21): these reads start together, beside appSite() below (accountName runs 'net user' on Windows); each is awaited where it was.
+  const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json'), serverFile = path.join(app.getPath('userData'), 'p9-server.json');
+  const petsFolder = path.join(app.getPath('userData'), 'pets');
+  const nameSoon = accountName(), settingsSoon = readFile(settingsFile, 'utf8'), savedSoon = readFile(serverFile, 'utf8'), petsSoon = lstat(petsFolder).catch(() => null);
+  settingsSoon.catch(() => {}); savedSoon.catch(() => {}); // read below; a missing file is handled there
   // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
   // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
   // No task, or v0.1.1's powershell.exe one (issue #6 B3), cannot be fixed by starting it: the installed app runs the
@@ -184,16 +189,15 @@ export async function createDesktop({ state, open } = {}) {
     return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff', 'Document-Policy': 'include-js-call-stacks-in-crash-reports' } });
   };
   protocol.handle('p9', serve('app', 'frame'));
-  const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json');
-  const name = await accountName();
-  let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
+  const name = await nameSoon;
+  let settings = checkSettings(await settingsSoon.then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
   let settingsSaving = Promise.resolve();
   // Server mode (remote.mjs, threat model row 50): while a host is chosen, state is that server's forward, else this machine's
   // daemon. Both daemons keep running; switching reloads the window onto the other. The choice is kept in p9-server.json.
-  const localState = state, serverFile = path.join(app.getPath('userData'), 'p9-server.json');
+  const localState = state;
   const sshCommand = (!app.isPackaged && process.env.P9_SSH) || 'ssh'; // P9_SSH: the tests' stand-in, source checkouts only
   // last: the host used before, so Local can show a one-click way back.
-  const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
+  const saved = await savedSoon.then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
   // Aborted on quit: ends a forward connectServer is still waiting on (a quit mid-connect left its ssh running).
   const leaving = new AbortController();
   // 0.1.8 Settings > Open P9 on (openOn): null, where it was last (host, as before); '', this computer; a host, that remote,
@@ -329,9 +333,8 @@ export async function createDesktop({ state, open } = {}) {
   // Here, not beside wake(): wake() reads serverHost, which does not exist before this point.
   if (process.platform === 'win32' && localState) health(localState).catch(wake);
   app.on('will-quit', () => { serverTry++; leaving.abort(); server?.close().catch(() => {}); });
-  const petsFolder = path.join(app.getPath('userData'), 'pets');
   // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
-  if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
+  if (!(await petsSoon)) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
   // Only for the shell itself: an artifact's frame (item 19, row 65) gets neither.
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => callback(details?.isMainFrame !== false && (permission === 'clipboard-sanitized-write' || permission === 'notifications')));
