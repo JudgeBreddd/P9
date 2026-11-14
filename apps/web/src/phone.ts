@@ -1786,19 +1786,26 @@ one('#mission').addEventListener('click', async (event) => {
 });
 // O67: one follow per output, ended for good when its window closes (reopening does not bring it back) or a newer run takes the output.
 const following = new WeakMap<HTMLElement, object>();
-async function follow(run: string, output: HTMLElement) {
+async function follow(output: HTMLElement, start: () => Promise<string | null>) {
   const me = {}; following.set(output, me);
   let from = 0, closed = false;
-  output.closest('dialog')?.addEventListener('close', () => { closed = true; }, { once: true });
-  for (;;) {
-    const part = await request(`/runs/${encodeURIComponent(run)}?from=${from}`);
-    if (following.get(output) !== me) return; // a newer run has this output
-    // Nobody reads a closed window. ponytail: the run goes on; its later output is not shown on reopening.
-    if (closed || !output.isConnected) { output.textContent += '\n[window closed: later output not shown]'; return; }
-    output.textContent += part.output; from = part.next;
-    if (part.done) { output.textContent += part.code === 0 ? '' : `\n[exit ${part.code}]`; return; }
-    await new Promise((resolve) => setTimeout(resolve, 700));
-  }
+  // The close is watched from before the run is asked for: a window closed while that request is out is closed all the same.
+  const dialog = output.closest('dialog'), shut = () => { closed = true; };
+  dialog?.addEventListener('close', shut, { once: true });
+  // Nobody reads a closed window. ponytail: the run goes on; its later output is not shown on reopening.
+  const over = () => following.get(output) !== me /* a newer run has this output */ || ((closed || !output.isConnected) && ((output.textContent += '\n[window closed: later output not shown]'), true));
+  try {
+    const run = await start();
+    if (run === null) return;
+    for (;;) {
+      if (over()) return;
+      const part = await request(`/runs/${encodeURIComponent(run)}?from=${from}`);
+      if (over()) return;
+      output.textContent += part.output; from = part.next;
+      if (part.done) { output.textContent += part.code === 0 ? '' : `\n[exit ${part.code}]`; return; }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+  } finally { dialog?.removeEventListener('close', shut); }
 }
 one('#mission').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1811,9 +1818,12 @@ one('#mission').addEventListener('submit', async (event) => {
     const copy = output.nextElementSibling as HTMLButtonElement; copy.hidden = false; copy.textContent = 'Copy';
     copy.onclick = () => navigator.clipboard.writeText(output.textContent ?? '').then(() => 'Copied', () => 'Copy failed').then((said) => { copy.textContent = said; });
     const args = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
-    const result = await mutate(`/scripts/${encodeURIComponent(item.id)}/run`, { args, ...(item.confirm && { confirm: true }) });
-    if (result.status === 202) await follow(String(result.body.run), output).catch(() => { output.textContent += '\n[lost the run output]'; });
-    else output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.reason ?? result.body.error ?? result.status}`;
+    await follow(output, async () => {
+      const result = await mutate(`/scripts/${encodeURIComponent(item.id)}/run`, { args, ...(item.confirm && { confirm: true }) });
+      if (result.status === 202) return String(result.body.run);
+      output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.reason ?? result.body.error ?? result.status}`;
+      return null;
+    }).catch(() => { output.textContent += '\n[lost the run output]'; });
   } else if (form.dataset.idea !== undefined) {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
