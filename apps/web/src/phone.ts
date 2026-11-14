@@ -21,13 +21,18 @@ type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Wind
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
-// L1: the message in the box is kept in this phone's storage (label() runs on every change of it), so a reload or a sign-in
-// does not eat it. "restored" is the one kept from before this page loaded, waiting for its chat to open (route()).
-let restored: { id: string; text: string } | null = (() => {
-  try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
-})();
-// F4 item 11: the draft waiting to be written (label(), keepDraft()); declared here, as label() can run early.
-let draft: { id: string; text: string } | null = null, draftTimer: ReturnType<typeof setTimeout> | undefined;
+// L1, O61: the message in the box is kept in this phone's storage, one per chat (label() runs on every change of it), so
+// a reload, a sign-in or opening another chat does not eat it or carry it into the wrong chat. boxFor is the chat whose
+// text the box holds now (route() swaps it). ponytail: a deleted chat's draft stays in storage until its text is cleared.
+const drafts = new Map<string, string>((() => {
+  try {
+    const all = JSON.parse(localStorage.getItem('p9-drafts') ?? '{}'), old = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); // p9-draft: the one record before O61
+    const kept = Object.entries(all && typeof all === 'object' ? all : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+    return typeof old?.id === 'string' && typeof old.text === 'string' && !kept.some(([id]) => id === old.id) ? [...kept, [old.id, old.text] as [string, string]] : kept;
+  } catch { return []; }
+})());
+// F4 item 11: the drafts waiting to be written (setDraft(), keepDraft()); declared here, as label() can run early.
+let boxFor = '', lastSized: string | null = null, draftDirty = false, draftTimer: ReturnType<typeof setTimeout> | undefined;
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; readOnly?: boolean; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 // F4 item 10: the file editor's code (CodeMirror) loads on the first file opened, or in idle time after the first chat
 // screen, as the terminal's does (loadTerm); before, it loaded and was built before the first screen. Until then no file
@@ -144,7 +149,10 @@ function keepPending(key: string, value?: Pending) {
 }
 async function mutate(path: string, body: Json, deadline = 0) {
   if (!online()) throw new Error('offline');
-  const key = path + '\n' + JSON.stringify(body);
+  // O62: a long body (a message with photos, megabytes) is named by its digest. As the name itself it overflowed this
+  // phone's storage, and the send failed before it left, with nothing said.
+  const raw = JSON.stringify(body);
+  const key = path + '\n' + (raw.length > 2000 ? 'sha256:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)))].map((byte) => byte.toString(16).padStart(2, '0')).join('') : raw);
   const stored = keepPending('')[key];
   const pending: Pending = stored && !stored.used ? stored : { id: crypto.randomUUID() };
   keepPending(key, pending);
@@ -161,7 +169,7 @@ async function mutate(path: string, body: Json, deadline = 0) {
   const stop = new AbortController(), timer = deadline ? setTimeout(() => stop.abort(), deadline) : 0;
   let response: Response, result: Json;
   try {
-    response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body), signal: stop.signal });
+    response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: raw, signal: stop.signal });
     // Only an unreadable body (not JSON) is an empty answer; an abort or a network failure while reading it is not an answer at all (round 3 review).
     result = await response.json().catch((error) => { if (error instanceof SyntaxError) return {}; throw error; });
   } catch (error) { throw stop.signal.aborted ? new Error('timeout') : error; }
@@ -281,9 +289,8 @@ async function fetchEvents(wait = 0) {
   else {
     await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
-    const box = one<HTMLTextAreaElement>('#prompt'), open = one<HTMLSelectElement>('#conversation').value;
-    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled' && String(event.conversation) === open)
-      box.value = String((event.data as Json).text) + (box.value ? '\n' + box.value : '');
+    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled')
+      putBack(String(event.conversation), String((event.data as Json).text)); // O61: into its own chat's text, open or not
   }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
 }
@@ -314,7 +321,7 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[] };
+type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[] };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
@@ -352,10 +359,17 @@ const build = perChat((events) => {
   const blocks: Block[] = [];
   // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
   const strip: Strip = { events: [] };
-  const add = (kind: string, text: unknown, extra: Partial<Block> = {}) => { blocks.push({ kind, text: String(text ?? ''), ...extra }); };
+  // O63: `at` names a block by the event that began it (its cursor, and which of that event's blocks), so its node in the
+  // page is the same one when earlier events are read in above it or the blocks before it regroup.
+  let at = '', nth = 0, seq = 0;
+  const add = (kind: string, text: unknown, extra: Partial<Block> = {}) => { blocks.push({ kind, text: String(text ?? ''), at: at + '.' + nth++, ...extra }); };
   // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
-  const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.text += ' · not answered'; } if (block.kind === 'ask') block.closed = true; });
+  // O65: a tool call still running when its turn ends (a Stop writes no closing update for it) is over too: it stops spinning.
+  // One that does go on (a background task) says so with its next update.
+  const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.text += ' · not answered'; } if (block.kind === 'ask') block.closed = true;
+    if (block.kind === 'tool' && (block.status === 'pending' || block.status === 'in_progress')) block.status = 'ended'; });
   for (const event of events) {
+    at = String(event.cursor ?? 'n' + seq); seq++; nth = 0;
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
     // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
     if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
@@ -428,9 +442,9 @@ function itemsOf(blocks: Block[]) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
     if (j - i >= 2) {
       const run = blocks.slice(i, j + 1);
-      out.push({ key: 'g' + i, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
+      out.push({ key: 'g' + blocks[i].at, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
       i = j;
-    } else { const block = blocks[i]; out.push({ key: 'b' + i, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion(), html: () => blockHtml(block) }); }
+    } else { const block = blocks[i]; out.push({ key: 'b' + block.at, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion(), html: () => blockHtml(block) }); }
   }
   itemsKept = { blocks, key, out };
   return out;
@@ -514,7 +528,7 @@ function chatBar(id: string, run: string) {
 }
 // Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
 // so the browser's own back, the iOS edge swipe included, returns to the list.
-let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, anchored = false, seenItems = 0;
+let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, seenItems = 0;
 const body = one<HTMLElement>('#chatBody');
 function route(id: string) {
   const changed = id !== openId; openId = id;
@@ -524,11 +538,14 @@ function route(id: string) {
   document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
   barSig = '';
   if (!id) { pushed = false; mountBar('chat', chatsBar()); online(); renderList(); return; }
+  // L1, O61: the box holds this chat's own unsent text: the other chat's is kept for it, and this chat's (typed before, or
+  // from before a sign-in or a reload) goes in; a chat with none opens empty.
+  if (boxFor !== id) {
+    const box = one<HTMLTextAreaElement>('#prompt');
+    setDraft(boxFor, box.value); boxFor = id; box.value = drafts.get(id) ?? ''; lastSized = null; note(); one<HTMLElement>('#slash').hidden = true;
+  }
   if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one<HTMLElement>('#jump').hidden = true; }
   render();
-  // L1: the unsent message from before the page was last thrown away (a sign-in, a reload) goes back in its own chat's box.
-  const box = one<HTMLTextAreaElement>('#prompt');
-  if (restored?.id === id && !box.value) { box.value = restored.text; label(); }
 }
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
 function back() { if (pushed) window.history.back(); else { window.history.replaceState(null, '', location.pathname + location.search); route(''); } }
@@ -554,7 +571,17 @@ function render() {
   const earlier = one<HTMLButtonElement>('#earlier');
   earlier.hidden = !older.has(picked) || hiddenBlocks > 0; // what is read is drawn first, as the reader scrolls up
   if (changedEarlier !== picked) { changedEarlier = picked; earlier.disabled = false; earlier.textContent = 'Load earlier'; }
-  const height = body.scrollHeight, top = body.scrollTop;
+  // O63: a reader who scrolled up keeps their place by the first block on screen, not by the browser's own scroll anchoring
+  // (not every phone browser has it): where that block is drawn is read before the change and put back after it.
+  let hold: { key: string; top: number } | null = null;
+  if (!stuck) {
+    const edge = body.getBoundingClientRect().top;
+    for (const node of events.children as HTMLCollectionOf<HTMLElement>) {
+      if (!node.dataset.key) continue;
+      const box = node.getBoundingClientRect();
+      if (box.bottom > edge) { hold = { key: node.dataset.key, top: box.top }; break; }
+    }
+  }
   patch(events, shown);
   const info = phoneFolders.get(picked);
   if (!info && !phoneFoldersLoading.has(picked)) {
@@ -572,8 +599,11 @@ function render() {
     const canPick = !!info && !item?.project && !item?.sent;
     events.insertAdjacentHTML('beforeend', `<div class="empty"><h2>What are we working on?</h2><p>Working directory · ${canPick ? `<button type="button" class="quiet" data-chat-folder title="Click to start this chat in another folder">${escape(folder)}</button>` : escape(folder)}</p></div>`);
   }
-  if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
-  anchored = false;
+  if (stuck) body.scrollTop = body.scrollHeight;
+  else if (hold) { // older blocks inserted above, or one above that grew, keep the reader where they were
+    const node = [...events.children as HTMLCollectionOf<HTMLElement>].find((item) => item.dataset.key === hold!.key);
+    if (node) body.scrollTop += node.getBoundingClientRect().top - hold.top;
+  }
   const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
@@ -621,7 +651,7 @@ one('#sheetBody').addEventListener('click', async event => {
   }
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
-  if (restored?.id === id) restored = { ...restored, id: next };
+  editDraft(id, (text) => { setDraft(next, text); return ''; }); // O61: the text typed goes with the chat to its new id
   if (chosenMode) startPick.set(next, chosenMode);
   if (chosenModel) swapModel.set(next, chosenModel);
   sheet.close(); await loadChat(); openChat(next);
@@ -634,12 +664,12 @@ one('#earlier').addEventListener('click', async () => {
   try {
     take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1)), [id]);
     button.disabled = false; button.textContent = 'Load earlier';
-    if (openId === id) { anchored = true; render(); }
+    if (openId === id) render();
   } catch { button.disabled = false; button.textContent = 'Not loaded · Tap to try again'; }
 });
 body.addEventListener('scroll', () => {
   stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 80; one<HTMLElement>('#jump').hidden = stuck;
-  if (body.scrollTop < 60 && hiddenBlocks > 0) { windowSize += 60; anchored = true; render(); } // older history loads when the reader reaches the top
+  if (body.scrollTop < 60 && hiddenBlocks > 0) { windowSize += 60; render(); } // older history loads when the reader reaches the top
 }, { passive: true });
 new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(body);
 new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(one('#events'));
@@ -703,7 +733,7 @@ function renderPicks(id: string) {
   const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.dataset.was ?? '' : startPick.get(id) ?? '';
   picksFor = key;
   mode.innerHTML = `<option value="">Mode: ${escape(set?.name ?? 'as set')}</option>` + ((modes as Record<string, string[]>)[provider(id)] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
-  mode.value = keep; mode.dataset.was = mode.value; startPick.delete(id); pill();
+  mode.value = keep || (chosen.get(id)?.get('mode')?.value ?? ''); mode.dataset.was = mode.value; startPick.delete(id); pill();
   type Pick = { current?: string; options?: { value: string; name: string }[] };
   const config = (configs.at(-1)?.data ?? agentLists[provider(id)] ?? {}) as { // O47: a chat not started yet offers its agent's kept lists
     model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
@@ -714,6 +744,12 @@ function renderPicks(id: string) {
   // P10: the agent's own effort, fast mode and plan switch (threat model row 22), each sent only when changed.
   one('#pickers').innerHTML = (config.pickers ?? []).map((p) => `<select data-config="${escape(p.id)}" data-current="${escape(p.current)}" aria-label="${escape(p.name)}">${(p.options ?? []).map((o) =>
     `<option value="${escape(o.value)}"${o.value === p.current ? ' selected' : ''}>${escape(p.name + ': ' + o.name)}</option>`).join('')}</select>`).join('');
+  // O64: a pick made here and not sent yet is still the pick after this redraw (the agent reported a setting, or the reader
+  // came back from another chat): only what the agent offers, and a send clears it (the agent's own value is the truth again).
+  for (const [key, pick] of chosen.get(id) ?? []) {
+    const select = key === 'model' ? model : key.startsWith('config:') ? [...document.querySelectorAll<HTMLSelectElement>('#pickers select')].find((item) => item.dataset.config === key.slice(7)) : undefined;
+    if (select && pick.value !== pick.base && [...select.options].some((option) => option.value === pick.value)) select.value = pick.value;
+  }
 }
 // Keeps the chat live: long-polls the daemon (it holds each request up to 8 s) while the page is visible and online.
 async function listen() {
@@ -781,24 +817,41 @@ const turn = perChat((events) => {
 // in with Steer (after the current step) or, from the Queue button beside it, after the turn.
 // F4 item 11: the draft goes to storage once typing pauses, not on every key; a hidden page or the sign-in writes it at once.
 function keepDraft() {
-  clearTimeout(draftTimer); if (!draft) return;
-  try { if (draft.text.trim()) localStorage.setItem('p9-draft', JSON.stringify(draft)); else localStorage.removeItem('p9-draft'); } catch {}
-  draft = null;
+  clearTimeout(draftTimer); if (!draftDirty) return;
+  try { if (drafts.size) localStorage.setItem('p9-drafts', JSON.stringify(Object.fromEntries(drafts))); else localStorage.removeItem('p9-drafts'); localStorage.removeItem('p9-draft'); } catch {}
+  draftDirty = false;
 }
+function setDraft(id: string, text: string) {
+  if (!id || (drafts.get(id) ?? '') === text) return;
+  if (text.trim()) drafts.set(id, text); else drafts.delete(id);
+  draftDirty = true; clearTimeout(draftTimer); draftTimer = setTimeout(keepDraft, 400);
+}
+// O61: a chat's unsent text, read and changed by chat, never through whichever chat the box shows: a send answered, or a
+// message handed back, after the reader opened another chat must not touch that other chat's text.
+function editDraft(id: string, change: (text: string) => string) {
+  const box = one<HTMLTextAreaElement>('#prompt'), text = change(id === boxFor ? box.value : drafts.get(id) ?? '');
+  setDraft(id, text);
+  if (id === boxFor) { box.value = text; label(); }
+}
+const putBack = (id: string, text: string) => editDraft(id, (now) => text + (now ? '\n' + now : ''));
 addEventListener('pagehide', keepDraft); document.addEventListener('visibilitychange', () => { if (document.hidden) keepDraft(); });
 function label() {
-  const id = one<HTMLSelectElement>('#conversation').value, send = one<HTMLButtonElement>('#composer button[type="submit"]');
+  const id = openId, send = one<HTMLButtonElement>('#composer button[type="submit"]');
   const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
   const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
   const box = one<HTMLTextAreaElement>('#prompt');
-  if (!restored || box.value) {
-    restored = null;
-    draft = { id, text: box.value }; clearTimeout(draftTimer); draftTimer = setTimeout(keepDraft, 400);
-  }
+  if (id === boxFor) setDraft(id, box.value);
   box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
   // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
   // here. ponytail: by hand, as iOS Safari has no field-sizing.
-  box.style.height = 'auto'; box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
+  // O63: measured only when the text changed, and the chat's place is put back: the measure makes the box one line for a
+  // moment, the chat grows by the difference, and at the bottom the browser moved it up by that much on every key.
+  if (lastSized !== box.value) {
+    const chat = one<HTMLElement>('#chatBody'), top = chat.scrollTop; lastSized = box.value;
+    box.style.height = 'auto'; box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
+    // At the bottom it stays at the bottom, in the same task as the key (a taller box makes the chat shorter).
+    const to = stuck ? chat.scrollHeight : top; if (chat.scrollTop !== to) chat.scrollTop = to;
+  }
   send.dataset.stop = String(busy && empty);
   one('#send .vh').textContent = busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
   // P18: the slim card over the box says a send goes into a running turn, and how (Steer is the arrow's default).
@@ -806,12 +859,13 @@ function label() {
   one('#midTurnLabel').textContent = (provider(id) === 'codex' ? 'Codex' : 'Claude') + ' is working';
 }
 function renderQueue() {
-  const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
+  const id = openId, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
   box.hidden = !items.length && !held.length;
   box.innerHTML = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
     + items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
 }
 let draining = false;
+const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
 async function drain() {
   if (draining || !navigator.onLine) return;
   draining = true;
@@ -819,17 +873,17 @@ async function drain() {
   try {
     for (const chat of state.conversations) {
       const id = String(chat.id);
+      if (Date.now() < (retryAt.get(id) ?? 0)) continue;
       for (let next = queued(id)[0]; next && !asking(id); next = queued(id)[0]) {
         const { qid, ...body } = next;
         const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' });
-        // Any answer is final for this message: it went, or the daemon refused it and says why (the text goes back in the box).
+        // O62: refused because the turn is still ending (a Stop just pressed: the daemon holds nothing for a turn that is
+        // stopping). The message stays queued and goes a moment later; it used to come back into the box as "Not sent".
+        if (result.status === 409 && result.body.error === 'turn-running') { retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break; }
+        // Any other answer is final for this message: it went, or the daemon refused it and says why (the text goes back in its chat's box).
         keepQueue(id, queued(id).filter((item) => item.qid !== qid));
         if (result.status === 202) sent = true;
-        else {
-          const input = one<HTMLTextAreaElement>('#prompt');
-          if (id === one<HTMLSelectElement>('#conversation').value) input.value = next.text + (input.value ? '\n' + input.value : '');
-          note(`Not sent: ${result.body.error ?? result.status}`);
-        }
+        else { putBack(id, next.text); if (id === openId) note(`Not sent: ${result.body.error ?? result.status}`); }
       }
     }
   } catch { /* a lost request keeps its message and its ID; the next drain sends it again */ }
@@ -840,23 +894,27 @@ one<HTMLElement>('#queued').onclick = async (event) => {
   const hold = (event.target as Element).closest<HTMLButtonElement>('button[data-unhold]');
   if (hold) {
     // A held one comes back into the box only once the daemon has let it go (it may just have been sent).
-    const id = one<HTMLSelectElement>('#conversation').value, item = turn(id).held.get(hold.dataset.unhold!);
-    const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: hold.dataset.unhold });
-    if (result.status === 200 && item) { const input = one<HTMLTextAreaElement>('#prompt'); input.value = item.text + (input.value ? '\n' + input.value : ''); }
-    await fetchEvents(); render(); return;
+    const id = openId, item = turn(id).held.get(hold.dataset.unhold!);
+    // O62: with a deadline, and a line when it did not work: the tap used to wait for good on a request that never answered.
+    hold.disabled = true;
+    try {
+      const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: hold.dataset.unhold }, SEND_DEADLINE);
+      if (result.status === 200 && item) putBack(id, item.text);
+      else if (result.status !== 200 && result.status !== 409) note(`Not taken back: ${result.body.error ?? result.status}`); // 409: it was sent already, and the events show it
+    } catch (error) { hold.disabled = false; note(`Not taken back: ${(error as Error).message === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : 'P9 could not be reached'}. It is still waiting; tap Take back to try again.`); return; }
+    await fetchEvents().catch(() => {}); render(); return;
   }
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
-  const id = one<HTMLSelectElement>('#conversation').value, item = queued(id).find((entry) => entry.qid === button.dataset.unqueue); if (!item) return;
+  const id = openId, item = queued(id).find((entry) => entry.qid === button.dataset.unqueue); if (!item) return;
   keepQueue(id, queued(id).filter((entry) => entry.qid !== item.qid));
-  const input = one<HTMLTextAreaElement>('#prompt'); input.value = item.text + (input.value ? '\n' + input.value : '');
-  renderQueue(); label();
+  putBack(id, item.text); renderQueue();
 };
 // P4: one tap sends with the keyboard open. The send button never takes focus, so the box keeps it: no blur, no
 // keyboard closing and the layout jumping under the finger to eat the tap (focus moves on mousedown, which a tap
 // also fires).
 for (const button of document.querySelectorAll<HTMLButtonElement>('#composer button[type="submit"], button[form="composer"]')) for (const type of ['pointerdown', 'mousedown']) button.addEventListener(type, (event) => event.preventDefault());
 async function submitFromBox(event: Event) {
-  event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
+  event.preventDefault(); const id = openId; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
   if (id && submitter?.dataset.stop === 'true') {
@@ -874,7 +932,7 @@ async function submitFromBox(event: Event) {
   // Round 3 and 4 review: a send that got no answer stays one submission, with its first wire body and operation ID, until the daemon
   // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
   // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
-  const draft = JSON.stringify([text, images.map((image) => image.data), chosenKey(id)]);
+  const draft = JSON.stringify([text, images.map((image) => image.data.length + ':' + image.data.slice(-64)), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
   if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
   const again = inFlight.has(id);
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
@@ -882,7 +940,7 @@ async function submitFromBox(event: Event) {
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
-    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
+    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); chosen.delete(id); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
@@ -895,19 +953,23 @@ async function submitFromBox(event: Event) {
     if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
   }
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
-  const sent = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
-  inFlight.set(id, { draft, sent });
+  // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
+  const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
+  const sent = { ...first, ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
+  inFlight.set(id, { draft, sent: first }); keepInFlight();
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
-  inFlight.delete(id);
+  inFlight.delete(id); keepInFlight();
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
+  // are no longer unsent: what the agent reports is the setting again.
+  if (result.status === 202) { chosen.delete(id); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = input.value.replace(text, '').trim(); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); chosen.delete(id); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 }
@@ -917,8 +979,15 @@ async function submitFromBox(event: Event) {
 // A send that gets no answer keeps its text, images and operation ID; tapping send again is the same operation.
 // ponytail: the interrupt's wait for the turn to end (up to 20 s of reads) still holds the guard; each read is short.
 const SEND_DEADLINE = 30000;
-// ponytail: in memory, one per chat, until answered (a reload loses it; the kept operation ID then holds only if the rebuilt body is identical).
-const inFlight = new Map<string, { draft: string; sent: Json }>(); // per chat: the send that got no answer
+// O62: per chat, the send that got no answer, kept in this phone's storage with the settings chosen for it: after a reload
+// the same text sent again is that same send (its first body and operation ID), so it does not arrive twice.
+const inFlight = new Map<string, { draft: string; sent: Json }>();
+function keepInFlight() {
+  try {
+    if (inFlight.size) localStorage.setItem('p9-inflight', JSON.stringify(Object.fromEntries([...inFlight].map(([id, kept]) => [id, { ...kept, picks: [...chosen.get(id) ?? []] }]))));
+    else localStorage.removeItem('p9-inflight');
+  } catch {}
+}
 // Round 5 review: the identity of a pending send holds the settings the user chose and that took effect, never a count of events (a
 // cancelled warning, a no-op pick or an away-and-back would raise it) and never the adapter's own redraws (they set values, not choices).
 // Per chat and setting: `base` is what it was before the user's first change, so a setting changed back to it is as if never touched.
@@ -927,11 +996,16 @@ function choose(id: string, key: string, value: string, base: string) {
   const own = chosen.get(id) ?? chosen.set(id, new Map()).get(id)!;
   own.set(key, { base: own.get(key)?.base ?? base, value });
 }
+try {
+  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; picks: [string, { base: string; value: string }][] }>)) {
+    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent }); if (kept.picks?.length) chosen.set(id, new Map(kept.picks));
+  }
+} catch {}
 const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
 // The model and the agent's own pickers have no warning: a change is accepted when it fires. (Mode is recorded in its own handler, once its warning is confirmed.)
 document.addEventListener('change', (event) => {
   const pick = event.target as HTMLSelectElement;
-  if (pick.matches?.('#model, #pickers select')) choose(one<HTMLSelectElement>('#conversation').value, pick.id === 'model' ? 'model' : 'config:' + pick.dataset.config, pick.value, pick.dataset.current ?? '');
+  if (pick.matches?.('#model, #pickers select')) choose(openId, pick.id === 'model' ? 'model' : 'config:' + pick.dataset.config, pick.value, pick.dataset.current ?? '');
 }, true);
 const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 let submitting = false;
@@ -940,9 +1014,12 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   submitting = true;
   try { return await submitFromBox(event); }
   catch (error) {
-    if ((error as Error).message !== 'timeout') throw error;
-    note(((event as SubmitEvent).submitter as HTMLButtonElement | null)?.dataset.stop === 'true' ? `Not stopped: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Tap Stop to try again.`
-      : `Not sent yet: no answer from P9 after ${SEND_DEADLINE / 1000} seconds. Your message is still in the box. Tap send to try again; it will not go twice.`);
+    // O62: every failure says why under the box. Only a timeout did; the rest left the text in the box and no word.
+    const why = (error as Error).message, stop = ((event as SubmitEvent).submitter as HTMLButtonElement | null)?.dataset.stop === 'true';
+    if (why === 'login-required') return false; // the sign-in page is opening; the text is kept for after it
+    const cause = why === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : why === 'offline' ? 'the phone is offline'
+      : (error as Error).name === 'QuotaExceededError' ? "this phone's storage for P9 is full" : 'P9 could not be reached';
+    note(stop ? `Not stopped: ${cause}. Tap Stop to try again.` : `Not sent yet: ${cause}. Your message is still in the box. Tap send to try again; it will not go twice.`);
     return false;
   }
   finally { submitting = false; }
@@ -962,13 +1039,13 @@ let attachedRead = false; // until the kept images are read back, a redraw must 
 function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
 try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
 function renderAttached() {
-  const list = attached.get(one<HTMLSelectElement>('#conversation').value) ?? [], box = one<HTMLElement>('#attached');
+  const list = attached.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length; keepAttached();
   box.innerHTML = list.map((image, i) => `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
 async function addImages(files: Iterable<File>) {
-  const id = one<HTMLSelectElement>('#conversation').value; if (!id) return;
+  const id = openId; if (!id) return;
   const list = attached.get(id) ?? []; attached.set(id, list);
   note();
   for (const file of files) {
@@ -979,7 +1056,7 @@ async function addImages(files: Iterable<File>) {
 }
 one<HTMLElement>('#attached').onclick = (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
-  attached.get(one<HTMLSelectElement>('#conversation').value)?.splice(Number(button.dataset.unattach), 1); renderAttached();
+  attached.get(openId)?.splice(Number(button.dataset.unattach), 1); renderAttached();
 };
 const picker = one<HTMLInputElement>('#attachInput');
 const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');
@@ -1033,7 +1110,7 @@ function sentImgs(id: string, hashes?: string[]) {
 // P10: slash commands, the agent's own list (its newest available_commands_update, this chat's or else the same
 // agent's), while the box holds only "/name", as on the desktop. A tap fills one in; the agent runs it.
 function showSlash() {
-  const input = one<HTMLTextAreaElement>('#prompt'), slash = one<HTMLElement>('#slash'), typed = /^\/(\S*)$/.exec(input.value), id = one<HTMLSelectElement>('#conversation').value;
+  const input = one<HTMLTextAreaElement>('#prompt'), slash = one<HTMLElement>('#slash'), typed = /^\/(\S*)$/.exec(input.value), id = openId;
   const lists = typed ? state.events.filter((event) => (event.data as Json)?.sessionUpdate === 'available_commands_update' && (event.conversation === id || provider(String(event.conversation)) === provider(id))) : [];
   const newest = lists.findLast((event) => event.conversation === id) ?? lists.at(-1), all = ((newest?.data as Json | undefined)?.availableCommands ?? []) as Json[];
   const name = (command: Json) => String(command?.name ?? ''), word = typed?.[1] ?? '';
@@ -1050,7 +1127,7 @@ one<HTMLElement>('#slash').onclick = (event) => {
 one<HTMLSelectElement>('#conversation').onchange = render; // a stub's history loads from render
 // P10: a question's Answer and Decline, the same POST /chat/:id/answer.
 async function answerQuestion(form: HTMLFormElement, decline: boolean) {
-  const id = one<HTMLSelectElement>('#conversation').value, request = form.dataset.question!;
+  const id = openId, request = form.dataset.question!;
   const asked = state.events.find((event) => event.type === 'question' && (event.data as Json)?.request === request)?.data as Json | undefined;
   const fields = (asked?.form as Json | null)?.fields as Json[] | undefined;
   if (!decline && !fields) return;
@@ -1065,7 +1142,7 @@ one<HTMLElement>('#events').onclick = async (event) => {
   const decline = (event.target as Element).closest<HTMLButtonElement>('button[data-decline]');
   if (decline) return answerQuestion(decline.form!, true);
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-request]'); if (!button) return;
-  const id = one<HTMLSelectElement>('#conversation').value;
+  const id = openId;
   button.parentElement!.querySelectorAll('button').forEach((item) => { item.disabled = true; });
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/answer', { request: button.dataset.request, answer: { optionId: button.dataset.option } });
   if (result.status === 200) { await fetchEvents(); render(); }
@@ -1079,7 +1156,7 @@ const loose = one<HTMLDialogElement>('#looseDlg');
 let answer: ((value: string) => void) | undefined;
 loose.addEventListener('close', () => { if (!loose.open) { answer?.(loose.returnValue); answer = undefined; } });
 one<HTMLSelectElement>('#mode').onchange = async (event) => {
-  const mode = event.target as HTMLSelectElement, pick = mode.value, id = one<HTMLSelectElement>('#conversation').value, agent = provider(id);
+  const mode = event.target as HTMLSelectElement, pick = mode.value, id = openId, agent = provider(id);
   if (pick in LOOSE && !localStorage.getItem('p9-mode-ok:' + pick)) {
     one('#looseT').textContent = `Turn on ${pick} for ${agent === 'codex' ? 'Codex' : 'Claude'}?`; one('#looseP').textContent = (LOOSE as Record<string, string>)[pick];
     answer?.('no');
