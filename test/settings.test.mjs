@@ -1355,6 +1355,13 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 20000 });
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High']);
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On', 'Off ✓']);
+  // O71: the Effort default can show while the daemon's one fresh read of the lists still says loading (its agent is being
+  // stopped). When the read ends, the open Model menu drops its "Reading…" note and morph, which matches rows by position,
+  // relabels the row a click had found as On to Off: the pick sent was Off. Pick only once the read is over.
+  await pillOf(pane, 'Model').click();
+  await page.locator('#pillMenu [data-list-note]').waitFor({ state: 'detached', timeout: 20000 }).catch(async () => {
+    throw new Error('the lists read never ended: Model menu ' + (await page.locator('#pillMenu').innerText()).replace(/\s+/g, ' ')); });
+  await page.keyboard.press('Escape');
   await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
   await ta.click(); await page.keyboard.type('config'); await page.keyboard.press('Enter');
   // A failed wait says what the agent did answer and what the pills showed, so a red run names the lost pick.

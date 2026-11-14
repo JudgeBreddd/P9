@@ -210,9 +210,14 @@ test('the weekly Wiki audit on the phone at 390x844: Approve, Park, Deny per row
     await tile.waitFor({ timeout: 15000 });
     await tile.click();
     const box = page.locator('#mission dialog[open]');
-    await box.locator('summary', { hasText: 'Weekly Wiki audit' }).click();
-    await box.locator('[data-ck="audit"] [data-ck-row]').first().waitFor({ timeout: 10000 });
-    return box;
+    // Closing a window leaves its rows as they were, and the Mission tap's refresh (phone.ts keepOpen) can draw them again
+    // before or after the tile tap: the row may already be open here. Tap it only while it is closed, as a person would.
+    const audit = box.locator('details.row', { has: page.locator('xpath=./summary', { hasText: 'Weekly Wiki audit' }) });
+    for (const end = Date.now() + 10000; Date.now() < end; await page.waitForTimeout(200)) {
+      if (!await audit.evaluate((d) => d.open).catch(() => true)) await audit.locator('xpath=./summary').click().catch(() => {});
+      if (await box.locator('[data-ck="audit"] [data-ck-row]').first().isVisible()) return box;
+    }
+    throw new Error('the audit row never showed its rows; the window held: ' + await box.innerText().catch(() => '(no window)'));
   };
   let box = await open();
   const row = (n) => box.locator('[data-ck="audit"] [data-ck-row]').nth(n);

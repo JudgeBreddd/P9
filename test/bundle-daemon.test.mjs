@@ -9,7 +9,9 @@ import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 
 // B10: package-windows.mjs builds the installer's daemon folder with bundleDaemon; this builds the same layout with this
 // platform's agent binaries and runs it, so a bundle that cannot start or find its agents fails here before Windows CI.
-test('B10: the bundled daemon is a few dozen files, starts, and its agents answer from the bundled layout', async (t) => {
+// O71: CI jobs 132372666811 (#108) and #111's linux (2) sat on this file for 29 min with no result. Every wait here is
+// bounded, so a stuck step fails with this test's name: the test, each child run, and the adapters (killed outright).
+test('B10: the bundled daemon is a few dozen files, starts, and its agents answer from the bundled layout', { timeout: 180000 }, async (t) => {
   // Outside the repo, so nothing resolves from the workspace's node_modules. ponytail: about 670 MB of agent binaries;
   // the test sandbox's /tmp is 1 GB, so move this to a disk folder with no node_modules above it if that fills.
   const out = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-'));
@@ -37,13 +39,13 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   t.after(() => rm(home, { recursive: true, force: true }));
   for (const adapter of ['claude-agent-acp', 'codex-acp']) {
     const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home } });
-    t.after(() => child.kill());
+    t.after(() => child.kill('SIGKILL'));
     let output = '', errors = '';
     child.stderr.on('data', (chunk) => { errors += chunk; });
     await new Promise((resolve) => {
       child.stdout.on('data', (chunk) => { output += chunk; if (output.includes('\n')) resolve(); });
       child.once('exit', resolve);
-      setTimeout(resolve, 15000);
+      setTimeout(resolve, 15000).unref();
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: {} } }) + '\n');
     });
     assert.equal(JSON.parse(output.split('\n')[0]).result?.agentInfo?.name, '@agentclientprotocol/' + adapter, adapter + ' said: ' + output.slice(0, 500) + errors.slice(-500));
@@ -54,14 +56,14 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   assert.match(await readFile(path.join(claudeDist, 'index.js'), 'utf8'), /createRequire\(import\.meta\.resolve\("@anthropic-ai\/claude-agent-sdk"\)\)/);
   await writeFile(path.join(claudeDist, 'probe.mjs'), "import { createRequire } from 'node:module';\n"
     + "console.log(createRequire(import.meta.resolve('@anthropic-ai/claude-agent-sdk')).resolve(process.argv[2]));\n");
-  const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8' });
+  const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8', timeout: 30000 });
   assert.equal(probe.stdout.trim(), path.join(modules, '@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude'), probe.stderr);
   // claude-usage.mjs (the Claude 5 h meter) imports the SDK by path from the adapter's folder: 0.1.6's Windows build
   // shipped without sdk.mjs and the meter showed a dash.
   await writeFile(path.join(claudeDist, 'probe-sdk.mjs'), "import { createRequire } from 'node:module';\n"
     + "const sdk = await import(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));\n"
     + "console.log(typeof sdk.query);\n");
-  const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8' });
+  const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8', timeout: 30000 });
   assert.equal(sdkProbe.stdout.trim(), 'function', sdkProbe.stderr);
 });
 

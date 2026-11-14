@@ -105,10 +105,14 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           set -o pipefail
+          # O71: a test with no timeout of its own fails after 10 min with its name, and a file whose tests are done exits
+          # even if a child it started still holds a handle (two jobs hung 29 min with no name, #108 and #111).
+          # The job log gets lines cut at 2,000 characters; tests.log (the artifact) keeps them whole. #115's linux (6) job
+          # log stopped at the first P9_SHOT line (a 69 KB picture), so its failing test and summary never showed there.
           systemctl --user is-system-running || true
           if [ -z "$FILES" ]; then FILES=$(node test/shard.mjs "$SHARD" 7); fi
           echo "shard $SHARD: $FILES"
-          xvfb-run -a node scripts/with-tmp.mjs node --test $FILES 2>&1 | tee "$RUNNER_TEMP/tests.log"
+          xvfb-run -a node scripts/with-tmp.mjs node --test --test-timeout=600000 --test-force-exit $FILES 2>&1 | tee "$RUNNER_TEMP/tests.log" | cut -c1-2000
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()
