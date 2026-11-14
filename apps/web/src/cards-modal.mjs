@@ -9,8 +9,10 @@ async function petLook(name) {
   const pet = await window.p9.loadPet(name).catch(() => null), img = new Image();
   if (pet) { img.src = pet.sprite; await img.decode().catch(() => {}); }
   if (img.naturalWidth < 1536) return null;
-  const cv = new OffscreenCanvas(img.naturalWidth, img.naturalHeight), g = cv.getContext('2d'); g.drawImage(img, 0, 0);
-  const frames = row => { let n = 0; while (n < 8 && g.getImageData(n * 192, row * 208, 192, 208).data.some((v, i) => i % 4 === 3 && v)) n++; return n || 1; };
+  // A CPU-backed canvas and only the alpha bytes looked at (window-4, O14): the scan ran on the window's main thread at startup.
+  const cv = new OffscreenCanvas(img.naturalWidth, img.naturalHeight), g = cv.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
+  const seen = d => { for (let i = 3; i < d.length; i += 4) if (d[i]) return true; return false; };
+  const frames = row => { let n = 0; while (n < 8 && seen(g.getImageData(n * 192, row * 208, 192, 208).data)) n++; return n || 1; };
   return { img, displayName: pet.displayName, rows: Array.from({ length: 9 }, (_, row) => frames(row)) };
 }
 async function loadPetLook() {
