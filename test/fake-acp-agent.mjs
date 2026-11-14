@@ -468,6 +468,20 @@ const connection = acp.connectAgent(stream, {
       }
       return { stopReason: 'end_turn' };
     }
+    // "drip <n> <ms>": a reply streamed the way a real agent writes it, n chunks of about 60 characters, ms apart, with a
+    // tool call (started, then completed) after every tenth chunk.
+    if (text.startsWith('drip ')) {
+      const [n, ms] = text.slice(5).split(' ').map(Number);
+      for (let i = 1; i <= n; i++) {
+        await say('Chunk ' + i + ' of the reply, with **some** markdown and `code` in it. ' + (i % 5 ? '' : '\n\n'));
+        if (i % 10 === 0) {
+          await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'drip-' + i, title: 'Read file ' + i, kind: 'read', status: 'in_progress' } });
+          await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'drip-' + i, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'line '.repeat(40) + i } }] } });
+        }
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      }
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'ask-strict') {
       const result = await connection.createElicitation({ sessionId, mode: 'form', message: 'Order', requestedSchema: { type: 'object',
         properties: { colour: { type: 'string', enum: ['red', 'blue'] }, count: { type: 'integer', minimum: 1, maximum: 5 },

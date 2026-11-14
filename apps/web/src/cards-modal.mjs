@@ -118,7 +118,8 @@ function renderCards() {
   outer.$('#rBell').innerHTML = svg.bell + `<b>${n || ''}</b>`;
   outer.$('#rBell').title = 'Notification Center' + (n ? ` (${n})` : '') + ' · Ctrl Shift N';
   if (outer.mdl.open && outer.S.modal?.kind === 'center') outer.renderModal();
-  outer.missionLive();
+  // F2: Mission's lists redraw only where they can be seen (its page, or a window other than a chat); setFocus redraws them on the way in.
+  if (outer.S.focus === 'mission' || (outer.mdl.open && outer.S.modal && outer.S.modal.kind !== 'chat')) outer.missionLive();
 }
 const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560], sprint: [760, 560] }; // defaults; your resize wins, per type
 const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script', sprint: 'sprint' })[k] || 'list';

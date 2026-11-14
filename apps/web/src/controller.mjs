@@ -107,6 +107,7 @@ const SP = { on: false, data: null, error: '', timer: 0 };
 const addEventListener = (type, listener) => window.addEventListener(type, listener, { signal: lifetime.signal });
 const removeEventListener = (type, listener) => window.removeEventListener(type, listener);
 const setTimeout = (fn, delay) => { const id = window.setTimeout(() => { timers.delete(id); fn(); }, delay); timers.add(id); return id; };
+const setInterval = (fn, delay) => { const id = window.setInterval(fn, delay); lifetime.signal.addEventListener('abort', () => window.clearInterval(id)); return id; }; // F7: ends with the view
 const observe = fn => { const observer = new ResizeObserver(fn); observers.push(observer); return observer; };
 const popover = (...args) => createPopover(args[0], args[1], args[2], lifetime.signal);
 DUWOP.init(); shareLook(lifetime.signal);
@@ -133,6 +134,9 @@ function sync(a, b) {
     if (!o) return a.appendChild(n);
     if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) return a.replaceChild(n, o);
     if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; return; }
+    // F2: an unchanged subtree (most of a pane while one reply streams) is compared natively and left alone. Not when it holds
+    // a form control: those take their value from the markup below, which the attributes alone do not show.
+    if (o.isEqualNode(n) && !FORM.has(n.tagName) && !n.querySelector('input, textarea, select')) return;
     attrs(o, n);
     if (o.tagName !== 'TEXTAREA') sync(o, n); // rewriting a textarea's text resets its caret
     // read from the markup: a template's own .value is not filled in
@@ -143,6 +147,7 @@ function sync(a, b) {
   });
   olds.slice(news.length).forEach(n => n.remove());
 }
+const FORM = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
 function attrs(o, n) {
   for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
   for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
@@ -314,7 +319,7 @@ document.addEventListener('pointerdown', e => {
     localStorage.setItem('p9-pet-spots', JSON.stringify(petSpots));
   };
   addEventListener('pointermove', move); addEventListener('pointerup', up);
-});
+}, { signal: lifetime.signal });
 let lastCards = '';
 window.p9?.onCardAct?.(({ key, action }) => cardAct(cardList().find(c => c.key === key), action));
 
@@ -420,7 +425,8 @@ addEventListener('click', e => { const b = e.target.closest('#mdlFoot [data-slot
 if (sampleView) window.__toast = toast; // ponytail: the UI test's door, as window.__side
 const showModal = HTMLDialogElement.prototype.showModal, modals = []; // in the order opened: the top layer's, not the page's
 HTMLDialogElement.prototype.showModal = function () { showModal.call(this); modals.splice(modals.indexOf(this) >>> 0, 1); modals.push(this); raiseToasts(); };
-document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElement) raiseToasts(); }, true);
+lifetime.signal.addEventListener('abort', () => { HTMLDialogElement.prototype.showModal = showModal; }); // F7: the next view patches its own
+document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElement) raiseToasts(); }, { capture: true, signal: lifetime.signal });
 // Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped; the rest
 // wait in History. The x stops it on the daemon, so every window and the phone agree (owner, 2026-10-25: a new window
 // reopened 9 chats closed in another). Before that, closed IDs lived in this window's localStorage: loadChat stops the
@@ -478,7 +484,7 @@ document.addEventListener('keydown', e => {
   const host = edSave.root.closest('dialog') || edSave.root, at = document.activeElement;
   if (!host.checkVisibility() || (at && at !== document.body && !host.contains(at))) return; // a closed modal never saves
   e.preventDefault(); edSave.save(); edSave.after();
-});
+}, { signal: lifetime.signal });
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
 
@@ -494,7 +500,7 @@ let topAt = 0;
 setInterval(pullTopLevels, 30000);
 // Live data from the daemon (window.p9.mission) fills the lists once it answers; until then the page says why it is empty.
 const live = { on: false, note: window.p9?.mission ? 'Connecting to the P9 daemon…' : 'No P9 daemon in this view', primary: null, waiting: '' };
-document.addEventListener('visibilitychange', () => { if (!document.hidden) loadUsage().then(renderChats); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadUsage().then(renderChats); }, { signal: lifetime.signal });
 let usageSoon = 0;
 setInterval(() => { if (document.hidden) return; for (const s of S.sessions) for (const el of document.querySelectorAll('.pane[data-id="' + s.id + '"] .cache')) { const [text, state] = cacheOf(s); el.dataset.s = state; el.lastChild.textContent = text; } }, 15000);
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
@@ -670,7 +676,7 @@ const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.sli
 function setFocus(f, stay = false) {
   if (!focusOn(f)) return; // turned off in Settings, or not on this remote
   S.focus = f;
-  if (f === 'mission') { refreshMission(); if ($('#fMission .mrow[data-placed]')) missionLive(); }
+  if (f === 'mission') { refreshMission(); missionLive(); } // F2: renderCards skips it while Mission is out of sight
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
@@ -737,11 +743,14 @@ async function devFreeze() {
   requestAnimationFrame(() => { if (mine === devFreezing) devStill.hidden = true; });
 }
 // A menu whose rows arrive after it opens (the machine list) only reaches down over the editor once it grows, so its size counts too.
-const popSize = new ResizeObserver(devFreeze);
-document.querySelectorAll('.pop').forEach(p => { new MutationObserver(devFreeze).observe(p, { attributeFilter: ['hidden'] }); popSize.observe(p); });
-new ResizeObserver(placeDev).observe($('#fDev'));
-new ResizeObserver(cardsOverlay).observe($('.stage'));
-new MutationObserver(() => { placeDev(); cardsOverlay(); }).observe(document.body, { subtree: true, attributeFilter: ['open'] });
+const popSize = new ResizeObserver(devFreeze), popHidden = new MutationObserver(devFreeze);
+document.querySelectorAll('.pop').forEach(p => { popHidden.observe(p, { attributeFilter: ['hidden'] }); popSize.observe(p); });
+// F2: only a dialog opening or closing moves the editor or the cards; a tool row's details opening while a reply streams does not.
+const dialogs = new MutationObserver(list => { if (list.some(m => m.target.nodeName === 'DIALOG')) { placeDev(); cardsOverlay(); } });
+dialogs.observe(document.body, { subtree: true, attributeFilter: ['open'] });
+observers.push(popSize, popHidden, dialogs);
+observe(placeDev).observe($('#fDev'));
+observe(cardsOverlay).observe($('.stage'));
 window.p9?.onFocus?.(f => { if (Object.hasOwn(focusNames, f)) setFocus(f); });
 document.querySelectorAll('[data-focus-btn]').forEach(b => b.onclick = () => setFocus(b.dataset.focusBtn));
 // Ctrl+1/2/3 is what Builder asked for; Chrome keeps Ctrl+1-8 for its own tabs, so Alt+1/2/3 works in a browser too.
@@ -821,7 +830,7 @@ dock.querySelector('.tb').onpointerdown = e => {
   const place = ev => { dock.style.left = Math.max(0, Math.min(pr.width - 80, ev.clientX - dx - pr.left)) + 'px'; dock.style.top = Math.max(0, Math.min(pr.height - 30, ev.clientY - dy - pr.top)) + 'px'; };
   place(e); tb.onpointermove = place; tb.onpointerup = tb.onpointercancel = () => { tb.onpointermove = tb.onpointerup = tb.onpointercancel = null; placeDev(); };
 };
-new ResizeObserver(() => placeDev()).observe(dock); // D14: opened, closed (display none), floated, docked or resized
+observe(() => placeDev()).observe(dock); // D14: opened, closed (display none), floated, docked or resized
 
 /* ---------- stop all + palette ---------- */
 $('#stopAll').onclick = () => $('#stopDlg').showModal();
