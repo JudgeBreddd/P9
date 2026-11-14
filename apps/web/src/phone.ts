@@ -1,5 +1,5 @@
 import type { EditorView } from 'codemirror';
-import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -1099,9 +1099,11 @@ one<HTMLElement>('#attached').onclick = (event) => {
 };
 const picker = one<HTMLInputElement>('#attachInput');
 const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');
-// P4: + and the mode pill open the shared sheet. The phone's own pickers: the photo library, the camera, or its files
-// (the same image types the daemon takes); the chooser opens in the same tap, so the browser lets it.
-one<HTMLElement>('#attach').onclick = () => openSheet('Attach', opts([['pick', 'library', 'Photo library'], ['pick', 'camera', 'Take photo'], ['pick', 'file', 'File']]));
+// O68: + opens the phone's own chooser, which already offers the library, the camera and the files; P9 does not ask first.
+// An iPhone greys out what the filter leaves out and cannot say why, so it gets no filter and addImages() gives the reason.
+// ponytail: an iPad that reports itself as a Mac keeps the filter, and its greyed files.
+const NO_FILTER = /iP(hone|ad|od)/.test(navigator.userAgent);
+one<HTMLElement>('#attach').onclick = () => { picker.accept = NO_FILTER ? '' : 'image/*'; picker.click(); };
 // The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's effort, fast mode and plan
 // (the model is the top bar's Model sheet), which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
 function pill() {
@@ -1117,14 +1119,10 @@ one<HTMLElement>('#modePill').onclick = () => {
 };
 sheet.addEventListener('close', () => { if (!one('#modeHome').contains(one('#more'))) one('#modeHome').append(one('#more')); });
 one('#sheetBody').addEventListener('click', (event) => {
-  const row = (event.target as Element).closest<HTMLButtonElement>('[data-pick], [data-mode]'); if (!row) return;
+  const row = (event.target as Element).closest<HTMLButtonElement>('[data-mode]'); if (!row) return;
   sheet.close();
   // A mode goes through the select's change, so a loosened one still asks first (the warning opens as the sheet closes).
-  if (row.dataset.mode !== undefined) { const mode = one<HTMLSelectElement>('#mode'); mode.value = row.dataset.mode; mode.dispatchEvent(new Event('change')); return; }
-  const pick = row.dataset.pick;
-  picker.accept = pick === 'file' ? IMG_OK.join(',') : 'image/*';
-  if (pick === 'camera') picker.setAttribute('capture', 'environment'); else picker.removeAttribute('capture');
-  picker.click();
+  const mode = one<HTMLSelectElement>('#mode'); mode.value = row.dataset.mode!; mode.dispatchEvent(new Event('change'));
 });
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
@@ -1868,6 +1866,8 @@ async function loadSignIn() {
             : `<p class="muted">After you sign in, Claude shows a code. Paste it here.</p><form class="sign-form" data-sign-send="${agent}"><input data-sign-code autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Claude's code" placeholder="Code from Claude" maxlength="512"><button type="submit">Send code</button></form>`);
       const act = s.running ? `<button type="button" data-sign="stop:${agent}">Cancel</button>`
         : `<button type="button" data-sign="start:${agent}">${s.signedIn || ended ? 'Sign in again' : 'Sign in'}</button>`;
+      // O68: an account that is signed in and has nothing to say is one line; a card is for one that needs something.
+      if (s.signedIn && !s.running && !said && !note) return `<p class="sign-line" data-agent="${agent}"><span>${name} · Signed in</span>${act}</p>`;
       return `<article class="card sign-in${said || note ? ' warn' : ''}" data-agent="${agent}"><h2>${name} <small>${s.signedIn ? 'Signed in' : 'Not signed in'}</small></h2>${running}`
         + (said ? `<p>${escape(said)}</p>` : '') + (note ? `<p>${escape(note)}</p>` : '') + `<div class="sign-acts">${act}</div></article>`;
     }).join('');
@@ -1878,6 +1878,7 @@ async function loadSignIn() {
     }
     const input = box.querySelector<HTMLInputElement>('[data-sign-code]');
     if (input) input.value = typed;
+    one('#usage')[box.querySelector('.card') ? 'before' : 'after'](box); // lines only: under the plan bars; a card that needs something stays on top
   }
   if (SIGN_IN.some(([agent]) => data[agent].running) && !one<HTMLElement>('[data-view="usage"]').hidden) signInTimer = window.setTimeout(() => void loadSignIn(), 2000);
 }
