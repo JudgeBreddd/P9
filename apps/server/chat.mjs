@@ -266,10 +266,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // keep() runs in the same tick as the append that names the photo, so a delete in between cannot take it.
   // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
   const imageDir = (ownership || state) && path.join(ownership || state, 'images');
-  // stored: the folder's bytes, counted by the first photo of this daemon run and kept since, so the folder is scanned again
-  // only when that count passes 200 MB (finding 15). A photo removed elsewhere (a deleted chat's) leaves it high, which
-  // costs one early scan that sets it right.
-  let stored = null;
+  // stored: the folder's bytes, kept since the last scan; seen: the folder's mtime after P9's own last write. The folder is
+  // scanned again only when its mtime says something else added or removed a file (a deleted chat's photos, a file put
+  // there by hand), and swept only when the count passes 200 MB (finding 15). ponytail: a file grown in place is not
+  // seen until the next scan.
+  let stored = null, seen = null;
   const keep = (images) => images.map(({ mimeType, data }) => {
     const bytes = Buffer.from(data, 'base64'), hash = createHash('sha256').update(bytes).digest('hex');
     if (imageDir) {
@@ -278,7 +279,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const file = path.join(imageDir, hash + EXT[mimeType]);
       let before = 0;
       try { before = statSync(file).size; } catch {}
-      stored ??= scan().reduce((sum, item) => sum + item.size, 0);
+      if (stored === null || statSync(imageDir).mtimeMs !== seen) stored = scan().reduce((sum, item) => sum + item.size, 0);
       writeFileSync(file, bytes, { mode: 0o600 });
       stored += bytes.length - before;
       if (stored > MAX_STORED) {
@@ -287,6 +288,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         for (const item of files) { if (total <= MAX_STORED) break; unlinkSync(path.join(imageDir, item.name)); total -= item.size; }
         stored = total;
       }
+      seen = statSync(imageDir).mtimeMs;
     }
     return { hash, type: mimeType };
   });
