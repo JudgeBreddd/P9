@@ -657,8 +657,12 @@ one('#sheetBody').addEventListener('click', async event => {
   else editDraft(id, (text) => { setDraft(next, text); return ''; });
   if (chosenMode) startPick.set(next, chosenMode);
   if (chosenModel) swapModel.set(next, chosenModel);
-  // The sheet stays over the box until the new chat owns it: text typed into the old chat's box in between would be kept under the deleted id.
-  try { await loadChat(); openChat(next); } finally { sheet.close(); }
+  // O61: the chat on screen changes with the box, before the list is read again, so a send, a queued message or a draft
+  // saved while that read runs is the new chat's: none can land under the deleted id. The list entry is swapped here and
+  // the read replaces it with the daemon's.
+  state.conversations = state.conversations.map(entry => entry.id === id ? { ...entry, id: next, folder } : entry);
+  fillPicker(); openChat(next);
+  try { await loadChat(); } finally { sheet.close(); }
 });
 // P20: the next TAIL blocks before the oldest read, drawn above; the reader stays where they were.
 one('#earlier').addEventListener('click', async () => {

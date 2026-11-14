@@ -100,6 +100,10 @@ test('phone: an empty chat shows and changes its starting folder', { timeout: 18
   await page.evaluate(() => document.querySelector('#sheet').close());
   assert.equal(await page.locator('#prompt').inputValue(), 'draft survives', 'the box lost its text during the swap');
   await page.locator('#prompt').fill('draft survives, with more typed during the swap');
+  // The chat on screen is already the new one, so the text is saved under it and a send would go to it, with the read still held.
+  const swappedTo = (await call(server, '/chat')).conversations[0].id;
+  await page.waitForFunction((id) => location.hash === '#chat=' + encodeURIComponent(id) && document.querySelector('#conversation').value === id && JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')[id] === 'draft survives, with more typed during the swap', swappedTo, { timeout: 5000 });
+  assert.equal(await page.evaluate((id) => Object.keys(JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')).includes(id), original), false, 'text is kept under the deleted chat');
   free(); await page.unroute(/\/chat\?lists=fresh/);
   await page.locator('[data-chat-folder]').filter({ hasText: path.join(server.workspace, 'site') }).waitFor();
   assert.equal(await page.locator('#mode').inputValue(), 'Plan');
