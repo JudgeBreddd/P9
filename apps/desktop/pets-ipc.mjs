@@ -1,6 +1,6 @@
 // Pets: list, petdex import and install, add a folder (IPC handlers). Split out of main.mjs's createDesktop (F9) with no change in behaviour; names that stay in createDesktop come in through outer.
 import { ipcMain, app, dialog } from 'electron';
-import { loadPet, PET_NAME, addPet } from './pet-files.mjs';
+import { loadPet, listPet, PET_NAME, addPet } from './pet-files.mjs';
 import { readdir, mkdtemp, mkdir, writeFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -12,7 +12,7 @@ export function petsIpc(outer) {
         || args.length > 1) throw new Error('ipc-sender-refused');
     if (args.length) return (await loadPet(outer.petsFolder, args[0])) ?? Promise.reject(new Error('pet-refused'));
     const names = (await readdir(outer.petsFolder).catch(() => [])).filter(name => PET_NAME.test(name)).sort().slice(0, 50);
-    const pets = (await Promise.all(names.map(name => loadPet(outer.petsFolder, name)))).filter(Boolean).map(({ name, displayName }) => ({ name, displayName }));
+    const pets = (await Promise.all(names.map(name => listPet(outer.petsFolder, name)))).filter(Boolean);
     return { folder: outer.petsFolder, pets, importable: (await importable()).length };
   });
   // Import: Codex's pets folders, names P9 does not have yet; each still goes through addPet's checks on the click. Codex keeps

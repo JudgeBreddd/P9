@@ -1001,16 +1001,23 @@ export async function createDesktop({ state, open } = {}) {
   // devServing: the folder the loaded page was given (its saves go there).
   let cardsView = null, cardsItems = [], cardsHide = null;
   let devToken = null, devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
+  // The editor page's build, read once (about 18 MB; review item 22) and kept: every Dev Focus open and reopen used to read it
+  // again. A rebuild drops it; a failed read is tried again on the next open.
+  let devBuild = null;
+  const devAssets = () => devBuild ??= assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))).catch(error => { devBuild = null; throw error; });
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
+  // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
+  // wait for promises on quit, and the host must not outlive the app. One handler for the current start (review item 24:
+  // one per start piled up); a failed start aborts its own process at once.
+  // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
+  let hostQuit = null;
+  app.once('will-quit', () => hostQuit?.());
   const startHost = () => editorHost ??= (async () => {
-    // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
-    // wait for promises on quit, and the host must not outlive the app.
-    // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
     const unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), quit = new AbortController();
-    app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
+    hostQuit = () => { stopEditorHost(unit); quit.abort(); };
     // An install in progress (the AppImage's first start) finishes first, so Dev Focus opens instead of saying missing.
     await editorInstall?.catch(() => {});
-    return startEditorHost({ unit, signal: quit.signal });
+    return startEditorHost({ unit, signal: quit.signal }).catch(error => { quit.abort(); throw error; });
   })().catch(error => { editorHost = null; throw error; });
   // Server mode (threat model row 50): the server's daemon runs the editor (POST /dev/editor) and the tunnel forwards its socket to
   // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the
@@ -1071,7 +1078,7 @@ export async function createDesktop({ state, open } = {}) {
       // Just after a switch to a server the tunnel is still coming up: wait for it as long as connectServer does (15 s).
       for (let i = 0; i < 60 && serverHost && !server && !serverError; i++) await new Promise(resolve => setTimeout(resolve, 250));
       const unanswered = () => { throw Object.assign(new Error('daemon-unavailable'), { server: serverHost ?? undefined }); };
-      const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state).catch(unanswered)]);
+      const [devFiles, status] = await Promise.all([devAssets(), health(state).catch(unanswered)]);
       const host = serverHost ? await serverEditor() : await startHost();
       const origin = 'http://127.0.0.1:' + host.port;
       // Extension pages (webviews: a README, an image preview) get their own origin, p9://webview, so their scripts can't reach
@@ -1237,7 +1244,10 @@ export async function createDesktop({ state, open } = {}) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
     if (!devView?.getVisible()) return null;
     const image = await devView.webContents.capturePage().catch(() => null);
-    return image && !image.isEmpty() ? 'data:image/jpeg;base64,' + image.toJPEG(90).toString('base64') : null;
+    if (!image || image.isEmpty()) return null;
+    // Review item 26: at the view's own size (half the width on a 2x screen, where it is drawn at that size anyway), quality 80.
+    const { width, height } = devView.getBounds(), size = image.getSize();
+    return 'data:image/jpeg;base64,' + (size.width > width ? image.resize({ width, height, quality: 'good' }) : image).toJPEG(80).toString('base64');
   });
   cardsIpc(outer);
   // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
@@ -1418,6 +1428,7 @@ export async function createDesktop({ state, open } = {}) {
       const built = await new Promise(resolve => execFile(command, more, { cwd: fileURLToPath(new URL('../../', import.meta.url)), timeout: 600_000, maxBuffer: 16 * 1024 * 1024 },
         (error, _stdout, stderr) => resolve(error ? { error: 'build-failed', detail: String(stderr).trim().split('\n').slice(-3).join('\n').slice(0, 300) } : null)));
       if (built) return built;
+      devBuild = null;
       sites.app = await appSite();
     } finally { rebuilding = false; }
     window.webContents.reload();

@@ -134,12 +134,13 @@ const DOC = /\.(md|markdown)$/i, LEGAL = /(^|\/)(licen[cs]e|notice|copying)[^/]*
 export function slimArchive(folder) {
   const present = SLIM.filter((name) => existsSync(path.join(folder, name)));
   if (!present.includes('agents.json') || !present.includes('apps/server')) throw new Error('slim-bundle-incomplete');
-  // Named file by file, so the platform's tar (GNU, or bsdtar on Windows and macOS) never matches a pattern of its own.
+  // Named file by file, so the platform's tar (GNU, or bsdtar on Windows and macOS) never matches a pattern of its own. The names
+  // go on tar's stdin, NUL-separated (review item 28): on the command line about 3000 of them passed Windows' 32 K limit.
   const files = present.flatMap((name) => statSync(path.join(folder, name)).isDirectory()
     ? readdirSync(path.join(folder, name), { recursive: true, withFileTypes: true }).filter((e) => !e.isDirectory())
       .map((e) => path.relative(folder, path.join(e.parentPath, e.name)).split(path.sep).join('/')) : [name])
     .filter((name) => LEGAL.test(name) || !(NOT_RUN.test(name) || DOC.test(name)));
-  return run('tar', ['-czf', '-', '-C', folder, ...files]);
+  return run('tar', ['-czf', '-', '-C', folder, '--null', '-T', '-'], files.map((name) => name + '\0').join(''));
 }
 
 // This app's source as tar.gz for the script's stdin, one top folder (the script strips it). A git checkout sends its
@@ -159,9 +160,10 @@ export function sourceArchive(folder) {
   const excludes = [...new Set(['node_modules', '.git', 'dist', '.env', '.env.*', '.cursor', ...ignored])].map(p => '--exclude=' + p);
   return run('tar', ['-czf', '-', ...excludes, '-C', path.dirname(folder), path.basename(folder)]);
 }
-function run(command, args) {
-  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+function run(command, args, input) {
+  const child = spawn(command, args, { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'] });
   child.on('error', (error) => child.stdout.destroy(error)); // no git or tar: installRemote stops ssh and the install fails
+  if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); } // a tar that stopped early fails on its own
   return child.stdout;
 }
 
