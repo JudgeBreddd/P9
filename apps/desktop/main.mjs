@@ -1001,10 +1001,16 @@ export async function createDesktop({ state, open } = {}) {
   // devServing: the folder the loaded page was given (its saves go there).
   let cardsView = null, cardsItems = [], cardsHide = null;
   let devToken = null, devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
-  // The editor page's build, read once (about 18 MB; review item 22) and kept: every Dev Focus open and reopen used to read it
-  // again. A rebuild drops it; a failed read is tried again on the next open.
-  let devBuild = null;
-  const devAssets = () => devBuild ??= assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))).catch(error => { devBuild = null; throw error; });
+  // The editor page's build (about 18 MB; review item 22), kept while its index.html keeps the same mtime: every Dev Focus open
+  // and reopen used to read it all again. Any build (Rebuild or a hand-run pnpm build:dev, which empties and rewrites dist)
+  // writes a new index.html, so the next open reads the new build. A failed stat or read is tried again on the next open.
+  const devDist = fileURLToPath(new URL('../dev/dist/', import.meta.url));
+  let devBuild = null, devBuilt = null;
+  const devAssets = async () => {
+    const built = await stat(path.join(devDist, 'index.html')).then(info => info.mtimeMs, () => null);
+    if (built === null || built !== devBuilt) { devBuild = null; devBuilt = built; }
+    return devBuild ??= assets(devDist).catch(error => { devBuild = null; throw error; });
+  };
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
   // wait for promises on quit, and the host must not outlive the app. One handler for the current start (review item 24:
@@ -1428,7 +1434,6 @@ export async function createDesktop({ state, open } = {}) {
       const built = await new Promise(resolve => execFile(command, more, { cwd: fileURLToPath(new URL('../../', import.meta.url)), timeout: 600_000, maxBuffer: 16 * 1024 * 1024 },
         (error, _stdout, stderr) => resolve(error ? { error: 'build-failed', detail: String(stderr).trim().split('\n').slice(-3).join('\n').slice(0, 300) } : null)));
       if (built) return built;
-      devBuild = null;
       sites.app = await appSite();
     } finally { rebuilding = false; }
     window.webContents.reload();
