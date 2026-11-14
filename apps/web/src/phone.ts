@@ -1,5 +1,5 @@
 import type { EditorView } from 'codemirror';
-import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -473,9 +473,9 @@ function patch(list: HTMLElement, wanted: Entry[]) {
 }
 // P7: what each chat is doing, read from its events the way the desktop's robot heads are: a user message with no turn end
 // after it is working; an approval or question not yet answered is waiting on you; otherwise stopped.
-type Digest = { run: 'working' | 'needs' | 'idle'; last: string };
+type Digest = { run: 'working' | 'needs' | 'idle'; last: string; mine?: boolean };
 // F4 item 9: a left fold over each chat's events, carried on from the last event folded while that chat's list only grew.
-type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean };
+type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean; mine?: boolean };
 const folds = new Map<string, Fold>();
 function digest() {
   const seen = new Map<string, Fold>();
@@ -486,16 +486,16 @@ function digest() {
     seen.set(id, chat);
   }
   const out = new Map<string, Digest>();
-  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '' }));
+  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '', mine: chat.mine }));
   return out;
 }
 function fold(chat: Fold, event: Json) {
   {
     const kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
-    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; }
+    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; chat.mine = true; }
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
-      if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; }
+      if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; chat.mine = false; }
       else if (update === 'tool_call') chat.tail = false;
     }
     else if (kind === 'approval' || kind === 'question') chat.open.add(String(data.request));
@@ -505,15 +505,40 @@ function fold(chat: Fold, event: Json) {
 }
 const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 let listSig = '';
+// O66: the preview line as text, without the reply's Markdown marks. ponytail: the common marks by pattern, not a parse;
+// a name written __like_this__ loses its underscores.
+const plain = (line: string) => line.replace(/^\s*(`{3,}|~{3,}).*$/, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '').replace(/\*\*|__|~~|`/g, '')
+  .replace(/(^|[\s(])[*_](?=\S)([^*_]*\S)[*_](?=$|[\s).,;:!?])/g, '$1$2').trim();
+// O66: what a chat last said when the reader last had it on screen, kept on this phone. A chat whose newest line differs,
+// and is not working or asking, has a result not read yet. The first 60 characters, which the daemon's cut preview shares.
+// A newest line that is a prompt (a turn that ended with no reply) is not a result: no mark. ponytail: a stub's preview does
+// not say whose line it is, so a prompt sent from elsewhere that got no reply can still mark it.
+let read: Record<string, string> = {};
+try { read = JSON.parse(localStorage.getItem('p9-read') ?? '{}') ?? {}; } catch {}
+const keepRead = () => { try { localStorage.setItem('p9-read', JSON.stringify(Object.fromEntries(state.conversations.map((item) => String(item.id)).filter((id) => id in read).map((id) => [id, read[id]])))); } catch {} };
+// A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
+function rowInfo(item: Json, found = digest()): Digest {
+  const id = String(item.id);
+  return state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id) ?? { run: 'idle', last: '' };
+}
+function markRead(id: string) {
+  const item = state.conversations.find((entry) => entry.id === id); if (!item) return;
+  const mark = rowInfo(item).last.slice(0, 60); if (read[id] !== mark) { read[id] = mark; keepRead(); }
+}
 function renderList() {
+  let seeded = false;
   const found = digest(), row = (item: Json) => {
-    // A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
-    const id = String(item.id), info = state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
-    return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
+    const id = String(item.id), info = rowInfo(item, found), run = info.run, mark = info.last.slice(0, 60), stopped = !isOpen(item);
+    if (!(id in read) && mark) { read[id] = mark; seeded = true; } // first seen on this phone: nothing to call new
+    const unread = run === 'idle' && !info.mine && id in read && read[id] !== mark;
+    const second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : escape(plain(info.last) || (info.last.trim() ? 'Code' : '')); // a reply that opens with a code fence
+    return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"${stopped ? ' data-stopped' : ''}${unread ? ' data-unread' : ''}><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${stopped ? '<span class="tag">Stopped</span>' : ''}${second}</small></span>${unread ? '<i class="new" role="img" aria-label="Not read yet"></i>' : ''}<time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
   const html = phoneSections(state.conversations, (item: Json) => isOpen(item) || !!item.sent, section) // N1 point 12: by project (phone-projects.mjs)
     || '<div class="empty">No chats yet. Tap + to start one.</div>';
+  if (seeded) keepRead();
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
 // The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
@@ -531,7 +556,8 @@ function chatBar(id: string, run: string) {
 let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, seenItems = 0;
 const body = one<HTMLElement>('#chatBody');
 function route(id: string) {
-  const changed = id !== openId; openId = id;
+  const changed = id !== openId, was = openId; openId = id;
+  if (was) markRead(was); if (id) markRead(id); // O66: what was on screen is read
   if (id) localStorage.setItem('p9-last-chat', id); // item 3: the next open reads this chat's events first
   const select = one<HTMLSelectElement>('#conversation'); if (id) select.value = id;
   one<HTMLElement>('#chatList').hidden = !!id; one<HTMLElement>('#chatArea').hidden = !id; one<HTMLElement>('#composerSlot').hidden = !id;
@@ -1075,9 +1101,11 @@ one<HTMLElement>('#attached').onclick = (event) => {
 };
 const picker = one<HTMLInputElement>('#attachInput');
 const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');
-// P4: + and the mode pill open the shared sheet. The phone's own pickers: the photo library, the camera, or its files
-// (the same image types the daemon takes); the chooser opens in the same tap, so the browser lets it.
-one<HTMLElement>('#attach').onclick = () => openSheet('Attach', opts([['pick', 'library', 'Photo library'], ['pick', 'camera', 'Take photo'], ['pick', 'file', 'File']]));
+// O68: + opens the phone's own chooser, which already offers the library, the camera and the files; P9 does not ask first.
+// An iPhone greys out what the filter leaves out and cannot say why, so it gets no filter and addImages() gives the reason.
+// ponytail: an iPad that reports itself as a Mac keeps the filter, and its greyed files.
+const NO_FILTER = /iP(hone|ad|od)/.test(navigator.userAgent);
+one<HTMLElement>('#attach').onclick = () => { picker.accept = NO_FILTER ? '' : 'image/*'; picker.click(); };
 // The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's effort, fast mode and plan
 // (the model is the top bar's Model sheet), which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
 function pill() {
@@ -1093,14 +1121,10 @@ one<HTMLElement>('#modePill').onclick = () => {
 };
 sheet.addEventListener('close', () => { if (!one('#modeHome').contains(one('#more'))) one('#modeHome').append(one('#more')); });
 one('#sheetBody').addEventListener('click', (event) => {
-  const row = (event.target as Element).closest<HTMLButtonElement>('[data-pick], [data-mode]'); if (!row) return;
+  const row = (event.target as Element).closest<HTMLButtonElement>('[data-mode]'); if (!row) return;
   sheet.close();
   // A mode goes through the select's change, so a loosened one still asks first (the warning opens as the sheet closes).
-  if (row.dataset.mode !== undefined) { const mode = one<HTMLSelectElement>('#mode'); mode.value = row.dataset.mode; mode.dispatchEvent(new Event('change')); return; }
-  const pick = row.dataset.pick;
-  picker.accept = pick === 'file' ? IMG_OK.join(',') : 'image/*';
-  if (pick === 'camera') picker.setAttribute('capture', 'environment'); else picker.removeAttribute('capture');
-  picker.click();
+  const mode = one<HTMLSelectElement>('#mode'); mode.value = row.dataset.mode!; mode.dispatchEvent(new Event('change'));
 });
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
@@ -1321,13 +1345,17 @@ let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: stri
 // P9's built-in tiles a section may name (W-D); naming any decides which show. The phone has no editor, so edit is the desktop's alone.
 const TILE_WIDGETS = ['idea', 'sprint', 'edit'];
 const naming = (s: { widget?: string; widgets?: string[] }, w: string) => s.widget === w || !!s.widgets?.includes(w);
+const checklists: Record<string, unknown> = {};
+// O67: the closed row's line, as a folder row has its count: what the list holds, once it was read.
+const checklistLine = (r: unknown) => { const got = r as { error?: string; files?: unknown[] } | undefined; return !got ? '…' : got.error ? 'not read' : !got.files?.length ? 'nothing to review' : got.files.length === 1 ? '1 file' : got.files.length + ' files'; };
 const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
 // its in a window i can open"). Callers escape title and line.
 const win = (id: string, title: string, count: number | string, line: string, body: string, bad = false) => {
   // Rows needing attention (a red one, or something waiting) lead the list; a zero count is drawn muted (spec §6).
   const attn = bad || (id === 'queue' && Number(count) > 0), zero = /^(0( .*)?)?$/.test(String(count));
-  return `<button type="button" class="tile${bad ? ' bad' : ''}"${attn ? ' data-attn' : ''}${zero ? ' data-zero' : ''} data-open="${id}"><span>${title}</span><b>${count}</b><small>${line}</small></button>`
+  const word = typeof count === 'string' && /[A-Za-z]{2}/.test(count); // O67: a name in the count's place is text, not a number
+  return `<button type="button" class="tile${bad ? ' bad' : ''}"${attn ? ' data-attn' : ''}${zero ? ' data-zero' : ''} data-open="${id}"><span>${title}</span><b${word ? ' data-word' : ''}>${count}</b><small>${line}</small></button>`
     + `<dialog class="window" id="w-${id}"><header class="bar"><button type="button" class="back" data-close aria-label="Back to Mission">${ICON.back}Mission</button><div class="title"><h1>${title}</h1></div></header><div class="wbody">${body}</div></dialog>`;
 };
 // A reload rebuilds the tiles; the window Builder had open opens
@@ -1415,7 +1443,7 @@ async function loadMission(cached = false) {
     sortQueue(data.queue as Waiting[]); // in place: an answer form's index is its place in mission.queue
     const by = queueBy(), sortPick = data.queue.length > 1 ? `<label class="queue-sort">Sort<select data-queue-sort aria-label="Sort"><option value="updated"${by === 'updated' ? ' selected' : ''}>Newest</option><option value="project"${by === 'project' ? ' selected' : ''}>Project</option></select></label>` : '';
     const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${escape(item.project)} · ${escape(item.age)}</small>`,
-      `<pre>${escape(item.content)}</pre>` + (item.answerable
+      `<div class="md" data-waiting-text>${md.parse(item.content)}</div>` + (item.answerable
         ? `<form data-answer="${index}"><label>Your answer<textarea rows="3" required maxlength="4000"></textarea></label><button type="submit">Send answer</button><p class="muted" data-note></p></form>`
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
     const groups = new Map<string, string[]>(), names = new Map<string, string[]>(); // a section's rows, and their titles for its detail line
@@ -1461,7 +1489,7 @@ async function loadMission(cached = false) {
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
         `<div data-folder="${escape(list.id)}"${list.root ? ` data-root="${escape(list.root)}"` : ''}><p class="muted">Loading…</p></div>`));
       // Checklists (threat model row M4-a): read when the window opens; each press is one mark or one review line.
-      const checks = (space.checklists ?? []).map((list) => row(escape(list.title), `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
+      const checks = (space.checklists ?? []).map((list) => row(`${escape(list.title)}<small data-ck-count="${escape(list.id)}">${escape(checklistLine(checklists[list.id]))}</small>`, `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
       // References: a script is its own row (Run included), a page its link, an app is the laptop's; an ID nothing has says so.
       // A section naming sprint: its buttons and script refs are the sprint window's (W-M), so they are not rows here too.
       const sprint = space.widget === 'sprint';
@@ -1581,13 +1609,13 @@ one('#mission').addEventListener('close', () => { openWindow = ''; expanded = ne
 // A window's folder lists, once per drawing: the count in the row, the files (newest first) in its body, each a row whose
 // text loads read-only from the folder's own list (a path the list does not hold is refused by the daemon).
 // Checklists: the daemon's last reply per ID, and the Apply pressed once (it runs on the second press).
-const checklists: Record<string, unknown> = {};
 let checklistArmed = '';
 async function loadChecklist(list: HTMLElement) {
   const id = list.dataset.ck!;
   try { checklists[id] = await request('/mission/checklist?' + new URLSearchParams({ id })); }
   catch (error) { checklists[id] = checklistAnswer(0, (error as { body?: unknown }).body ?? { error: (error as Error).message }); }
   list.innerHTML = checklistHtml(id, checklists[id], escape, checklistArmed);
+  const line = document.querySelector(`#mission [data-ck-count="${CSS.escape(id)}"]`); if (line) line.textContent = checklistLine(checklists[id]);
 }
 one('#mission').addEventListener('click', async (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-ck] button');
@@ -1634,7 +1662,7 @@ async function loadFolders(box: HTMLElement) {
       if (unit) unit.textContent = total === 1 ? ' file' : ' files';
       list.innerHTML = (files.length < total || partial ? `<p class="muted">${files.length < total ? `The newest ${files.length} of ${total}` : ''}${partial ? ' · a very big folder: some subfolders were not read' : ''}</p>` : '')
         + (files.length ? files.map((f) => row(`${escape(f.name)}<small>${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small>`,
-          `<pre data-src="/mission/folder/file" data-text="${escape(new URLSearchParams({ id, path: f.path }).toString())}">Loading…</pre>`)).join('') : '<p class="muted">No files match.</p>');
+          `<${/\.md$/i.test(f.name) ? 'div class="md"' : 'pre'} data-src="/mission/folder/file" data-text="${escape(new URLSearchParams({ id, path: f.path }).toString())}">Loading…</${/\.md$/i.test(f.name) ? 'div' : 'pre'}>`)).join('') : '<p class="muted">No files match.</p>');
     } catch (error) {
       const code = (error as Error).message, refused = code === 'root-refused';
       if (count) count.textContent = refused ? 'refused' : 'unreadable';
@@ -1662,10 +1690,11 @@ one('#mission').addEventListener('toggle', async (event) => {
         + `<ul class="list">${files.map((f) => `<li><button type="button" class="quiet" data-note-root="${escape(root)}" data-note="${escape(f.path)}">${escape(f.path)} <small class="muted">${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small></button></li>`).join('')}</ul>`;
     } catch (error) { list.innerHTML = `<p class="muted">Could not list the notes (${escape((error as Error).message)})</p>`; }
   }
-  const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > pre[data-text]');
+  const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > [data-text]');
   if (!pre || pre.dataset.loaded) return;
   pre.dataset.loaded = '1';
-  try { pre.textContent = (await request((pre.dataset.src ?? '/mission/space-log') + '?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
+  // O67: a Markdown file's box is a div and reads rendered (md: raw HTML, links and images as text); a log stays as it was written.
+  try { const got = String((await request((pre.dataset.src ?? '/mission/space-log') + '?' + pre.dataset.text)).text); if (pre.tagName === 'PRE') pre.textContent = got; else pre.innerHTML = md.parse(got) as string; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
 }, true);
 // A data tile's answer (threat model row 70), drawn as text by the same code as the desktop's.
 async function pullTile(tile: HTMLElement) {
@@ -1739,8 +1768,14 @@ one('#mission').addEventListener('change', (event) => {
 one('#mission').addEventListener('change', async (event) => {
   const pick = (event.target as Element).closest<HTMLSelectElement>('[data-space-pick]');
   if (!pick) return;
-  const result = await mutate('/mission/space', { name: pick.value || null });
-  void loadMission();
+  // O67: a change that did not happen says so under the picker, which the reload has put back on the space still shown.
+  let failed = '';
+  pick.disabled = true; // one change at a time: the picker shows the asked-for space until the reload below
+  try { const result = await mutate('/mission/space', { name: pick.value || null }); if (result.status >= 300) failed = String(result.body?.reason ?? result.body?.error ?? result.status); }
+  catch (error) { failed = (error as Error).message; }
+  await loadMission();
+  pick.disabled = false;
+  if (failed) document.querySelector('#mission [data-space-picker]')?.insertAdjacentHTML('afterend', `<p class="tile-note" data-space-failed role="status">The space was not changed (${escape(failed)}).</p>`);
 });
 one('#mission').addEventListener('click', async (event) => {
   const allow = (event.target as Element).closest<HTMLButtonElement>('[data-tile-allow]');
@@ -1749,14 +1784,28 @@ one('#mission').addEventListener('click', async (event) => {
   const result = await mutate('/mission/data/allow', { id: tile.dataset.tile });
   if (result.status === 200) await pullTile(tile); else drawTile(tile, tileAnswer(result.status, result.body));
 });
-async function follow(run: string, output: HTMLElement) {
-  let from = 0;
-  for (;;) {
-    const part = await request(`/runs/${encodeURIComponent(run)}?from=${from}`);
-    output.textContent += part.output; from = part.next;
-    if (part.done) { output.textContent += part.code === 0 ? '' : `\n[exit ${part.code}]`; return; }
-    await new Promise((resolve) => setTimeout(resolve, 700));
-  }
+// O67: one follow per output, ended for good when its window closes (reopening does not bring it back) or a newer run takes the output.
+const following = new WeakMap<HTMLElement, object>();
+async function follow(output: HTMLElement, start: () => Promise<string | null>) {
+  const me = {}; following.set(output, me);
+  let from = 0, closed = false;
+  // The close is watched from before the run is asked for: a window closed while that request is out is closed all the same.
+  const dialog = output.closest('dialog'), shut = () => { closed = true; };
+  dialog?.addEventListener('close', shut, { once: true });
+  // Nobody reads a closed window. ponytail: the run goes on; its later output is not shown on reopening.
+  const over = () => following.get(output) !== me /* a newer run has this output */ || ((closed || !output.isConnected) && ((output.textContent += '\n[window closed: later output not shown]'), true));
+  try {
+    const run = await start();
+    if (run === null) return;
+    for (;;) {
+      if (over()) return;
+      const part = await request(`/runs/${encodeURIComponent(run)}?from=${from}`);
+      if (over()) return;
+      output.textContent += part.output; from = part.next;
+      if (part.done) { output.textContent += part.code === 0 ? '' : `\n[exit ${part.code}]`; return; }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+  } finally { dialog?.removeEventListener('close', shut); }
 }
 one('#mission').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1769,9 +1818,12 @@ one('#mission').addEventListener('submit', async (event) => {
     const copy = output.nextElementSibling as HTMLButtonElement; copy.hidden = false; copy.textContent = 'Copy';
     copy.onclick = () => navigator.clipboard.writeText(output.textContent ?? '').then(() => 'Copied', () => 'Copy failed').then((said) => { copy.textContent = said; });
     const args = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
-    const result = await mutate(`/scripts/${encodeURIComponent(item.id)}/run`, { args, ...(item.confirm && { confirm: true }) });
-    if (result.status === 202) await follow(String(result.body.run), output).catch(() => { output.textContent += '\n[lost the run output]'; });
-    else output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.reason ?? result.body.error ?? result.status}`;
+    await follow(output, async () => {
+      const result = await mutate(`/scripts/${encodeURIComponent(item.id)}/run`, { args, ...(item.confirm && { confirm: true }) });
+      if (result.status === 202) return String(result.body.run);
+      output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.reason ?? result.body.error ?? result.status}`;
+      return null;
+    }).catch(() => { output.textContent += '\n[lost the run output]'; });
   } else if (form.dataset.idea !== undefined) {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
@@ -1833,6 +1885,8 @@ async function loadSignIn() {
             : `<p class="muted">After you sign in, Claude shows a code. Paste it here.</p><form class="sign-form" data-sign-send="${agent}"><input data-sign-code autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Claude's code" placeholder="Code from Claude" maxlength="512"><button type="submit">Send code</button></form>`);
       const act = s.running ? `<button type="button" data-sign="stop:${agent}">Cancel</button>`
         : `<button type="button" data-sign="start:${agent}">${s.signedIn || ended ? 'Sign in again' : 'Sign in'}</button>`;
+      // O68: an account that is signed in and has nothing to say is one line; a card is for one that needs something.
+      if (s.signedIn && !s.running && !said && !note) return `<p class="sign-line" data-agent="${agent}"><span>${name} · Signed in</span>${act}</p>`;
       return `<article class="card sign-in${said || note ? ' warn' : ''}" data-agent="${agent}"><h2>${name} <small>${s.signedIn ? 'Signed in' : 'Not signed in'}</small></h2>${running}`
         + (said ? `<p>${escape(said)}</p>` : '') + (note ? `<p>${escape(note)}</p>` : '') + `<div class="sign-acts">${act}</div></article>`;
     }).join('');
@@ -1843,6 +1897,7 @@ async function loadSignIn() {
     }
     const input = box.querySelector<HTMLInputElement>('[data-sign-code]');
     if (input) input.value = typed;
+    one('#usage')[box.querySelector('.card') ? 'before' : 'after'](box); // lines only: under the plan bars; a card that needs something stays on top
   }
   if (SIGN_IN.some(([agent]) => data[agent].running) && !one<HTMLElement>('[data-view="usage"]').hidden) signInTimer = window.setTimeout(() => void loadSignIn(), 2000);
 }
@@ -1989,7 +2044,7 @@ async function openFile(path: string, root?: string) {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
     await putText(file.content);
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
-    preview(!!root);
+    preview(!!root || /\.md$/i.test(path)); // O67: a Markdown file opens to read; Edit is in the bar's menu
     // review 3 L2: a _private note with File protection on reads, but its save would be refused
     one('#fileState').textContent = state.file.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     online(); syncSave();
@@ -2141,7 +2196,7 @@ void (async function keptFile() {
   if (!await openFile(kept.path, root)) return;
   localStorage.removeItem('p9-file-draft');
   state.file = { path: kept.path, hash: kept.hash, content: typeof kept.content === 'string' ? kept.content : '', root };
-  await putText(kept.text);
+  await putText(kept.text); preview(false); // unsaved text comes back in the editor, not behind the read view
   one('#fileState').textContent = 'Kept through sign-in, not saved'; show('files');
 })();
 if (localStorage.getItem('p9-mission-draft')) show('mission'); // P2: put back by keptMission() when Mission draws

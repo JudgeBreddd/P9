@@ -275,24 +275,18 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
     document.querySelector('#prompt').dispatchEvent(kind === 'paste' ? new ClipboardEvent('paste', { ...init, clipboardData: dt }) : new DragEvent('drop', { ...init, dataTransfer: dt }));
   }, [png, kind, count]);
   const paste = (count) => put('paste', count);
-  const choose = async (pick, files) => {
-    await page.click('#attach');
-    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click(`#sheet[open] [data-pick="${pick}"]`)]);
+  // O68: + opens the phone's own chooser in the one tap (it offers the library, the camera and the files itself).
+  const choose = async (files) => {
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#attach')]);
     await chooser.setFiles(files);
-    return page.$eval('#attachInput', (el) => [el.accept, el.getAttribute('capture')]);
+    return page.$eval('#attachInput', (el) => [el.accept, el.getAttribute('capture'), document.querySelector('#sheet').open]);
   };
   await newChat(page, 'claude');
-  await page.click('#attach');
-  assert.deepEqual(await page.$$eval('#sheet[open] [data-pick]', (els) => els.map((el) => el.textContent)), ['Photo library', 'Take photo', 'File']);
-  assert.equal(await page.textContent('#sheetTitle'), 'Attach');
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 });
-  // Each choice opens the phone's own picker: the camera asked for on Take photo, the four types on File.
-  assert.deepEqual(await choose('camera', [{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', 'environment']);
+  assert.deepEqual(await choose([{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', null, false]);
   await chips(1);
-  assert.deepEqual(await choose('file', [{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]), ['image/png,image/jpeg,image/gif,image/webp', null]);
+  await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]);
   await noted('Not attached: notes.txt: PNG, JPEG, GIF or WebP only.');
-  assert.deepEqual(await choose('library', [{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', null]);
+  await choose([{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]);
   await chips(2);
   await paste(1);
   await chips(3);

@@ -245,7 +245,11 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.click('#fileList button[data-name="inner.md"]');
   await page.waitForSelector('#fileState:text("Loaded")', { timeout: 10000 });
   assert.equal(await page.locator('#openPath').innerText(), 'inner.md');
-  await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]');
+  // O67: a Markdown file opens to read; the menu's Edit shows the editor and its Preview comes back.
+  assert.equal(await page.locator('#rendered').isVisible(), true, 'inner.md opened in the editor');
+  await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]:text-is("Edit")');
+  assert.equal(await page.locator('#editor').isVisible(), true);
+  await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]:text-is("Preview")');
   assert.equal(await page.locator('#rendered').isVisible(), true);
   assert.equal(await page.locator('#editor').isHidden(), true);
   // P17: the editor's text is the preview's size (14 px mono beside 15 px text), not 16 px.

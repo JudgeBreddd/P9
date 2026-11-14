@@ -129,8 +129,8 @@ test('K9, K10: attached photos survive a reload; a sheet opened over the Mode sh
   // K10: the Mode sheet borrows the effort/plan controls; a second sheet over it must not wipe them.
   await page.click('#modePill');
   await page.waitForSelector('#sheetBody #more', { state: 'attached' });
-  await page.evaluate(() => document.querySelector('#attach').click());
-  await page.waitForSelector('#sheetTitle:text("Attach")');
+  await page.evaluate(() => dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Over', html: '<p>x</p>' } }))); // + opened a sheet here before O68
+  await page.waitForSelector('#sheetTitle:text("Over")');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('dialog[open]'), null, { timeout: 5000 });
   assert.equal(await page.evaluate(() => !!document.querySelector('#modeHome #more #pickers')), true, 'the Mode controls are gone');

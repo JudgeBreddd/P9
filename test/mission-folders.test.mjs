@@ -237,7 +237,8 @@ test('folder lists and references on the phone at 390x844', { timeout: 90000, sk
   await files.first().waitFor({ timeout: 10000 });
   assert.deepEqual(await files.evaluateAll((all) => all.map((n) => n.firstChild.textContent.trim())), ['c.md', 'sub/b.md', 'a.md']);
   await files.nth(1).click();
-  await box.locator('[data-folder="open-plans"] pre', { hasText: 'Status: open' }).waitFor({ timeout: 10000 });
+  // O67: a Markdown file reads rendered, in a div; other files stay in a pre.
+  await box.locator('[data-folder="open-plans"] .md[data-text]', { hasText: 'Status: open' }).waitFor({ timeout: 10000 });
   // Read-only lists: the Quick note form is the one writable field (create-only, row 76).
   assert.equal(await box.locator(':is(textarea, [contenteditable="true"]):not([data-quicknote] *)').count(), 0, 'read-only');
   await shot(page, 'phone-space-folder');
