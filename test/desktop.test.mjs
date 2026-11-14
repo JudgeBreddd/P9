@@ -33,7 +33,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.deepEqual(await page.evaluate(() => window.p9.updates({ check: true })), off);
     for (const ask of [{ check: 'yes' }, { install: true, check: true }, 'check', null]) await assert.rejects(page.evaluate(ask => window.p9.updates(ask), ask), /ipc-sender-refused/);
     const csp = await page.evaluate(async () => (await fetch('/')).headers.get('content-security-policy'));
-    assert.match(csp, /default-src 'none'/); assert.match(csp, /script-src 'self' 'sha256-/); assert.ok(!csp.includes('unsafe-eval'));
+    assert.match(csp, /default-src 'none'/); assert.match(csp, /script-src 'self'[^;]*;/); assert.ok(!/script-src[^;]*unsafe-inline/.test(csp)); assert.ok(!csp.includes('unsafe-eval')); // F8: no inline script left, so no hash is required
     assert.deepEqual(await page.evaluate(async () => {
       const script = document.createElement('script'); script.textContent = 'window.injected = true'; document.body.append(script);
       return [window.injected === undefined, (await fetch('/missing')).status, (await fetch('/%2e%2e/package.json')).status, (await fetch('/', { method: 'POST' })).status];
