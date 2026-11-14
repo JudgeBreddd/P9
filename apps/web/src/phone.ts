@@ -1,4 +1,4 @@
-import { basicSetup, EditorView } from 'codemirror';
+import type { EditorView } from 'codemirror';
 import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
@@ -26,12 +26,20 @@ const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char
 let restored: { id: string; text: string } | null = (() => {
   try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
 })();
+// F4 item 11: the draft waiting to be written (label(), keepDraft()); declared here, as label() can run early.
+let draft: { id: string; text: string } | null = null, draftTimer: ReturnType<typeof setTimeout> | undefined;
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; readOnly?: boolean; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
-const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
-  EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
+// F4 item 10: the file editor's code (CodeMirror) loads on the first file opened, or in idle time after the first chat
+// screen, as the terminal's does (loadTerm); before, it loaded and was built before the first screen. Until then no file
+// is open, so the text is the loaded file's.
+let editor: EditorView | null = null, editorLoad: Promise<EditorView> | undefined;
+const loadEditor = () => editorLoad ??= import('codemirror').then(({ basicSetup, EditorView }) => editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
+  EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] }));
+const text = () => editor?.state.doc.toString() ?? state.file?.content ?? '';
+const putText = async (content: string) => { const view = await loadEditor(); view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } }); };
 
 // Save is live only once the draft differs from what was loaded (spec §6).
-const dirty = () => !!state.file && editor.state.doc.toString() !== state.file.content;
+const dirty = () => !!state.file && text() !== state.file.content;
 function syncSave() { one<HTMLButtonElement>('#save').disabled = !navigator.onLine || !dirty() || !!state.file?.readOnly; }
 function online() {
   const value = navigator.onLine;
@@ -97,9 +105,9 @@ fit();
 // answers and the new idea not sent yet (p9-mission-draft, put back by keptMission()); the login page is told why it is
 // shown (p9-ended), so a session that ended says so instead of a bare passkey page.
 function toLogin() {
-  forgetMission(); localStorage.removeItem('p9-csrf');
+  forgetMission(); localStorage.removeItem('p9-csrf'); keepDraft();
   try {
-    if (dirty()) localStorage.setItem('p9-file-draft', JSON.stringify({ ...state.file, disk: undefined, text: editor.state.doc.toString() }));
+    if (dirty()) localStorage.setItem('p9-file-draft', JSON.stringify({ ...state.file, disk: undefined, text: text() }));
     holdTyped(); if (Object.keys(typed.answers).length || typed.idea) localStorage.setItem('p9-mission-draft', JSON.stringify(typed));
     sessionStorage.setItem('p9-ended', '1');
   } catch {}
@@ -216,13 +224,30 @@ addEventListener('hashchange', () => { if (applyLink()) { show('chat'); route(on
 // Reads every event after state.cursor into state.events (the daemon pages 500 at a time); wait > 0 long-polls for the
 // first. `extra` narrows it to some chats (the first read, PH3). The page holds what it has read, so a reload or a second
 // visit shows each chat in full.
+// F4 item 9: the same events, per chat, in cursor order, so a reader of one chat walks that chat's events only.
+// pull() appends; take() can put older events before held ones, so it rebuilds the lists of the chats it read.
+const byChat = new Map<string, Json[]>(), NONE: Json[] = [];
+const eventsOf = (id: string) => byChat.get(id) ?? NONE;
+function keepEvent(event: Json) {
+  state.events.push(event);
+  const id = String(event.conversation), list = byChat.get(id); if (list) list.push(event); else byChat.set(id, [event]);
+}
+// A reading of one chat's events, kept until they change (its list is replaced, or grows).
+function perChat<T>(read: (events: Json[], id: string) => T) {
+  const kept = new Map<string, { list: Json[]; n: number; value: T }>();
+  return (id: string) => {
+    const list = eventsOf(id), was = kept.get(id);
+    if (was && was.list === list && was.n === list.length) return was.value;
+    const value = read(list, id); kept.set(id, { list, n: list.length, value }); return value;
+  };
+}
 async function pull(extra: string, wait = 0) {
   let batch: Json[];
   do {
     const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
     batch = result.events as Json[] ?? [];
     // The live loop and a refresh can overlap; an event already held is skipped.
-    for (const event of batch) if (Number(event.cursor) > state.cursor) { state.events.push(event); state.cursor = Number(event.cursor); }
+    for (const event of batch) if (Number(event.cursor) > state.cursor) { keepEvent(event); state.cursor = Number(event.cursor); }
     // A narrowed read reports how far it scanned, matching or not.
     if (extra && batch.length < 500) state.cursor = Math.max(state.cursor, Number(result.cursor));
   } while (batch.length === 500);
@@ -267,9 +292,11 @@ async function fetchEvents(wait = 0) {
 const TAIL = 30, older = new Map<string, number>();
 let changedEarlier = ''; // the chat the Load earlier button was last reset for
 function take(result: Json, ids: string[]) {
-  const held = new Set(state.events.map((event) => Number(event.cursor)));
-  state.events.push(...(result.events as Json[]).filter((event) => !held.has(Number(event.cursor))));
+  const held = new Set(state.events.map((event) => Number(event.cursor))), fresh = (result.events as Json[]).filter((event) => !held.has(Number(event.cursor)));
+  state.events.push(...fresh);
   state.events.sort((a, b) => Number(a.cursor) - Number(b.cursor));
+  const touched = new Set(fresh.map((event) => String(event.conversation)));
+  for (const chat of touched) byChat.set(chat, state.events.filter((event) => String(event.conversation) === chat));
   const more = (result.more ?? {}) as Json;
   for (const id of ids) if (typeof more[id] === 'number') older.set(id, more[id] as number); else older.delete(id);
 }
@@ -321,15 +348,14 @@ type Entry = { key: string; sig: string; html: () => string };
 type Strip = { events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> };
 const DETAIL_CAP = 2000; // a tool call's expandable detail: the ledger's status and text content, escaped, capped (threat model row 18)
 const toolText = (data: Json) => (Array.isArray(data.content) ? data.content as Json[] : []).map((item) => String(((item.content ?? item) as Json | undefined)?.text ?? '')).filter(Boolean).join('\n');
-function build(picked: string) {
+const build = perChat((events) => {
   const blocks: Block[] = [];
   // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
   const strip: Strip = { events: [] };
   const add = (kind: string, text: unknown, extra: Partial<Block> = {}) => { blocks.push({ kind, text: String(text ?? ''), ...extra }); };
   // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
   const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.text += ' · not answered'; } if (block.kind === 'ask') block.closed = true; });
-  for (const event of state.events) {
-    if (event.conversation !== picked) continue;
+  for (const event of events) {
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
     // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
     if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
@@ -372,7 +398,7 @@ function build(picked: string) {
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('note', 'Stopped · Send again to resume.'); }
   }
   return { blocks, strip };
-}
+});
 // P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
 const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
 function blockHtml(block: Block) {
@@ -393,7 +419,10 @@ function blockHtml(block: Block) {
 }
 // Three or more tool calls in a row fold into one row; their images stay in the chat below it, as on the desktop. A block's key is its index (a group's is its first block's), so a
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
+let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
 function itemsOf(blocks: Block[]) {
+  const key = sentCache.size + ':' + codeColoursVersion(); // F4 item 9: a poll that changed no block signs none again
+  if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
   const out: Entry[] = [];
   for (let i = 0; i < blocks.length; i++) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
@@ -403,6 +432,7 @@ function itemsOf(blocks: Block[]) {
       i = j;
     } else { const block = blocks[i]; out.push({ key: 'b' + i, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion(), html: () => blockHtml(block) }); }
   }
+  itemsKept = { blocks, key, out };
   return out;
 }
 type Keyed = HTMLElement & { sig?: string };
@@ -430,11 +460,24 @@ function patch(list: HTMLElement, wanted: Entry[]) {
 // P7: what each chat is doing, read from its events the way the desktop's robot heads are: a user message with no turn end
 // after it is working; an approval or question not yet answered is waiting on you; otherwise stopped.
 type Digest = { run: 'working' | 'needs' | 'idle'; last: string };
+// F4 item 9: a left fold over each chat's events, carried on from the last event folded while that chat's list only grew.
+type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean };
+const folds = new Map<string, Fold>();
 function digest() {
-  const seen = new Map<string, { working: boolean; open: Set<string>; last: string; tail: boolean }>();
-  for (const event of state.events) {
-    const id = String(event.conversation), kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
-    let chat = seen.get(id); if (!chat) seen.set(id, chat = { working: false, open: new Set(), last: '', tail: false });
+  const seen = new Map<string, Fold>();
+  for (const [id, list] of byChat) {
+    let chat = folds.get(id);
+    if (!chat || chat.list !== list) folds.set(id, chat = { list, n: 0, working: false, open: new Set(), last: '', tail: false });
+    for (; chat.n < list.length; chat.n++) fold(chat, list[chat.n]);
+    seen.set(id, chat);
+  }
+  const out = new Map<string, Digest>();
+  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '' }));
+  return out;
+}
+function fold(chat: Fold, event: Json) {
+  {
+    const kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
     if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; }
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
@@ -445,9 +488,6 @@ function digest() {
     else if (kind === 'answered') chat.open.delete(String(data.request));
     else if (['turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error'].includes(kind)) { chat.working = false; chat.open.clear(); }
   }
-  const out = new Map<string, Digest>();
-  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '' }));
-  return out;
 }
 const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 let listSig = '';
@@ -652,9 +692,9 @@ let picksFor = '';
 // made while the page's first read runs is a stub, drawn only once its history is in.
 const startPick = new Map<string, string>();
 const swapModel = new Map<string, string>();
+const picksOf = perChat((events) => ({ configs: events.filter((event) => event.type === 'config'), set: events.findLast((event) => event.type === 'mode')?.data as { name?: string } | undefined }));
 function renderPicks(id: string) {
-  const configs = state.events.filter((event) => event.conversation === id && event.type === 'config');
-  const set = state.events.findLast((event) => event.conversation === id && event.type === 'mode')?.data as { name?: string } | undefined;
+  const { configs, set } = picksOf(id);
   // The agent is in the key: a chat made here can draw before its row is read, with no modes yet.
   const key = id + ':' + provider(id) + ':' + configs.length + ':' + (set?.name ?? '');
   if (key === picksFor) return;
@@ -698,30 +738,37 @@ async function listen() {
 // the same message under the same ID and the daemon replays it. ponytail: this phone's storage only, as the desktop's queue.
 type Queued = { qid: string; text: string; mode?: string; model?: string; config?: Record<string, string> };
 const queueKey = (id: string) => 'p9-queue:' + id;
+// F4 item 11: read from storage once per chat, then kept here; every change is written through. Another tab's change
+// (the storage event) drops what is kept.
+const queues = new Map<string, Queued[]>();
+addEventListener('storage', (event) => { if (!event.key || event.key.startsWith('p9-queue:')) queues.clear(); });
 function queued(id: string): Queued[] {
-  try { const all = JSON.parse(localStorage.getItem(queueKey(id)) ?? '[]'); return Array.isArray(all) ? all.filter((item) => typeof item?.text === 'string' && typeof item.qid === 'string') : []; } catch { return []; }
+  let items = queues.get(id);
+  if (!items) {
+    try { const all = JSON.parse(localStorage.getItem(queueKey(id)) ?? '[]'); items = Array.isArray(all) ? all.filter((item) => typeof item?.text === 'string' && typeof item.qid === 'string') : []; } catch { items = []; }
+    queues.set(id, items);
+  }
+  return items!;
 }
-function keepQueue(id: string, items: Queued[]) { if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
+function keepQueue(id: string, items: Queued[]) { queues.set(id, items); if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
 // A question or approval still waiting for an answer in this chat.
-function asking(id: string) {
+const asking = perChat((events) => {
   const open = new Set<string>();
-  for (const event of state.events) {
-    if (event.conversation !== id) continue;
+  for (const event of events) {
     const kind = String(event.type), request = String((event.data as Json | undefined)?.request);
     if (kind === 'approval' || kind === 'question') open.add(request);
     else if (kind === 'answered') open.delete(request);
     else if (['turn-end', 'interrupted', 'exited', 'stopped'].includes(kind)) open.clear();
   }
   return open.size > 0;
-}
+});
 // P4: the messages the daemon holds for this chat (Steer or Queue mid-turn), read from its events as the desktop reads
 // them: a user event sends the held ones it names. Whether a turn runs is the Chats list's reading (digest), so the top
 // bar's "Working…" and the Stop button never disagree.
 const running = (id: string) => (digest().get(id)?.run ?? 'idle') !== 'idle';
-function turn(id: string) {
+const turn = perChat((events) => {
   const held = new Map<string, { text: string; when: string }>();
-  for (const event of state.events) {
-    if (event.conversation !== id) continue;
+  for (const event of events) {
     const kind = String(event.type), data = (event.data ?? {}) as Json;
     if (kind === 'user') { for (const sent of Array.isArray(data.held) ? data.held : []) held.delete(String(sent)); }
     else if (['interrupted', 'exited', 'stopped', 'error'].includes(kind)) held.clear();
@@ -729,9 +776,16 @@ function turn(id: string) {
     else if (kind === 'unheld') held.delete(String(data.id));
   }
   return { held };
-}
+});
 // The send button, as the desktop's: during a turn an empty box makes it Stop (the text stays yours), and text goes
 // in with Steer (after the current step) or, from the Queue button beside it, after the turn.
+// F4 item 11: the draft goes to storage once typing pauses, not on every key; a hidden page or the sign-in writes it at once.
+function keepDraft() {
+  clearTimeout(draftTimer); if (!draft) return;
+  try { if (draft.text.trim()) localStorage.setItem('p9-draft', JSON.stringify(draft)); else localStorage.removeItem('p9-draft'); } catch {}
+  draft = null;
+}
+addEventListener('pagehide', keepDraft); document.addEventListener('visibilitychange', () => { if (document.hidden) keepDraft(); });
 function label() {
   const id = one<HTMLSelectElement>('#conversation').value, send = one<HTMLButtonElement>('#composer button[type="submit"]');
   const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
@@ -739,7 +793,7 @@ function label() {
   const box = one<HTMLTextAreaElement>('#prompt');
   if (!restored || box.value) {
     restored = null;
-    try { if (box.value.trim()) localStorage.setItem('p9-draft', JSON.stringify({ id, text: box.value })); else localStorage.removeItem('p9-draft'); } catch {}
+    draft = { id, text: box.value }; clearTimeout(draftTimer); draftTimer = setTimeout(keepDraft, 400);
   }
   box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
   // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
@@ -1806,10 +1860,10 @@ one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.
 // A .md file can be read rendered: md shows raw HTML as text and links and images as plain text (threat model row 18).
 const preview = (on: boolean) => {
   one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on;
-  if (on) one('#rendered').innerHTML = md.parse(editor.state.doc.toString()) as string;
+  if (on) one('#rendered').innerHTML = md.parse(text()) as string;
 };
 // The Discard and Preview/Edit choices live in the bar's more menu (the shared sheet).
-const discard = () => { if (state.file) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: state.file.content } }); };
+const discard = () => { if (state.file) void putText(state.file.content); };
 one<HTMLButtonElement>('#moreFile').onclick = () => openSheet('File', (state.file && /\.md$/i.test(state.file.path) ? `<button type="button" class="opt" data-file="preview">${one<HTMLElement>('#rendered').hidden ? 'Preview' : 'Edit'}</button>` : '') + '<button type="button" class="opt" data-file="discard">Discard changes</button>');
 one('#sheetBody').addEventListener('click', (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-file], [data-term]'); if (!button) return;
@@ -1841,7 +1895,7 @@ async function openFile(path: string, root?: string) {
   showImage(false);
   try {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
-    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
+    await putText(file.content);
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root);
     // review 3 L2: a _private note with File protection on reads, but its save would be refused
@@ -1856,7 +1910,7 @@ async function openFile(path: string, root?: string) {
 }
 async function saveFile(hash: string) {
   if (!state.file || state.file.readOnly) return;
-  const { path, root } = state.file, content = editor.state.doc.toString();
+  const { path, root } = state.file, content = text();
   const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content, ...(state.file.place && { root: state.file.place }) });
   if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; syncSave(); }
   else if (result.status === 409) {
@@ -1868,10 +1922,10 @@ async function saveFile(hash: string) {
 }
 one<HTMLButtonElement>('#save').onclick = () => void saveFile(state.file?.hash ?? '');
 one<HTMLButtonElement>('#saveMine').onclick = () => { if (state.file?.disk) void saveFile(state.file.disk.hash); };
-one<HTMLButtonElement>('#loadDisk').onclick = () => {
+one<HTMLButtonElement>('#loadDisk').onclick = async () => {
   const disk = state.file?.disk; if (!state.file || !disk) return;
   state.file = { ...state.file, hash: disk.hash, content: disk.content, disk: undefined };
-  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: disk.content } });
+  await putText(disk.content);
   one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true; if (!one<HTMLElement>('#rendered').hidden) preview(true);
 };
 
@@ -1980,7 +2034,7 @@ addEventListener('online', () => { online(); void loadChat().then(drain); });
 online(); const first = loadChat(); void first.finally(() => {
   performance.mark('p9-chat-painted'); document.getElementById('boot')?.remove();
   const idle = (window as { requestIdleCallback?: (run: () => void) => void }).requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));
-  idle(() => void loadTerm().catch(() => {}));
+  idle(() => { void loadTerm().catch(() => {}); void loadEditor().catch(() => {}); });
 });
 // P2: coming back to the app asks the daemon at once, so a session that ended meanwhile goes to the login now (request()),
 // with the drafts kept, not on the next Save, Send or Stop.
@@ -1995,7 +2049,7 @@ void (async function keptFile() {
   if (!await openFile(kept.path, root)) return;
   localStorage.removeItem('p9-file-draft');
   state.file = { path: kept.path, hash: kept.hash, content: typeof kept.content === 'string' ? kept.content : '', root };
-  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: kept.text } });
+  await putText(kept.text);
   one('#fileState').textContent = 'Kept through sign-in, not saved'; show('files');
 })();
 if (localStorage.getItem('p9-mission-draft')) show('mission'); // P2: put back by keptMission() when Mission draws
