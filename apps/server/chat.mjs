@@ -355,11 +355,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
-    wakeAll();
+    wakeAll(type);
   };
-  // Long polls wake once per tick, not once per event: a streamed burst of updates is one read for each poller (finding 16).
+  // Streamed updates wake long polls once per tick, not once per event: a burst is one read for each poller (finding 16).
+  // Every other event wakes them now, so 'created' reaches a window before the create's reply (controller.mjs relies on it).
   let waking = false;
-  const wakeAll = () => { if (waking) return; waking = true; setImmediate(() => { waking = false; for (const wake of listeners) wake(); }); };
+  const wakeAll = (type) => {
+    if (type !== 'update') { for (const wake of listeners) wake(); return; }
+    if (waking) return; waking = true; setImmediate(() => { waking = false; for (const wake of listeners) wake(); });
+  };
   const sprintOf = (id) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('sprint:' + id)?.value ?? '{}'); } catch { return {}; } };
   const setSprint = (id, patch) => {
     const value = { ...sprintOf(id), ...patch };
