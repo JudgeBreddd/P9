@@ -109,5 +109,18 @@ test('O67 e: a script stops being followed when its window closes', { timeout: 1
   await page.waitForTimeout(1200); const settled = polls; // the poll in flight at the close may still land
   await page.waitForTimeout(3000);
   assert.equal(polls, settled, `the run was read ${polls - settled} more times after its window closed`);
+  // A read held while the window is closed and opened again ends the follow all the same.
+  await openTile(page, 'Reviews');
+  await page.click('#mission dialog[open] summary:has-text("Slow job") [data-run-now]');
+  await page.waitForSelector('#mission dialog[open] pre[data-output]:has-text("tick 1")', { timeout: 15000 });
+  let release; const held = new Promise((done) => { release = done; });
+  await page.route(/\/runs\/[^/]+\?from=/, async (route) => { await held; await route.continue(); });
+  await page.waitForRequest(/\/runs\/[^/]+\?from=/, { timeout: 10000 });
+  await page.click('#mission dialog[open] [data-close]');
+  await openTile(page, 'Reviews');
+  const before = polls; release();
+  await page.waitForSelector('#mission dialog[open] pre[data-output]:has-text("window closed")', { timeout: 10000 });
+  await page.waitForTimeout(2500);
+  assert.equal(polls, before, `the held read went on following after the window was opened again (${polls - before} more reads)`);
   console.log('PASS O67 e: no read of the run after the window closed (' + settled + ' before)');
 });
