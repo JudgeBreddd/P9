@@ -13,7 +13,8 @@ import { daemonRequest } from '../../scripts/teh.mjs';
 import { newer } from '../server/update.mjs';
 import { PIECE } from '../server/pieces.mjs';
 
-const run = promisify(execFile), LONG = 60_000, POLL_MS = 2000;
+// Following an update: every 2 s for the first minute (a quick update looks quick), then every 10 s (review item 25).
+const run = promisify(execFile), LONG = 60_000, POLL_MS = 2000, SLOW_MS = 10_000;
 // ponytail: 3 h, past the server's longest update: the build (20 min), the turn limit (2 h) and the swap (under 15 min).
 const FOLLOW_MS = 3 * 60 * 60_000;
 // A step line names files, never where they are on the server: any absolute path becomes its last part (a URL stays whole).
@@ -95,14 +96,14 @@ export async function updateServer({ state, check, version, checkout, host, tell
   if (started.status !== 202) return tell({ phase: 'failed', host, version: target.version, error: started.body?.error ?? 'update-refused' }) ?? { phase: 'failed' };
   const id = started.body.id;
   let last = '';
-  const end = Date.now() + deadline;
+  const begun = Date.now(), end = begun + deadline;
   while (live()) {
     if (Date.now() > end) {
       const lost = { phase: 'timed-out', host, version: target.version, minutes: Math.round(deadline / 60_000) };
       tell(lost);
       return lost;
     }
-    await wait(POLL_MS);
+    await wait(Date.now() - begun < 60_000 ? POLL_MS : SLOW_MS);
     // Through the restart nothing answers for a while; check() re-reads the new daemon's credentials once it is back.
     const now = await check().catch(() => null);
     const answer = await daemonRequest(state, 'GET', '/update/status').catch(() => null);

@@ -32,12 +32,17 @@ const freePort = () => new Promise((resolve, reject) => {
 });
 // Review 2 M2: only our own real folder, as sshLogin checks; one another user made first (os.tmpdir() when XDG_RUNTIME_DIR
 // is unset) could hold a socket that answers as the server, so then no sharing at all.
+// Kept once true under XDG_RUNTIME_DIR (review item 27), a folder only this user can write in; under os.tmpdir() a cleaner
+// could remove ours and another user make it again, so there it is checked on every ssh start.
+let owned = false;
 const ownControl = () => {
+  if (owned) return true;
   try {
     mkdirSync(CONTROL_DIR, { recursive: true, mode: 0o700 });
     const folder = lstatSync(CONTROL_DIR);
     if (!folder.isDirectory() || folder.uid !== process.getuid()) return false;
     chmodSync(CONTROL_DIR, 0o700);
+    owned = !!process.env.XDG_RUNTIME_DIR && CONTROL_DIR.startsWith(process.env.XDG_RUNTIME_DIR + path.sep);
     return true;
   } catch { return false; }
 };

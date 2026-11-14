@@ -15,41 +15,57 @@ import { found, placeTmux } from '../apps/server/deps.mjs';
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-export async function health(state) {
+// desktop.json per state folder, read once and kept (review item 27: every request read it). Read again when the daemon refuses
+// the cookie (401) or nothing is at the socket: a restarted daemon writes new credentials and may have a new socket.
+const known = new Map();
+const again = (error) => error?.status === 401 || error?.code === 'ECONNREFUSED' || error?.code === 'ENOENT';
+async function withCredentials(state, send) {
+  const cached = known.get(state);
+  if (cached) { try { return await send(cached); } catch (error) { if (!again(error)) throw error; } }
   const credentials = JSON.parse(await readFile(path.join(state, 'desktop.json'), 'utf8'));
-  return new Promise((resolve, reject) => {
+  known.set(state, credentials);
+  return send(credentials);
+}
+
+export const health = (state) => withCredentials(state, (credentials) => new Promise((resolve, reject) => {
     const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: '/health',
       headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}` }, timeout: 2000 }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(new Error('unhealthy')));
+      res.on('end', () => res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(Object.assign(new Error('unhealthy'), { status: res.statusCode })));
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end();
-  });
-}
+  }));
 
 // A request that starts an agent waits for it: the daemon allows 45 s for the start (chat.mjs START_MS), then up to 5 s each for the
 // mode, model and up to 6 effort settings. Everything else keeps the 10 s default.
 export const AGENT_START_MS = 90_000;
 // One authenticated request to the daemon over its Unix socket; resolves { status, body }.
+// A 401 is not a result: the request was refused before it did anything, so it is sent again with desktop.json read again.
 export async function daemonRequest(state, method, route, body, op = randomUUID(), timeout = 10000) {
-  const credentials = JSON.parse(await readFile(path.join(state, 'desktop.json'), 'utf8'));
   const data = body === undefined ? undefined : JSON.stringify(body);
-  return new Promise((resolve, reject) => {
+  return withCredentials(state, (credentials) => new Promise((resolve, reject) => {
     const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout,
       headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}`, 'x-p9-csrf': credentials.csrf,
         ...(method === 'GET' ? {} : { 'x-p9-op': op }), ...(data ? { 'content-type': 'application/json' } : {}) } }, (res) => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); } });
+      res.on('end', () => {
+        if (res.statusCode === 401) return reject(Object.assign(new Error('unauthorized'), { status: 401, reply: text }));
+        try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); }
+      });
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(data);
+  })).catch((error) => {
+    // Still refused with desktop.json just read: the 401 as it was before the cache, a reply and not an error.
+    if (error?.status === 401 && error.reply !== undefined) { try { return { status: 401, body: JSON.parse(error.reply) }; } catch { throw Object.assign(new Error('bad-response'), { status: 401 }); } }
+    throw error;
   });
 }
 

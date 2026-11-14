@@ -27,10 +27,11 @@ async function gate() {
     run('python3', [spike, '--all']);
   }
   run(process.execPath, ['--test', 'test/diagnostics.test.mjs', 'test/files.test.mjs', 'test/save-faults.test.mjs', 'test/scanner.test.mjs', 'test/server.test.mjs', 'test/startup.test.mjs', 'test/inventory.test.mjs']);
-  await scan(root);
+  const files = await paths(root); // one walk for the scan and the inventory (licenses.mjs here writes nothing)
+  await scan(root, files);
   console.log('PASS phase3 secret and private-path scan');
   run(process.execPath, ['scripts/licenses.mjs']);
-  await mutationInventory(root);
+  await mutationInventory(root, files);
   console.log('PASS phase3 mutation inventory: filesystem/process imports and mutation sites confined to enumerated reviewed modules; not an OS sandbox');
   console.log('PASS phase3 foundation code checks; run the project plan gate separately for review and Required threat-model acceptance');
   const phase6 = process.argv.includes('--all') || process.argv.includes('--phase6');
@@ -76,7 +77,7 @@ export async function duwopPins(directory) {
   console.log('PASS phase4 DUWOP: every unmodified vendor file matches its pinned sha256');
 }
 
-export async function mutationInventory(directory) {
+export async function mutationInventory(directory, files) {
   // Inventory filesystem/process access, including server's read-only recovery count.
   // side.mjs, controller.mjs = the side panel's own side.open(slot, ...) and close (c12: a panel in the page, no filesystem; the page has no fs at all).
   // phone.ts, terminal.mjs = the xterm screen's write() and open() (draw and mount, Phase 17; terminal.mjs is the
@@ -145,7 +146,7 @@ export async function mutationInventory(directory) {
   const sourceExtensions = new Set(['.sh', '.js', '.cjs', '.mjs', '.ps1', '.nsh', '.ts', '.tsx', '.astro', '.html']);
   const dataExtensions = new Set(['.md', '.json', '.yaml', '.yml', '.css', '.svg', '.webmanifest']);
   const specialFiles = new Set(['LICENSE', '.publish', '.publishignore', '.gitignore', '.gitattributes', '.gitleaksignore', '.githooks/pre-commit', '.githooks/pre-push']);
-  for (const file of await paths(directory)) {
+  for (const file of files ?? await paths(directory)) {
     const relative = path.relative(directory, file);
     const extension = path.extname(file);
     if (!sourceExtensions.has(extension)) {

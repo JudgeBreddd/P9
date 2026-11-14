@@ -18,10 +18,11 @@ export async function paths(directory, root = directory) {
   return files;
 }
 
-export async function pathScan(directory) {
+// files: the source list from paths(directory), walked once by the caller (review item 28: the gate walked the tree three times).
+export async function pathScan(directory, files) {
   const patterns = ['/ho' + 'me/', 'IC' + 'M/', '_' + 'private/'];
   const bad = [];
-  for (const file of await paths(directory)) {
+  for (const file of files ?? await paths(directory)) {
     if (path.basename(file) === '.publishignore' || path.basename(file) === '.gitignore') continue;
     const text = await readFile(file, 'utf8');
     if (patterns.some((pattern) => text.includes(pattern))) bad.push(path.relative(directory, file));
@@ -29,12 +30,13 @@ export async function pathScan(directory) {
   return bad;
 }
 
-export async function scan(directory) {
-  const bad = await pathScan(directory);
+export async function scan(directory, files) {
+  files ??= await paths(directory);
+  const bad = await pathScan(directory, files);
   if (bad.length) throw new Error('private-path-in-source: ' + bad.join(', '));
   const source = await mkdtemp(path.join(os.tmpdir(), 'p9-source-'));
   try {
-    for (const file of await paths(directory)) {
+    for (const file of files) {
       const target = path.join(source, path.relative(directory, file));
       await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       await copyFile(file, target);
