@@ -651,7 +651,10 @@ one('#sheetBody').addEventListener('click', async event => {
   }
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
-  editDraft(id, (text) => { setDraft(next, text); return ''; }); // O61: the text typed goes with the chat to its new id
+  // O61: the text typed goes with the chat to its new id. The box itself changes owner here, before the list is read again:
+  // whatever is typed while that read runs (the sheet can be dismissed) is the new chat's, and route(next) leaves the box alone.
+  if (boxFor === id) { setDraft(next, one<HTMLTextAreaElement>('#prompt').value); setDraft(id, ''); boxFor = next; }
+  else editDraft(id, (text) => { setDraft(next, text); return ''; });
   if (chosenMode) startPick.set(next, chosenMode);
   if (chosenModel) swapModel.set(next, chosenModel);
   // The sheet stays over the box until the new chat owns it: text typed into the old chat's box in between would be kept under the deleted id.
