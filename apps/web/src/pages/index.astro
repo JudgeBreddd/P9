@@ -1,5 +1,4 @@
 ---
-import Shell from '../Shell';
 import DuwopBoot from '../components/DuwopBoot.astro';
 import '../styles/fonts.css';
 import '../lib/duwop.css';
@@ -15,6 +14,11 @@ import '../styles/projects.css';
 import '../styles/artifact.css';
 import '../styles/code-colours.css';
 import '../styles/builder-look.css';
+import '../styles/black-hole.css';
+import shell from '../shell.html?raw';
+import hole from '../black-hole.html?raw';
+// List 29: the shell is static markup, inlined here (as phone.astro does); shell-start.ts runs its DOM code once. No React.
+const markup = shell.replace('<!--black-hole-->', hole);
 ---
 <!doctype html>
 <html lang="en" class="dark" data-theme="event-horizon-prime" data-amoled data-fx="underglow motion shine">
@@ -24,5 +28,11 @@ import '../styles/builder-look.css';
     <DuwopBoot />
     <title>P9 — Event Horizon</title>
   </head>
-  <body><Shell client:load /></body>
+  <body>
+    <div data-p9-island><Fragment set:html={markup} /></div>
+    <script>
+      import { startShell } from '../shell-start';
+      startShell();
+    </script>
+  </body>
 </html>

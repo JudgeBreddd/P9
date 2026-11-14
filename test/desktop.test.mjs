@@ -106,7 +106,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await focus('dev'); assert.equal(await page.locator('#devTabs [aria-selected="true"]').getAttribute('data-file'), 'server.ts');
     assert.deepEqual((await caret(editor)).slice(1), [devValue, 20, 25]);
     await focus('mission'); await openWin(panelID); assert.equal(await body.evaluate(p => p.scrollTop), missionTop); await closeWin();
-    assert.equal(await page.evaluate(() => performance.timeOrigin), identity); assert.equal(await page.locator('astro-island').count(), 1);
+    assert.equal(await page.evaluate(() => performance.timeOrigin), identity); assert.equal(await page.locator('[data-p9-island]').count(), 1);
     console.log('PASS phase4 must-pass: Chat draft/caret/scroll, Dev tab/draft/caret and Mission scroll survive focus cycle without reload');
 
     await focus('dev'); await editor.evaluate(t => { t.focus(); t.setSelectionRange(20, 25); });
