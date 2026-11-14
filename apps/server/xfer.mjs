@@ -27,6 +27,18 @@ async function gitList(cwd, args) {
   } catch { return null; }
 }
 
+// One file the walk found (path relative to the manifest's base): counted as skipped, or kept with what the manifest and
+// its hash cache need. False once more than MAX_COUNT are kept: the walk stops there (H1).
+function keep(name, stat, skipped, out) {
+  if (name.split('/').some(lockedName)) skipped.locked += 1;
+  else if (!stat) return true;
+  else if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink !== 1)) skipped.links += 1;
+  else if (!stat.isFile()) skipped.special += 1;
+  else if (stat.size > MAX_FILE) skipped.large += 1;
+  else { out.push({ path: name, size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino }); return out.length <= MAX_COUNT; }
+  return true;
+}
+
 // A chat started outside the workspace (v0.1.6 U4) sends its own folder: root names the folder the paths are relative to, an
 // absolute one (Unrestricted mode only, as a chat may start there: chat.mjs folderCheck) or a workspace folder ('' the
 // workspace). Without root the paths are workspace-relative, as before. The listing rules are the same either way.
@@ -61,7 +73,8 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
   }, 10 * 60 * 1000).unref();
 
   // Files under `base` (absolute), relative to it. Git folders: git's list, nested repos by their own list; others: a
-  // walk that leaves out HEAVY folders and .git. Locked names and links are counted, never followed.
+  // walk that leaves out HEAVY folders and .git. Locked names and links are counted, never followed. Each file is
+  // checked as it is found and the walk stops past MAX_COUNT sendable files (H1): false then, true when it saw them all.
   async function list(base, prefix, skipped, out) {
     const tracked = await gitList(base, ['--cached', '--others', '--exclude-standard']);
     if (tracked) {
@@ -71,20 +84,22 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
         // An empty submodule folder (never checked out) lists itself as './': walking it again would never end.
         if (full === base) { skipped.ignored += 1; continue; }
         const stat = await lstat(full).catch(() => null);
-        if (stat?.isDirectory()) await list(full, prefix + name + '/', skipped, out); // a nested repo
-        else if (stat) out.push(prefix + name);
+        if (stat?.isDirectory()) { if (!await list(full, prefix + name + '/', skipped, out)) return false; } // a nested repo
+        else if (!keep(prefix + name, stat, skipped, out)) return false;
       }
-      return;
+      return true;
     }
     for (const entry of await readdir(base, { withFileTypes: true }).catch(() => [])) {
+      const full = path.join(base, entry.name);
       if (entry.isDirectory()) {
         if (HEAVY.includes(entry.name) || entry.name === '.git') skipped.ignored += 1;
         else if (lockedName(entry.name)) skipped.locked += 1;
-        else await list(path.join(base, entry.name), prefix + entry.name + '/', skipped, out);
+        else if (!await list(full, prefix + entry.name + '/', skipped, out)) return false;
       } else if (entry.isSymbolicLink()) skipped.links += 1;
-      else if (entry.isFile()) out.push(prefix + entry.name);
+      else if (entry.isFile()) { if (!keep(prefix + entry.name, await lstat(full).catch(() => null), skipped, out)) return false; }
       else skipped.special += 1;
     }
+    return true;
   }
 
   async function hashOf(full, stat) {
@@ -119,21 +134,16 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
       if (!base) return no;
       // Checked as a chat's folder is (threat model row 24): no links, no locked names on the way.
       if (!await listDirectory(base, folder).then(() => true, () => false)) return refused(409, 'folder-missing', { folder });
-      const skipped = { ignored: 0, links: 0, large: 0, special: 0, locked: 0 }, names = [], files = [];
-      await list(folder ? path.join(base, folder) : base, folder ? folder + '/' : '', skipped, names);
-      let truncated = false;
-      for (const name of names.sort()) {
-        if (name.split('/').some(lockedName)) { skipped.locked += 1; continue; }
-        const full = path.join(base, name), stat = await lstat(full).catch(() => null);
-        if (!stat) continue;
-        if (stat.isSymbolicLink()) { skipped.links += 1; continue; }
-        if (!stat.isFile()) { skipped.special += 1; continue; }
-        if (stat.nlink !== 1) { skipped.links += 1; continue; }
-        if (stat.size > MAX_FILE) { skipped.large += 1; continue; }
-        if (files.length >= MAX_COUNT) { truncated = true; break; }
-        files.push({ path: name, size: stat.size, sha256: await hashOf(full, stat), mtimeMs: Math.round(stat.mtimeMs) });
+      const skipped = { ignored: 0, links: 0, large: 0, special: 0, locked: 0 }, kept = [];
+      const whole = await list(folder ? path.join(base, folder) : base, folder ? folder + '/' : '', skipped, kept);
+      // Past the limit the desktop refuses the send (desktop/xfer.mjs overLimit), so nothing is hashed (O9): the answer
+      // comes after the walk's first MAX_COUNT + 1 files, not after hashing them. Syncthing is still looked for in them.
+      if (!whole) return { status: 200, files: [], skipped, truncated: true, syncthing: await syncthing(folder, kept, base) };
+      const files = [];
+      for (const f of kept.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
+        files.push({ path: f.path, size: f.size, sha256: await hashOf(path.join(base, f.path), f), mtimeMs: Math.round(f.mtimeMs) });
       }
-      return { status: 200, files, skipped, truncated, syncthing: await syncthing(folder, files, base) };
+      return { status: 200, files, skipped, truncated: false, syncthing: await syncthing(folder, files, base) };
     },
     // One piece of a workspace file, opened without following links (packages/files openSafe).
     async file(relativePath, offset, folderRoot) {
