@@ -977,6 +977,14 @@ under the same send, the server no longer has the earlier pieces: the commit ref
 upload-mismatch`, with their names), the same answer as for a wrong piece, and they have to be sent again. A daemon restart already dropped all staging; this
 adds the same clean-up for a client that died without aborting.
 
+## The folder list before a send
+
+Before Send to remote, each side's daemon lists the folder with every file's size, time and sha256 (`/xfer/manifest`,
+desktop routes only). Since v0.1.9 phase 4 the list stops at 200,000 sendable files: past that it answers `truncated`
+with no files, having opened none of them to hash, and the laptop refuses the send naming the "Most files in one send"
+Setting, as before. The limit and the refusal are unchanged; fewer files are read, and no file names or hashes are sent
+back for a folder that cannot be sent.
+
 ## Projects
 
 A project (threat model row N1) is an id P9 makes (a random UUID) and its own folder, `projects/<id>/` beside the ledger
