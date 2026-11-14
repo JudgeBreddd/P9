@@ -505,15 +505,38 @@ function fold(chat: Fold, event: Json) {
 }
 const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 let listSig = '';
+// O66: the preview line as text, without the reply's Markdown marks. ponytail: the common marks by pattern, not a parse;
+// a name written __like_this__ loses its underscores.
+const plain = (line: string) => line.replace(/^\s*(`{3,}|~{3,}).*$/, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '').replace(/\*\*|__|~~|`/g, '')
+  .replace(/(^|[\s(])[*_](?=\S)([^*_]*\S)[*_](?=$|[\s).,;:!?])/g, '$1$2').trim();
+// O66: what a chat last said when the reader last had it on screen, kept on this phone. A chat whose newest line differs,
+// and is not working or asking, has a result not read yet. The first 60 characters, which the daemon's cut preview shares.
+let read: Record<string, string> = {};
+try { read = JSON.parse(localStorage.getItem('p9-read') ?? '{}') ?? {}; } catch {}
+const keepRead = () => { try { localStorage.setItem('p9-read', JSON.stringify(Object.fromEntries(state.conversations.map((item) => String(item.id)).filter((id) => id in read).map((id) => [id, read[id]])))); } catch {} };
+// A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
+function rowInfo(item: Json, found = digest()): Digest {
+  const id = String(item.id);
+  return state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id) ?? { run: 'idle', last: '' };
+}
+function markRead(id: string) {
+  const item = state.conversations.find((entry) => entry.id === id); if (!item) return;
+  const mark = rowInfo(item).last.slice(0, 60); if (read[id] !== mark) { read[id] = mark; keepRead(); }
+}
 function renderList() {
+  let seeded = false;
   const found = digest(), row = (item: Json) => {
-    // A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
-    const id = String(item.id), info = state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
-    return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
+    const id = String(item.id), info = rowInfo(item, found), run = info.run, mark = info.last.slice(0, 60), stopped = !isOpen(item);
+    if (!(id in read) && mark) { read[id] = mark; seeded = true; } // first seen on this phone: nothing to call new
+    const unread = run === 'idle' && id in read && read[id] !== mark;
+    const second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : escape(plain(info.last));
+    return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"${stopped ? ' data-stopped' : ''}${unread ? ' data-unread' : ''}><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${stopped ? '<span class="tag">Stopped</span>' : ''}${second}</small></span>${unread ? '<i class="new" role="img" aria-label="Not read yet"></i>' : ''}<time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
   const html = phoneSections(state.conversations, (item: Json) => isOpen(item) || !!item.sent, section) // N1 point 12: by project (phone-projects.mjs)
     || '<div class="empty">No chats yet. Tap + to start one.</div>';
+  if (seeded) keepRead();
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
 // The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
@@ -531,7 +554,8 @@ function chatBar(id: string, run: string) {
 let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, seenItems = 0;
 const body = one<HTMLElement>('#chatBody');
 function route(id: string) {
-  const changed = id !== openId; openId = id;
+  const changed = id !== openId, was = openId; openId = id;
+  if (was) markRead(was); if (id) markRead(id); // O66: what was on screen is read
   if (id) localStorage.setItem('p9-last-chat', id); // item 3: the next open reads this chat's events first
   const select = one<HTMLSelectElement>('#conversation'); if (id) select.value = id;
   one<HTMLElement>('#chatList').hidden = !!id; one<HTMLElement>('#chatArea').hidden = !id; one<HTMLElement>('#composerSlot').hidden = !id;
