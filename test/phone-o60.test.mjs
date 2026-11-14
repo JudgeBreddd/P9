@@ -113,9 +113,10 @@ test('O62: the message goes to the chat on screen, whatever the chat list says',
   await open(page, server, A);
   await page.fill('#prompt', 'to the open chat');
   // Stands in for the open chat having left the list (stopped before its first message, or closed): the select then has no option for it.
-  await page.evaluate(() => { const select = document.querySelector('#conversation'); select.innerHTML = '<option value="">No conversations yet</option>'; });
-  await page.click('#send', { force: true });
-  await page.waitForTimeout(1500);
+  // Emptied and sent in one step, so a list refresh cannot put the option back in between.
+  await page.evaluate(() => { const select = document.querySelector('#conversation'); select.innerHTML = '<option value="">No conversations yet</option>'; document.querySelector('#send').click(); });
+  for (let i = 0; i < 100 && !attempts.length; i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(500);
   assert.deepEqual(attempts.map((attempt) => [attempt.chat, attempt.body.text]), [[A, 'to the open chat']], 'the send did not go to the open chat');
   console.log('PASS O62: sent to the open chat with the list select empty');
 });
@@ -135,6 +136,18 @@ test('O64: an unsent pick survives the agent reporting its settings, and is sent
   await page.click('#send', { force: true });
   await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 10000 });
   assert.deepEqual(attempts[0].body.config, { effort: 'high' }, 'the pick was not in the request');
+  // A pick made while a send is on its way belongs to the next message: the first send's answer must not clear it.
+  await page.unroute('**/chat/*/prompt');
+  let release; const held = new Promise((done) => { release = done; }), next = [];
+  await page.route('**/chat/*/prompt', async (route) => { next.push(route.request().postDataJSON()); if (next.length === 1) await held; return route.fulfill({ status: 202, contentType: 'application/json', body: '{"accepted":true}' }); });
+  await pick(page, 'low'); await pick(page, 'high');
+  await page.fill('#prompt', 'first of two'); await page.click('#send', { force: true });
+  while (!next.length) await page.waitForTimeout(100);
+  await pick(page, 'max'); release();
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 10000 });
+  later(server, A, [settings([{ value: 'max', name: 'Max' }, { value: 'xl', name: 'Extra' }])]); // a redraw, the agent still reporting low
+  await page.waitForFunction(() => document.querySelectorAll('#pickers select[data-config="effort"] option').length === 4, null, { timeout: 30000 });
+  assert.equal(await page.locator('#pickers select[data-config="effort"]').inputValue(), 'max', "a pick made during a send was cleared by that send's answer");
   console.log('PASS O64: the pick survived a rebuild and went out as ' + JSON.stringify(attempts[0].body.config));
 });
 

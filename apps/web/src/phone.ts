@@ -654,7 +654,8 @@ one('#sheetBody').addEventListener('click', async event => {
   editDraft(id, (text) => { setDraft(next, text); return ''; }); // O61: the text typed goes with the chat to its new id
   if (chosenMode) startPick.set(next, chosenMode);
   if (chosenModel) swapModel.set(next, chosenModel);
-  sheet.close(); await loadChat(); openChat(next);
+  // The sheet stays over the box until the new chat owns it: text typed into the old chat's box in between would be kept under the deleted id.
+  try { await loadChat(); openChat(next); } finally { sheet.close(); }
 });
 // P20: the next TAIL blocks before the oldest read, drawn above; the reader stays where they were.
 one('#earlier').addEventListener('click', async () => {
@@ -932,6 +933,7 @@ async function submitFromBox(event: Event) {
   // Round 3 and 4 review: a send that got no answer stays one submission, with its first wire body and operation ID, until the daemon
   // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
   // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
+  const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's
   const draft = JSON.stringify([text, images.map((image) => image.data.length + ':' + image.data.slice(-64)), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
   if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
   const again = inFlight.has(id);
@@ -940,7 +942,7 @@ async function submitFromBox(event: Event) {
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
-    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); chosen.delete(id); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
+    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
@@ -964,12 +966,12 @@ async function submitFromBox(event: Event) {
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { chosen.delete(id); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); chosen.delete(id); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); spend(id, picked); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 }
@@ -995,6 +997,12 @@ const chosen = new Map<string, Map<string, { base: string; value: string }>>();
 function choose(id: string, key: string, value: string, base: string) {
   const own = chosen.get(id) ?? chosen.set(id, new Map()).get(id)!;
   own.set(key, { base: own.get(key)?.base ?? base, value });
+}
+// The picks that went with a send are no longer unsent; one changed since (another value) stays chosen.
+function spend(id: string, picked: Map<string, string>) {
+  const own = chosen.get(id); if (!own) return;
+  for (const [key, value] of picked) if (own.get(key)?.value === value) own.delete(key);
+  if (!own.size) chosen.delete(id);
 }
 try {
   for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; picks: [string, { base: string; value: string }][] }>)) {
