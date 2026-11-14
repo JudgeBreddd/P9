@@ -11,6 +11,8 @@ import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 // platform's agent binaries and runs it, so a bundle that cannot start or find its agents fails here before Windows CI.
 // O71: CI jobs 132372666811 (#108) and #111's linux (2) sat on this file for 29 min with no result. Every wait here is
 // bounded, so a stuck step fails with this test's name: the test, each child run, and the adapters (killed outright).
+// A synchronous run blocks every timer until its child exits, so each one is killed with SIGKILL (SIGTERM can be ignored)
+// and must exit 0: output printed before a timeout is not a pass.
 test('B10: the bundled daemon is a few dozen files, starts, and its agents answer from the bundled layout', { timeout: 180000 }, async (t) => {
   // Outside the repo, so nothing resolves from the workspace's node_modules. ponytail: about 670 MB of agent binaries;
   // the test sandbox's /tmp is 1 GB, so move this to a disk folder with no node_modules above it if that fills.
@@ -28,7 +30,7 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   await cp(path.join(root, 'package.json'), path.join(out, 'package.json'));
   await cp(path.join(root, 'scripts', 'teh.mjs'), path.join(out, 'scripts', 'teh.mjs'));
   await cp(path.join(root, 'packages'), path.join(out, 'packages'), { recursive: true });
-  const doctor = spawnSync(process.execPath, [path.join(out, 'scripts', 'teh.mjs'), 'doctor', '--state', instance.state], { encoding: 'utf8', timeout: 30000 });
+  const doctor = spawnSync(process.execPath, [path.join(out, 'scripts', 'teh.mjs'), 'doctor', '--state', instance.state], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
   assert.equal(doctor.status, 0, 'teh doctor from the daemon folder: ' + doctor.stderr.slice(-1000));
   assert.equal(JSON.parse(doctor.stdout).daemon.status, 'ok');
   for (const name of ['hono', 'ws', '@simplewebauthn/server', '@agentclientprotocol/sdk', 'zod']) assert.match(notices, new RegExp('\n## ' + name + '@'), name + ' notice');
@@ -56,14 +58,16 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   assert.match(await readFile(path.join(claudeDist, 'index.js'), 'utf8'), /createRequire\(import\.meta\.resolve\("@anthropic-ai\/claude-agent-sdk"\)\)/);
   await writeFile(path.join(claudeDist, 'probe.mjs'), "import { createRequire } from 'node:module';\n"
     + "console.log(createRequire(import.meta.resolve('@anthropic-ai/claude-agent-sdk')).resolve(process.argv[2]));\n");
-  const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8', timeout: 30000 });
+  const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
+  assert.ok(!probe.error && probe.status === 0, 'probe: ' + (probe.error?.message ?? 'exit ' + probe.status + ' ' + probe.signal) + ' ' + probe.stderr.slice(-500));
   assert.equal(probe.stdout.trim(), path.join(modules, '@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude'), probe.stderr);
   // claude-usage.mjs (the Claude 5 h meter) imports the SDK by path from the adapter's folder: 0.1.6's Windows build
   // shipped without sdk.mjs and the meter showed a dash.
   await writeFile(path.join(claudeDist, 'probe-sdk.mjs'), "import { createRequire } from 'node:module';\n"
     + "const sdk = await import(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));\n"
     + "console.log(typeof sdk.query);\n");
-  const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8', timeout: 30000 });
+  const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
+  assert.ok(!sdkProbe.error && sdkProbe.status === 0, 'probe-sdk: ' + (sdkProbe.error?.message ?? 'exit ' + sdkProbe.status + ' ' + sdkProbe.signal) + ' ' + sdkProbe.stderr.slice(-500));
   assert.equal(sdkProbe.stdout.trim(), 'function', sdkProbe.stderr);
 });
 
