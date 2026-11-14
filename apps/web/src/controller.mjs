@@ -917,13 +917,16 @@ let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: 
 let missionFiles = null;
 let setPage = 'General';
 $('#setBtn').onclick = async () => {
-  if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
-  if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
-  if (window.p9?.fileProtection) { const r = await window.p9.fileProtection().catch(() => null); fileProtect = r?.status === 200 ? r.body.on : null; }
-  if (window.p9?.terminal) { const r = await window.p9.terminal('greeting', {}).catch(() => null); termGreeting = r?.status === 200 ? r.body.show : null; }
-  serverInfo = window.p9?.server ? await window.p9.server().catch(() => null) : null;
-  if (window.p9?.chat) { const r = await window.p9.chat('missionFiles', {}).catch(() => null); missionFiles = r?.status === 200 ? r.body : null; }
-  updates = window.p9?.updates ? await window.p9.updates().catch(() => null) : null;
+  // The reads go out together (window-4, O16): one after another, each daemon call is a round trip over a remote's tunnel.
+  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null);
+  [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = await Promise.all([
+    window.p9?.listPets ? window.p9.listPets().catch(() => null) : pets,
+    window.p9?.chat ? status(liveChat.call('lock'), 'on') : agentLock,
+    window.p9?.fileProtection ? status(window.p9.fileProtection(), 'on') : fileProtect,
+    window.p9?.terminal ? status(window.p9.terminal('greeting', {}), 'show') : termGreeting,
+    window.p9?.server ? window.p9.server().catch(() => null) : null,
+    window.p9?.chat ? window.p9.chat('missionFiles', {}).then(r => r?.status === 200 ? r.body : null, () => null) : missionFiles,
+    window.p9?.updates ? window.p9.updates().catch(() => null) : null]);
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
 $('#setClose').onclick = () => $('#setDlg').close();

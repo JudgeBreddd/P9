@@ -86,7 +86,8 @@ function landStatus() {
 const LAND_ROWS = ['0', '0', '3', '4', '8', '6', '7'];
 async function landPets() {
   const box = outer.$('#landPets'), list = window.p9?.listPets ? (await window.p9.listPets().catch(() => null))?.pets?.slice(0, 12) ?? [] : [];
-  for (const p of list) if (!outer.IND.looks.has(p.name)) outer.IND.looks.set(p.name, await outer.petLook(p.name));
+  // All at once, not one after another (window-4, O14): each look is its own IPC read and decode.
+  await Promise.all(list.filter(p => !outer.IND.looks.has(p.name)).map(async p => outer.IND.looks.set(p.name, await outer.petLook(p.name))));
   if (!outer.land.open) return;
   box.innerHTML = list.filter(p => outer.IND.looks.get(p.name)).map(p => outer.petCanvas(p.name, '0', innerHeight < 700 ? 60 : 72, false)).join('');
   box.querySelectorAll('canvas.pet').forEach(cv => {
