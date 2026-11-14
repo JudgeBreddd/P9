@@ -41,15 +41,6 @@ test('Desktop costs, app: Dev Focus opens with no editor server, the pets list, 
   await page.waitForURL(/^p9:\/\/app\//, { timeout: 30000 });
   await page.locator('#rChat').waitFor({ timeout: 30000 });
 
-  // Item 23: the pets list (two strings per pet), 5 times.
-  const petsMs = [], petsBytes = [];
-  for (let i = 0; i < 5; i++) {
-    const before = await rchar(pid), t0 = performance.now();
-    const count = await page.evaluate(() => window.p9.listPets().then((r) => r.pets.length));
-    petsMs.push(Math.round(performance.now() - t0)); petsBytes.push((await rchar(pid)) - before);
-    assert.equal(count, 10);
-  }
-
   // Items 22 and 24: Dev Focus shown, hidden and shown again; each show after a failed start opens it again.
   await app.evaluate(({ app }) => { globalThis.p9CostLoads = 0; app.on('web-contents-created', (_event, contents) => contents.on('did-finish-load', () => { globalThis.p9CostLoads++; })); });
   const quitBefore = await app.evaluate(({ app }) => app.listenerCount('will-quit'));
@@ -71,6 +62,16 @@ test('Desktop costs, app: Dev Focus opens with no editor server, the pets list, 
     stillChars.push(await page.evaluate(() => window.p9.devStill().then((s) => s?.length ?? -1)));
     stillMs.push(Math.round(performance.now() - t0));
   }
+  // Item 23: the pets list (two strings per pet), 5 times. Last: reading 80 MB first changed the Dev Focus numbers after it
+  // (window-3 runs 121931 to 122146, Dev Focus with and without this step).
+  const petsMs = [], petsBytes = [];
+  for (let i = 0; i < 5; i++) {
+    const before = await rchar(pid), t0 = performance.now();
+    const count = await page.evaluate(() => window.p9.listPets().then((r) => r.pets.length));
+    petsMs.push(Math.round(performance.now() - t0)); petsBytes.push((await rchar(pid)) - before);
+    assert.equal(count, 10);
+  }
+
   const result = {
     pets: { ms: median(petsMs), mb: +(median(petsBytes) / 1048576).toFixed(1), all: petsMs },
     dev: { firstMs: devMs[0], firstMb: +(devBytes[0] / 1048576).toFixed(1), reopenMs: median(devMs.slice(1)), reopenMb: +(median(devBytes.slice(1)) / 1048576).toFixed(1), all: devMs, allMb: devBytes.map((b) => +(b / 1048576).toFixed(1)) },
