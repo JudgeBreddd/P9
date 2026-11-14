@@ -473,9 +473,9 @@ function patch(list: HTMLElement, wanted: Entry[]) {
 }
 // P7: what each chat is doing, read from its events the way the desktop's robot heads are: a user message with no turn end
 // after it is working; an approval or question not yet answered is waiting on you; otherwise stopped.
-type Digest = { run: 'working' | 'needs' | 'idle'; last: string };
+type Digest = { run: 'working' | 'needs' | 'idle'; last: string; mine?: boolean };
 // F4 item 9: a left fold over each chat's events, carried on from the last event folded while that chat's list only grew.
-type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean };
+type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean; mine?: boolean };
 const folds = new Map<string, Fold>();
 function digest() {
   const seen = new Map<string, Fold>();
@@ -486,16 +486,16 @@ function digest() {
     seen.set(id, chat);
   }
   const out = new Map<string, Digest>();
-  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '' }));
+  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '', mine: chat.mine }));
   return out;
 }
 function fold(chat: Fold, event: Json) {
   {
     const kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
-    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; }
+    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; chat.mine = true; }
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
-      if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; }
+      if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; chat.mine = false; }
       else if (update === 'tool_call') chat.tail = false;
     }
     else if (kind === 'approval' || kind === 'question') chat.open.add(String(data.request));
@@ -512,6 +512,8 @@ const plain = (line: string) => line.replace(/^\s*(`{3,}|~{3,}).*$/, '').replace
   .replace(/(^|[\s(])[*_](?=\S)([^*_]*\S)[*_](?=$|[\s).,;:!?])/g, '$1$2').trim();
 // O66: what a chat last said when the reader last had it on screen, kept on this phone. A chat whose newest line differs,
 // and is not working or asking, has a result not read yet. The first 60 characters, which the daemon's cut preview shares.
+// A newest line that is a prompt (a turn that ended with no reply) is not a result: no mark. ponytail: a stub's preview does
+// not say whose line it is, so a prompt sent from elsewhere that got no reply can still mark it.
 let read: Record<string, string> = {};
 try { read = JSON.parse(localStorage.getItem('p9-read') ?? '{}') ?? {}; } catch {}
 const keepRead = () => { try { localStorage.setItem('p9-read', JSON.stringify(Object.fromEntries(state.conversations.map((item) => String(item.id)).filter((id) => id in read).map((id) => [id, read[id]])))); } catch {} };
@@ -529,8 +531,8 @@ function renderList() {
   const found = digest(), row = (item: Json) => {
     const id = String(item.id), info = rowInfo(item, found), run = info.run, mark = info.last.slice(0, 60), stopped = !isOpen(item);
     if (!(id in read) && mark) { read[id] = mark; seeded = true; } // first seen on this phone: nothing to call new
-    const unread = run === 'idle' && id in read && read[id] !== mark;
-    const second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : escape(plain(info.last));
+    const unread = run === 'idle' && !info.mine && id in read && read[id] !== mark;
+    const second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : escape(plain(info.last) || (info.last.trim() ? 'Code' : '')); // a reply that opens with a code fence
     return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"${stopped ? ' data-stopped' : ''}${unread ? ' data-unread' : ''}><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${stopped ? '<span class="tag">Stopped</span>' : ''}${second}</small></span>${unread ? '<i class="new" role="img" aria-label="Not read yet"></i>' : ''}<time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
@@ -1768,9 +1770,11 @@ one('#mission').addEventListener('change', async (event) => {
   if (!pick) return;
   // O67: a change that did not happen says so under the picker, which the reload has put back on the space still shown.
   let failed = '';
+  pick.disabled = true; // one change at a time: the picker shows the asked-for space until the reload below
   try { const result = await mutate('/mission/space', { name: pick.value || null }); if (result.status >= 300) failed = String(result.body?.reason ?? result.body?.error ?? result.status); }
   catch (error) { failed = (error as Error).message; }
   await loadMission();
+  pick.disabled = false;
   if (failed) document.querySelector('#mission [data-space-picker]')?.insertAdjacentHTML('afterend', `<p class="tile-note" data-space-failed role="status">The space was not changed (${escape(failed)}).</p>`);
 });
 one('#mission').addEventListener('click', async (event) => {
@@ -1780,13 +1784,18 @@ one('#mission').addEventListener('click', async (event) => {
   const result = await mutate('/mission/data/allow', { id: tile.dataset.tile });
   if (result.status === 200) await pullTile(tile); else drawTile(tile, tileAnswer(result.status, result.body));
 });
+// O67: one follow per output, ended for good when its window closes (reopening does not bring it back) or a newer run takes the output.
+const following = new WeakMap<HTMLElement, object>();
 async function follow(run: string, output: HTMLElement) {
-  let from = 0;
+  const me = {}; following.set(output, me);
+  let from = 0, closed = false;
+  output.closest('dialog')?.addEventListener('close', () => { closed = true; }, { once: true });
   for (;;) {
     const part = await request(`/runs/${encodeURIComponent(run)}?from=${from}`);
+    if (following.get(output) !== me) return; // a newer run has this output
+    // Nobody reads a closed window. ponytail: the run goes on; its later output is not shown on reopening.
+    if (closed || !output.isConnected) { output.textContent += '\n[window closed: later output not shown]'; return; }
     output.textContent += part.output; from = part.next;
-    // O67: nobody reads a closed window. ponytail: the run goes on; its later output is not shown on reopening.
-    if (!output.isConnected || output.closest('dialog')?.open === false) { output.textContent += '\n[window closed: later output not shown]'; return; }
     if (part.done) { output.textContent += part.code === 0 ? '' : `\n[exit ${part.code}]`; return; }
     await new Promise((resolve) => setTimeout(resolve, 700));
   }

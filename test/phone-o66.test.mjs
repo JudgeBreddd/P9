@@ -6,7 +6,7 @@ import { remoteDaemon } from './helpers.mjs';
 import { phone } from './phone-c16-helpers.mjs';
 
 // O66: the phone's chat list says what each chat is doing. Fails on main 074b17d.
-const A = '00000000-0000-4000-8000-0000000000a1', B = '00000000-0000-4000-8000-0000000000b2', C = '00000000-0000-4000-8000-0000000000c3';
+const A = '00000000-0000-4000-8000-0000000000a1', B = '00000000-0000-4000-8000-0000000000b2', C = '00000000-0000-4000-8000-0000000000c3', D = '00000000-0000-4000-8000-0000000000d4';
 const shots = process.env.P9_SCREENSHOTS || '/tmp';
 const shot = async (page, name) => { const png = await page.screenshot({ type: 'png', path: shots + '/' + name + '.png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 const db = (server) => new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
@@ -27,6 +27,7 @@ test('O66: a row shows stopped and not read yet, and its preview has no Markdown
   seed(server, A, 'Marks', 'idle', turn('hello a', '## **Done**: see `notes.md` and [the log](https://example.test/log)\nmore'));
   seed(server, B, 'Ended', 'stopped', turn('hello b', 'All finished here.'));
   seed(server, C, 'Quiet', 'idle', turn('hello c', 'First answer.'));
+  seed(server, D, 'Fenced', 'idle', turn('hello d', '```js\nconst a = 1;\n```'));
   const { page } = await phone(t, server);
   await row(page, C).waitFor({ timeout: 15000 });
   assert.equal(await row(page, A).locator('small').innerText(), 'Done: see notes.md and the log', 'the preview still shows Markdown marks');
@@ -46,5 +47,11 @@ test('O66: a row shows stopped and not read yet, and its preview has no Markdown
   await row(page, C).click(); await page.waitForSelector('#events > *', { timeout: 15000 });
   await page.locator('[data-back]').click(); await row(page, C).waitFor();
   assert.equal(await page.locator('#chatList .new').count(), 0, 'the mark stays after the chat was read');
+  // A reply that opens with a code fence still has a preview.
+  assert.equal(await row(page, D).locator('small').innerText(), 'Code', 'a fenced reply has an empty preview');
+  // A prompt whose turn ended with no reply is not a result to read.
+  const again = db(server); append(again, C, [['user', { text: 'my own prompt' }], ['error', { message: 'the agent failed' }]]); again.close();
+  await page.waitForFunction((id) => document.querySelector(`#chatList [data-chat="${id}"][data-run="idle"] small`)?.textContent === 'my own prompt', C, { timeout: 20000 });
+  assert.equal(await page.locator('#chatList .new').count(), 0, 'the reader\'s own prompt is marked not read');
   console.log('PASS O66: Stopped shown, one chat marked not read then cleared by reading it, previews are plain text');
 });
