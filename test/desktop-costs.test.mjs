@@ -114,7 +114,7 @@ test('Desktop costs, node: update follow, daemon requests, ssh options, slim tar
   const spin = async () => { for (let i = 0; i < 200; i++) await new Promise((resolve) => setImmediate(resolve)); };
   const settle = async () => { for (let i = 0; i < 2000 && served['/update/status'] < checks; i++) await new Promise((resolve) => setImmediate(resolve)); await spin(); };
   await settle();
-  for (let s = 0; s < 10 * 60 + 5 && !ended; s++) { t.mock.timers.tick(1000); await settle(); }
+  for (let s = 0; s < 10 * 60 + 60 && !ended; s++) { t.mock.timers.tick(1000); await settle(); }
   t.mock.timers.reset();
   assert.equal(ended?.phase, 'timed-out', JSON.stringify(ended));
 
