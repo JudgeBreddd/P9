@@ -30,6 +30,7 @@ apps/web/src/phone.ts _private  1
 apps/web/src/security.mjs _private  2
 apps/web/src/shell.html needs you 1
 apps/web/src/shell.html plan.md  1
+apps/web/src/shell-start.ts needs you 3
 apps/web/src/walkthrough.mjs needs you 1
 apps/web/src/walkthrough.mjs _private  1
 packages/files/index.mjs _private  4
