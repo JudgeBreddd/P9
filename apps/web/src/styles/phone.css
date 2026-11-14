@@ -266,6 +266,7 @@ section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-w
 #events .st{flex:none;display:inline-grid;place-items:center;width:14px;height:14px;font-size:12px;line-height:1}
 #events [data-status=completed]>details>summary .st::before,#events [data-status=done]>details>summary .st::before{content:"✓";color:var(--cyan)}
 #events [data-status=failed]>details>summary .st::before{content:"✕";color:var(--red)}
+#events [data-status=ended]>details>summary .st::before{content:"–";color:var(--dim)} /* O65: still running when its turn ended */
 #events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{content:"";width:12px;height:12px;border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan);border-radius:50%}
 #jump{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:36px;height:36px;min-width:36px;min-height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.08);background:var(--raised);color:var(--text);display:grid;place-items:center;box-shadow:0 2px 10px rgba(0,0,0,.4)}
 #jump svg{width:18px;height:18px}

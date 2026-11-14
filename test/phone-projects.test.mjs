@@ -90,16 +90,29 @@ test('phone: an empty chat shows and changes its starting folder', { timeout: 18
   await page.waitForTimeout(500);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-folder-picker ' + (await page.screenshot()).toString('base64'));
   await page.locator('[data-chat-folder-at="site"]').click();
+  // O61: the chat list read after the swap is held; text typed meanwhile (the sheet dismissed) must go with the new chat.
+  let swapped = false, free; const gate = new Promise((done) => { free = done; });
+  await page.route('**/chat/*/delete', (route) => { swapped = true; return route.continue(); });
+  await page.route(/\/chat\?lists=fresh/, async (route) => { if (swapped) await gate; return route.continue().catch(() => {}); });
   await page.locator('[data-chat-folder-select]').click();
   await until(async () => { const x = (await call(server, '/chat')).conversations; return x.length === 1 && x[0].folder === 'site' && x[0].id !== original; }, 'phone folder swap');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => document.querySelector('#sheet').close());
+  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives', 'the box lost its text during the swap');
+  await page.locator('#prompt').fill('draft survives, with more typed during the swap');
+  // The chat on screen is already the new one, so the text is saved under it and a send would go to it, with the read still held.
+  const swappedTo = (await call(server, '/chat')).conversations[0].id;
+  await page.waitForFunction((id) => location.hash === '#chat=' + encodeURIComponent(id) && document.querySelector('#conversation').value === id && JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')[id] === 'draft survives, with more typed during the swap', swappedTo, { timeout: 5000 });
+  assert.equal(await page.evaluate((id) => Object.keys(JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')).includes(id), original), false, 'text is kept under the deleted chat');
+  free(); await page.unroute(/\/chat\?lists=fresh/);
   await page.locator('[data-chat-folder]').filter({ hasText: path.join(server.workspace, 'site') }).waitFor();
   assert.equal(await page.locator('#mode').inputValue(), 'Plan');
   assert.equal(await page.locator('#model').inputValue(), 'haiku');
   await page.locator('#attached img[alt="photo.png"]').waitFor({ timeout: 10000 });
-  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives');
+  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives, with more typed during the swap');
   await page.reload();
   await page.locator('#attached img[alt="photo.png"]').waitFor({ timeout: 15000 });
-  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives');
+  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives, with more typed during the swap');
   assert.equal(await page.locator('#gap').isHidden(), true, 'no gap immediately after swap');
   const id = (await call(server, '/chat')).conversations[0].id;
   await page.locator('#prompt').fill('photo check'); await page.locator('#composer button[type=submit]').click();
