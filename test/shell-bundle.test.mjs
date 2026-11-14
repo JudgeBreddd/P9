@@ -1,7 +1,7 @@
 // The desktop shell's bundle (phase 4, window-5, list 29). Measures only; it asserts that the shell page loads JS and comes
 // up, never a size, so the same file runs unchanged before and after a change. Logs "P9_BUNDLE <json>": every JS file the
 // built shell page (apps/web/dist/index.html) loads, followed through its imports, with raw and gzip bytes; then one
-// launch to the chat list and "P9_SHOT shell <png base64>" so the shell's look can be compared side by side.
+// launch per run x5 with "P9_SHELL_AT <json>" (below) and, on the last, "P9_SHOT shell <png base64>" so the shell's look can be compared side by side.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
@@ -14,7 +14,7 @@ import { daemon, root } from './helpers.mjs';
 
 const dist = path.join(root, 'apps/web/dist');
 
-test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 120000 }, async (t) => {
+test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 300000 }, async (t) => {
   const html = readFileSync(path.join(dist, 'index.html'), 'utf8');
   const seen = new Map(), todo = [...html.matchAll(/["'(](\/_astro\/[^"'()\s]+\.js)/g)].map((m) => m[1]);
   while (todo.length) {
@@ -31,20 +31,47 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 1
   console.log('P9_BUNDLE ' + JSON.stringify({ jsRaw: sum('raw'), jsGzip: sum('gzip'), files: files.length, htmlBytes: html.length, inlineScripts, island: html.includes('<astro-island'), top: files.slice(0, 6) }));
   assert.ok(files.length > 0, 'the shell page loads JS');
 
+  // Five launches on one profile (the first is a first run). Per launch, ms from the launch call: the shell's markup on the
+  // page (#rChat has a size), the shell's code run (mountShell has put its icon in #rChat), DOMContentLoaded and load.
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-shell-bundle-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
-  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
-  const proc = app.process();
-  try {
-    const page = await app.firstWindow({ timeout: 20000 });
-    await page.waitForURL(/^p9:\/\/app\//, { timeout: 20000 });
-    await page.locator('#rChat').waitFor({ timeout: 20000 });
-    await page.waitForTimeout(1500);
-    const png = await page.screenshot({ animations: 'disabled' });
-    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT shell ' + png.toString('base64'));
-    assert.ok(await page.locator('[data-p9-island]').count() === 1, 'the shell markup is on the page once');
-  } finally {
-    await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill();
+  const init = () => {
+    const at = window.__shellAt = {}; const now = () => Math.round(performance.now());
+    document.addEventListener('DOMContentLoaded', () => { at.dcl = now(); });
+    addEventListener('load', () => { at.load = now(); });
+    const tick = () => {
+      const el = document.getElementById('rChat');
+      if (el && at.markup === undefined && el.getBoundingClientRect().width) at.markup = now();
+      if (el && at.mounted === undefined && el.querySelector('svg')) at.mounted = now();
+      if (at.mounted === undefined || at.markup === undefined) setTimeout(tick, 2);
+    };
+    tick();
+  };
+  const launches = [];
+  for (let i = 0; i < 5; i++) {
+    const t0 = Date.now();
+    const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+    await app.context().addInitScript(init);
+    const proc = app.process();
+    try {
+      const page = await app.firstWindow({ timeout: 20000 });
+      await page.waitForURL(/^p9:\/\/app\//, { timeout: 20000 });
+      await page.locator('#rChat svg').waitFor({ timeout: 20000 });
+      const { origin, at } = await page.evaluate(() => ({ origin: performance.timeOrigin, at: window.__shellAt || {} }));
+      const from = (k) => at[k] === undefined ? null : Math.round(origin - t0 + at[k]);
+      launches.push({ markup: from('markup'), mounted: from('mounted'), dcl: from('dcl'), load: from('load') });
+      if (i === 4) {
+        await page.waitForTimeout(1500);
+        const png = await page.screenshot({ animations: 'disabled' });
+        if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT shell ' + png.toString('base64'));
+        assert.ok(await page.locator('[data-p9-island]').count() === 1, 'the shell markup is on the page once');
+      }
+    } finally {
+      await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill();
+    }
   }
+  const median = (list) => { const s = [...list].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  const warm = launches.slice(1), pick = (k) => median(warm.map((l) => l[k]));
+  console.log('P9_SHELL_AT ' + JSON.stringify({ first: launches[0], warm: { markup: pick('markup'), mounted: pick('mounted'), dcl: pick('dcl'), load: pick('load') }, launches }));
 });
