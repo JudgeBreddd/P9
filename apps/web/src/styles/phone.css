@@ -115,6 +115,7 @@ main>section>#keys{flex:none;display:flex;gap:2px;margin:0;padding:4px 8px;overf
 .tile::after{content:"";grid-column:3;grid-row:1;justify-self:end;width:8px;height:8px;border-right:2px solid var(--dim);border-top:2px solid var(--dim);transform:rotate(45deg)}
 .tile span{grid-column:1;font-size:16px;color:var(--text);text-transform:none;letter-spacing:0}
 .tile b{grid-column:2;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 15px ui-monospace,monospace;color:var(--dim)}
+.tile b[data-word]{font-family:inherit;color:var(--text)}
 /* Every row has its detail line (spec §6), muted; a row needing attention keeps its amber or red count. */
 .tile small{display:block;grid-column:1/-1;grid-row:2;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:13px;font-weight:400}
 .tile[data-attn] b{color:var(--amber);font-weight:700}.tile.bad b{color:var(--red)}

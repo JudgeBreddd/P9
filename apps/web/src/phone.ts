@@ -1345,13 +1345,17 @@ let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: stri
 // P9's built-in tiles a section may name (W-D); naming any decides which show. The phone has no editor, so edit is the desktop's alone.
 const TILE_WIDGETS = ['idea', 'sprint', 'edit'];
 const naming = (s: { widget?: string; widgets?: string[] }, w: string) => s.widget === w || !!s.widgets?.includes(w);
+const checklists: Record<string, unknown> = {};
+// O67: the closed row's line, as a folder row has its count: what the list holds, once it was read.
+const checklistLine = (r: unknown) => { const got = r as { error?: string; files?: unknown[] } | undefined; return !got ? '…' : got.error ? 'not read' : !got.files?.length ? 'nothing to review' : got.files.length === 1 ? '1 file' : got.files.length + ' files'; };
 const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
 // its in a window i can open"). Callers escape title and line.
 const win = (id: string, title: string, count: number | string, line: string, body: string, bad = false) => {
   // Rows needing attention (a red one, or something waiting) lead the list; a zero count is drawn muted (spec §6).
   const attn = bad || (id === 'queue' && Number(count) > 0), zero = /^(0( .*)?)?$/.test(String(count));
-  return `<button type="button" class="tile${bad ? ' bad' : ''}"${attn ? ' data-attn' : ''}${zero ? ' data-zero' : ''} data-open="${id}"><span>${title}</span><b>${count}</b><small>${line}</small></button>`
+  const word = typeof count === 'string' && /[A-Za-z]{2}/.test(count); // O67: a name in the count's place is text, not a number
+  return `<button type="button" class="tile${bad ? ' bad' : ''}"${attn ? ' data-attn' : ''}${zero ? ' data-zero' : ''} data-open="${id}"><span>${title}</span><b${word ? ' data-word' : ''}>${count}</b><small>${line}</small></button>`
     + `<dialog class="window" id="w-${id}"><header class="bar"><button type="button" class="back" data-close aria-label="Back to Mission">${ICON.back}Mission</button><div class="title"><h1>${title}</h1></div></header><div class="wbody">${body}</div></dialog>`;
 };
 // A reload rebuilds the tiles; the window Builder had open opens
@@ -1439,7 +1443,7 @@ async function loadMission(cached = false) {
     sortQueue(data.queue as Waiting[]); // in place: an answer form's index is its place in mission.queue
     const by = queueBy(), sortPick = data.queue.length > 1 ? `<label class="queue-sort">Sort<select data-queue-sort aria-label="Sort"><option value="updated"${by === 'updated' ? ' selected' : ''}>Newest</option><option value="project"${by === 'project' ? ' selected' : ''}>Project</option></select></label>` : '';
     const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${escape(item.project)} · ${escape(item.age)}</small>`,
-      `<pre>${escape(item.content)}</pre>` + (item.answerable
+      `<div class="md" data-waiting-text>${md.parse(item.content)}</div>` + (item.answerable
         ? `<form data-answer="${index}"><label>Your answer<textarea rows="3" required maxlength="4000"></textarea></label><button type="submit">Send answer</button><p class="muted" data-note></p></form>`
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
     const groups = new Map<string, string[]>(), names = new Map<string, string[]>(); // a section's rows, and their titles for its detail line
@@ -1485,7 +1489,7 @@ async function loadMission(cached = false) {
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
         `<div data-folder="${escape(list.id)}"${list.root ? ` data-root="${escape(list.root)}"` : ''}><p class="muted">Loading…</p></div>`));
       // Checklists (threat model row M4-a): read when the window opens; each press is one mark or one review line.
-      const checks = (space.checklists ?? []).map((list) => row(escape(list.title), `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
+      const checks = (space.checklists ?? []).map((list) => row(`${escape(list.title)}<small data-ck-count="${escape(list.id)}">${escape(checklistLine(checklists[list.id]))}</small>`, `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
       // References: a script is its own row (Run included), a page its link, an app is the laptop's; an ID nothing has says so.
       // A section naming sprint: its buttons and script refs are the sprint window's (W-M), so they are not rows here too.
       const sprint = space.widget === 'sprint';
@@ -1605,13 +1609,13 @@ one('#mission').addEventListener('close', () => { openWindow = ''; expanded = ne
 // A window's folder lists, once per drawing: the count in the row, the files (newest first) in its body, each a row whose
 // text loads read-only from the folder's own list (a path the list does not hold is refused by the daemon).
 // Checklists: the daemon's last reply per ID, and the Apply pressed once (it runs on the second press).
-const checklists: Record<string, unknown> = {};
 let checklistArmed = '';
 async function loadChecklist(list: HTMLElement) {
   const id = list.dataset.ck!;
   try { checklists[id] = await request('/mission/checklist?' + new URLSearchParams({ id })); }
   catch (error) { checklists[id] = checklistAnswer(0, (error as { body?: unknown }).body ?? { error: (error as Error).message }); }
   list.innerHTML = checklistHtml(id, checklists[id], escape, checklistArmed);
+  const line = document.querySelector(`#mission [data-ck-count="${CSS.escape(id)}"]`); if (line) line.textContent = checklistLine(checklists[id]);
 }
 one('#mission').addEventListener('click', async (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-ck] button');
@@ -1658,7 +1662,7 @@ async function loadFolders(box: HTMLElement) {
       if (unit) unit.textContent = total === 1 ? ' file' : ' files';
       list.innerHTML = (files.length < total || partial ? `<p class="muted">${files.length < total ? `The newest ${files.length} of ${total}` : ''}${partial ? ' · a very big folder: some subfolders were not read' : ''}</p>` : '')
         + (files.length ? files.map((f) => row(`${escape(f.name)}<small>${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small>`,
-          `<pre data-src="/mission/folder/file" data-text="${escape(new URLSearchParams({ id, path: f.path }).toString())}">Loading…</pre>`)).join('') : '<p class="muted">No files match.</p>');
+          `<${/\.md$/i.test(f.name) ? 'div class="md"' : 'pre'} data-src="/mission/folder/file" data-text="${escape(new URLSearchParams({ id, path: f.path }).toString())}">Loading…</${/\.md$/i.test(f.name) ? 'div' : 'pre'}>`)).join('') : '<p class="muted">No files match.</p>');
     } catch (error) {
       const code = (error as Error).message, refused = code === 'root-refused';
       if (count) count.textContent = refused ? 'refused' : 'unreadable';
@@ -1686,10 +1690,11 @@ one('#mission').addEventListener('toggle', async (event) => {
         + `<ul class="list">${files.map((f) => `<li><button type="button" class="quiet" data-note-root="${escape(root)}" data-note="${escape(f.path)}">${escape(f.path)} <small class="muted">${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small></button></li>`).join('')}</ul>`;
     } catch (error) { list.innerHTML = `<p class="muted">Could not list the notes (${escape((error as Error).message)})</p>`; }
   }
-  const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > pre[data-text]');
+  const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > [data-text]');
   if (!pre || pre.dataset.loaded) return;
   pre.dataset.loaded = '1';
-  try { pre.textContent = (await request((pre.dataset.src ?? '/mission/space-log') + '?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
+  // O67: a Markdown file's box is a div and reads rendered (md: raw HTML, links and images as text); a log stays as it was written.
+  try { const got = String((await request((pre.dataset.src ?? '/mission/space-log') + '?' + pre.dataset.text)).text); if (pre.tagName === 'PRE') pre.textContent = got; else pre.innerHTML = md.parse(got) as string; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
 }, true);
 // A data tile's answer (threat model row 70), drawn as text by the same code as the desktop's.
 async function pullTile(tile: HTMLElement) {
@@ -1763,8 +1768,12 @@ one('#mission').addEventListener('change', (event) => {
 one('#mission').addEventListener('change', async (event) => {
   const pick = (event.target as Element).closest<HTMLSelectElement>('[data-space-pick]');
   if (!pick) return;
-  const result = await mutate('/mission/space', { name: pick.value || null });
-  void loadMission();
+  // O67: a change that did not happen says so under the picker, which the reload has put back on the space still shown.
+  let failed = '';
+  try { const result = await mutate('/mission/space', { name: pick.value || null }); if (result.status >= 300) failed = String(result.body?.reason ?? result.body?.error ?? result.status); }
+  catch (error) { failed = (error as Error).message; }
+  await loadMission();
+  if (failed) document.querySelector('#mission [data-space-picker]')?.insertAdjacentHTML('afterend', `<p class="tile-note" data-space-failed role="status">The space was not changed (${escape(failed)}).</p>`);
 });
 one('#mission').addEventListener('click', async (event) => {
   const allow = (event.target as Element).closest<HTMLButtonElement>('[data-tile-allow]');
@@ -1778,6 +1787,8 @@ async function follow(run: string, output: HTMLElement) {
   for (;;) {
     const part = await request(`/runs/${encodeURIComponent(run)}?from=${from}`);
     output.textContent += part.output; from = part.next;
+    // O67: nobody reads a closed window. ponytail: the run goes on; its later output is not shown on reopening.
+    if (!output.isConnected || output.closest('dialog')?.open === false) { output.textContent += '\n[window closed: later output not shown]'; return; }
     if (part.done) { output.textContent += part.code === 0 ? '' : `\n[exit ${part.code}]`; return; }
     await new Promise((resolve) => setTimeout(resolve, 700));
   }
@@ -2013,7 +2024,7 @@ async function openFile(path: string, root?: string) {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
     await putText(file.content);
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
-    preview(!!root);
+    preview(!!root || /\.md$/i.test(path)); // O67: a Markdown file opens to read; Edit is in the bar's menu
     // review 3 L2: a _private note with File protection on reads, but its save would be refused
     one('#fileState').textContent = state.file.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     online(); syncSave();
@@ -2165,7 +2176,7 @@ void (async function keptFile() {
   if (!await openFile(kept.path, root)) return;
   localStorage.removeItem('p9-file-draft');
   state.file = { path: kept.path, hash: kept.hash, content: typeof kept.content === 'string' ? kept.content : '', root };
-  await putText(kept.text);
+  await putText(kept.text); preview(false); // unsaved text comes back in the editor, not behind the read view
   one('#fileState').textContent = 'Kept through sign-in, not saved'; show('files');
 })();
 if (localStorage.getItem('p9-mission-draft')) show('mission'); // P2: put back by keptMission() when Mission draws
