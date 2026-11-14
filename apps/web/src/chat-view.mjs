@@ -278,14 +278,13 @@ function meters(s) {
 }
 const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; outer.chatImgs.set(hash, '');
   window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { outer.chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) outer.chatImgs.delete(hash); }); };
-// i: e's index in s.events (shown passes it; the rows' data-ev and Open plan read it back).
-function event(e, s, i = s.events.lastIndexOf(e)) {
+function event(e, s) {
   switch (e.t) {
     case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}><div class="who">${e.ask ? 'Question from ' + esc(outer.S.sessions.find(x => x.id === e.ask)?.title ?? 'another chat') + ' · answered read-only' : e.info ? 'Note from ' + esc(outer.S.sessions.find(x => x.id === e.info)?.title ?? 'another chat') + ' · information only' : 'You'}${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${outer.names[s.agent]}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent])}</div>`;
-    case 'warn': return warnHtml(e.text, ' data-ev="' + i + '"' + (e.open ? ' open' : ''));
-    case 'thought': return `<details class="thought" data-ev="${i}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
-    case 'tool': return `<details class="tool" data-ev="${i}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" class="open-plan" data-open-plan="${i}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent])}`;
+    case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
+    case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
+    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent])}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/^(Claude Code|Codex) is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
   }
@@ -380,10 +379,9 @@ const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : 
 // chat built 31 MB of HTML in about 170 ms, and live chats redraw on every batch). "Show earlier" adds TAIL more.
 const TAIL = 200;
 function shown(s) {
-  const list = []; s.events.forEach((e, i) => { if (e.t !== 'approval' && e.t !== 'question') list.push(i); }); // F2: indexes, so no row searches for its own
-  const from = Math.max(0, list.length - (s.tail || TAIL));
+  const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), from = Math.max(0, list.length - (s.tail || TAIL));
   return (from || s.more !== undefined ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier${from ? ` (${from.toLocaleString()} more)` : ''}</button>` : '')
-    + list.slice(from).map(i => event(s.events[i], s, i)).join('');
+    + list.slice(from).map(e => event(e, s)).join('');
 }
 /* ---------- the message bar's pills (0.1.8): Mode, Model and Effort, one menu kept outside the panes ----------
    Panes are rebuilt from S on every change (every 18 ms while a reply streams); morph keeps each pill button by position and
@@ -913,7 +911,7 @@ function applyChat(ev, into) {
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
         else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
       } else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.findLast(e => e.t === 'tool' && e.id === d.toolCallId); /* F2: newest first, where the running tool is */ if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
+      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
       else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) outer.usageNow(); }
