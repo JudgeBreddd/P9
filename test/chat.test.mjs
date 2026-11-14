@@ -410,6 +410,22 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused, kept across a restart with the state folder gone; a photo left in the state folder from before item 26 moved to the ownership folder and the start went on; a link there still refuses the start');
 });
 
+// Phase 4 #107: the window takes its new chat from 'created' or the create's reply, whichever comes first, and the file
+// browser needs 'created' first (controller.mjs, claimFresh). A long poll waiting when a chat is made answers before the create.
+test("a long poll waiting when a chat is created answers with 'created' before the create's reply", async (t) => {
+  const instance = await start(t);
+  const cursor = (await json(call(instance, '/chat/events?after=0'))).body.cursor;
+  const order = [];
+  const poll = json(call(instance, `/chat/events?after=${cursor}&wait=8000`)).then((page) => { order.push('events'); return page; });
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the poll is waiting
+  const made = json(call(instance, '/chat', 'POST', { provider: 'claude' }, { 'x-p9-op': randomUUID() })).then((reply) => { order.push('create'); return reply; });
+  const [page, reply] = await Promise.all([poll, made]);
+  assert.equal(reply.status, 201);
+  assert.ok(page.body.events.some((e) => e.type === 'created' && e.conversation === reply.body.conversation));
+  assert.deepEqual(order, ['events', 'create']);
+  console.log("PASS created-first: the waiting long poll answered with 'created' before the create's reply");
+});
+
 test('operation IDs: required, replayed once finished, refused when reused, outcome unknown after a crash', async (t) => {
   const instance = await start(t);
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude' }, { 'x-p9-op': '' })).status, 428);

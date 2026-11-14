@@ -967,6 +967,16 @@ that chat's own history names that hash; the file name is built from the hash, n
 deletes each of its photos that no other chat's history names; a photo another chat also sent stays. The phone does not
 show sent photos.
 
+## Files sent to the server
+
+A send from the laptop stages each file's pieces on the server, in P9's state folder (folder 0700, files 0600), until
+its commit moves them into place (threat model row 59). Since v0.1.9 phase 4 the server also drops a send that has had
+no piece and no commit for an hour: its file list and its staged pieces are deleted, the same as an abort. Nothing in
+the workspace is touched, since staged pieces only reach it at commit. If the laptop then sends more pieces or commits
+under the same send, the server no longer has the earlier pieces: the commit refuses those files (`409
+upload-mismatch`, with their names), the same answer as for a wrong piece, and they have to be sent again. A daemon restart already dropped all staging; this
+adds the same clean-up for a client that died without aborting.
+
 ## Projects
 
 A project (threat model row N1) is an id P9 makes (a random UUID) and its own folder, `projects/<id>/` beside the ledger

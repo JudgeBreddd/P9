@@ -118,10 +118,10 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       // hold is already 'turn' (chat.mjs sets it in the same tick as its lifecycle start), so this second look sees it.
       job.phase = 'waiting-turns';
       for (const end = Date.now() + turnLimit; ;) {
-        job.turns = chat.list().filter((c) => c.state === 'turn').length;
+        job.turns = chat.turning();
         if (!job.turns) {
           lifecycle.hold('updating');
-          job.turns = chat.list().filter((c) => c.state === 'turn').length;
+          job.turns = chat.turning();
           if (!job.turns) break;
           lifecycle.release('updating');
         }

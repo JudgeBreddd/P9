@@ -200,7 +200,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
   // version: the daemon's own; the installed app counts a start healthy only when it matches its own (AU5, rollback.mjs).
   api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
-    recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
+    recoveryRecordCount: await recoveryCount() }));
+  // The recovery folder is read again only when its mtime moved (an entry added or removed), not on every poll (finding 18).
+  // ponytail: on a file system with whole-second mtimes, a record written in the same second as the last read shows at the next change.
+  let recoveryCounted = { mtime: null, count: 0 };
+  const recoveryCount = async () => {
+    const { mtimeMs } = await stat(recovery);
+    if (mtimeMs !== recoveryCounted.mtime) recoveryCounted = { mtime: mtimeMs, count: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length };
+    return recoveryCounted.count;
+  };
   // File protection off lifts these three read-only rules too (Builder, 2026-10-18: "Everything").
   const readOnly = (file, name = file.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
@@ -534,7 +542,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // Peer help (SECURITY.md § Delegate): only the user at the desktop opens a chat to other chats' questions.
   api.post('/chat/:id/askable', async (c) => (c.get('device') ? c.json({ error: 'desktop-only' }, 403) : reply(c, chat.setAskable(c.req.param('id'), await json(c)))));
   api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'), await json(c))));
-  api.get('/chat/:id/images/:hash', (c) => reply(c, chat.image(c.req.param('id'), c.req.param('hash'))));
+  api.get('/chat/:id/images/:hash', async (c) => reply(c, await chat.image(c.req.param('id'), c.req.param('hash'))));
   api.get('/terminals', async (c) => {
     try { return c.json({ terminals: await terminals.list() }); } catch (error) {
       if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503);

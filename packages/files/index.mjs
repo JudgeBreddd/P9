@@ -172,12 +172,14 @@ export async function listDirectory(root, relative, { space = false, privateRoot
       parent = await open(`/proc/self/fd/${parent.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       handles.push(parent);
     }
-    const entries = [];
-    for (const name of await readdir(`/proc/self/fd/${parent.fd}`)) {
-      const stat = await lstat(`/proc/self/fd/${parent.fd}/${name}`).catch(() => null);
-      if (isLocked(name)) continue;
-      if (stat?.isFile()) entries.push({ name, mtimeMs: stat.mtimeMs });
-      else if (stat?.isDirectory()) entries.push({ name, mtimeMs: stat.mtimeMs, dir: true });
+    // 64 lstat calls at a time, not one by one (finding 17); the sort below gives the same order.
+    const entries = [], names = (await readdir(`/proc/self/fd/${parent.fd}`)).filter((name) => !isLocked(name));
+    for (let i = 0; i < names.length; i += 64) {
+      const stats = await Promise.all(names.slice(i, i + 64).map((name) => lstat(`/proc/self/fd/${parent.fd}/${name}`).then((stat) => [name, stat], () => [name, null])));
+      for (const [name, stat] of stats) {
+        if (stat?.isFile()) entries.push({ name, mtimeMs: stat.mtimeMs });
+        else if (stat?.isDirectory()) entries.push({ name, mtimeMs: stat.mtimeMs, dir: true });
+      }
     }
     return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   } finally { await Promise.all(handles.map((handle) => handle.close())); }

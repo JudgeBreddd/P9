@@ -3,8 +3,8 @@
 // agent-first-workspace (_engine/acp-connection.ts, os-process.ts, provider-service.ts, 2026-10-09); the adapter
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -217,10 +217,12 @@ function agentImages(update) {
   return update;
 }
 
-// Event payloads are stored as sent by the adapter, minus oversized tool output.
+// Event payloads are stored as sent by the adapter, minus oversized tool output. The text made to measure one is kept
+// (measured) for the ledger to store, so a streamed update is serialized once (finding 16).
+const measured = new WeakMap();
 function trim(update) {
   const text = JSON.stringify(update);
-  if (text.length <= MAX_EVENT) return update;
+  if (text.length <= MAX_EVENT) { if (update && typeof update === 'object') measured.set(update, text); return update; }
   const { _meta, rawOutput, rawInput, ...rest } = update;
   return { ...rest, truncated: text.length };
 }
@@ -264,15 +266,29 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // keep() runs in the same tick as the append that names the photo, so a delete in between cannot take it.
   // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
   const imageDir = (ownership || state) && path.join(ownership || state, 'images');
+  // stored: the folder's bytes, kept since the last scan; seen: the folder's mtime after P9's own last write. The folder is
+  // scanned again only when its mtime says something else added or removed a file (a deleted chat's photos, a file put
+  // there by hand), and swept only when the count passes 200 MB (finding 15). ponytail: a file grown in place is not
+  // seen until the next scan.
+  let stored = null, seen = null;
   const keep = (images) => images.map(({ mimeType, data }) => {
     const bytes = Buffer.from(data, 'base64'), hash = createHash('sha256').update(bytes).digest('hex');
     if (imageDir) {
       mkdirSync(imageDir, { recursive: true, mode: 0o700 });
-      writeFileSync(path.join(imageDir, hash + EXT[mimeType]), bytes, { mode: 0o600 });
-      // ponytail: a scan of the folder per photo sent; fine for the few thousand 200 MB holds, an index past that.
-      const files = readdirSync(imageDir).map((name) => { const { size, mtimeMs } = statSync(path.join(imageDir, name)); return { name, size, mtimeMs }; }).sort((a, b) => a.mtimeMs - b.mtimeMs);
-      let total = files.reduce((sum, file) => sum + file.size, 0);
-      for (const file of files) { if (total <= MAX_STORED) break; unlinkSync(path.join(imageDir, file.name)); total -= file.size; }
+      const scan = () => readdirSync(imageDir).map((name) => { const { size, mtimeMs } = statSync(path.join(imageDir, name)); return { name, size, mtimeMs }; });
+      const file = path.join(imageDir, hash + EXT[mimeType]);
+      let before = 0;
+      try { before = statSync(file).size; } catch {}
+      if (stored === null || statSync(imageDir).mtimeMs !== seen) stored = scan().reduce((sum, item) => sum + item.size, 0);
+      writeFileSync(file, bytes, { mode: 0o600 });
+      stored += bytes.length - before;
+      if (stored > MAX_STORED) {
+        const files = scan().sort((a, b) => a.mtimeMs - b.mtimeMs);
+        let total = files.reduce((sum, item) => sum + item.size, 0);
+        for (const item of files) { if (total <= MAX_STORED) break; unlinkSync(path.join(imageDir, item.name)); total -= item.size; }
+        stored = total;
+      }
+      seen = statSync(imageDir).mtimeMs;
     }
     return { hash, type: mimeType };
   });
@@ -337,9 +353,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (kept && type === 'config' && data.model?.current) kept.model = data.model.current;
     else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
-    try { ledger.append(conversation, type, data); }
+    try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
-    for (const wake of listeners) wake();
+    wakeAll(type);
+  };
+  // Streamed updates wake long polls once per tick, not once per event: a burst is one read for each poller (finding 16).
+  // Every other event wakes them now, so 'created' reaches a window before the create's reply (controller.mjs relies on it).
+  let waking = false;
+  const wakeAll = (type) => {
+    if (type !== 'update') { for (const wake of listeners) wake(); return; }
+    if (waking) return; waking = true; setImmediate(() => { waking = false; for (const wake of listeners) wake(); });
   };
   const sprintOf = (id) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('sprint:' + id)?.value ?? '{}'); } catch { return {}; } };
   const setSprint = (id, patch) => {
@@ -1024,12 +1047,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // daemon holds. Folder roots may hold home and the workspace, P9's MCP tools stop asking, a chat may start in any folder.
     loose: (id) => loose() && !live.get(id)?.solo,
     // CP3: a photo sent in this chat, by hash. Only one this chat's own messages name; base64 in JSON, as it was sent.
-    image(id, hash) {
+    async image(id, hash) {
       if (!ID.test(id) || typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash) || !imageDir) return refused(404, 'not-found');
       const event = db.prepare("SELECT data FROM events WHERE conversation = ? AND type IN ('user', 'held') AND data LIKE ? LIMIT 1").get(id, `%"hash":"${hash}"%`);
       const type = event && JSON.parse(event.data).images?.find?.((image) => image.hash === hash)?.type;
       if (!Object.hasOwn(EXT, type ?? '')) return refused(404, 'not-found');
-      try { return { status: 200, mimeType: type, data: readFileSync(path.join(imageDir, hash + EXT[type])).toString('base64') }; }
+      try { return { status: 200, mimeType: type, data: (await readFile(path.join(imageDir, hash + EXT[type]))).toString('base64') }; }
       catch { return refused(404, 'not-found'); }
     },
     // The P9 MCP server (mcp.mjs): which live chat a relay's token belongs to, or null.
@@ -1077,6 +1100,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     // lists (O47): { agent: { model, pickers, def, at, state } | null }; state 'loading' while this run's one fresh read is on.
     lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], state: readState[agent] ?? 'kept' } : null])); },
+    // How many chats have a turn running: the idle watch and the update's turn wait ask only this (finding 12).
+    turning: () => db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE state = 'turn'").get().n,
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,

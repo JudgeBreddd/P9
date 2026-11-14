@@ -49,6 +49,16 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
   const swept = root ? rm(root, { recursive: true, force: true }).catch(() => {}) : Promise.resolve();
   const uploads = new Map(), busy = new Set(), hashes = new Map(), HASH_CACHE = 50_000;
   const staging = (id, n) => path.join(root, 'in-' + id, String(n));
+  // A send whose client died mid-send never aborts: after an hour with no piece or commit its list and staging go
+  // (finding 20). A send that comes back later starts those files again (upload-mismatch).
+  const touched = new Map(), IDLE = 3600 * 1000;
+  const touch = (id) => touched.set(id, Date.now());
+  setInterval(() => {
+    for (const [id, at] of touched) if (Date.now() - at > IDLE) {
+      touched.delete(id); uploads.delete(id);
+      if (root) rm(path.join(root, 'in-' + id), { recursive: true, force: true }).catch(() => {});
+    }
+  }, 10 * 60 * 1000).unref();
 
   // Files under `base` (absolute), relative to it. Git folders: git's list, nested repos by their own list; others: a
   // walk that leaves out HEAVY folders and .git. Locked names and links are counted, never followed.
@@ -138,7 +148,7 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
       if (!root) return refused(503, 'xfer-unavailable');
       await swept;
       const paths = uploads.get(id) ?? new Map();
-      uploads.set(id, paths);
+      uploads.set(id, paths); touch(id);
       if (!paths.has(body.path)) {
         if (paths.size >= MAX_COUNT) return refused(413, 'xfer-too-large');
         paths.set(body.path, paths.size);
@@ -166,7 +176,7 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
         if (f.size === 0) { await mkdir(path.dirname(staged), { recursive: true, mode: 0o700 }); await appendFile(staged, '', { mode: 0o600 }); }
         if (!await checkStaged(staged, f.size, f.sha256)) { mismatch.push(f.path); await rm(staged, { force: true }); }
       }
-      uploads.set(id, paths);
+      uploads.set(id, paths); touch(id);
       // A wrong piece cannot be fixed by appending: those files start again.
       if (mismatch.length) { for (const name of mismatch) paths.delete(name); return refused(409, 'upload-mismatch', { files: mismatch }); }
       const tag = new Date().toISOString().replace(/[:.]/g, '-') + '-' + id.slice(0, 8);
@@ -186,7 +196,7 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
     },
     async abort(id) {
       if (!ID.test(id)) return refused(400, 'request-refused');
-      uploads.delete(id);
+      uploads.delete(id); touched.delete(id);
       if (root) await rm(path.join(root, 'in-' + id), { recursive: true, force: true });
       return { status: 200, ok: true };
     },
