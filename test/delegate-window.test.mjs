@@ -311,7 +311,10 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
   const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const weakest = Array.from({ length: 12 }, (_, i) => 'Line ' + (i + 1) + ' of a long weakest part, as a real report has.').join('\n\n');
-  assert.ok((await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest })).ready);
+  await a.tool('send_chat', { chat: made.chat, text: 'late' }); // ready needs the worker mid-turn
+  const ready = await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest });
+  assert.ok(ready.ready, JSON.stringify(ready));
+  await a.done(made.chat);
   // The lead's turn runs on (an approval it waits on), and 30 messages wait for its end, as the coordinator's and the
   // workers' notes did.
   await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'permission' });
