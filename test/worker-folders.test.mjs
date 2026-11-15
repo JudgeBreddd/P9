@@ -156,7 +156,7 @@ test('Worker folders A4: the setup shell on Windows without ComSpec is System32\
   assert.deepEqual(setupShell('x', 'linux', {}), ['/bin/sh', '-c', 'x']);
 });
 
-test('Worker folders A4: a setup command past its cap is stopped with everything it started, and the answer waits only for that stop', { timeout: 60000 }, async (t) => {
+test('Worker folders A4: a setup command past its cap is stopped with everything it started, and the answer waits only for that stop', { timeout: 120000 }, async (t) => {
   const { dir, owner, home } = repos(t);
   // The setup starts a child that keeps the output pipes open and outlives it unless the whole tree is stopped: once with
   // the setup still running, once with the setup gone and only its child left.
@@ -165,14 +165,21 @@ test('Worker folders A4: a setup command past its cap is stopped with everything
     write(script, `import { spawn } from 'node:child_process'; import fs from 'node:fs';
 const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); ${parent}\n`);
-    const started = Date.now();
-    const result = await createWorkerFolders({ home, setupMs: 3000 }).make(ID, item, owner, `node "${script}"`);
+    // A cold node start (seen on the arm64 Windows runner) can pass the cap before the script wrote its child's pid. Then
+    // the cap doubles and the same folder's setup runs again (a failed setup runs again by design): no fixed wait.
+    let result, started, cap = 3000;
+    for (; ; cap *= 2) {
+      started = Date.now();
+      result = await createWorkerFolders({ home, setupMs: cap }).make(ID, item, owner, `node "${script}"`);
+      if (fs.existsSync(pidFile) || cap >= 12000) break;
+    }
+    assert.ok(fs.existsSync(pidFile), item + ': the setup never started its child, even with a ' + cap + ' ms cap: ' + JSON.stringify(result));
     const pid = Number(fs.readFileSync(pidFile, 'utf8'));
     // At the answer the whole tree is already gone: nothing is still writing in the folder.
     let alive = true; try { process.kill(pid, 0); } catch { alive = false; }
     if (alive) process.kill(pid, 'SIGKILL');
     assert.equal(alive, false, item + ': the setup command\'s own child was stopped before the answer');
-    assert.ok(Date.now() - started < 20000, item + ': answered at the cap, not when the pipes close');
+    assert.ok(Date.now() - started < cap + 17000, item + ': answered at the cap, not when the pipes close');
     // Windows: the Job Object ends what the shell left behind when the shell ends, so the setup that exited 0 has finished.
     if (item === 'gone' && process.platform === 'win32') { assert.equal(result.error, undefined, result.detail); continue; }
     assert.equal(result.error, 'setup-failed');
