@@ -7,6 +7,26 @@ import path from 'node:path';
 import { root, daemon } from './helpers.mjs';
 import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 
+// B10's cleanup, one step (the Linux hang row, #134's CI log): its steps used to run rm(home) first, while codex-acp
+// was still cloning plugins into home, so rm threw ENOTEMPTY, and a cleanup step that throws skips every later one:
+// the adapter kills never ran and their pipes held the process open (the #111 hang). Each adapter runs in its own
+// process group, and one SIGKILL to the group stops the adapter, codex and git together (a kill to the adapter alone
+// leaves them writing). Then it waits for each to close, bounded, and only then removes home. On Windows a group
+// cannot be signalled: there the adapter alone is killed. ponytail: a child that leaves the group (setsid) is not
+// stopped; the bounded wait then fails with this test's name instead of hanging.
+const group = process.platform !== 'win32';
+async function stopAll(children, home) {
+  await Promise.all(children.map((child) => {
+    const closed = child.exitCode !== null || child.signalCode !== null ? null : new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('B10 cleanup: pid ' + child.pid + ' did not close in 10 s')), 10000);
+      child.once('close', () => { clearTimeout(timer); resolve(); });
+    });
+    try { if (group) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { /* ESRCH: already gone */ }
+    return closed;
+  }));
+  await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}
+
 // B10: package-windows.mjs builds the installer's daemon folder with bundleDaemon; this builds the same layout with this
 // platform's agent binaries and runs it, so a bundle that cannot start or find its agents fails here before Windows CI.
 // O71: CI jobs 132372666811 (#108) and #111's linux (2) sat on this file for 29 min with no result. Every wait here is
@@ -38,10 +58,11 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
 
   const modules = path.join(out, 'node_modules');
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-home-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  const children = [];
+  t.after(() => stopAll(children, home));
   for (const adapter of ['claude-agent-acp', 'codex-acp']) {
-    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home } });
-    t.after(() => child.kill('SIGKILL'));
+    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home }, detached: group });
+    children.push(child);
     let output = '', errors = '';
     child.stderr.on('data', (chunk) => { errors += chunk; });
     await new Promise((resolve) => {
@@ -69,6 +90,26 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
   assert.ok(!sdkProbe.error && sdkProbe.status === 0, 'probe-sdk: ' + (sdkProbe.error?.message ?? 'exit ' + sdkProbe.status + ' ' + sdkProbe.signal) + ' ' + sdkProbe.stderr.slice(-500));
   assert.equal(sdkProbe.stdout.trim(), 'function', sdkProbe.stderr);
+});
+
+// The hang row's check: a child that keeps writing into home through a grandchild, as codex-acp's plugin clone does.
+// One cleanup step must leave neither of them running and home removed.
+test('B10 cleanup: one step stops each adapter with its whole process group, waits for it, then removes home', { skip: !group && 'no process groups on Windows', timeout: 60000 }, async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-home-'));
+  const writer = "const fs = require('node:fs'), dir = process.argv[1]; for (let i = 0; ; i += 1) { try { fs.mkdirSync(dir + '/' + (i % 40), { recursive: true }); fs.writeFileSync(dir + '/' + (i % 40) + '/f' + i, 'x'); } catch {} }";
+  const parent = "const c = require('node:child_process').spawn(process.execPath, ['-e', process.argv[1], process.argv[2]], { stdio: 'ignore' }); console.log(c.pid); setInterval(() => {}, 1000);";
+  const child = spawn(process.execPath, ['-e', parent, writer, path.join(home, '.codex', '.tmp', 'plugins-clone')], { detached: group });
+  t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } });
+  const grandchild = Number(await new Promise((resolve) => child.stdout.once('data', (chunk) => resolve(String(chunk).trim()))));
+  for (let i = 0; i < 100 && !(await readdir(path.join(home, '.codex', '.tmp', 'plugins-clone')).catch(() => [])).length; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  await stopAll([child], home);
+  // A killed grandchild is a zombie until its new parent reaps it: give that 2 s. (/proc state Z counts as gone.)
+  const running = (pid) => { try { process.kill(pid, 0); } catch { return false; } try { return !/\) Z /.test(spawnSync('cat', ['/proc/' + pid + '/stat'], { encoding: 'utf8' }).stdout); } catch { return true; } };
+  const alive = async (pid) => { for (let i = 0; i < 40 && running(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50)); return running(pid); };
+  assert.equal(await alive(grandchild), false, 'the writer the adapter started still runs');
+  assert.equal(await alive(child.pid), false);
+  await assert.rejects(readdir(home), { code: 'ENOENT' }, 'home was not removed');
+  console.log('PASS B10 cleanup');
 });
 
 // Item 15 (Windows): CI run 40611561200 found rg.exe importing vcruntime140.dll on Windows arm64 with no copy beside it.
