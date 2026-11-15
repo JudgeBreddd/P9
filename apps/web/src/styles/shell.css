@@ -564,7 +564,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 .walk-at{outline:2px solid var(--primary);outline-offset:3px;border-radius:8px}
 /* the running-chats row is empty until a chat runs: the walkthrough still points at where its robot heads appear */
 .bots.walk-at:empty{display:block;min-width:32px;min-height:32px}
-/* ---------- landing page (Builder, plan.md "Landing page"): the black hole, the greeting, the focus modes, the pets ---------- */
+/* ---------- landing page (Builder): the black hole, the greeting, the focus modes, the pets ---------- */
 /* Until the controller decides (landing or straight in), the shell stays dark: no flash of the app before the intro. */
 body:has(#land[data-pending]) :is(.shell,.fx-ambient){visibility:hidden}
 .land{--out:cubic-bezier(.22,1,.36,1);--ink:oklch(0.96 0.01 255);--dim:oklch(0.76 0.03 262)}

@@ -42,3 +42,31 @@ test('L3: a chat with no running turn shows no Stop', { timeout: 120000 }, async
   assert.equal(await page.locator('#stopTurn').count(), 0);
   console.log('PASS L3: an idle chat has no Stop');
 });
+
+// O108: a keyboard user on Stop or the model button keeps focus when the bar redraws. The redraw is made here: the live
+// long poll is held until Tab has put focus on the button, then answered with an approval, so the bar's run state goes from
+// Working to Waiting on you while Stop stays. No fixed wait. The phone's live loop starts when its first load is done,
+// inside phone(), so its first long poll can reach the daemon before this route is added (CI job 132930615787): that
+// poll is not held here, and the daemon keeps it up to 8 s (chat.mjs caps wait at 8000). The next one is held, so the
+// test waits for it, bounded, before Tab's focus is checked against it.
+for (const target of ['stopTurn', 'modelBtn']) {
+  test('O108: keyboard focus on #' + target + ' stays when the bar redraws', { timeout: 120000 }, async (t) => {
+    const server = await remoteDaemon(t, {});
+    seedChat(server, { running: true });
+    const { page } = await phone(t, server);
+    const held = [], live = (u) => u.pathname === '/chat/events' && Number(u.searchParams.get('wait')) > 0;
+    let heldOne; const first = new Promise((resolve) => { heldOne = resolve; });
+    await page.route(live, (r) => { held.push(r); heldOne(); });
+    await openChat(page, server);
+    await page.waitForSelector('[data-bar="chat"] .run[data-run="working"]', { timeout: 10000 });
+    for (let i = 0; i < 30 && !(await page.evaluate((id) => document.activeElement?.id === id, target)); i++) await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate((id) => document.activeElement?.id, target), target, 'Tab reaches #' + target);
+    let bound; await Promise.race([first, new Promise((resolve) => { bound = setTimeout(resolve, 15000); })]); clearTimeout(bound);
+    assert.ok(held.length > 0, 'the live long poll was held');
+    const approval = { cursor: 1e9, conversation: CHAT, type: 'approval', at: Date.now(), data: { request: 'o108', toolCall: { title: 'Run a command' }, options: [] } };
+    await held.shift().fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [approval], cursor: 1e9 }) });
+    await page.waitForSelector('[data-bar="chat"] .run[data-run="needs"]', { timeout: 10000 });
+    assert.equal(await page.evaluate((id) => document.activeElement?.matches('#' + id + ':focus-visible') ?? false, target), true, 'focus stays on #' + target + ' when the bar is redrawn');
+    console.log('PASS O108: focus on #' + target + ' stayed through the bar redraw');
+  });
+}

@@ -238,6 +238,7 @@ body.inchat nav{display:none}
 #events .msg.ask{padding:10px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow-wrap:anywhere}
 #events .msg.ask.open{border-color:var(--amber)}
 #events .msg.ask .actions{margin-top:8px}
+#events .msg.ask .ask-plan{max-height:50vh;overflow:auto;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.04)}
 /* P16: an approval or question reads at 14 px and its choices wrap instead of squeezing three bold 44 px pills into a row. */
 #events .msg.ask{font-size:14px;line-height:1.45}#events .msg.ask .actions{flex-wrap:wrap;gap:8px}#events .msg.ask .actions button{flex:1 1 auto;min-height:38px;padding:6px 12px;font-size:13px;line-height:1.3;white-space:normal}
 #events .msg.ask :is(fieldset,legend,small,label){font-size:13px}

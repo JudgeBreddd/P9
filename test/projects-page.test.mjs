@@ -478,6 +478,8 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await mkdir(path.join(sprint, 'roles'), { recursive: true, mode: 0o700 }); await mkdir(path.join(sprint, 'notes'), { mode: 0o700 });
   await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
   await writeFile(path.join(sprint, 'rules.md'), 'Only touch docs/.');
+  // A guarded save sets the old file aside before it places the new one, so for that instant sprint.md is absent (sprint-files.mjs): polls read that as ''.
+  const sprintText = () => readFile(path.join(sprint, 'sprint.md'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; });
   await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
   await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
   const { page, errors } = await launch(t, instance);
@@ -490,7 +492,7 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await box.waitFor({ timeout: 5000 });
   assert.match(await box.inputValue(), /Goal: the docs site\./);
   await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to sprint.md');
+  await until(async () => (await sprintText()).includes('w3: the changelog'), 'the edit saved to sprint.md');
   assert.match(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
   // The lead edits the plan after the page opened it; the user types, then opens another file. The save is refused: the
   // lead's text stays on disk, sprint.md stays open with the user's text, and the page says so with a way on.
@@ -503,11 +505,12 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   assert.match(await box.inputValue(), /w4: mine\n$/);
   assert.equal(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), '# Plan\n\nGoal: the lead\'s.\n');
   await note.getByRole('button', { name: 'Save mine over it' }).click();
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).endsWith('w4: mine\n'), 'Save mine over it saved');
-  assert.equal(await note.textContent(), '');
+  await until(async () => (await sprintText()).endsWith('w4: mine\n'), 'Save mine over it saved');
+  // The file lands before the reply reaches the page, and the page clears the note on the reply: wait for it.
+  await until(async () => (await note.textContent()) === '', 'the note cleared after Save mine over it');
   // Two saves started at once: the second goes after the first and names the file the first wrote, so it is not refused.
   await box.evaluate(async (b) => { for (const text of ['first save\n', 'second save\n']) { b.value = text; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); await new Promise((r) => setTimeout(r, 0)); } });
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')) === 'second save\n', 'the second of two overlapping saves landed');
+  await until(async () => (await sprintText()) === 'second save\n', 'the second of two overlapping saves landed');
   await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
   await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'a saved file switches');
   assert.equal(await page.locator('[data-sp-box]').inputValue(), 'Only touch docs/.');
@@ -589,5 +592,134 @@ test('projects: Clean up worker folders on the sprint section says what it remov
   assert.ok(existsSync(path.join(sprint, 'sprint.md')), 'the sprint files stay');
   await page.locator('[data-sprint]').evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-clean ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  assert.deepEqual(errors, []);
+});
+
+// H1-H3, I1 (Start sprint's prep): New sprint on the project page makes a prep; its section
+// shows each role of roles.json as a row with the same Agent / Model / Effort picks as Settings > Delegation, adds and
+// removes workers, lists every role's files before they are written, and a roles.json the lead wrote meanwhile wins.
+test('projects: New sprint makes a prep whose roles and role files are edited on the page', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'site'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
+  const { app, page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator('[data-pj="spnew"]').click();
+  await page.locator('#pjAsk input').fill('Docs sprint');
+  await page.locator('#pjAsk [value=yes]').click();
+  const section = page.locator('[data-sprint]');
+  await section.locator('[data-sp-prep]').waitFor({ timeout: 10000 });
+  const lead = await section.getAttribute('data-sprint');
+  assert.match(await section.locator('h2').textContent(), /Docs sprint/);
+  assert.equal(await section.locator('[data-pj="spclean"]').count(), 0, 'a prep has no worker folders to clean up');
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const folder = (await Promise.all(bases.map((b) => stat(path.join(b, 'sprints', lead)).then(() => path.join(b, 'sprints', lead), () => null)))).find(Boolean);
+  assert.ok(folder, 'found the prep\'s folder');
+  // As a click does: the pick has the focus when it changes (the page does not redraw under a focused text box).
+  const pick = async (role, value) => { const s = page.locator(`[data-spr="agent"][data-role="${role}"]`); await s.focus(); await s.selectOption(value); };
+  const roles = async () => JSON.parse(await readFile(path.join(folder, 'roles.json'), 'utf8')).roles;
+  // A guarded save sets roles.json aside before it places the new one, so for that instant it is absent (sprint-files.mjs
+  // swap): a poll reads that as null, which no check below takes as done.
+  const polled = () => roles().catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  assert.deepEqual(await page.locator('[data-role-row]').evaluateAll((r) => r.map((x) => x.dataset.roleRow)), ['lead', 'review']);
+  assert.deepEqual(await page.locator('[data-spr="agent"][data-role="lead"] option').evaluateAll((o) => o.map((x) => x.value)), ['', 'claude', 'codex'], 'the same agents Settings > Delegation offers, empty first');
+  // The lead's agent: written to roles.json, the model and effort it had cleared.
+  await pick('lead', 'codex');
+  await until(async () => (await polled())?.[0]?.provider === 'codex', 'the lead\'s agent saved to roles.json');
+  assert.deepEqual((await roles())[0], { key: 'lead', provider: 'codex', model: '', effort: '' });
+  await page.locator('[data-spr="model"][data-role="lead"]').waitFor({ timeout: 5000 });
+  // A worker: a name P9 refuses changes nothing; a good one adds its row, and its three files are listed before they exist.
+  const keyBox = page.locator('[data-sp-newkey]');
+  await keyBox.fill('Bad Key'); await page.locator('[data-pj="sprole-add"]').click();
+  assert.equal((await roles()).length, 2, 'a refused name added a role');
+  await keyBox.fill('docs'); await page.locator('[data-pj="sprole-add"]').click();
+  await until(async () => (await polled())?.some((r) => r.key === 'docs'), 'the worker saved to roles.json');
+  await page.locator('[data-role-row="docs"]').waitFor({ timeout: 5000 });
+  const work = page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' });
+  assert.match(await work.textContent(), /its first message at Start · empty/);
+  assert.equal(existsSync(path.join(folder, 'roles', 'docs.work.md')), false);
+  await work.click();
+  const box = page.locator('[data-sp-box]');
+  await until(async () => (await box.getAttribute('data-name')) === 'roles/docs.work.md', 'the work file open');
+  await box.pressSequentially('Write the install page.');
+  await page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await until(async () => existsSync(path.join(folder, 'roles', 'docs.work.md')) && (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8')) === 'Write the install page.', 'the work file made by its first save');
+  // The lead writes roles.json meanwhile (with a mode): the page's next change is refused, the rows show the lead's file,
+  // and the change made again keeps the lead's mode.
+  const theirs = { roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: '', model: '', effort: '' }, { key: 'docs', provider: 'codex', model: '', effort: '', mode: 'Read-only' }] };
+  // The work file's save answers with every sprint file as the daemon reads them after the write: the lead writes only
+  // once that answer is on the page (the work file's row no longer empty), and in one step, a whole file put in place.
+  // A reader between a truncate and its write reads roles.json as empty, and the page shows no rows to pick.
+  await until(async () => !/· empty/.test(await work.textContent()), 'the work file\'s save answered on the page');
+  await writeFile(path.join(folder, 'roles.json.new'), JSON.stringify(theirs, null, 2) + '\n');
+  await rename(path.join(folder, 'roles.json.new'), path.join(folder, 'roles.json'));
+  await pick('review', 'claude');
+  await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue()) === 'claude', async () => 'the rows show the lead\'s roles.json; seen ' + JSON.stringify({ disk: await polled(), html: await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message), toasts: await page.locator('body').evaluate(() => [...document.querySelectorAll('[class*=toast]')].map((x) => x.textContent).join(' | ')) }));
+  assert.deepEqual(await roles(), theirs.roles, 'a refused change wrote over the lead\'s file');
+  assert.equal(await page.locator('[data-spr="agent"][data-role="review"]').inputValue(), '');
+  await pick('review', 'claude');
+  await until(async () => (await polled())?.[1]?.provider === 'claude', 'the change made again saved');
+  assert.equal((await roles())[2].mode, 'Read-only', 'the lead\'s mode kept');
+  // A second pick made while the first one's save is still out: the first save's redraw sets every pick back to the file,
+  // and the second save, queued behind it, still writes the second pick. The next roles.json save is held in the main
+  // process until the test lets it go.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    let hold = true; globalThis.letGo = null;
+    ipcMain.handle('p9:chat', async (e, action, body, ...rest) => {
+      if (hold && action === 'sprintFile' && body?.name === 'roles.json') { hold = false; await new Promise((go) => { globalThis.letGo = go; }); }
+      return h(e, action, body, ...rest);
+    });
+  });
+  await pick('lead', 'codex');
+  await until(() => app.evaluate(() => !!globalThis.letGo), 'the first save held');
+  await pick('review', 'codex');
+  await app.evaluate(() => globalThis.letGo());
+  await until(async () => (await polled())?.[1]?.provider === 'codex', async () => 'the second pick, made while the first save was held, saved; on disk ' + JSON.stringify(await polled()));
+  assert.deepEqual((await roles()).slice(0, 2).map((r) => r.provider), ['codex', 'codex'], 'both picks on disk');
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  assert.match(await page.locator('[data-pj="spfile"]', { hasText: /^rules\.md/ }).textContent(), /none yet, P9's defaults are sent/);
+  assert.match(await page.locator('[data-pj="spfile"]', { hasText: 'roles/lead.work.md' }).textContent(), /· empty/);
+  await page.setViewportSize({ width: 900, height: 900 }); await page.waitForTimeout(600); // the panel settles at the new width
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  // Nothing in the section reaches past its right edge (each element's box, so a clipped one counts too), beyond the 8 px
+  // a row's hover background reaches out on each side by design (projects.css .crow).
+  const wide = await section.evaluate((e) => { const r = e.getBoundingClientRect().right + 9; return [...e.querySelectorAll('*')].filter((x) => x.getBoundingClientRect().right > r).map((x) => x.tagName + '.' + x.className + ' ' + Math.round(x.getBoundingClientRect().right - r + 1) + 'px ' + (x.textContent || '').slice(0, 40)); });
+  assert.deepEqual(wide, [], 'past the sprint section\'s edge at 900 wide');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep-narrow ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await page.setViewportSize({ width: 1400, height: 900 });
+  // O110: a writer that empties roles.json, pauses, then writes. A save answered in the pause read roles.json empty: the
+  // rows stay (the last good ones) and show the written file once it is there, without a reload. A second sprint torn at
+  // the same time, met only in the first one's fresh read, keeps its rows too and shows its own file when written.
+  await page.locator('[data-pj="spnew"]').click();
+  await page.locator('#pjAsk input').fill('Site sprint');
+  await page.locator('#pjAsk [value=yes]').click();
+  await until(async () => (await page.locator('[data-sprint]').count()) === 2, 'the second prep');
+  const lead2 = (await page.locator('[data-sprint]').evaluateAll((e) => e.map((x) => x.dataset.sprint))).find((x) => x !== lead);
+  const file = path.join(folder, 'roles.json'), file2 = path.join(path.dirname(folder), lead2, 'roles.json');
+  const written = JSON.parse(await readFile(file, 'utf8')), written2 = JSON.parse(await readFile(file2, 'utf8'));
+  written.roles[0].provider = 'claude'; written2.roles[0].provider = 'codex';
+  const leadPick = (l) => page.locator(`[data-sprint="${l}"] [data-spr="agent"][data-role="lead"]`);
+  const seen = async (l) => (await leadPick(l).inputValue({ timeout: 1000 }).catch(() => null));
+  await until(async () => (await seen(lead2)) === '', 'the second prep\'s rows');
+  await page.evaluate(() => { window.notReloaded = true; });
+  await writeFile(file, ''); await writeFile(file2, '');
+  await page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' }).click();
+  await until(async () => (await box.getAttribute('data-name')) === 'roles/docs.work.md', 'the work file open again');
+  await box.pressSequentially(' Then the FAQ.');
+  await page.locator(`[data-sprint="${lead}"] [data-pj="spfile"]`, { hasText: /^sprint\.md/ }).click();
+  await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8')).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
+  await writeFile(file, JSON.stringify(written, null, 2) + '\n');
+  await until(async () => (await seen(lead)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator(`[data-sprint="${lead}"] [data-sp-roles]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
+  assert.equal(await seen(lead2), '', 'the second sprint, still torn, keeps its rows');
+  await writeFile(file2, JSON.stringify(written2, null, 2) + '\n');
+  await until(async () => (await seen(lead2)) === 'codex', async () => 'the second sprint\'s rows show its written roles.json; seen ' + await page.locator(`[data-sprint="${lead2}"]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
+  assert.equal(await page.evaluate(() => window.notReloaded), true, 'the page reloaded');
+  // Remove: workers only; the lead and the reviewer have no Remove.
+  assert.equal(await page.locator('[data-pj="sprole-rm"][data-role="lead"], [data-pj="sprole-rm"][data-role="review"]').count(), 0);
+  await page.locator('[data-pj="sprole-rm"][data-role="docs"]').click();
+  await until(async () => (await polled())?.some((r) => r.key === 'docs') === false, 'the worker removed from roles.json');
+  await page.locator('[data-role-row="docs"]').waitFor({ state: 'detached', timeout: 5000 });
   assert.deepEqual(errors, []);
 });

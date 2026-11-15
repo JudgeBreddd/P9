@@ -99,6 +99,22 @@ test('A message sent mid-turn goes into the turn (steered); one sent past an app
   console.log('PASS steering: a message mid-turn went into the turn, not behind it; one sent past an approval declined it and reached the agent');
 });
 
+// phone-3 (Tyler's desktop screenshot, 2026-11-13: "You chose: reject", "You chose: exit-plan-bypass"): the line after an
+// answer holds the button's own words, as the phone does, never its internal id.
+test('phone-3: after an approval the desktop says the button the user chose, in its own words', { timeout: 120000 }, async (t) => {
+  const { launch, open, agentSaid, ends } = await setup(t, 'chose');
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(), chat = await open(page);
+  await chat.send('permission');
+  await chat.pane.locator('[data-approve="allow"]').click({ timeout: 15000 });
+  await until(() => agentSaid('permission:allow'), 'the agent got the answer');
+  const line = chat.pane.locator('.notice', { hasText: 'You chose' });
+  await line.waitFor({ timeout: 15000 });
+  assert.equal(await line.innerText(), 'You chose: Allow');
+  await line.scrollIntoViewIfNeeded(); await page.waitForTimeout(300);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-you-chose ' + (await page.screenshot()).toString('base64'));
+});
+
 test('An agent slow to answer steering (6 s, past the 5 s wait): the message reaches it once and is not queued; a late refusal shows a notice with the text', { timeout: 120000 }, async (t) => {
   const { instance, id, launch, open, users, agentSaid, ends } = await setup(t, 'slow-steer', ['slow-steering']);
   await until(async () => await ends() === 1, 'hello answered');

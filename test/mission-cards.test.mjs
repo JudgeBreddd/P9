@@ -143,6 +143,11 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     await page.click('#fMission [data-group="Home"]');
     const card = (id) => page.locator(`#mdlBody [data-card][data-tile="${id}"]`);
     const inbox = card('inbox').frameLocator('iframe');
+    // A draw of the whole window on demand: the section's text changes on disk and the rail's Mission button reads it again.
+    const redraw = async (text, edit = () => {}) => { const s = { ...space().sections[0], text }; edit(s);
+      await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [s] }));
+      await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+      await page.locator('#mdlBody [data-space-text]', { hasText: text }).waitFor({ timeout: 10000 }); };
     await inbox.locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
     assert.equal(await inbox.locator('#label').textContent(), '<b>not markup</b>', 'the JSON arrived as data: markup in it stays text');
     assert.equal(await inbox.locator('#label b').count(), 0);
@@ -201,6 +206,21 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       // A changed answer must still reach the card (on the next pull, or the one after: a tile's answer is kept 30 s).
       await writeFile(path.join(ws, 'hub/nums.json'), JSON.stringify({ count: 13, label: '<b>not markup</b>' }));
       await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 65000 });
+      // O94: that changed answer drew the whole window, and every card kept its frame (a click in a card then still lands).
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a changed answer draws the window and keeps every card frame');
+      await redraw('Custom cards, drawn again.');
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a changed section keeps every card frame too');
+      assert.match(await card('throws').locator('.card-note').innerText(), /card boom/, 'a kept card still says the error it stopped with');
+      await redraw('Custom cards, one renamed.', (s) => { s.cards[0] = { ...s.cards[0], title: 'Messages' }; });
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a renamed card keeps its frame');
+      assert.equal(await card('inbox').locator('iframe').getAttribute('title'), 'Messages', 'the kept frame takes the new name');
+      // Where an element cannot move without reloading (no Element.moveBefore: phone Safari, older browsers), each draw makes
+      // the frames again, and the last answer still reaches the new frame.
+      await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
+      await redraw('Custom cards, no moveBefore.');
+      assert.deepEqual(await frames(), Array(6).fill('new'), 'without moveBefore every card frame is made again');
+      await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 15000 });
+      await page.evaluate(() => { Element.prototype.moveBefore = window.__mb; });
     }
     await card('inbox').scrollIntoViewIfNeeded();
     shot('m5-desktop-1280-' + theme, await page.screenshot());
@@ -213,7 +233,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     if (theme === 'event-horizon-prime') { // wall 15: the card's load-time p9open opened nothing; a click opens the whole file
       await page.click('#mdlBack');
       const logs = card('logs').frameLocator('iframe');
-      // CI-only failure (M5 :212, :223): a click in the logs card right after Back is sometimes lost. Record what moves in the
+      // CI-only failure (M5 :212, :223, :257): a click in the logs card right after Back is sometimes lost. Record what moves in the
       // window and what reaches the card's frame around the click; on a miss print it, with a screenshot, instead of a bare timeout.
       const clickAfterBack = async (button, opened, name) => {
         await page.evaluate(() => { const log = window.__m5 = [], at = s => log.push([Date.now(), s]), body = document.querySelector('#mdlBody');
@@ -229,7 +249,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
         const said = [], hear = m => m.text().startsWith('P9M5 ') && said.push([+m.text().split(' ')[1], 'in the card: ' + m.text().split(' ').slice(2).join(' ')]);
         page.on('console', hear); // the card's own record, kept even when the frame is made again before the miss is seen
         await frame.evaluate(() => { const at = s => console.log(`P9M5 ${Date.now()} ${s}`), open = window.p9open;
-          for (const k of ['pointerdown', 'click']) addEventListener(k, e => at(`${k} on ${e.target.id || e.target.nodeName} at ${e.clientX},${e.clientY}, activation ${navigator.userActivation?.isActive}`), true);
+          for (const k of ['pointermove', 'pointerdown', 'pointerup', 'click']) addEventListener(k, e => at(`${k} on ${e.target.id || e.target.nodeName} at ${e.clientX},${e.clientY}, activation ${navigator.userActivation?.isActive}`), { capture: true, once: k === 'pointermove' });
           window.p9open = path => { at(`p9open ${path}, activation ${navigator.userActivation?.isActive}`); return open(path); }; });
         // The cause: a card frame (its own process) that was out of view draws nothing, and until it has drawn again Chromium gives
         // a click on it to the page's <iframe> element, so the card never sees it ("pointerdown on the page: art-frame"). Its
@@ -243,24 +263,41 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
         await Promise.race([frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
           sleep(10000).then(() => { throw new Error('no frame drawn in 10 s'); })]).catch(moved('the card drew no frame'));
         const t = [[Date.now(), 'click ' + button + ' starts']];
-        await logs.locator(button).click();
+        const record = async (what, e) => { // the timeline from the click, and whether the window and the card frame still answer
+          const answers = async (f) => Promise.race([f.evaluate(() => 'answers').catch((x) => 'gone: ' + x.message.split('\n')[0]), sleep(2000).then(() => 'no answer in 2 s')]);
+          const win = await answers(page);
+          t.push([Date.now(), `the window ${win}, the card frame ${await answers(frame)}; frames: ${page.frames().length}`]);
+          // A stalled card frame can stall the page's screenshot too (#152 runs: empty). Then take the window's last drawn frame from
+          // the main process; if neither comes, say why in the timeline instead of printing an empty image.
+          const bound = (p, what) => Promise.race([p, sleep(5000).then(() => { throw new Error(what + ': nothing in 5 s'); })]);
+          const why = [], png = await page.screenshot({ timeout: 5000 }).then((b) => b.toString('base64') || why.push('page screenshot: empty') && '').catch((x) => { why.push('page screenshot: ' + x.message.split('\n')[0]); })
+            || await bound(app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.capturePage().then((i) => i.isEmpty() ? Promise.reject(new Error('empty image')) : i.toPNG().toString('base64'))), 'window capture')
+              .then((b) => (t.push([Date.now(), 'screenshot from the window capture (' + why[0] + ')']), b)).catch((x) => { why.push('window capture: ' + x.message.split('\n')[0]); });
+          if (png) console.log(`P9_SHOT ${name}-miss ${png}`); else t.push([Date.now(), 'no screenshot: ' + why.join('; ')]);
+          const all = [...t, ...win === 'answers' ? await page.evaluate(() => window.__m5) : [], ...said].sort((a, b) => a[0] - b[0]);
+          page.off('console', hear);
+          throw new Error(`${name}: ${what}; the window says ${JSON.stringify(await page.locator('#mdlT').innerText({ timeout: 2000 }).catch(() => '?'))}; ms from the click:\n` + all.map(([ms, s]) => `${ms - t[0][0]} ${s}`).join('\n'), { cause: e });
+        };
+        // CI #142 linux 6 (:257): the click hung 30 s after "performing click action" (input sent, no answer). Bound it at 10 s:
+        // the waits above already scrolled the button in and saw the card draw, and here a click takes well under a second.
+        await logs.locator(button).click({ timeout: 10000 }).catch((e) => record('the click did not finish in 10 s', e));
         t.push([Date.now(), 'click returned']);
-        await opened.waitFor({ timeout: 10000 }).finally(() => page.off('console', hear)).catch(async (e) => {
-          console.log(`P9_SHOT ${name}-miss ` + (await page.screenshot()).toString('base64'));
-          const all = [...t, ...await page.evaluate(() => window.__m5), ...said].sort((a, b) => a[0] - b[0]);
-          throw new Error(`${name}: lost click; the window says ${JSON.stringify(await page.locator('#mdlT').innerText())}; ms from the click:\n` + all.map(([ms, s]) => `${ms - t[0][0]} ${s}`).join('\n'), { cause: e });
-        });
+        console.log(`${name}: click took ${t[1][0] - t[0][0]} ms`);
+        await opened.waitFor({ timeout: 10000 }).catch((e) => record('lost click', e));
+        page.off('console', hear);
       };
       await card('logs').scrollIntoViewIfNeeded();
       await sleep(1000);
       assert.equal(await page.locator('#mdlT').innerText(), 'Home · 7 items', 'p9open with no click opens nothing');
-      await logs.locator('#a').click();
-      await page.locator('#mdlBody pre', { hasText: 'the whole log, not its last lines' }).waitFor({ timeout: 10000 });
+      await logs.locator('body[data-ready]').waitFor({ timeout: 10000 });
+      await card('logs').locator('iframe').evaluate((f) => { f.dataset.o94 = 'before a.log'; });
+      await clickAfterBack('#a', page.locator('#mdlBody pre', { hasText: 'the whole log, not its last lines' }), 'm5-257');
       assert.equal(await page.locator('#mdlT').innerText(), 'a.log');
       shot('wall15-log-open', await page.screenshot());
       await page.click('#mdlBack');
       await card('logs').scrollIntoViewIfNeeded();
       await logs.locator('body[data-ready]').waitFor({ timeout: 10000 }); // Back draws the window whole: a new frame
+      assert.equal(await card('logs').locator('iframe').evaluate((f) => f.dataset.o94 ?? 'fresh'), 'fresh', 'after Back the card frames are made fresh (O94 keeps only a frame still in the window)');
       await clickAfterBack('#b', page.locator('#mdlBody pre', { hasText: 'Could not read it' }), 'm5-212');
       assert.equal(await page.locator('#mdlFoot [data-fix]').count(), 0, 'no Fix with Claude on a file that did not open');
       await page.click('#mdlBack');
@@ -295,7 +332,19 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.click('[data-nav="mission"]');
   await phone.click('#mission [data-open]:has-text("Home")', { timeout: 15000 });
   await phone.clock.install(); // the tiles' 30 s refresh is then the page's own timer, moved on below
-  for (const title of ['Inbox', 'Probe', 'Broken script', 'Throws']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
+  // O71: Mission redraws rows as its fresh answer and the opened cards arrive, so a tap can land as a row moves and leave it
+  // closed (Throws, CI #121's group 6 dump). After each tap, wait for that row to be open; tap again if it is not. A row
+  // counts as open only if it is still open 200 ms later: a close from a redraw can come just after the tap opened it.
+  // Bottom row first: a row grows when it opens and again when its card loads, which moves every row below it.
+  // Tapping from the bottom up means no row still to be tapped can move under the pointer.
+  for (const title of ['Throws', 'Broken script', 'Probe', 'Inbox']) {
+    const isOpen = () => phone.locator(`#mission dialog[open] details:has(> summary:has-text("${title}"))`).evaluate((row) => row.open).catch(() => false);
+    const staysOpen = async () => await isOpen() && (await phone.waitForTimeout(200), await isOpen());
+    for (let tap = 0; tap < 3 && !await staysOpen(); tap++) {
+      await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
+      for (let i = 0; i < 10 && !await isOpen(); i++) await phone.waitForTimeout(100);
+    }
+  }
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
   await pinbox.frameLocator('iframe').locator('#count', { hasText: '13' }).waitFor({ timeout: 20000 }); // the desktop's changed answer
   // A note that never says it prints what each card row held (open or not, its note, the frame's state), so a miss explains itself.

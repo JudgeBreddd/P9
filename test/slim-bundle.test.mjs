@@ -106,7 +106,9 @@ const archived = async (folder, into) => {
   const tgz = into + '.tar.gz';
   await new Promise((resolve, reject) => { const out = spawn('sh', ['-c', 'cat > "$0"', tgz], { stdio: ['pipe', 'ignore', 'ignore'] }); slimArchive(folder).pipe(out.stdin); out.once('close', resolve); out.once('error', reject); });
   await mkdir(into);
-  assert.equal((await run('tar', ['-xzf', tgz, '-C', into])).code, 0);
+  // tar's own words go in the failure: an exit 2 seen once in 7 runs (O71) said nothing about why (O79).
+  const untar = await run('tar', ['-xzf', tgz, '-C', into]);
+  assert.equal(untar.code, 0, 'tar -xzf: ' + untar.out);
   const files = new Map();
   for (const entry of await readdir(into, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile()) continue;

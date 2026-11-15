@@ -83,7 +83,7 @@ test('Landing v5: the video plays in #land, the old sky loop is off, send-to-ser
   assert.ok((await page.evaluate(() => window.__gl)).includes('landSky'), 'original: the landing sky is set up again');
   await page.keyboard.press('Space');
   // Without WebGL (no GPU) the sky is off by design (landing-sky.mjs), so there is nothing to size.
-  if (await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
+  if (await page.evaluate(() => !!document.createElement('canvas').getContext('webgl', { failIfMajorPerformanceCaveat: true }))) await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
     .catch(async () => assert.fail('original: the sky is not drawing: ' + JSON.stringify(await look(page))));
   seen = await look(page);
   assert.equal(seen.hidden, true);
