@@ -420,12 +420,14 @@ test('O109: a worker report closes into the chat and only a new one comes back; 
 test('712: old workers clear out of the sprint box: archived ones leave it, a stopped one clears from the card, all stopped clear at once', { timeout: 150000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false }); // as busyLead: a worker's task is written to the project
   const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
   await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
   const a = await tools(t, instance, parent);
   const kids = [];
-  for (let i = 0; i < 5; i++) { const made = await a.tool('open_chat', { text: 'first', item: 'W' + i, done_means: 'x', checks: ['Tests pass'] }); assert.ok(made.chat, JSON.stringify(made)); await a.done(made.chat); kids.push(made.chat); }
+  for (let i = 0; i < 5; i++) { const made = await a.tool('open_chat', { text: 'first', item: 'W' + i, done_means: 'x', checks: ['Tests pass'] }); assert.ok(made.chat, JSON.stringify(made)); await a.done(made.chat); kids.push(made.chat); console.log('O712 made ' + i); }
   for (const id of kids.slice(0, 4)) { const r = await a.tool('stop_chat', { chat: id, close: true }); assert.equal(r.action, 'stopped', JSON.stringify(r)); } // the fifth stays: a live worker keeps its row and has no clear
+  console.log('O712 stopped 4');
   // The way archive_chat clears one, before the window opens (Tyler's try on 2026-11-14).
   await call(instance, `/chat/${kids[0]}/archive`, 'POST', { archived: true });
   const { app, page, errors } = await launch(t, instance);
