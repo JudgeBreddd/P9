@@ -922,7 +922,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const blocks = (text, images) => [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(({ mimeType, data }) => ({ type: 'image', mimeType, data }))];
   // 2026-10-24 (a user's messages waited 8 h behind an open question and a turn that never ended): a message sent while
   // the agent asks declines the question or approval, as Claude Code's "tell Claude what to do differently" does.
-  const decline = (id, session) => {
+  // Only the user's own message (O96): a P9 note or another chat's message is not the user's answer, so it leaves the
+  // question or approval open (a worker's "ended its turn" line declined its lead's start_sprint approval).
+  const decline = (id, session, body) => {
+    if (senders.has(body)) return;
     for (const [request, pending] of session.pending) {
       const answer = pending.kind === 'approval' ? { outcome: { outcome: 'cancelled' } } : { action: 'cancel' };
       pending.resolve(answer);
@@ -937,7 +940,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (!session?.turn || !session.steering || session.stopping || session.solo) return refused(409, 'turn-running'); // nothing joins a turn that answers another chat
     if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
-    decline(id, session);
+    decline(id, session, body);
     // Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is delivered,
     // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
@@ -1245,7 +1248,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }
       // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
-      decline(id, session);
+      decline(id, session, body);
       const turn = session.turn = randomUUID();
       // A worker on a work queue has no task but a ready: its next message ends that report too (its reviews stay).
       if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
@@ -1373,6 +1376,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     queue: (id) => { const c = db.prepare('SELECT parent, key FROM conversations WHERE id = ?').get(id); return c ? queueOf(c.parent, c.key, sprintOf(id)) : null; },
     setSprint,
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
+    // O82: a reused worker takes the key of the role it now does, so its next lead message carries that role's rules.
+    rekey(id, key) {
+      try { db.prepare('UPDATE conversations SET key = ? WHERE id = ?').run(key, id); return {}; }
+      catch (error) { if (/UNIQUE/.test(String(error.message))) return { error: 'key-taken' }; throw error; }
+    },
     // Peer help (delegate.mjs ask_chat). ask: text goes to chat id as a question from the chat `from`, after whatever
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.
     answering: (id) => !!live.get(id)?.solo,

@@ -138,16 +138,23 @@ test('Delegate window: workers indented under their chat and folded past three; 
   await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
   const group = page.locator('#setDelegation');
   await group.scrollIntoViewIfNeeded();
-  assert.match(await group.locator('[data-dg-what]').innerText(), /hand parts of a job, or a whole build, to workers/);
+  // window-9: Delegate and Sprints read as two features; Delegate is everyday work with no plan, roles or review.
+  assert.match(await group.locator('[data-dg-what]').innerText(), /^Delegate is for everyday work\..*There is no plan, no fixed roles and no review step unless the agent sets one up\.$/s);
+  assert.match(await group.locator('.set-row:has([data-dg-start]) strong').innerText(), /^Who may start workers$/);
+  assert.equal(await group.locator('[data-dg-start]').getAttribute('aria-label'), 'Who may start workers');
+  assert.match(await group.locator('.set-row:has([data-dg-start]) .muted').innerText(), /A sprint always asks you before it starts, whatever this says\.$/);
   // F5: sprints have their own section, which says where each sprint setting lives.
   const sprints = page.locator('#setSprint');
   await sprints.scrollIntoViewIfNeeded();
-  assert.deepEqual(await sprints.locator('.set-row strong').allInnerTexts(), ['A branch per worker', 'A plan written down', 'Ready means checked', 'Where you follow it', 'Sprint settings']);
+  assert.deepEqual(await sprints.locator('.set-row strong').allInnerTexts(), ['Roles', 'A plan written down', 'A branch per worker', 'Ready means checked', 'Where you follow it', 'Sprint settings']);
+  assert.match(await sprints.locator('p.muted').first().innerText(), /^A sprint is for a big build that runs over days or weeks.*Your yes is the approval of its plan\.$/s);
+  assert.match(await sprints.locator('.set-row:has(strong:text-is("Sprint settings")) .muted').innerText(), /Delegation above only decides whether a sprint can start at all: Off stops it\.$/);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT f5-sprints ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await group.scrollIntoViewIfNeeded();
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT f5-delegation ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await until(async () => await group.locator('[data-dg-start]').inputValue() === 'agent' && !(await group.locator('[data-dg-start]').isDisabled()), 'the daemon\'s value in Settings');
   assert.deepEqual(await group.locator('[data-dg-start] option').allInnerTexts(), ['Off', 'Ask me first', 'Agent decides']);
+  assert.equal(await group.locator('[data-dg-roles]').innerText(), 'Worker 1, Worker 2 and on are for Delegate. A sprint sets each of its chats\' agent, model and effort in its own roles.');
   await group.locator('[data-dg-start]').selectOption('ask');
   await until(async () => (await call(instance, '/delegation')).start === 'ask', 'Ask me first saved');
   // Workers per chat: one row per worker, each with its own agent, model and effort.

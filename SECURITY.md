@@ -751,7 +751,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   like `run_script`. The same key from the same parent returns the chat it already made and asks
   nothing. A chat has at most as many running workers as "Workers per chat" in Settings >
   Delegation says (5 until changed, never more than 20), 3 levels deep.
-- **The Delegation setting.** Settings > Delegation, "Who starts a sprint", has three values, kept
+- **The Delegation setting.** Settings > Delegation, "Who may start workers", has three values, kept
   in the daemon and read on every `open_chat`. **Off**: every new worker is refused
   (`delegate-off`); chats already started keep running and can still be read, sent to and stopped.
   **Ask me first** (the default): P9 asks you in the parent chat before that chat's first
