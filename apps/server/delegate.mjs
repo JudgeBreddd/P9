@@ -460,6 +460,9 @@ export function createDelegate({ chat, allowed }) {
     const target = chat.sprint(args.chat);
     if (!target.ready) return { error: 'not-ready', detail: 'That chat has no ready commit: it has not called ready, or its ready was refused. Call verdict after its ready goes through, with the commit ready returned.' };
     if (args.commit !== target.ready.commit) return { error: 'stale-commit' };
+    // One verdict per ready: a repeat would count a fix twice; a passed item stays passed (its next ready is the next item).
+    if (target.verdict) return { error: 'already-reviewed', detail: 'This ready already has your verdict. The worker reports again with ready after its fix.' };
+    if (target.ready.item && target.reviews?.[target.ready.item]?.state === 'passed') return { error: 'already-reviewed', detail: 'That item already passed.' };
     if (!['pass', 'fix'].includes(args.result) || !text(args.note, 4000)) return { error: 'request-refused' };
     const value = { by: caller, commit: args.commit, result: args.result, note: args.note, at: Date.now() };
     // The review record (sprint method rules 3 and 4): the fix count comes from verdicts, and the third fix is flagged.

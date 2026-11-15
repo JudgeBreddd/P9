@@ -68,6 +68,11 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
     assert.equal((await tools.ready(report, worker)).ready.item, 'daemon-1');
     const v = tools.verdict({ chat: worker, commit: at, result: 'fix', note: 'finding ' + n }, reviewer);
     assert.deepEqual([v.review.state, v.review.fixes, v.review.larger ?? false], ['fix', n, n === 3]);
+    // One verdict per ready: the same fix again counts nothing and sends nothing.
+    const before = sent.length;
+    assert.equal(tools.verdict({ chat: worker, commit: at, result: 'fix', note: 'again' }, reviewer).error, 'already-reviewed');
+    assert.equal(sprintOf(worker).reviews['daemon-1'].fixes, n);
+    assert.equal(sent.length, before);
     assert.deepEqual(sent.find((s) => s[0] === worker && s[1].includes('finding ' + n)).slice(1, 3), [`[p9] daemon-1: the reviewer asked for a fix (fix ${n}) at ${at}: finding ${n}`, 'queue']);
   }
   assert.deepEqual(sent.filter((s) => s[0] === lead).map((s) => s[1]), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Opus or Fable).']);
@@ -76,7 +81,11 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
   assert.equal(tools.verdict({ chat: worker, commit: c2, result: 'pass', note: 'ok' }, reviewer).review.state, 'passed');
   assert.equal(sprintOf(worker).reviews['daemon-1'].fixes, 3, 'a pass reset the fix count');
   assert.match(sent.at(-1)[1], /^\[p9\] daemon-1 passed review at [0-9a-f]+\. Start your next item\.$/);
-  // Passed: the next ready is the next item; a new message to the worker (which clears ready) keeps the record.
+  // A late fix on the passed ready cannot undo the pass.
+  assert.equal(tools.verdict({ chat: worker, commit: c2, result: 'fix', note: 'late' }, reviewer).error, 'already-reviewed');
+  assert.equal(sprintOf(worker).reviews['daemon-1'].state, 'passed');
+  // Passed: the next ready is the next item; a new message to the worker (chat.mjs clears ready: the daemon test in
+  // delegate.test.mjs checks that) keeps the record.
   states.set(worker, { ...sprintOf(worker), ready: null, verdict: null });
   commit('two');
   assert.equal((await tools.ready(report, worker)).ready.item, 'daemon-2');

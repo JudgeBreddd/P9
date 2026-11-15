@@ -1247,7 +1247,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session);
       const turn = session.turn = randomUUID();
-      if (sprintOf(id).task && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
+      // A worker on a work queue has no task but a ready: its next message ends that report too (its reviews stay).
+      if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       let ended;
