@@ -208,6 +208,7 @@ const readEndsUnderFocus = async (t, row) => {
 test('window: O74 a list read ending under an open Model menu keeps the keyboard on the same model, and Enter picks it', { timeout: 120000 }, async (t) => {
   const { page, pane, errors, focused } = await readEndsUnderFocus(t, 'opus');
   assert.equal(focused, 'opus', 'focus stays on Opus, not on the row that took its place');
+  console.log('P9_SHOT o74-menu-redrawn ' + (await page.screenshot()).toString('base64')); // the menu still open after the redraw, Opus focused
   await page.keyboard.press('Enter');
   assert.equal(await pillValue(pane, 'Model'), 'Opus');
   assert.deepEqual(errors, []);
