@@ -1010,6 +1010,7 @@ test('O109: five messages held from two senders (an agent and the user) all go a
   const a = await agent(t, instance);
   const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
   const folder = path.resolve(instance.workspace, made.folder);
+  fs.writeFileSync(path.join(folder, 'log-prompts'), ''); // the fake agent logs every prompt from here on
   await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
   const prompts = () => (fs.existsSync(path.join(folder, 'prompts.log')) ? fs.readFileSync(path.join(folder, 'prompts.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((blocks) => !blocks.some((block) => block.startsWith('[p9] '))) : []); // the parent shares the folder: not its [p9] lines
   const before = prompts().length;
@@ -1043,6 +1044,7 @@ test('O109: the user\'s message told along with an agent\'s note that waited is 
   const made = await a.tool('open_chat', { text: 'hello', title: 'Target' });
   await a.done(made.chat);
   const folder = path.resolve(instance.workspace, made.folder), USER = '[P9: from the user, in this chat.]';
+  fs.writeFileSync(path.join(folder, 'log-prompts'), ''); // the fake agent logs every prompt from here on
   const prompts = () => (fs.existsSync(path.join(folder, 'prompts.log')) ? fs.readFileSync(path.join(folder, 'prompts.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((blocks) => !blocks.some((block) => block.startsWith('[p9] '))) : []);
   // A note from the agent waits for the next message; the user's message that follows says it is the user's.
   await a.tool('send_chat', { chat: made.chat, text: 'fyi', when: 'note' });

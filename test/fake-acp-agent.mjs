@@ -196,7 +196,8 @@ const connection = acp.connectAgent(stream, {
   async turn(params) {
     const { sessionId } = params;
     sprintRules(params.prompt);
-    appendFileSync('prompts.log', JSON.stringify(params.prompt.filter((block) => block.type === 'text').map((block) => block.text)) + '\n'); // every prompt's text blocks
+    // Every prompt's text blocks, only for a test that put log-prompts in the folder (a chat folder's listing stays its own).
+    if (existsSync('log-prompts')) appendFileSync('prompts.log', JSON.stringify(params.prompt.filter((block) => block.type === 'text').map((block) => block.text)) + '\n');
     const text = textOf(params.prompt);
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     for (const block of params.prompt) if (block.type === 'text' && block.text.startsWith(NOTE) && block.text.includes(']\n\n')) await say('note:' + block.text.slice(block.text.indexOf(']\n\n') + 3).trim());
