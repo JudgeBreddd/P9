@@ -39,8 +39,10 @@ export function createSprintFiles({ home }) {
   // file must still have, '' for one that must not exist, else 'changed' and the other writer's text kept (O97). The
   // check and the swap are one guarded step: the file is renamed aside (a writer after that makes a new file), checked
   // there, and the new text placed without replacing anything (placeNew), which fails if a writer made the file
-  // meanwhile. ponytail: a writer still holding the old file open is caught only up to the recheck after the placing;
-  // for that instant the file is absent to readers.
+  // meanwhile. A writer still holding the old file open is caught up to the recheck after the placing: theirs is put
+  // back and the save is a conflict. ponytail: one that writes after that recheck writes to a file with no name, the same
+  // as after any whole-file write (temp and rename); no check can see a write after its last read without a lock every
+  // writer takes, and agents take none (O101). For the instant of the swap the file is absent to readers.
   function write(lead, name, text, expect) {
     const file = fileOf(lead, name);
     if (!file || typeof text !== 'string' || text.length > MAX_FILE || !text.isWellFormed()) return false;

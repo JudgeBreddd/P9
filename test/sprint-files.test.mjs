@@ -555,3 +555,35 @@ test('Sprint files: a writer making the file while a failed save puts the old on
   assert.deepEqual(fs.readdirSync(folder).filter((f) => f.includes('.p9-')), [], 'no temp or aside files left');
   console.log('PASS O97 restore race');
 });
+
+test('Sprint files: an edit written through a handle opened before the save is kept with a conflict up to the save\'s last recheck; after it, as for any whole-file write, it reaches no name (O101)', { timeout: 10000 }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const files = createSprintFiles({ home: dir }), folder = path.join(dir, LEAD), file = path.join(folder, 'sprint.md');
+  files.ensure(LEAD);
+  // A writer (an agent's own editor) opened sprint.md before the page's save, and writes through that handle at one step.
+  const run = (step, expect = true) => {
+    files.write(LEAD, 'sprint.md', 'old');
+    const fd = fs.openSync(file, 'r+'), theirs = () => { fs.ftruncateSync(fd, 0); fs.writeSync(fd, 'theirs', 0); };
+    const real = { renameSync: fs.renameSync, linkSync: fs.linkSync };
+    // before: just after the save set the file aside; placed: just after the save's text was linked in at the name.
+    if (step === 'before') t.mock.method(fs, 'renameSync', (from, to) => { real.renameSync.call(fs, from, to); if (String(to).includes('.p9-old-')) theirs(); });
+    if (step === 'placed') t.mock.method(fs, 'linkSync', (from, to) => { real.linkSync.call(fs, from, to); if (String(from).includes('.p9-tmp-') && String(to) === file) theirs(); });
+    syncBuiltinESMExports();
+    let got;
+    try { got = files.write(LEAD, 'sprint.md', 'page', expect ? hashOf('old') : undefined); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    if (step === 'after') theirs();
+    fs.closeSync(fd);
+    return [got, files.read(LEAD, 'sprint.md')];
+  };
+  // Up to the last recheck: theirs stays at the name and the save is a conflict (409: the page keeps its own text).
+  assert.deepEqual(run('before'), ['changed', 'theirs'], 'written just after the save set the file aside');
+  assert.deepEqual(run('placed'), ['changed', 'theirs'], 'written just after the save placed its text');
+  // After the save's last step the handle points at a file that has no name any more: the same for the guarded save as
+  // for a plain whole-file write (temp file and rename, as every writer's own atomic save does). No check of P9's can
+  // see a write that lands after its last read of the file; only a lock every writer takes could, and agents take none.
+  assert.deepEqual(run('after'), [true, 'page'], 'guarded save, written after its last recheck');
+  assert.deepEqual(run('after', false), [true, 'page'], 'plain whole-file write, written after it');
+  assert.deepEqual(fs.readdirSync(folder).filter((f) => f.includes('.p9-')), [], 'no temp or aside files left');
+  console.log('PASS O101 pre-opened handle');
+});
