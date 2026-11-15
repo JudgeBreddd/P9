@@ -458,24 +458,60 @@ test('Sprint files: a lead write landing between the save\'s last check and its 
   console.log('PASS O97 guarded swap');
 });
 
-test('Sprint files: a save whose link fails for another reason throws and leaves the file at its name (O97 link error)', { timeout: 10000 }, (t) => {
+test('Sprint files: a save on a disk without hard links places its text by an exclusive copy; one that cannot place it throws and puts the old file back, or keeps it aside and names it (O97 link error)', { timeout: 10000 }, (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const files = createSprintFiles({ home: dir }), folder = path.join(dir, LEAD);
-  files.ensure(LEAD); files.write(LEAD, 'sprint.md', "the worker's newer file");
-  const realLink = fs.linkSync;
-  const save = (name, text, hash) => { try { return files.write(LEAD, name, text, hash); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); } };
-  // A link that fails for another reason (no hard links on this disk, a full disk): the save throws, and the file is
-  // back at its name with its text, never left only aside or deleted.
-  for (const only of [true, false]) {
-    t.mock.method(fs, 'linkSync', (from, to) => {
-      if (only && !String(from).includes('.p9-tmp-')) return realLink.call(fs, from, to);
-      throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' });
-    });
+  const files = createSprintFiles({ home: dir }), folder = path.join(dir, LEAD), file = path.join(folder, 'sprint.md');
+  files.ensure(LEAD); files.write(LEAD, 'sprint.md', 'old');
+  const real = { linkSync: fs.linkSync, copyFileSync: fs.copyFileSync }, fail = (code) => Object.assign(new Error(code), { code });
+  const mock = (name, fn) => t.mock.method(fs, name, (from, to, ...rest) => fn(String(from), () => real[name].call(fs, from, to, ...rest)));
+  const save = (text, hash) => {
     syncBuiltinESMExports();
-    let thrown = null; try { save('sprint.md', 'page', hashOf("the worker's newer file")); } catch (error) { thrown = error.code; }
-    assert.deepEqual([thrown, files.read(LEAD, 'sprint.md')], ['EPERM', "the worker's newer file"], `${only ? 'the save\'s link' : 'every link'} failing: threw ${thrown}, left: ${files.read(LEAD, 'sprint.md')}`);
-  }
+    try { return { got: files.write(LEAD, 'sprint.md', text, hash) }; } catch (error) { return { thrown: error.code, message: error.message }; } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  };
+  const now = () => files.read(LEAD, 'sprint.md');
+  // No hard links on this disk: the save lands by an exclusive copy.
+  mock('linkSync', () => { throw fail('EPERM'); });
+  let r = save('page', hashOf('old'));
+  assert.deepEqual([r.got, now()], [true, 'page'], `no links: ${JSON.stringify(r)}, left: ${now()}`);
+  // The save's copy fails too (a full disk): it throws, and the old file is back at its name.
+  mock('linkSync', () => { throw fail('EPERM'); });
+  mock('copyFileSync', (from, go) => { if (from.includes('.p9-tmp-')) throw fail('ENOSPC'); return go(); });
+  r = save('more', hashOf('page'));
+  assert.deepEqual([r.thrown, now()], ['ENOSPC', 'page'], `the save's copy failing: ${JSON.stringify(r)}, left: ${now()}`);
+  // Nothing can put it back: it stays aside with its bytes, and the error names where.
+  mock('linkSync', () => { throw fail('EPERM'); }); mock('copyFileSync', () => { throw fail('ENOSPC'); });
+  r = save('more', hashOf('page'));
+  const kept = fs.readdirSync(folder).filter((f) => f.includes('.p9-old-'));
+  assert.equal(kept.length, 1, `kept aside: ${kept}, ${JSON.stringify(r)}`);
+  assert.ok(r.message?.includes(kept[0]), `the error names it: ${JSON.stringify(r)}`);
+  assert.equal(fs.readFileSync(path.join(folder, kept[0]), 'utf8'), 'page');
+  fs.renameSync(path.join(folder, kept[0]), file);
   assert.deepEqual(fs.readdirSync(folder).filter((f) => f.includes('.p9-')), [], 'no temp or aside files left');
   console.log('PASS O97 link error');
+});
+
+test('Sprint files: a writer making the file while a failed save puts the old one back keeps its text (O97 restore race)', { timeout: 10000 }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const files = createSprintFiles({ home: dir }), folder = path.join(dir, LEAD), file = path.join(folder, 'sprint.md');
+  files.ensure(LEAD); files.write(LEAD, 'sprint.md', 'old');
+  const fail = (code) => Object.assign(new Error(code), { code });
+  // Forced: every link fails, the save's own text cannot be placed, and the worker writes the file just before the step
+  // that puts the old file back from aside (a rename or a copy): after any check that the name is free.
+  t.mock.method(fs, 'linkSync', () => { throw fail('EPERM'); });
+  for (const name of ['copyFileSync', 'renameSync']) {
+    const real = fs[name];
+    t.mock.method(fs, name, (from, to, ...rest) => {
+      if (name === 'copyFileSync' && String(from).includes('.p9-tmp-')) throw fail('ENOSPC');
+      if (String(from).includes('.p9-old-')) fs.writeFileSync(file, "the worker's newer file");
+      return real.call(fs, from, to, ...rest);
+    });
+  }
+  syncBuiltinESMExports();
+  let thrown = null;
+  try { files.write(LEAD, 'sprint.md', 'page', hashOf('old')); } catch (error) { thrown = error.code; } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.deepEqual([!!thrown, files.read(LEAD, 'sprint.md')], [true, "the worker's newer file"], `threw ${thrown}, left: ${files.read(LEAD, 'sprint.md')}`);
+  assert.deepEqual(fs.readdirSync(folder).filter((f) => f.includes('.p9-')), [], 'no temp or aside files left');
+  console.log('PASS O97 restore race');
 });
