@@ -88,7 +88,7 @@ export function createSprintFiles({ home }) {
     if (!linksWork(file)) return 'no-links';
     if (expect === '') return placeNew(temporary, file) ? true : 'changed';
     const aside = file + '.p9-old-' + randomUUID();
-    try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return 'changed'; throw error; } // deleted meanwhile
     const kept = () => { try { return hashOf(readFileSync(aside, 'utf8')) === expect; } catch { return false; } };
     let mine = false, newer = false;
     try {

@@ -493,6 +493,13 @@ test('Sprint files: a lead write landing between the save\'s last check and its 
   // Nothing in the way: the save lands, and no temp or aside file is left.
   assert.equal(files.write(LEAD, 'sprint.md', 'page', hashOf("the worker's newer file")), true);
   assert.equal(files.read(LEAD, 'sprint.md'), 'page');
+  // Deleted after the save's check, just before it sets the file aside: a conflict (409 with the files as they are now),
+  // not a refused request.
+  const realRename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => { if (String(to).includes('.p9-old-')) fs.unlinkSync(from); return realRename.call(fs, from, to); });
+  syncBuiltinESMExports();
+  const gone = save('sprint.md', 'more', hashOf('page'));
+  assert.deepEqual([gone, files.read(LEAD, 'sprint.md')], ['changed', null], `deleted meanwhile: the save returned ${gone}`);
   const left = [...fs.readdirSync(folder), ...fs.readdirSync(path.join(folder, 'notes'))].filter((f) => f.includes('.p9-'));
   assert.deepEqual(left, [], 'no temp or aside files left');
   console.log('PASS O97 guarded swap');
