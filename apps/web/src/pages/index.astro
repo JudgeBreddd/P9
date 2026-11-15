@@ -31,8 +31,9 @@ const markup = shell.replace('<!--black-hole-->', hole);
   <body>
     <div data-p9-island><Fragment set:html={markup} /></div>
     <script>
-      import { startShell } from '../shell-start';
-      startShell();
+      // A dynamic import, as the React island had: the page's load event does not wait for the shell's code, so a reload
+      // early in startup is not cut off mid-load (agent-setup.test.mjs Row 61 on a remote).
+      import('../shell-start').then(({ startShell }) => startShell());
     </script>
   </body>
 </html>

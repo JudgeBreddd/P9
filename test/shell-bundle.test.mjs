@@ -1,7 +1,8 @@
-// The desktop shell's bundle (phase 4, window-5, list 29). Measures only; it asserts that the shell page loads JS and comes
-// up, never a size, so the same file runs unchanged before and after a change. Logs "P9_BUNDLE <json>": every JS file the
+// The desktop shell's bundle (phase 4, window-5, list 29). Its one size assert is "P9_SCRIPTS" (the JS the page parses at
+// startup) against BUDGET; everything is logged first, so the file still measures main. Logs "P9_BUNDLE <json>": every JS file the
 // built shell page (apps/web/dist/index.html) loads, followed through its imports, with raw and gzip bytes; then one
-// launch per run x5 with "P9_SHELL_AT <json>" (below) and, on the last, "P9_SHOT shell <png base64>" so the shell's look can be compared side by side.
+// launch per run x5 with "P9_SHELL_AT <json>" (below) and, on the last, "P9_SHOT shell <png base64>" so the shell's look can be compared side by side,
+// and "P9_SCRIPTS <json>": the /_astro/ scripts the page has parsed, from Chrome's debugger, with raw bytes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
@@ -13,6 +14,8 @@ import { _electron } from '@playwright/test';
 import { daemon, root } from './helpers.mjs';
 
 const dist = path.join(root, 'apps/web/dist');
+// ponytail: one fixed budget, raw bytes of JS parsed at startup (827844 after window-5, about 1.5% headroom); raise it on purpose.
+const BUDGET = 840000;
 
 test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 300000 }, async (t) => {
   const html = readFileSync(path.join(dist, 'index.html'), 'utf8');
@@ -63,6 +66,17 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 3
       launches.push({ markup: from('markup'), mounted: from('mounted'), dcl: from('dcl'), load: from('load') });
       if (i === 4) {
         await page.waitForTimeout(1500);
+        // The size that counts: every /_astro/ script the page has parsed by now, from Chrome's debugger (Debugger.enable
+        // reports the scripts already parsed). The walk above reads imports from the files and missed both terminal.*.js
+        // (main) and a backtick import() (after #116); this list cannot miss a script the page runs.
+        const cdp = await app.context().newCDPSession(page), parsed = new Set();
+        cdp.on('Debugger.scriptParsed', (e) => { const m = /\/_astro\/([^/?#]+\.js)$/.exec(e.url); if (m) parsed.add(m[1]); });
+        await cdp.send('Debugger.enable'); await page.waitForTimeout(500); await cdp.detach();
+        const scripts = [...parsed].map((file) => ({ file, raw: readFileSync(path.join(dist, '_astro', file)).length })).sort((a, b) => b.raw - a.raw);
+        const scriptsRaw = scripts.reduce((n, f) => n + f.raw, 0);
+        console.log('P9_SCRIPTS ' + JSON.stringify({ raw: scriptsRaw, files: scripts.length, scripts }));
+        assert.ok(scripts.length > 0, 'the shell page parsed JS from /_astro/');
+        assert.ok(scriptsRaw <= BUDGET, `the shell page parsed ${scriptsRaw} bytes of JS at startup, over the budget of ${BUDGET}`);
         const png = await page.screenshot({ animations: 'disabled' });
         if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT shell ' + png.toString('base64'));
         assert.ok(await page.locator('[data-p9-island]').count() === 1, 'the shell markup is on the page once');
