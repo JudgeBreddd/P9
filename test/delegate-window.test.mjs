@@ -101,6 +101,9 @@ test('Delegate window: workers indented under their chat and folded past three; 
   await page.waitForTimeout(500);
   assert.ok((await listed(page)).includes('1:' + kids[1]), 'the open worker was folded away');
 
+  // Window-1: the parent's row node stays the parent's through the redraws the workers' requests cause (with the fold row
+  // among the rows, each redraw used to turn it into Kid 1's row, so a click on the parent opened Kid 1).
+  await page.evaluate((id) => { window.__w1row = document.querySelector(`#navList .row[data-chat="${id}"]`); }, parent);
   // Two workers wait at once: an approval in Kid 1, a question in Kid 2. Both are drawn in the parent's chat.
   await a.tool('send_chat', { chat: kids[0], text: 'permission' });
   await a.tool('send_chat', { chat: kids[1], text: 'ask' });
@@ -109,6 +112,7 @@ test('Delegate window: workers indented under their chat and folded past three; 
   const pane = page.locator(`.pane[data-id="${parent}"]`);
   const card = (id) => pane.locator(`.pending[data-ask="${id}"][data-ask-sub]`);
   await card(kids[0]).waitFor({ timeout: 15000 }); await card(kids[1]).waitFor({ timeout: 15000 });
+  assert.deepEqual(await page.evaluate(() => [window.__w1row.isConnected, window.__w1row.dataset.chat]), [true, parent], 'the parent\'s row node became another chat\'s row');
   assert.match(await card(kids[0]).innerText(), /Worker needs approval[\s\S]*Write marker[\s\S]*Kid 1/i);
   assert.match(await card(kids[1]).innerText(), /Worker asks[\s\S]*Pick a colour[\s\S]*Kid 2/i);
   await shot(page, 'parent-cards');
