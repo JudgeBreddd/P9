@@ -4,10 +4,13 @@ import { chromium } from '@playwright/test';
 import { enrollDevice } from './helpers.mjs';
 
 // A phone-sized browser on the phone page, signed in.
-export async function phone(t, server, { touchScreen = false } = {}) {
+// Service workers are blocked unless a test asks for them: Playwright's page.route never sees a request that goes through a
+// service worker, and the phone's worker takes the page over at a time of its own (clients.claim), so a stubbed route
+// would sometimes be skipped and the request would reach the real daemon (O62, L1b).
+export async function phone(t, server, { touchScreen = false, serviceWorkers = 'block' } = {}) {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ hasTouch: touchScreen, viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ serviceWorkers, hasTouch: touchScreen, viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send('WebAuthn.enable');

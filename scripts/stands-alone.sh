@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 PAT='_tyler|status\.json|plan\.md|_private|/ICM[/]|workspace-hub|hindsight|llm.vault|needs.you|icm-|ICM workspace'
 BASE=scripts/stands-alone-baseline.txt
 scan() {
-  grep -rnoiE "$PAT" --include='*.mjs' --include='*.ts' --include='*.js' --include='*.html' --include='*.sh' --include='*.ps1' apps packages 2>/dev/null \
+  grep -rnoiE "$PAT" --include='*.mjs' --include='*.ts' --include='*.tsx' --include='*.json' --include='*.css' --include='*.js' --include='*.html' --include='*.sh' --include='*.ps1' apps packages 2>/dev/null \
     | grep -vE 'node_modules|\.test\.|/test/|/dist/|\.astro/' | awk -F: '{print $1" "tolower($3)}' | sort | uniq -c | awk '{print $2" "$3" "$4" "$1}'
 }
 if [ "${1:-}" = "--baseline" ]; then scan > "$BASE"; echo "baseline: $(wc -l < "$BASE") file+pattern rows"; exit 0; fi

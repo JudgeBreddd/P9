@@ -81,6 +81,24 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   assert.ok(next.hit);
 });
 
+// phone-1 (2026-11-15): "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
+// desktop. The decline ends the turn as cancelled; an approve followed by the same failure still shows it.
+test('declining the plan ends the turn as cancelled, not as an error', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  let after = 0;
+  for (const optionId of ['reject', 'exit-plan-bypass']) {
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'plan decline' });
+    const { hit: approval, cursor } = await until(instance, (event) => event.conversation === id && event.type === 'approval', after);
+    assert.equal(approval.data.toolCall.kind, 'switch_mode');
+    assert.equal((await call(instance, `/chat/${id}/answer`, 'POST', { request: approval.data.request, answer: { optionId } })).status, 200);
+    const end = await until(instance, (event) => event.conversation === id && (event.type === 'turn-end' || event.type === 'error'), cursor);
+    if (optionId === 'reject') assert.deepEqual([end.hit.type, end.hit.data.stopReason], ['turn-end', 'cancelled'], JSON.stringify(end.hit));
+    else assert.match(end.hit.type === 'error' ? end.hit.data.message : JSON.stringify(end.hit), /^Internal error: \[ede_diagnostic\]/);
+    after = end.cursor;
+  }
+});
+
 test('approvals and questions are answered only with options and fields the agent offered', async (t) => {
   const instance = await start(t);
   const id = await create(instance);

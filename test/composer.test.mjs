@@ -83,7 +83,7 @@ for (const provider of ['claude', 'codex']) {
     assert.ok(held >= 0 && held < done && done < user, 'held while the tool call ran, steered after it ended');
     assert.deepEqual([all[user].data.steered, all[user].data.held, all[held].data.when], [true, [all[held].data.id], 'steer']);
     assert.equal(await steers(instance), 'mid\n', 'exactly one steer');
-    assert.equal(await pane.locator('.queue [data-held]').count(), 0);
+    await pane.locator('.queue [data-held]').first().waitFor({ state: 'detached', timeout: 5000 }); // the window drops it on its next poll
     console.log('PASS CP1 ' + provider + ': a message sent during a tool call waited for it to end, then went into the turn once');
   });
 
@@ -114,7 +114,7 @@ for (const provider of ['claude', 'codex']) {
       await until(async () => (await said(instance, id, 'turn-end')).some((e) => e.data.unprompted), 'that turn ended after 10 s of quiet', 20000);
     } else await until(() => agentSaid('echo:mid'), 'refused as a steer, mid went as the next prompt', 20000);
     await until(async () => (await pane.locator('.working').count()) === 0, 'the chat no longer shows working', 15000);
-    assert.equal(await pane.locator('.queue [data-held]').count(), 0);
+    await pane.locator('.queue [data-held]').first().waitFor({ state: 'detached', timeout: 5000 }); // the window drops it on its next poll
     console.log('PASS CP8 ' + provider + ': a steer that crossed the turn\'s end landed and the chat went idle');
   });
 

@@ -383,7 +383,7 @@ const build = perChat((events) => {
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
         const image = type === 'agent' && imgSrc(data.content); if (image) (blocks.at(-1)!.images ??= []).push(image);
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
-      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) });
+      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) ?? (data.kind === 'switch_mode' ? '' : undefined) });
       else if (update === 'tool_call_update') {
         const tool = blocks.find((block) => block.kind === 'tool' && block.id === data.toolCallId);
         if (tool) {
@@ -391,11 +391,13 @@ const build = perChat((events) => {
           if (typeof data.title === 'string' && data.title) tool.text = data.title;
           const more = toolText(data); if (more) tool.detail = ((tool.detail ? tool.detail + '\n' : '') + more).slice(0, DETAIL_CAP);
           if (data.content) tool.images = toolImages(data.content);
+          // phone-2: Claude's plan call arrives empty and its plan comes in this update (ledger 409673-409674).
+          if (tool.plan !== undefined) tool.plan = artPlan({ ...data, kind: 'switch_mode' }) ?? tool.plan;
         }
       }
     }
     else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
-    else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [] });
+    else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [], plan: artPlan((data.toolCall ?? {}) as Json) });
     else if (kind === 'answered') {
       const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
       if (asked) asked.request = undefined;
@@ -426,7 +428,9 @@ function blockHtml(block: Block) {
   if (kind === 'ask' && !block.closed) return `<article data-kind="ask" class="msg ask open"><div>${escape(block.text)}</div>${questionForm(String(block.id), block.form ?? null)}</article>`;
   if (kind === 'approval' || kind === 'ask') {
     const open = kind === 'ask' ? !block.closed : !!block.request;
-    return `<article data-kind="${kind}" class="msg ask${open ? ' open' : ''}"><div>${escape(block.text)}</div>${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
+    // phone-2: an open plan approval shows the plan itself above its choices (rendered as a reply is), and opens whole.
+    const plan = block.request && block.plan ? `<div class="ask-plan msg md">${mdReply.parse(block.plan) as string}</div><button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : '';
+    return `<article data-kind="${kind}" class="msg ask${open ? ' open' : ''}"><div>${escape(block.text)}</div>${plan}${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
       `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`;
   }
   return `<article data-kind="${kind}" class="note">${escape(block.text)}</article>`;
@@ -541,6 +545,25 @@ function renderList() {
   if (seeded) keepRead();
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
+// O107, O108: the bar is patched by position instead of rewritten, so the back, model and Stop buttons stay the same nodes and
+// a keyboard user's focus stays on them. ponytail: the desktop's controller.mjs sync without its form handling (the bar has no
+// form controls); importing that module would pull the desktop into the phone bundle.
+function patchBar(old: Node, next: Node) {
+  const olds = [...old.childNodes], news = [...next.childNodes];
+  news.forEach((n, i) => {
+    const o = olds[i];
+    if (!o) old.appendChild(n);
+    else if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) old.replaceChild(n, o);
+    else if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; }
+    else if (!o.isEqualNode(n)) {
+      const e = o as Element, f = n as Element;
+      for (const { name } of [...e.attributes]) if (!f.hasAttribute(name)) e.removeAttribute(name);
+      for (const { name, value } of [...f.attributes]) if (e.getAttribute(name) !== value) e.setAttribute(name, value);
+      patchBar(o, n);
+    }
+  });
+  olds.slice(news.length).forEach((n) => (n as ChildNode).remove());
+}
 // The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
 let barSig = '';
 let agentLists: Record<string, unknown> = {}; // O47: each agent's lists as the daemon keeps them (GET /chat)
@@ -549,7 +572,9 @@ function chatBar(id: string, run: string) {
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
   const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
-  barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
+  barSig = html; const next = document.createElement('template'); next.innerHTML = html;
+  patchBar(one('[data-bar="chat"]'), next.content); // O107, O108: a later draw (the folder answer, the model's name, the run state) keeps a focused button
+  online();
 }
 // Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
 // so the browser's own back, the iOS edge swipe included, returns to the list.
@@ -1859,15 +1884,19 @@ async function refreshing(button: HTMLButtonElement, load: () => Promise<unknown
 // daemon hands over only a vendor's sign-in URL and Codex's code; the link is set as a property and opens only on a tap.
 type SignIn = { signedIn: boolean; running: boolean; url: string | null; code: string | null; unsupported: boolean; exit: number | null };
 const SIGN_IN: [agent: 'claude' | 'codex', name: string, page: string][] = [['claude', 'Claude', 'Claude'], ['codex', 'Codex', 'OpenAI']];
-let signInShown = '', signInTimer = 0, signInData: Record<string, SignIn> | null = null;
+let signInShown = '', signInTimer = 0, signInAsked = 0, signInData: Record<string, SignIn> | null = null;
 const signInNote: Record<string, string> = {};
 async function loadSignIn() {
   clearTimeout(signInTimer);
-  const box = one('#signIn');
+  const box = one('#signIn'), asked = ++signInAsked;
   // Unreachable after a first answer: the cards stay as last seen (a code typed in the box with them) and say so.
-  let stale = false;
-  try { signInData = await request('/phone/sign-in'); }
+  let stale = false, answer: Record<string, SignIn> | undefined;
+  try { answer = await request('/phone/sign-in'); }
   catch { stale = true; }
+  // O68 c: answers can come back out of order (the page's first-load ask can land after a later one), and an older
+  // answer drew over a newer one. Only the newest ask is drawn; it also sets the next poll.
+  if (asked !== signInAsked) return;
+  if (answer) signInData = answer;
   const data = signInData;
   if (!data) { box.innerHTML = '<article class="card warn"><h2>Sign-in unavailable</h2><p>The daemon did not answer.</p></article>'; signInShown = ''; return; }
   const key = JSON.stringify([data, signInNote, stale]);
