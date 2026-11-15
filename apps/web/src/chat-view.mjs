@@ -334,15 +334,16 @@ const ring = (status, done, total) => { const R = 10, C = +(2 * Math.PI * R).toF
 const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e && { k, e, kind: k.pending, at: e.at ?? null }; };
 function sprintCard(s) {
   if (s.stub) return '';
-  const workers = kin(s.id); if (!workers.length) return '';
+  // 712: an archived worker leaves the card, as it leaves the sidebar (listedChats). kin() kept it, so archive_chat changed nothing here.
+  const workers = kin(s.id).filter(k => !k.archived); if (!workers.length) return '';
   const project = projectOf(s, (outer.S.projects || []).filter(p => !p.archived));
   const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
   const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.task?.item ? 1 : 0, passed = st === 'passed' ? 1 : 0;
-    return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button></li>` }; });
+    return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button>${st === 'stopped' ? `<button type="button" class="sp-clear" data-sprint-clear="${esc(k.id)}" title="Clear from the card (archives the chat)" aria-label="Clear ${esc(k.title)}">×</button>` : ''}</li>` }; });
   const asks = workers.filter(k => k.pending && k.state === 'running').map(askOf).filter(Boolean).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
   const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
   return `<aside class="sprint" data-sprint data-folded="${folded}" data-auto="${choice === undefined}" data-open-asks="${asks.length}" aria-label="Sprint">
-    <div class="sp-headbar"><button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button><button type="button" class="sp-files" data-sprint-files ${project ? 'title="Open sprint files"' : 'disabled title="This chat has no project"'}>Files</button></div>
+    <div class="sp-headbar"><button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button>${count('stopped') > 1 ? `<button type="button" class="sp-files" data-sprint-clear="*" title="Archive every stopped worker">Clear ${count('stopped')} stopped</button>` : ''}<button type="button" class="sp-files" data-sprint-files ${project ? 'title="Open sprint files"' : 'disabled title="This chat has no project"'}>Files</button></div>
     <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>
     ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
   </aside>`;
@@ -698,6 +699,11 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
     p.querySelectorAll('[data-sprint-fold]').forEach(b => b.onclick = () => { SPRINT.folded.set(s.id, b.getAttribute('aria-expanded') === 'true'); renderChats(); });
     p.querySelectorAll('[data-sprint-files]').forEach(b => b.onclick = () => outer.openProject?.(s.project, s.id));
+    // 712: clearing a worker archives its chat (the daemon's archive, so every window and the sidebar agree; Archived view undoes it).
+    p.querySelectorAll('[data-sprint-clear]').forEach(b => b.onclick = async () => {
+      const ws = b.dataset.sprintClear === '*' ? kin(s.id).filter(k => !k.archived && k.state === 'stopped') : outer.S.sessions.filter(k => k.id === b.dataset.sprintClear);
+      for (const k of ws) { const r = await outer.liveChat.call('archiveChat', { id: k.id, archived: true }); if (r.status === 200) k.archived = true; }
+      outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-open]').forEach(b => b.onclick = () => { show(b.dataset.sprintOpen); outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-ask]').forEach(b => b.onclick = () => p.querySelector(`[data-ask="${CSS.escape(b.dataset.sprintAsk)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => outer.restartP9(b));

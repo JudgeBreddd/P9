@@ -413,3 +413,54 @@ test('O109: a worker report closes into the chat and only a new one comes back; 
   assert.deepEqual(errors, []);
   console.log('PASS O109 report+step: step named on screen; report closed into the chat, stayed closed after a reload, a new one pinned again');
 });
+
+// 712 (Tyler, 2026-11-14: "we cannot clear old workers out of the sprint box top right"): an archived worker leaves the card,
+// as it leaves the sidebar; a stopped worker can be cleared from the card itself (one, or all stopped at once), and stays
+// cleared after a reload. The card held every child chat whatever its archive (kin() in the card had no archived filter).
+test('712: old workers clear out of the sprint box: archived ones leave it, a stopped one clears from the card, all stopped clear at once', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const kids = [];
+  for (let i = 0; i < 5; i++) { const made = await a.tool('open_chat', { text: 'first', item: 'W' + i }); await a.done(made.chat); kids.push(made.chat); }
+  for (const id of kids.slice(0, 4)) assert.equal((await a.tool('stop_chat', { chat: id, close: true })).action, 'stopped'); // the fifth stays: a live worker keeps its row and has no clear
+  // The way archive_chat clears one, before the window opens (Tyler's try on 2026-11-14).
+  await call(instance, `/chat/${kids[0]}/archive`, 'POST', { archived: true });
+  const { app, page, errors } = await launch(t, instance);
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
+  await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  const pane = page.locator(`.pane[data-id="${parent}"]`), card = pane.locator('.sprint');
+  const row = (id) => card.locator(`[data-sprint-open="${id}"]`);
+  await row(kids[4]).waitFor({ state: 'attached', timeout: 20000 });
+  if (await card.getAttribute('data-folded') === 'true') await card.locator('[data-sprint-fold]').click();
+  await row(kids[1]).waitFor({ timeout: 5000 });
+  await shot(page, 'o712-before');
+  console.log('O712 card ' + await card.locator('.sp-sum').innerText());
+  assert.equal(await row(kids[0]).count(), 0, 'an archived worker is still on the card');
+  assert.equal(await card.locator('.sp-sum').innerText(), '4 workers');
+  // One stopped worker cleared from its row; the live one has no clear.
+  assert.equal(await card.locator(`[data-sprint-clear="${kids[4]}"]`).count(), 0, 'a live worker offers a clear');
+  await card.locator(`[data-sprint-clear="${kids[1]}"]`).click({ timeout: 5000 });
+  await until(async () => await row(kids[1]).count() === 0, 'the cleared worker left the card');
+  await shot(page, 'o712-one-cleared');
+  // The rest of the stopped ones at once; the live one stays.
+  await card.locator('[data-sprint-clear="*"]', { hasText: 'Clear 2 stopped' }).click({ timeout: 5000 });
+  await until(async () => await row(kids[2]).count() === 0 && await row(kids[3]).count() === 0, 'all stopped workers left the card');
+  assert.equal(await card.locator('.sp-sum').innerText(), '1 worker');
+  const archived = (await call(instance, '/chat')).conversations.filter((c) => kids.includes(c.id) && c.archived).map((c) => c.id).sort();
+  assert.deepEqual(archived, kids.slice(0, 4).sort(), 'clearing archives the chat in the daemon');
+  // A reload keeps them cleared, and the text box is still on screen with the card.
+  await page.reload();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await row(kids[4]).waitFor({ state: 'attached', timeout: 20000 });
+  for (const id of kids.slice(0, 4)) assert.equal(await row(id).count(), 0, 'a cleared worker came back after a reload');
+  const box = await pane.locator('.composer textarea').evaluate((el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }; });
+  assert.ok(box.top >= 0 && box.bottom <= box.height && box.hit, 'the text box is on screen: ' + JSON.stringify(box));
+  await shot(page, 'o712-reloaded');
+  assert.deepEqual(errors, []);
+  console.log('PASS 712: archived worker off the card; one stopped cleared by its x, two by Clear 2 stopped; archived in the daemon; still gone after a reload; text box on screen');
+});
