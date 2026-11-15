@@ -144,7 +144,8 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     const card = (id) => page.locator(`#mdlBody [data-card][data-tile="${id}"]`);
     const inbox = card('inbox').frameLocator('iframe');
     // A draw of the whole window on demand: the section's text changes on disk and the rail's Mission button reads it again.
-    const redraw = async (text) => { await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [{ ...space().sections[0], text }] }));
+    const redraw = async (text, edit = () => {}) => { const s = { ...space().sections[0], text }; edit(s);
+      await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [s] }));
       await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
       await page.locator('#mdlBody [data-space-text]', { hasText: text }).waitFor({ timeout: 10000 }); };
     await inbox.locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
@@ -210,6 +211,9 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       await redraw('Custom cards, drawn again.');
       assert.deepEqual(await frames(), Array(6).fill('kept'), 'a changed section keeps every card frame too');
       assert.match(await card('throws').locator('.card-note').innerText(), /card boom/, 'a kept card still says the error it stopped with');
+      await redraw('Custom cards, one renamed.', (s) => { s.cards[0] = { ...s.cards[0], title: 'Messages' }; });
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a renamed card keeps its frame');
+      assert.equal(await card('inbox').locator('iframe').getAttribute('title'), 'Messages', 'the kept frame takes the new name');
       // Where an element cannot move without reloading (no Element.moveBefore: phone Safari, older browsers), each draw makes
       // the frames again, and the last answer still reaches the new frame.
       await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });

@@ -684,12 +684,12 @@ function sectionBody(m, body, g, o) {
   // closed with Back (which wrote the body) the frames are made fresh, as before. Without moveBefore every draw makes them again.
   const look = c => m.cardHtml[c.id]?.html + document.documentElement.classList.contains('dark');
   const keep = typeof body.moveBefore !== 'function' ? [] : (sp?.cards || []).filter(c => body.contains(m.frames[c.id]) && m.made?.[c.id] === look(c))
-    .map(c => { const f = m.frames[c.id], old = f.closest('[data-card]'); body.parentNode.moveBefore(f, body); return [c.id, f, old.dataset.rendered]; });
+    .map(c => { const f = m.frames[c.id], old = f.closest('[data-card]'); body.parentNode.moveBefore(f, body); return [c, f, old.dataset.rendered]; });
   const fresh = o.write(body, boxes.map(b => !b.box ? b.html : `<${b.box === 'mlist' ? 'ul' : 'div'} class="${b.box}">${b.html}</${b.box === 'mlist' ? 'ul' : 'div'}>`).join(''));
-  for (const [id, f, was] of keep) { // with the card's state: rendered or not, and the error it stopped with
+  for (const [{ id, title }, f, was] of keep) { // with the card's state: rendered or not, and the error it stopped with
     const box = body.querySelector(`[data-card][data-tile="${CSS.escape(id)}"]`);
     if (!box) { f.remove(); continue; }
-    box.querySelector('.card-frame').moveBefore(f, null);
+    box.querySelector('.card-frame').moveBefore(f, null); f.title = title; // a renamed card keeps its frame; the frame's name follows
     if (was !== undefined) box.dataset.rendered = was;
     // A card that throws while it draws says error and then rendered, so the error is kept on m, not read off the state.
     if (m.cardErr?.[id]) box.querySelector('.card-note').textContent = m.cardErr[id];
