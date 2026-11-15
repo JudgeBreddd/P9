@@ -8,7 +8,7 @@
   },
   "main": "apps/desktop/start.cjs",
   "type": "module",
-  "packageManager": "pnpm@10.34.6",
+  "packageManager": "pnpm@12.20.0",
   "engines": {
     "node": "26.10.0"
   },
@@ -226,25 +226,6 @@
       "allowToChangeInstallationDirectory": false,
       "packElevateHelper": false,
       "include": "scripts/installer.nsh"
-    }
-  },
-  "pnpm": {
-    "overrides": {
-      "@peculiar/x509": "3.1.0",
-      "@peculiar/asn1-android": "3.0.0",
-      "@peculiar/asn1-asym-key": "3.0.0",
-      "@peculiar/asn1-cms": "3.0.0",
-      "@peculiar/asn1-csr": "3.0.0",
-      "@peculiar/asn1-ecc": "3.0.0",
-      "@peculiar/asn1-pfx": "3.0.0",
-      "@peculiar/asn1-pkcs8": "3.0.0",
-      "@peculiar/asn1-pkcs9": "3.0.0",
-      "@peculiar/asn1-rsa": "3.0.0",
-      "@peculiar/asn1-schema": "3.0.0",
-      "@peculiar/asn1-x509": "3.0.0",
-      "@peculiar/asn1-x509-attr": "3.0.0",
-      "@peculiar/asn1-x509-post-quantum": "3.0.0",
-      "asn1js": "4.0.0"
     }
   }
 }
