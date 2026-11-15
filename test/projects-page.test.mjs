@@ -599,7 +599,7 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.workspace, 'site'));
   const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
-  const { page, errors } = await launch(t, instance);
+  const { app, page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
   await page.locator('[data-pj="spnew"]').click();
   await page.locator('#pjAsk input').fill('Docs sprint');
@@ -649,6 +649,23 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await pick('review', 'claude');
   await until(async () => (await roles())[1].provider === 'claude', 'the change made again saved');
   assert.equal((await roles())[2].mode, 'Read-only', 'the lead\'s mode kept');
+  // A second pick made while the first one's save is still out: the first save's redraw sets every pick back to the file,
+  // and the second save, queued behind it, still writes the second pick. The next roles.json save is held in the main
+  // process until the test lets it go.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    let hold = true; globalThis.letGo = null;
+    ipcMain.handle('p9:chat', async (e, action, body, ...rest) => {
+      if (hold && action === 'sprintFile' && body?.name === 'roles.json') { hold = false; await new Promise((go) => { globalThis.letGo = go; }); }
+      return h(e, action, body, ...rest);
+    });
+  });
+  await pick('lead', 'codex');
+  await until(() => app.evaluate(() => !!globalThis.letGo), 'the first save held');
+  await pick('review', 'codex');
+  await app.evaluate(() => globalThis.letGo());
+  await until(async () => (await roles())[1].provider === 'codex', async () => 'the second pick, made while the first save was held, saved; on disk ' + JSON.stringify(await roles()));
+  assert.deepEqual((await roles()).slice(0, 2).map((r) => r.provider), ['codex', 'codex'], 'both picks on disk');
   await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.match(await page.locator('[data-pj="spfile"]', { hasText: /^rules\.md/ }).textContent(), /none yet, P9's defaults are sent/);

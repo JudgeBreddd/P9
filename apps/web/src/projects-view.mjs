@@ -276,9 +276,12 @@ export function installProjects(o, api) {
     if (cur?.id === project.id) { renderPage(); fillBox(false); } // the focus stays on the pick just used
     return r.status === 200;
   }
+  // The pick is read now, not when its save runs: a save queued behind another runs after that one's redraw has set
+  // every pick back to the file.
   page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-spr]')) return;
-    saveRoles(x.dataset.lead, rs => { const r = rs.find(y => y.key === x.dataset.role); if (!r) return false;
-      if (x.dataset.spr === 'agent') Object.assign(r, { provider: x.value, model: '', effort: '' }); else r[x.dataset.spr] = x.value; }); });
+    const { lead, role, spr } = x.dataset, value = x.value;
+    saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r) return false;
+      if (spr === 'agent') Object.assign(r, { provider: value, model: '', effort: '' }); else r[spr] = value; }); });
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
     const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) return failed(r);
     cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
