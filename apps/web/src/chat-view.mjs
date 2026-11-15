@@ -483,12 +483,22 @@ function closePill(back = true) {
 }
 // Review minor (2026-11-05): an open menu follows its chat while it re-renders (a queued mode applied, the agent's new model or
 // effort list): morph keeps the items by position, so the focused one keeps its focus. A chat no longer shown closes it.
+const itemKey = el => [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => a.name + '=' + a.value).join(' ');
 function refreshPill() {
   if (!PM.sid) return;
   const s = outer.S.sessions.find(x => x.id === PM.sid), btn = s && pillBtn();
   if (!btn) return closePill(false);
   PM.btn = btn;
-  const html = pillMenuHtml(s, PM.kind); if (html !== PM.html) { const retainFocus = document.activeElement === btn || pmRoot().contains(document.activeElement); PM.html = html; outer.morph(pmRoot(), html); if (retainFocus && !pmRoot().contains(document.activeElement)) (pmRoot().querySelector('[aria-checked="true"]') || pmItems()[0])?.focus(); }
+  const html = pillMenuHtml(s, PM.kind); if (html === PM.html) return;
+  // O74: morph keeps rows by position, so a row coming or going above the focused one moved focus onto another value (a list
+  // read ending under an open Model menu drops its "Reading…" note; Enter then picked the row below). Focus follows the
+  // value: the row with the same data-* attributes, or, when that value is gone, the row now at its position (the nearest).
+  const items = pmItems(), at = items.indexOf(document.activeElement), key = at >= 0 && itemKey(items[at]);
+  const retainFocus = document.activeElement === btn || pmRoot().contains(document.activeElement);
+  PM.html = html; outer.morph(pmRoot(), html);
+  const now = pmItems();
+  if (key) (now.find(i => itemKey(i) === key) || now[Math.min(at, now.length - 1)])?.focus();
+  else if (retainFocus && !pmRoot().contains(document.activeElement)) (pmRoot().querySelector('[aria-checked="true"]') || now[0])?.focus();
 }
 // note 7: a mode picked mid-turn shows at once (queued) but applies when the turn ends (turnEnd). The loosened modes ask first
 // (looseOk, red); the last pick is kept per agent for new chats (startMode), Codex's Plan is not a sandbox mode so it is not.
