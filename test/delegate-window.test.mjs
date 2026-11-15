@@ -319,8 +319,11 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   // coordinator's and the workers' notes did.
   const state = async () => (await call(instance, '/chat')).conversations.find((c) => c.id === parent).state;
   await until(async () => await state() !== 'turn', 'the lead is idle');
-  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'tools 20' });
-  await until(async () => await state() === 'turn', 'the lead is working');
+  const started = await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'tools 20' });
+  try { await until(async () => await state() === 'turn', 'the lead is working'); } catch (error) { // what the daemon did instead
+    const last = (await events(instance, parent)).slice(-20).map((e) => e.type + ':' + JSON.stringify(e.data).slice(0, 80));
+    assert.fail(error.message + ' | prompt answered ' + JSON.stringify(started) + ' | state ' + await state() + ' | last events ' + last.join(' || '));
+  }
   for (let i = 1; i <= 30; i++) assert.equal((await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'Queued note ' + i + ': ' + 'x'.repeat(80), when: 'queue' })).when, 'queue');
   const { app, page, errors } = await launch(t, instance);
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
@@ -332,16 +335,34 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   await until(async () => await pane.locator('[data-held]').count() >= 30, 'all 30 waiting messages drawn');
   const waiting = await pane.locator('[data-held]').count();
   await pane.locator('.sp-row').first().waitFor({ timeout: 20000 }); // the sprint card: the lead has a worker
-  await page.waitForTimeout(500);
+  // The text box is on screen, uncovered and takes focus, measured once the layout has stopped moving.
   const box = pane.locator('.composer textarea');
-  const seen = await box.evaluate((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }; });
-  await shot(page, 'o109-busy-lead');
-  console.log('O109 composer ' + JSON.stringify(seen));
-  assert.ok(seen.bottom <= seen.height && seen.top >= 0 && seen.hit, 'the text box is on screen and nothing covers it: ' + JSON.stringify(seen));
-  await box.click({ timeout: 5000 });
-  assert.equal(await box.evaluate((el) => document.activeElement === el), true, 'the text box takes focus');
-  // The strip says how many wait, and the user can still take one back.
+  const onScreen = async (name) => {
+    const measure = () => box.evaluate((el) => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => { const r = el.getBoundingClientRect();
+      done({ top: Math.round(r.top), bottom: Math.round(r.bottom), height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }); }))));
+    let seen = await measure();
+    for (let i = 0; i < 20; i++) { await page.waitForTimeout(250); const again = await measure(); if (JSON.stringify(again) === JSON.stringify(seen)) break; seen = again; }
+    await shot(page, 'o109-' + name);
+    console.log('O109 composer ' + name + ' ' + JSON.stringify(seen));
+    assert.ok(seen.bottom <= seen.height && seen.top >= 0 && seen.hit, name + ': the text box is on screen and nothing covers it: ' + JSON.stringify(seen));
+    await box.click({ timeout: 5000 });
+    assert.equal(await box.evaluate((el) => document.activeElement === el), true, name + ': the text box takes focus');
+  };
+  // Folded: the strip says how many wait.
   assert.equal(await pane.locator('.queue > summary').innerText(), waiting + ' queued');
+  assert.equal(await pane.locator('.queue').evaluate((el) => el.open), false);
+  await onScreen('folded');
+  // Open: all of them listed, each with its Take back, and the box still on screen.
+  await pane.locator('.queue > summary').click();
+  assert.equal(await pane.locator('.queue').evaluate((el) => el.open), true);
+  assert.equal(await pane.locator('.queue [data-unhold]').count(), waiting);
+  await onScreen('open');
+  // After a reload, the same.
+  await page.reload();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await until(async () => await pane.locator('[data-held]').count() >= 30, 'the waiting messages drawn again after a reload');
+  await onScreen('reloaded');
   // The turn ends by itself: the waiting messages go (one sender, so one prompt) and the strip empties.
   // Regression only: main already drops a delivered row (chat-view applyChat 'user'); this keeps it so with the strip.
   await until(async () => await pane.locator('[data-held]').count() === 0, 'no delivered message still reads Queued', 90000);
