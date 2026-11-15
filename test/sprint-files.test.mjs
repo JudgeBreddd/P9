@@ -401,6 +401,9 @@ test('Sprint files: O82 send_chat key re-keys a reused worker, so that message a
   assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x', when: 'note', key: 'phone' })).error, 'request-refused');
   assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x', key: 'Phone!' })).error, 'request-refused');
   assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === old.chat).key, 'review');
+  // A message the chat refuses (over the length limit once the notice is added) leaves the old key, so a retry still tells.
+  assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x'.repeat(100_000), key: 'phone' })).error, 'chat-not-sendable');
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === old.chat).key, 'review');
   // Re-keyed: this message carries the phone rules, not the reviewer's, and tells the worker where its notes are.
   const sent = await a.tool('send_chat', { chat: old.chat, text: 'go', key: 'phone' });
   assert.equal(sent.error, undefined, JSON.stringify(sent));

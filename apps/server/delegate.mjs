@@ -502,6 +502,8 @@ export function createDelegate({ chat, allowed }) {
       told = `[P9: your role key is now ${args.key}: your rules come from roles/${args.key}.rules.md and your notes file is notes/${args.key}.md. Your notes so far are in notes/${target.key ?? args.chat}.md.]\n\n`;
     }
     const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
+    // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
+    if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };
     return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn' };
   }
