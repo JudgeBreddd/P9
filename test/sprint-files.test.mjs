@@ -422,3 +422,30 @@ test('Sprint files: O82 send_chat key re-keys a reused worker, so that message a
   assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x', key: 'daemon' })).error, 'key-taken');
   console.log('PASS O82: re-keyed worker got the new role\'s rules on that message and the next; note, bad key and taken key refused');
 });
+
+test('Sprint files: a save\'s reply lists the file as it wrote it, so a writer landing right after the rename is refused at the next save, not replaced (O93)', { timeout: 10000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { createProjects } = await import('../apps/server/projects.mjs');
+  const PROJECT = '0123abcd-0000-4000-8000-0000000000aa', home = path.join(dir, 'projects'), sprintFiles = createSprintFiles({ home: path.join(dir, 'sprints') });
+  fs.mkdirSync(path.join(home, PROJECT), { recursive: true });
+  fs.writeFileSync(path.join(home, PROJECT, 'project.json'), JSON.stringify({ id: PROJECT, name: 'Site', work: { kind: 'p9' } }));
+  const projects = createProjects({ home, sprintFiles, row: (id) => (id === LEAD ? { project: PROJECT } : null) });
+  sprintFiles.ensure(LEAD);
+  const file = path.join(dir, 'sprints', LEAD, 'sprint.md'), opened = sprintFiles.list(LEAD).find((f) => f.name === 'sprint.md');
+  // The lead's agent writes sprint.md just after the page's save renamed its text into place, before the reply's list.
+  const real = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => { real.call(fs, from, to); if (String(from).includes('.p9-tmp-')) fs.writeFileSync(file, 'the lead\'s edit'); });
+  syncBuiltinESMExports();
+  let saved;
+  try { saved = await projects.sprintFile(PROJECT, { lead: LEAD, name: 'sprint.md', text: 'mine', hash: opened.hash }); }
+  finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(saved.status, 200);
+  const base = saved.files.find((f) => f.name === 'sprint.md');
+  assert.deepEqual([base.text, base.hash], ['mine', hashOf('mine')], 'the reply is what the page saved, not the lead\'s text');
+  // The page types on from its own text: that save names its own write and is refused; the lead's text stays.
+  const next = await projects.sprintFile(PROJECT, { lead: LEAD, name: 'sprint.md', text: 'mine and more', hash: base.hash });
+  assert.equal(next.status, 409); assert.equal(next.error, 'sprint-file-changed');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'the lead\'s edit');
+  console.log('PASS O93 save reply is the saved text');
+});

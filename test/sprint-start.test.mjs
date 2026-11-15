@@ -249,9 +249,13 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const n4 = (await rows(instance)).length;
   pending = a.tool('start_sprint', { sprint: s4.sprint });
   asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
+  // O96: a worker's turn ending meanwhile sends a P9 note ('[p9] ... ended its turn'); it is not the user's answer, so the approval stays open.
+  await call(instance, `/chat/${byTool.chats[0].chat}/prompt`, 'POST', { text: 'x' });
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data?.text?.startsWith('[p9]'), asked.cursor);
   await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: [] });
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
-  assert.equal((await pending).error, 'delegate-off', 'Delegation turned Off while the user was asked still made the lead');
+  const offReply = await pending;
+  assert.equal(offReply.error, 'delegate-off', 'Delegation turned Off while the user was asked: ' + JSON.stringify(offReply) + ' events in a: ' + JSON.stringify((await call(instance, `/chat/events?after=${asked.cursor}&only=${a.conversation}`)).body.events.map((e) => [e.type, e.data?.text?.slice(0, 80) ?? e.data?.answer ?? null])));
   assert.equal((await rows(instance)).length, n4);
   // Workers per chat lowered while the user is asked (one child running, 2 -> 1): Allow makes nothing.
   await call(instance, '/delegation', 'POST', { start: 'ask', max: 2, workers: [] });
