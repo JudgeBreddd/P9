@@ -4,7 +4,7 @@
     "O50: dependency updates arrive as PRs by themselves. Bot PRs merge by the same rule as any PR: CI green and a non-author verdict that read the changelog.",
     "One rule for every package Renovate offers: a version under 3 days old is held back. No branch and no PR is made for it; it is listed by name under 'Pending Status Checks' on the Dependency Dashboard issue until it is old enough.",
     "Security fixes are not held (Renovate's vulnerability alerts skip the wait; they need Dependabot alerts turned on in the repository settings).",
-    "Major updates come apart from the rest (O81, owner, 2026-11-15: \"split + check\"): patch and minor updates stay one PR per group and merge by the usual rule; each major package family is its own PR (the editor packages, Electron, marked, pnpm, peculiar; TypeScript is held below 7, O87), and any other major comes in one 'everything else (major)' PR. Before each nightly the coordinator lists the bot's open PRs and gives each major its own plan row, so none waits unseen.",
+    "Major updates come apart from the rest (O81, owner, 2026-11-15: \"split + check\"): patch and minor updates stay one PR per group and merge by the usual rule; each major package family is its own PR (the editor packages, Electron, marked, pnpm, peculiar; TypeScript is held below 7, O87; the editor packages below 34, O88), and any other major comes in one 'everything else (major)' PR. Before each nightly the coordinator lists the bot's open PRs and gives each major its own plan row, so none waits unseen.",
     "Not covered: the age of packages pulled in underneath (the lockfile's transitive entries); Renovate does not pass the wait to pnpm. Whether the packageManager pnpm pin is held by the wait is not stated in Renovate's documentation."
   ],
   "extends": ["config:recommended"],
@@ -45,6 +45,12 @@
       "matchUpdateTypes": ["major"],
       "matchPackageNames": ["@codingame/**", "vscode"],
       "groupName": "major: editor"
+    },
+    {
+      "description": "The editor packages stay below 34 (O88, owner via the coordinator, 2026-11-15: option 1; #132 closed). Each editor major is built from a newer VS Code: 39 is VS Code 1.145. P9's editor server is VSCodium's REH 1.121.03429 (apps/desktop/editor-host.mjs, README, the CI workflow), and an editor newer than its server never finishes opening Dev Focus (three tests time out on #132). VSCodium's newest server is 1.143, so no editor past 33 has a matching server yet. When VSCodium ships the server that matches an editor major, move the server pin and the editor together in one PR and raise this limit with them. Patch and minor updates of 33 still come in 'everything else'.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["@codingame/**", "vscode"],
+      "allowedVersions": "<34"
     },
     {
       "description": "A major update of the Electron package is its own PR.",
