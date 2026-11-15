@@ -35,8 +35,8 @@ importers:
         specifier: 2.6.0
         version: 2.6.0(zod@4.6.7)
       '@hono/node-server':
-        specifier: 2.1.7
-        version: 2.1.7(hono@4.13.18)
+        specifier: 2.1.8
+        version: 2.1.8(hono@4.13.18)
       '@simplewebauthn/server':
         specifier: 14.1.0
         version: 14.1.0(asn1js@4.0.0)
@@ -225,8 +225,8 @@ importers:
         specifier: 6.0.2
         version: 6.0.2
       electron:
-        specifier: 44.11.1
-        version: 44.11.1
+        specifier: 44.11.2
+        version: 44.11.2
       marked:
         specifier: 14.1.4
         version: 14.1.4
@@ -854,8 +854,8 @@ packages:
   '@hexagon/base64@1.1.28':
     resolution: {integrity: sha512-lhqDEAvWixy3bZ+UOYbPwUbBkwBq5C1LAJ/xPC8Oi+lL54oyakv/npbA0aU2hgCsx/1NUd4IBvV03+aUBWxerw==}
 
-  '@hono/node-server@2.1.7':
-    resolution: {integrity: sha512-Wr0E6S+v2Bw9FkpGNP5BQ5QbJvclUa06UVehd65WFZe6XeJwbrKQQ5wPDevc0IC+QyzbO7v3Llh5uo45IZcSnA==}
+  '@hono/node-server@2.1.8':
+    resolution: {integrity: sha512-jdf7FHh6A1lzjpHHQUgxsg2GeER2vMetnAOfeActzcoli6jamlK+NAwL6Dsr5Fl3BS3tYUQzCdtZjU8Qxv7bEA==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4 || ^5.0.0-0
@@ -2187,8 +2187,8 @@ packages:
   electron-updater@6.8.11:
     resolution: {integrity: sha512-12U/mbzaIKQS3Q543aQ7DjyAZMXeVJy1Wpu0qdq5ne4RXpIQDpWYm25zRjgXngAoo6swMrm4C4owGyiIipelsg==}
 
-  electron@44.11.1:
-    resolution: {integrity: sha512-pQdp3+NanyxVQxBxdHqnZ/Kj9gKBs8oeSGsmCb2R1yaFWuT91vbibR19o4pZdpkmBYDMl890+Ezt7qT/9zZjAA==}
+  electron@44.11.2:
+    resolution: {integrity: sha512-bzHeYOsrQenm2BCsmqMiP6DU0rKZTgkJCKFzQLldZEV09WgaKlwXyJemP3uVTpvK03T0cRqEXR5Ok4jsHhJHKw==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -4228,7 +4228,7 @@ snapshots:
 
   '@hexagon/base64@1.1.28': {}
 
-  '@hono/node-server@2.1.7(hono@4.13.18)':
+  '@hono/node-server@2.1.8(hono@4.13.18)':
     dependencies:
       hono: 4.13.18
 
@@ -4398,7 +4398,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.1(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.1.7(hono@4.13.18)
+      '@hono/node-server': 2.1.8(hono@4.13.18)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -5612,7 +5612,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@44.11.1:
+  electron@44.11.2:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0
