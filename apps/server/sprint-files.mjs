@@ -4,20 +4,35 @@
 // with every lead message); roles.json (each role's key, provider, model and effort: what Start sprint makes);
 // roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent with the sprint rules to
 // that worker); roles/<key>.work.md (the role's work: its first message at Start sprint); notes/<key>.md (the worker
-// keeps it itself: Now and Log).
+// keeps it itself: Now and Log); review-trail.md (P9's own: one row per reviewed item, rewritten at each ready and
+// verdict; nobody else writes it).
 import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const KEY = '[a-z0-9][a-z0-9._-]{0,63}'; // open_chat's key rule
-const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles\\.json|roles/${KEY}\\.(?:instructions|rules|work)\\.md|notes/${KEY}\\.md)$`);
+const TRAIL = 'review-trail.md';
+const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles\\.json|review-trail\\.md|roles/${KEY}\\.(?:instructions|rules|work)\\.md|notes/${KEY}\\.md)$`);
 export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
 // What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
 export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
 // What a worker is told about its notes file, at its start and again after each compaction.
 export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
+// The work queue (sprint method rule 4; Tyler, 2026-11-13: "The item list is the chunks assigned to the worker"): the
+// plan's item lines whose role is this key, in order. The role is the word after "role" at the start of a clause
+// ("; role daemon;" or ". Role: daemon."); an item's id is its text before the first colon. A tick in the plan is a
+// model's say-so: P9 counts an item done from its own review record, never from the box.
+export function itemsOf(plan, key) {
+  const items = [];
+  for (const line of typeof plan === 'string' ? plan.split('\n') : []) {
+    const item = /^\s*- \[[ xX]\] (.+)$/.exec(line)?.[1].trim();
+    const role = item && [...item.matchAll(/(?:^|[;.]\s*)role:?\s+([a-z0-9][a-z0-9_-]*(?:\.[a-z0-9_-]+)*)/gi)].at(-1)?.[1].toLowerCase();
+    if (role && role === key) items.push({ id: item.split(':')[0].trim().slice(0, 200), text: item.slice(0, 500) });
+  }
+  return items;
+}
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {
@@ -42,7 +57,7 @@ export function createSprintFiles({ home }) {
   // meanwhile. ponytail: a writer still holding the old file open is caught only up to the recheck after the placing;
   // for that instant the file is absent to readers. 'no-links': a disk without hard links, where nothing can be placed
   // whole without replacing (O100); the save is refused before anything is moved.
-  function write(lead, name, text, expect) {
+  function put(lead, name, text, expect) {
     const file = fileOf(lead, name);
     if (!file || typeof text !== 'string' || text.length > MAX_FILE || !text.isWellFormed()) return false;
     if (expect !== undefined) { const now = read(lead, name); if (expect === '' ? now !== null : now === null || hashOf(now) !== expect) return 'changed'; }
@@ -102,6 +117,8 @@ export function createSprintFiles({ home }) {
     if (mine || newer) unlinkSync(aside); else restore(aside, file);
     return mine || 'changed';
   }
+  // The review trail has one writer, P9 (trail below): the project page and set_rules cannot write it.
+  const write = (lead, name, text, expect) => (name === TRAIL ? false : put(lead, name, text, expect));
   // Made once, never over an edited file.
   const start = (lead, name, text) => { if (read(lead, name) === null && fileOf(lead, name)) write(lead, name, text); };
   return {
@@ -109,6 +126,7 @@ export function createSprintFiles({ home }) {
     fileOf,
     read,
     write,
+    trail: (lead, text) => put(lead, TRAIL, text),
     // D1: the sprint's folder and its plan, made at the lead's first worker.
     ensure(lead) { start(lead, 'sprint.md', PLAN); return folderOf(lead); },
     // D3, D4: a worker's notes, under its key or its chat ID (a worker without a key); roles: a keyed worker's role files
@@ -125,11 +143,11 @@ export function createSprintFiles({ home }) {
       for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, '');
       return folderOf(lead);
     },
-    // Every file of a sprint with its text, in a fixed order: plan, rules, roles.json, then roles and notes by name.
+    // Every file of a sprint with its text, in a fixed order: plan, rules, roles.json, review trail, then roles and notes by name.
     list(lead) {
       const folder = folderOf(lead);
       if (!folder) return [];
-      const names = ['sprint.md', 'rules.md', 'roles.json'];
+      const names = ['sprint.md', 'rules.md', 'roles.json', TRAIL];
       for (const dir of ['roles', 'notes']) {
         try { for (const f of readdirSync(path.join(folder, dir)).sort()) names.push(dir + '/' + f); } catch { /* none */ }
       }

@@ -22,7 +22,7 @@ import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
-import { createSprintFiles, notesLine } from './sprint-files.mjs';
+import { createSprintFiles, itemsOf, notesLine } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -397,6 +397,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // as its own block with every message that chat's agent sends a chat it started (a compaction in the worker cannot lose
   // it), and with no other sender's message. A keyed worker's roles/<key>.rules.md follows it.
   const sprintFiles = createSprintFiles({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
+  // The work queue of a keyed worker (sprint method rule 4): its role's items in the lead's plan, each with P9's own
+  // review record (ready = queued, verdict = fix or passed). The card's ring is done/total (window-8, Tyler 2026-11-15:
+  // done is counted by P9 from the chat's state, not from a model's report). plans: one read of each plan per list.
+  const queueOf = (parent, key, state, plans = new Map()) => {
+    if (!parent || !key) return null;
+    if (!plans.has(parent)) plans.set(parent, sprintFiles.read(parent, 'sprint.md'));
+    const items = itemsOf(plans.get(parent), key);
+    if (!items.length) return null;
+    const rows = items.map((item) => { const r = state.reviews?.[item.id]; return { ...item, state: r?.state ?? 'todo', fixes: r?.fixes ?? 0 }; });
+    return { done: rows.filter((r) => r.state === 'passed').length, total: rows.length, items: rows };
+  };
   const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
   // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
   // and sent after the rules of each message from its parent until one is confirmed to have reached the agent
@@ -1105,7 +1116,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], state: readState[agent] ?? 'kept' } : null])); },
     // How many chats have a turn running: the idle watch and the update's turn wait ask only this (finding 12).
     turning: () => db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE state = 'turn'").get().n,
-    list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent,
+    list: (plans = new Map()) => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent, key,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
@@ -1115,7 +1126,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map((c) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null; return { ...c, ...sprintOf(c.id), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1239,7 +1250,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session, body);
       const turn = session.turn = randomUUID();
-      if (sprintOf(id).task && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
+      // A worker on a work queue has no task but a ready: its next message ends that report too (its reviews stay).
+      if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       let ended;
@@ -1361,6 +1373,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
     activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
     sprint: sprintOf,
+    queue: (id) => { const c = db.prepare('SELECT parent, key FROM conversations WHERE id = ?').get(id); return c ? queueOf(c.parent, c.key, sprintOf(id)) : null; },
     setSprint,
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
     // O82: a reused worker takes the key of the role it now does, so its next lead message carries that role's rules.
