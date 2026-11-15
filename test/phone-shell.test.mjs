@@ -147,6 +147,10 @@ const checks = {
   // keyboard user, and lie inside the scrolling screen.
   async backFocus(page, side) {
     await page.waitForSelector('h1:text("Chats")');
+    // O107: the new chat's folder answer redraws the bar (the model's name comes in). Held until focus is on the back
+    // button, so that redraw always lands while a keyboard user is on it.
+    const held = [], folder = (u) => /^\/chat\/[^/]+\/folder$/.test(u.pathname);
+    await page.route(folder, (r) => { held.push(r); });
     await newChat(page);
     for (let i = 0; i < 20 && !(await page.evaluate(() => document.activeElement?.matches('.bar .back'))); i++) await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement?.matches('.bar .back')), true, 'Tab reaches the back button');
@@ -157,6 +161,10 @@ const checks = {
     });
     assert.notEqual(ring.style, 'none', 'a keyboard user still sees where focus is');
     assert.ok(ring.above <= 0, 'the ring reaches ' + ring.above + ' px above the screen it is drawn in: ' + JSON.stringify(ring));
+    assert.ok(held.length > 0, 'the folder request was held');
+    await page.unroute(folder); for (const r of held) await r.continue();
+    await page.waitForFunction(() => document.querySelector('#modelBtn')?.textContent.includes('·'));
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('.bar .back:focus-visible') ?? false), true, 'focus stays on the back button when the bar is redrawn');
   },
   // The side panel's phone form (specs/side-panel.md check 5): an artifact opens the sheet with full: it fills the viewport, and the next ordinary sheet does not keep it.
   async sheetFull(page) {
