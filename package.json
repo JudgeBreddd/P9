@@ -230,20 +230,20 @@
   },
   "pnpm": {
     "overrides": {
-      "@peculiar/x509": "2.1.0",
-      "@peculiar/asn1-android": "2.10.0",
-      "@peculiar/asn1-asym-key": "2.10.0",
-      "@peculiar/asn1-cms": "2.10.0",
-      "@peculiar/asn1-csr": "2.10.0",
-      "@peculiar/asn1-ecc": "2.10.0",
-      "@peculiar/asn1-pfx": "2.10.0",
-      "@peculiar/asn1-pkcs8": "2.10.0",
-      "@peculiar/asn1-pkcs9": "2.10.0",
-      "@peculiar/asn1-rsa": "2.10.0",
-      "@peculiar/asn1-schema": "2.10.0",
-      "@peculiar/asn1-x509": "2.10.0",
-      "@peculiar/asn1-x509-attr": "2.10.0",
-      "@peculiar/asn1-x509-post-quantum": "2.10.0"
+      "@peculiar/x509": "3.1.0",
+      "@peculiar/asn1-android": "3.0.0",
+      "@peculiar/asn1-asym-key": "3.0.0",
+      "@peculiar/asn1-cms": "3.0.0",
+      "@peculiar/asn1-csr": "3.0.0",
+      "@peculiar/asn1-ecc": "3.0.0",
+      "@peculiar/asn1-pfx": "3.0.0",
+      "@peculiar/asn1-pkcs8": "3.0.0",
+      "@peculiar/asn1-pkcs9": "3.0.0",
+      "@peculiar/asn1-rsa": "3.0.0",
+      "@peculiar/asn1-schema": "3.0.0",
+      "@peculiar/asn1-x509": "3.0.0",
+      "@peculiar/asn1-x509-attr": "3.0.0",
+      "@peculiar/asn1-x509-post-quantum": "3.0.0"
     }
   }
 }
