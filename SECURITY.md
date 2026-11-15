@@ -957,17 +957,24 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   row's chat under it, one by one with a short pause between them. A row other than `review` gets a worker folder
   (§ Worker folders): a clone and worktree as `open_chat` makes them, from the project's address or the folder
   `roles.json` names (checked as `open_chat` checks a folder). Each chat starts on exactly its row's agent, model and
-  effort. Your press counts as the yes for each of them, so P9 does not ask again per chat. Everything else
+  effort; a row naming `claude` or `codex` never runs on a provider profile, not one from Settings > Delegation's rows
+  nor the lead's own. Your press counts as the yes for each of them, so P9 does not ask again per chat. Everything else
   `open_chat` checks still applies: the agent lock, Settings > Delegation Off, Workers per chat, 3 levels deep, and a
   chat under the lead never runs in a wider mode than the lead. Without a mode in its row, the lead starts in its
   agent's default (Claude Auto, Codex Auto review) from your press, and in the calling chat's own mode from an agent's
-  call. An agent's call never makes a lead wider than the chat that called: a wider row is refused.
+  call. An agent's call never makes a lead wider than the chat that called: a wider row is refused. From an agent's
+  call the lead is that chat's worker under the same limits: it takes a place under Workers per chat from before you
+  are asked until it is made, a chat 3 levels deep cannot start one (nor one 2 deep a sprint with chats under its lead),
+  and after your yes P9 checks the agent lock, Delegation Off and the modes again before it makes anything.
 - **Checked before anything is made.** Every row is checked first: a known key used once, a `lead` row, an agent P9 can
   start, a model that agent (or that profile) lists, an effort it lists (empty when it has none), a mode it has, and no
   more rows under the lead than Workers per chat. A value P9 cannot start is refused by its role and field. P9 never
   swaps it for a default, and no chat is made.
 - **Pressing again.** A press that fails halfway keeps what it made. The next press keeps the lead (by its id) and every
-  chat already made (by its key), sends nothing to them again, and makes the rest. Two presses at the same time:
+  chat already made (by its key) and makes the rest. A kept chat whose first message never reached its agent (no turn
+  of it ended or is running: its start or a setting failed) is sent its work again, with its row's model and effort;
+  one that did is sent nothing. A P9 restart in the middle of that first turn counts as not reached, so that chat may
+  read its work twice. Two presses at the same time:
   the second is refused while the first runs.
 
 ## Agent modes

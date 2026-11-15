@@ -1404,6 +1404,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     sprintFiles,
     // The window's Notes button: this worker's notes file as it is now, read by the same rules as the project page.
     workerNotes: (id) => { const at = notesOf(id), text = at && sprintFiles.read(at.lead, at.name); return text === null || text === undefined ? { status: 404, error: 'no-notes' } : { status: 200, name: at.name, text }; },
+    // Start sprint: a chat's first message reached its agent (a turn ended, or one is running now). The user event alone
+    // says nothing: prompt writes it before the agent is started and configured.
+    delivered: (id) => Boolean(live.get(id)?.turn) || Boolean(db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'turn-end' LIMIT 1").get(id)),
     startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),

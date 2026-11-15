@@ -167,7 +167,7 @@ export function createDelegate({ chat, allowed }) {
     try { return await startWorker(caller, args, signal, { me, family, set, depth, at, ...opts }); }
     finally { const left = holding.get(caller).filter((n) => n !== at); if (left.length) holding.set(caller, left); else holding.delete(caller); }
   }
-  async function startWorker(caller, args, signal, { me, family, set, depth, at, approved = false, profile: named = null }) {
+  async function startWorker(caller, args, signal, { me, family, set, depth, at, approved = false, profile: named }) {
     const row = set.workers[at] ?? { agent: '', model: '', effort: '' };
     // A row on a provider profile that was removed since says nothing: the worker starts like a row left on "the parent's".
     const rowProfile = row.agent.startsWith('profile:') ? chat.profiles.list().profiles.find((p) => p.id === row.agent.slice(8)) ?? null : null;
@@ -184,7 +184,8 @@ export function createDelegate({ chat, allowed }) {
     if (picked.error) return picked;
     // A row on a profile starts the worker on that profile. With no row of its own, a profile chat's worker stays on its
     // parent's profile and model (a profile chat's model is fixed for the chat).
-    const profile = named ? { profile: named, model: args.model } : mine && rowProfile ? { profile: rowProfile.id, model: args.model ?? dflt.model }
+    // Start sprint (named is set, null for a built-in agent): the row's provider is final, never a Settings or parent profile.
+    const profile = named !== undefined ? (named ? { profile: named, model: args.model } : null) : mine && rowProfile ? { profile: rowProfile.id, model: args.model ?? dflt.model }
       : !mine && provider === me.provider && me.profile && !me.profile.gone ? { profile: me.profile.id, model: args.model ?? me.profile.model } : null;
     const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider && listed(known?.model?.options, me.model)) || undefined);
     const effortId = (provider === me.provider && me.effort?.id) || chat.lists()[provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
@@ -192,7 +193,7 @@ export function createDelegate({ chat, allowed }) {
     if (args.effort !== undefined && !effortId) return { error: 'effort-unknown', detail: 'That agent\'s effort list is not known yet; leave effort out.' };
     const folder = args.folder ?? (me.folder.startsWith(':') ? undefined : me.folder); // ':…' is a project's own files: the project places the chat
     const title = args.title ?? args.text.trim().split('\n')[0].slice(0, 60);
-    const ask = 'P9 Delegate: start a ' + (named ? 'profile' : profile ? (rowProfile && mine ? rowProfile.name : me.profile.name) : provider === 'claude' ? 'Claude' : 'Codex') + ' worker "' + title + '" in mode ' + picked.mode
+    const ask = 'P9 Delegate: start a ' + (named !== undefined ? (named ? 'profile' : provider === 'claude' ? 'Claude' : 'Codex') : profile ? (rowProfile && mine ? rowProfile.name : me.profile.name) : provider === 'claude' ? 'Claude' : 'Codex') + ' worker "' + title + '" in mode ' + picked.mode
       + (args.folder ? ', folder ' + args.folder : '') + '. Its task: ' + args.text.slice(0, 600) + (args.text.length > 600 ? '…' : '');
     // Ask me first (the default): the first worker of a chat the user started is a sprint's start, so the user is asked
     // in every mode, Unrestricted too. Later ones, and Agent decides, follow the same check as every acting P9 tool.
@@ -296,19 +297,32 @@ export function createDelegate({ chat, allowed }) {
     if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (starting.has(sprint)) return { error: 'sprint-starting', detail: 'This sprint is being started now.' };
     starting.add(sprint);
+    let reserved = null;
     try {
       if (chat.delegation().start === 'off') return OFF;
       const roles = rolesOf(sprint);
       if (roles.error) return roles;
-      // Modes, before any chat is made: from an agent's call the lead is never wider than that chat (modeFor refuses a
-      // wider row); no chat under the lead is wider than the lead.
-      const L0 = roles.lead, picked = caller ? modeFor(caller, { provider: L0.provider, mode: null }, L0.mode) : { mode: L0.mode ?? (L0.provider === 'claude' ? 'Auto' : 'Auto review') };
-      if (picked.error) return { ...picked, error: picked.error === 'mode-unknown' ? picked.error : 'role-refused', role: 'lead', field: 'mode', detail: 'Role lead, mode: ' + picked.detail };
-      const leadMode = lead ? chat.info(sprint).mode ?? picked.mode : picked.mode, ceiling = tierOf(L0.provider, leadMode);
-      const wide = roles.rest.find((r) => r.mode && tierOf(r.provider, r.mode) > ceiling);
-      if (wide) return { error: 'role-refused', role: wide.key, field: 'mode', detail: `Role ${wide.key}, mode: ${wide.mode} is wider than the lead's ${leadMode}.` };
-      // Called by an agent, the lead is that chat's worker: it takes a place like any other.
-      if (caller && !lead && running(caller, chat.family()) >= Math.min(chat.delegation().max, MAX_CHILDREN)) return tooMany(chat.delegation());
+      // Modes, before any chat is made and again after the user's answer: from an agent's call the lead is never wider
+      // than that chat (modeFor refuses a wider row); no chat under the lead is wider than the lead.
+      const modes = () => {
+        const L0 = roles.lead, picked = caller ? modeFor(caller, { provider: L0.provider, mode: null }, L0.mode) : { mode: L0.mode ?? (L0.provider === 'claude' ? 'Auto' : 'Auto review') };
+        if (picked.error) return { ...picked, error: picked.error === 'mode-unknown' ? picked.error : 'role-refused', role: 'lead', field: 'mode', detail: 'Role lead, mode: ' + picked.detail };
+        const leadMode = lead ? chat.info(sprint).mode ?? picked.mode : picked.mode, ceiling = tierOf(L0.provider, leadMode);
+        const wide = roles.rest.find((r) => r.mode && tierOf(r.provider, r.mode) > ceiling);
+        return wide ? { error: 'role-refused', role: wide.key, field: 'mode', detail: `Role ${wide.key}, mode: ${wide.mode} is wider than the lead's ${leadMode}.` } : { leadMode };
+      };
+      let { leadMode, ...refusal } = modes();
+      if (refusal.error) return refusal;
+      // Called by an agent, the lead is that chat's worker, with open_chat's limits: 3 levels deep (its own workers one
+      // more), and a place under Workers per chat, held from now so two starts at once never take the last one together.
+      if (caller && !lead) {
+        const family = chat.family(), set = chat.delegation();
+        let depth = 0;
+        for (let at = family.find((c) => c.id === caller); at?.parent && depth < 50; at = family.find((c) => c.id === at.parent)) depth += 1;
+        if (depth + (roles.rest.length ? 1 : 0) >= MAX_DEPTH || running(caller, family) + (holding.get(caller)?.length ?? 0) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
+        reserved = 'sprint:' + sprint;
+        holding.set(caller, [...(holding.get(caller) ?? []), reserved]);
+      }
       const plan = createHash('sha256').update((chat.sprintFiles.read(sprint, 'sprint.md') ?? '') + '\0' + (chat.sprintFiles.read(sprint, 'roles.json') ?? '')).digest('hex');
       const said = (r) => `${r.key} (${r.profile ? 'profile:' + r.profile : r.provider} ${r.model}${r.effort ? ' ' + r.effort : ''})`;
       if (caller) {
@@ -316,6 +330,11 @@ export function createDelegate({ chat, allowed }) {
           title: `P9: start the sprint "${(prep?.title ?? lead.title).slice(0, 120)}": ${[roles.lead, ...roles.rest].map(said).join(', ')}. This is your approval of its plan (sha256 ${plan.slice(0, 12)}).` };
         if (!await chat.approve(caller, request, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
         if (signal?.aborted) return { error: 'cancelled' };
+        // Anything may have changed while the user was asked: checked again before any chat is made.
+        if (chat.lock(caller).on) return { error: 'agent-lock-on' };
+        if (chat.delegation().start === 'off') return OFF;
+        ({ leadMode, ...refusal } = modes());
+        if (refusal.error) return refusal;
       }
       // The press is the approval record: the plan's hash, when and by whom.
       const started = { at: Date.now(), plan, by: caller ?? 'owner' };
@@ -325,8 +344,7 @@ export function createDelegate({ chat, allowed }) {
         const made = await chat.create({ provider: L.provider, title: prep.title, project, ...(L.profile && { profile: L.profile, model: L.model }) }, undefined, { id: sprint, ...(caller && { parent: caller }) });
         if (made.status !== 201) return { error: made.error ?? 'request-refused', role: 'lead', detail: 'The lead\'s chat was not made. Nothing was made.' };
       }
-      const leadNow = chat.info(sprint);
-      if (!leadNow.asked) {
+      if (!chat.delivered(sprint)) {
         const notes = chat.sprintFiles.ensureWorker(sprint, 'lead', false), own = (chat.sprintFiles.read(sprint, 'roles/lead.instructions.md') ?? '').trim();
         chat.startNote(sprint, (own ? `[P9: your instructions, from your sprint's roles/lead.instructions.md.\n${own}]\n\n` : '')
           + `[P9: you lead this sprint. Its folder: ${chat.sprintFiles.folderOf(sprint)}. P9 is starting the chats under you now, one by one: ${roles.rest.map((r) => r.key).join(', ') || 'none'}. list_chats shows them.]\n\n` + (notes ? notesLine(notes) : ''));
@@ -343,13 +361,25 @@ export function createDelegate({ chat, allowed }) {
         const existing = chat.family().find((c) => c.parent === sprint && c.key === r.key);
         if (!existing && i) await pause(STAGGER_MS, signal);
         const work = (chat.sprintFiles.read(sprint, `roles/${r.key}.work.md`) ?? '').trim() || 'Your sprint started. Read your instructions and your notes file, then begin your work.';
+        // Made by an earlier press whose first message never reached its agent (its start or a setting failed): sent now.
+        if (existing && !chat.delivered(existing.id)) {
+          const mode = modeFor(sprint, { provider: r.provider, mode: null }, r.mode);
+          if (mode.error) return { ...mode, role: r.key, chats };
+          const sent = await chat.prompt(existing.id, { text: work, mode: mode.mode, ...(!r.profile && { model: r.model }), ...(r.effortId && { config: { [r.effortId]: r.effort } }) }, undefined, sprint);
+          if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', role: r.key, chats, detail: `Role ${r.key} was made, but its message was not sent; press Start again.` };
+          chats.push({ key: r.key, chat: existing.id, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model, effort: r.effort, existing: true, sent: true });
+          continue;
+        }
         const got = await openChat(sprint, { text: work, title: r.key, key: r.key, provider: r.provider, model: r.model, ...(r.effortId && { effort: r.effort }),
           ...(r.mode && { mode: r.mode }), ...(r.key !== 'review' && { worktree: true }), ...(roles.folder !== undefined && { folder: roles.folder }) }, signal, { approved: true, profile: r.profile });
         if (got.error) return { ...got, role: r.key, chats, detail: (got.detail ? got.detail + ' ' : '') + `Role ${r.key} was not started; press Start again to make the rest.` };
         chats.push({ key: r.key, chat: got.chat, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model, effort: r.effort, existing: Boolean(got.existing) });
       }
       return { lead: sprint, started, chats };
-    } finally { starting.delete(sprint); }
+    } finally {
+      starting.delete(sprint);
+      if (reserved) { const left = holding.get(caller).filter((n) => n !== reserved); if (left.length) holding.set(caller, left); else holding.delete(caller); }
+    }
   }
   function newSprint(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };

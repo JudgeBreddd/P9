@@ -40,6 +40,10 @@ async function until(instance, match, after = 0) {
 async function agent(t, instance, project) {
   const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude', project });
   await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp' });
+  return attach(t, instance, conversation);
+}
+// The same for a chat already sent "mcp" (a worker whose task was that word).
+async function attach(t, instance, conversation) {
   const { hit, cursor } = await until(instance, (e) => e.conversation === conversation && e.data?.content?.text?.startsWith('mcp:'));
   const [entry] = JSON.parse(hit.data.content.text.slice(4));
   const client = new Client({ name: 'p9-test', version: '1' });
@@ -50,7 +54,9 @@ async function agent(t, instance, project) {
 }
 
 test('Start sprint: one press makes every chat on exactly its row (lead included); a row P9 cannot start is refused by name before any chat; pressing again keeps what was made; the press is the approval record', { timeout: 300000 }, async (t) => {
-  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // profile.log in the workspace: the fake agent writes there each start's provider settings (a hash, never the key).
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
+  const seen = () => fs.readFileSync(path.join(instance.workspace, 'profile.log'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const ws = instance.workspace;
   const repo = path.join(ws, 'repo');
   fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
@@ -171,6 +177,43 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   assert.equal((await rows(instance)).length, count + 1);
   assert.match(await config(instance, rest.body.chats[1].chat), /^config:model=default,effort=low,/);
   assert.equal((await events(instance, s2.sprint)).filter((e) => e.type === 'user' && e.data?.text === 'config').length, 1, 'the lead was sent its work again');
+  // A chat made whose first message never reached its agent (its agent could not start): the next press sends it, once.
+  const w3 = { key: 'w3', provider: 'codex', model: 'opus', effort: 'high' };
+  write2('roles.json', roles([lead, w2, w3])); write2('roles/w3.work.md', 'config');
+  fs.writeFileSync(path.join(ws, 'signed-out'), '');
+  const stuck = await call(instance, `/sprints/${s2.sprint}/start`, 'POST', {});
+  fs.rmSync(path.join(ws, 'signed-out'));
+  assert.notEqual(stuck.status, 200, JSON.stringify(stuck.body));
+  assert.equal(stuck.body.role, 'w3', JSON.stringify(stuck.body));
+  const w3chat = (await rows(instance)).find((r) => r.parent === s2.sprint && r.title === 'w3');
+  assert.ok(w3chat, 'the chat was made before its agent failed to start');
+  const sentW2 = (await events(instance, rest.body.chats[1].chat)).filter((e) => e.type === 'user').length;
+  const resumed = await call(instance, `/sprints/${s2.sprint}/start`, 'POST', {});
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.deepEqual(resumed.body.chats.map((c) => [c.key, c.existing, c.sent ?? false]), [['lead', true, false], ['w2', true, false], ['w3', true, true]]);
+  assert.equal(resumed.body.chats[2].chat, w3chat.id);
+  assert.match(await config(instance, w3chat.id), /^config:model=opus,effort=high,/, 'the kept chat was not started on its row');
+  assert.equal((await events(instance, rest.body.chats[1].chat)).filter((e) => e.type === 'user').length, sentW2, 'a chat that got its work was sent it again');
+  assert.equal((await call(instance, `/sprints/${s2.sprint}/start`, 'POST', {})).body.chats.filter((c) => c.sent).length, 0, 'a delivered chat was sent its work again');
+
+  // A row naming claude is never run on a provider profile: not Settings > Delegation's rows, not the lead's own.
+  const { profile } = (await call(instance, '/profiles', 'POST', { name: 'Far Cloud', baseUrl: 'https://models.example.test/api/', models: ['glm-5.3', 'kimi-k3:cloud'], key: 'sk-profile-test-0f3a9c71d2e84b56' })).body;
+  const far = { agent: 'profile:' + profile.id, model: 'kimi-k3:cloud', effort: '' };
+  await call(instance, '/delegation', 'POST', { start: 'ask', max: 5, workers: [far, far, far, far, far] });
+  const s5 = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'S5' })).body;
+  const plead = { key: 'lead', provider: 'profile:' + profile.id, model: 'glm-5.3', effort: 'low' }, builtin = { key: 'b', provider: 'claude', model: 'opus', effort: 'high' };
+  fs.writeFileSync(path.join(s5.folder, 'roles.json'), roles([plead, builtin]));
+  fs.writeFileSync(path.join(s5.folder, 'roles/lead.work.md'), 'config'); fs.writeFileSync(path.join(s5.folder, 'roles/b.work.md'), 'config');
+  const starts = seen().length;
+  const p5 = await call(instance, `/sprints/${s5.sprint}/start`, 'POST', {});
+  assert.equal(p5.status, 200, JSON.stringify(p5.body));
+  assert.deepEqual(p5.body.chats.map((c) => [c.key, c.provider, c.model]), [['lead', 'profile:' + profile.id, 'glm-5.3'], ['b', 'claude', 'opus']]);
+  assert.match(await config(instance, p5.body.chats[1].chat), /^config:model=opus,effort=high,/, 'the built-in row did not start on its row');
+  const [leadStart, bStart, ...more5] = seen().slice(starts);
+  assert.deepEqual(more5, [], 'one agent start per chat');
+  assert.deepEqual([leadStart.model, leadStart.baseUrl], ['glm-5.3', 'https://models.example.test/api'], 'the profile lead was not on its profile');
+  assert.equal(bStart.baseUrl ?? null, null, 'a row naming claude ran on a provider profile');
+  await call(instance, '/delegation', 'POST', { start: 'ask', max: 5, workers: [] });
 
   // An agent's start_sprint: asked in its chat (Unrestricted too); rejected, nothing is made; allowed, its chat is the
   // lead's parent and the record says who.
@@ -187,16 +230,43 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'reject' } });
   assert.equal((await pending).error, 'not-allowed');
   assert.equal((await rows(instance)).length, n3, 'a rejected start made a chat');
+  // The lead takes a place under Workers per chat from before the user is asked: with one place left, a second start at
+  // the same time is refused.
+  const s4 = await a.tool('new_sprint', { title: 'S4' });
+  fs.writeFileSync(path.join(s4.folder, 'roles.json'), roles([lead])); fs.writeFileSync(path.join(s4.folder, 'roles/lead.work.md'), 'config');
+  await call(instance, '/delegation', 'POST', { start: 'ask', max: 1, workers: [] });
   pending = a.tool('start_sprint', { sprint: made.sprint });
   asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
+  assert.equal((await a.tool('start_sprint', { sprint: s4.sprint })).error, 'too-many-chats', 'two starts at once took the last place together');
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
   const byTool = await pending;
   assert.equal(byTool.error, undefined, JSON.stringify(byTool));
   assert.equal(byTool.started.by, a.conversation);
   assert.equal((await rows(instance)).find((r) => r.id === made.sprint).parent, a.conversation);
   for (const [row, c] of [[lead, byTool.chats[0]], [review, byTool.chats[1]]]) assert.match(await config(instance, c.chat), new RegExp(`^config:model=${row.model},effort=${row.effort},`));
+  // Delegation turned Off while the user is asked: Allow makes nothing.
+  await call(instance, '/delegation', 'POST', { start: 'ask', max: 5, workers: [] });
+  const n4 = (await rows(instance)).length;
+  pending = a.tool('start_sprint', { sprint: s4.sprint });
+  asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
+  await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: [] });
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  assert.equal((await pending).error, 'delegate-off', 'Delegation turned Off while the user was asked still made the lead');
+  assert.equal((await rows(instance)).length, n4);
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [] });
+  // 3 levels deep: a chat 2 deep cannot start a sprint with chats under its lead (they would be 4 deep).
+  const k1 = await a.tool('open_chat', { text: 'mcp', title: 'k1', key: 'k1' });
+  const c1 = await attach(t, instance, k1.chat);
+  const k2 = await c1.tool('open_chat', { text: 'mcp', title: 'k2', key: 'k2' });
+  const c2 = await attach(t, instance, k2.chat);
+  const s6 = await c2.tool('new_sprint', { title: 'S6' });
+  assert.match(s6.sprint ?? '', /^[0-9a-f-]{36}$/, JSON.stringify(s6));
+  fs.writeFileSync(path.join(s6.folder, 'roles.json'), roles([lead, review]));
+  const n6 = (await rows(instance)).length;
+  assert.equal((await c2.tool('start_sprint', { sprint: s6.sprint })).error, 'too-many-chats', 'a lead\'s chats would be 4 levels deep');
+  assert.equal((await rows(instance)).length, n6);
   // A chat outside the project does not see the sprint.
   const out = await agent(t, instance, undefined);
   assert.equal((await out.tool('start_sprint', { sprint: s2.sprint })).error, 'unknown-sprint');
-  console.log('PASS Start sprint: refusals by role and field with no chat, every chat on its row (lead, review, codex and claude workers), press again keeps all, halfway then rest, record ' + plan.slice(0, 12) + ', start_sprint asked');
+  console.log('PASS Start sprint: refusals by role and field with no chat, every chat on its row (lead, review, codex and claude workers), press again keeps all, halfway then rest, an undelivered first message sent on the next press, claude row never on a profile, record ' + plan.slice(0, 12) + ', start_sprint asked with its place held, Off after the ask, 3 levels');
 });
