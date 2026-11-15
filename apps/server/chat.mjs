@@ -1136,9 +1136,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const folder = body.folder ?? (project ? projects.startFolder(project) : '');
       const there = () => (body.folder === undefined || body.folder === WORKER ? startOf({ folder, project: project?.id, parent: lineage?.parent, key: lineage?.key }).then(() => true, () => false) : folderThere(folder));
       if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
-      const id = randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
+      // lineage.id (Start sprint only, never a body field): the lead's chat takes its sprint's id, so the prep's folder is its own.
+      const id = lineage?.id ?? randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
       try { db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project, parent, key) VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null, lineage?.parent ?? null, lineage?.key ?? null); }
-      catch (error) { if (lineage?.key && /UNIQUE/.test(String(error.message))) return refused(409, 'key-taken'); throw error; }
+      catch (error) { if ((lineage?.key || lineage?.id) && /UNIQUE/.test(String(error.message))) return refused(409, 'key-taken'); throw error; }
       if (profile) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('profile:' + id, JSON.stringify(profile));
       emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(profile && { profile }), ...(lineage?.parent && { parent: lineage.parent }), ...(ID.test(op ?? '') && { op }) });
       return { status: 201, conversation: id };
@@ -1403,6 +1404,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     sprintFiles,
     // The window's Notes button: this worker's notes file as it is now, read by the same rules as the project page.
     workerNotes: (id) => { const at = notesOf(id), text = at && sprintFiles.read(at.lead, at.name); return text === null || text === undefined ? { status: 404, error: 'no-notes' } : { status: 200, name: at.name, text }; },
+    // Start sprint: a chat's first message reached its agent (a turn ended, or one is running now). The user event alone
+    // says nothing: prompt writes it before the agent is started and configured.
+    delivered: (id) => Boolean(live.get(id)?.turn) || Boolean(db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'turn-end' LIMIT 1").get(id)),
     startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),

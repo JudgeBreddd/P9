@@ -227,6 +227,17 @@ export function setupRoutes(outer) {
     const result = await outer.chat.workers.clean(id);
     return c.json(result, result.error === 'request-refused' ? 400 : result.error ? 500 : 200);
   });
+  // Desktop only (SECURITY.md § Start sprint): a sprint to prepare, and the owner's Start press, which is the approval
+  // record of its plan. No phone route and no agent reaches these; an agent's start_sprint asks the user in its chat.
+  outer.app.post('/projects/:id/sprints', async (c) => outer.reply(c, await outer.chat.projects.newSprint(c.req.param('id'), await outer.json(c))));
+  outer.app.post('/sprints/:id/start', async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp.ownerStart(c.req.param('id'));
+    const status = !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : result.error === 'sprint-starting' ? 409
+      : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off'].includes(result.error) ? 400 : 500;
+    return c.json(result, status);
+  });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
   outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));

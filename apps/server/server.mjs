@@ -119,7 +119,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     get api() { return api; }, get app() { return app; }, get chat() { return chat; }, get drafts() { return drafts; },
     get existing() { return existing; }, get greeting() { return greeting; }, get instance() { return instance; }, get json() { return json; },
     get ledger() { return ledger; }, get lifecycle() { return lifecycle; }, get loose() { return loose; },
-    get mission() { return mission; }, set mission(v) { mission = v; }, get planFor() { return planFor; }, get present() { return present; },
+    get mcp() { return mcp; }, get mission() { return mission; }, set mission(v) { mission = v; }, get planFor() { return planFor; }, get present() { return present; },
     get recovery() { return recovery; }, get reloadSettings() { return reloadSettings; }, get remote() { return remote; },
     get replaceSettings() { return replaceSettings; }, get reply() { return reply; }, get server() { return server; },
     get settings() { return settings; }, set settings(v) { settings = v; }, get settingsFile() { return settingsFile; },

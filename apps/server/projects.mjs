@@ -84,6 +84,11 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     for (const folder of [folderOf(id), filesOf(id)]) if (!(await lstat(folder)).isDirectory()) throw new Error('unsafe-path');
     return filesOf(id);
   }
+  const pref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? 'null'); } catch { return null; } };
+  const prepOf = (sprint) => (ID.test(sprint ?? '') ? pref('prep:' + sprint) : null);
+  const started = (sprint) => (ID.test(sprint ?? '') ? pref('sprint-start:' + sprint) : null);
+  const preps = (project) => db.prepare("SELECT key, value FROM prefs WHERE key LIKE 'prep:%'").all()
+    .map((r) => { try { return { id: r.key.slice(5), ...JSON.parse(r.value) }; } catch { return null; } }).filter((p) => p?.project === project);
   // A gone or refused work folder is reported, never thrown. AGENTS.md and CLAUDE.md are seen in the listing only.
   async function view(value, full = true) {
     let entries = null;
@@ -91,8 +96,11 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     else try { entries = await folderCheck(value.work.folder); } catch { entries = null; }
     const chats = db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE project = ?').get(value.id).n;
     // D1, D3, D4: each chat in the project that has a sprint folder, with its files' text (SECURITY.md § Sprint files).
-    const sprints = full && sprintFiles ? db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id)
-      .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: sprintFiles.list(c.id) })) : [];
+    // A prep (Start sprint) is listed before its lead chat exists: prep true, its title the one it was made with.
+    const sprints = full && sprintFiles ? [...db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id),
+      ...preps(value.id).filter((p) => !row(p.id))]
+      .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: sprintFiles.list(c.id), prep: !row(c.id),
+        ...(started(c.id) && { started: started(c.id) }) })) : [];
     // Two projects may use one work folder (N1 spec, 2026-11-08): the others using it, for the dialog to name.
     const where = value.work.kind === 'p9' ? null : path.resolve(workspace, value.work.folder);
     const sharedWith = [];
@@ -240,12 +248,27 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       const value = await record(id);
       if (!value) return refused(404, 'unknown-project');
       if (!only(body, ['lead', 'name', 'text', 'hash']) || typeof body.lead !== 'string' || !ID.test(body.lead) || typeof body.text !== 'string' || typeof body.hash !== 'string') return refused(400, 'request-refused');
-      if (row(body.lead)?.project !== id || !sprintFiles?.exists(body.lead)) return refused(404, 'unknown-sprint');
+      if ((row(body.lead)?.project ?? prepOf(body.lead)?.project) !== id || !sprintFiles?.exists(body.lead)) return refused(404, 'unknown-sprint');
       const saved = sprintFiles.write(body.lead, body.name, body.text, body.hash);
       if (saved === 'changed') return { status: 409, error: 'sprint-file-changed', files: sprintFiles.list(body.lead) };
       if (!saved) return refused(400, 'request-refused');
       return { status: 200, files: sprintFiles.list(body.lead) };
     },
+    // Start sprint's prep: a sprint folder before its chats exist. Its id is the one the lead's chat gets at Start; the
+    // project it belongs to is kept by P9 (prefs), never read from a file an agent can edit.
+    async newSprint(id, body) {
+      const value = await record(id);
+      if (!value) return refused(404, 'unknown-project');
+      if (!only(body, ['title']) || !text(body?.title, MAX_NAME) || !body.title.trim() || !sprintFiles) return refused(400, 'request-refused');
+      const sprint = randomUUID();
+      db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('prep:' + sprint, JSON.stringify({ project: id, title: body.title.trim() }));
+      const role = (key) => ({ key, provider: '', model: '', effort: '' });
+      sprintFiles.prep(sprint, { roles: [role('lead'), role('review')] });
+      return { status: 201, sprint, folder: sprintFiles.folderOf(sprint), files: sprintFiles.list(sprint) };
+    },
+    prepOf,
+    started,
+    recordStart: (sprint, value) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('sprint-start:' + sprint, JSON.stringify(value)); },
     record,
     startFolder,
     filesStart,

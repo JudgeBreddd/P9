@@ -1,15 +1,17 @@
 // The sprint's files (sprint spec D1, D3, D4; SECURITY.md § Sprint files). Plain files in the sprint's folder in P9's
 // state, <ownership>/sprints/<lead chat id>/, beside the worker folders: the lead's agent, its workers and the owner
 // (project page) all read and edit them. Only these names: sprint.md; rules.md (the sprint rules set_rules writes, sent
-// with every lead message); roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent
-// with the sprint rules to that worker); notes/<key>.md (the worker keeps it itself: Now and Log).
+// with every lead message); roles.json (each role's key, provider, model and effort: what Start sprint makes);
+// roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent with the sprint rules to
+// that worker); roles/<key>.work.md (the role's work: its first message at Start sprint); notes/<key>.md (the worker
+// keeps it itself: Now and Log).
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const KEY = '[a-z0-9][a-z0-9._-]{0,63}'; // open_chat's key rule
-const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles/${KEY}\\.(?:instructions|rules)\\.md|notes/${KEY}\\.md)$`);
+const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles\\.json|roles/${KEY}\\.(?:instructions|rules|work)\\.md|notes/${KEY}\\.md)$`);
 export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
 // What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
@@ -65,11 +67,18 @@ export function createSprintFiles({ home }) {
       start(lead, `notes/${key}.md`, NOTES);
       return fileOf(lead, `notes/${key}.md`);
     },
-    // Every file of a sprint with its text, in a fixed order: plan, rules, then roles and notes by name.
+    // A prep (Start sprint): the plan, the roles file and the lead's and reviewer's role files, before any chat exists.
+    prep(lead, roles) {
+      start(lead, 'sprint.md', PLAN);
+      start(lead, 'roles.json', JSON.stringify(roles, null, 2) + '\n');
+      for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, '');
+      return folderOf(lead);
+    },
+    // Every file of a sprint with its text, in a fixed order: plan, rules, roles.json, then roles and notes by name.
     list(lead) {
       const folder = folderOf(lead);
       if (!folder) return [];
-      const names = ['sprint.md', 'rules.md'];
+      const names = ['sprint.md', 'rules.md', 'roles.json'];
       for (const dir of ['roles', 'notes']) {
         try { for (const f of readdirSync(path.join(folder, dir)).sort()) names.push(dir + '/' + f); } catch { /* none */ }
       }
