@@ -927,8 +927,11 @@ function applyChat(ev, into) {
         return { ...shape, key: f.key, label: f.label, hint: f.hint, required: f.required, type: f.kind };
       };
       s.events.push({ t: 'question', at: ev.at, request: d.request, title: d.message, unsupported: !d.form, fields: d.form ? d.form.fields.map(field) : [] }); s.pending = 'question'; break; }
-    case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
-      notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
+    case 'answered': {
+      // phone-3: the button's own words, not its internal id (the id only when the approval is not in this replay).
+      const id = d.answer.outcome?.optionId, option = s.events.find(e => e.request === d.request)?.options?.find(o => o[0] === id);
+      s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
+      notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + (option?.[1] || id) : 'Approval cancelled') : 'Question: ' + d.answer.action); break; }
     case 'lock-rejected': notice((d.ask ? 'Answering another chat (read-only): rejected ' : 'Agent lock: rejected ') + (d.toolCall?.title || 'a tool call')); break;
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
