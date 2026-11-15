@@ -332,7 +332,10 @@ export function createDelegate({ chat, allowed }) {
         if (signal?.aborted) return { error: 'cancelled' };
         // Anything may have changed while the user was asked: checked again before any chat is made.
         if (chat.lock(caller).on) return { error: 'agent-lock-on' };
-        if (chat.delegation().start === 'off') return OFF;
+        const now = chat.delegation();
+        if (now.start === 'off') return OFF;
+        // A lower Workers per chat: the place held is this start's own, so it does not count against it.
+        if (reserved && running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
         ({ leadMode, ...refusal } = modes());
         if (refusal.error) return refusal;
       }

@@ -253,6 +253,14 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
   assert.equal((await pending).error, 'delegate-off', 'Delegation turned Off while the user was asked still made the lead');
   assert.equal((await rows(instance)).length, n4);
+  // Workers per chat lowered while the user is asked (one child running, 2 -> 1): Allow makes nothing.
+  await call(instance, '/delegation', 'POST', { start: 'ask', max: 2, workers: [] });
+  pending = a.tool('start_sprint', { sprint: s4.sprint });
+  asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
+  await call(instance, '/delegation', 'POST', { start: 'ask', max: 1, workers: [] });
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  assert.equal((await pending).error, 'too-many-chats', 'a limit lowered while the user was asked still made the lead');
+  assert.equal((await rows(instance)).length, n4);
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [] });
   // 3 levels deep: a chat 2 deep cannot start a sprint with chats under its lead (they would be 4 deep).
   const k1 = await a.tool('open_chat', { text: 'mcp', title: 'k1', key: 'k1' });
@@ -268,5 +276,5 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   // A chat outside the project does not see the sprint.
   const out = await agent(t, instance, undefined);
   assert.equal((await out.tool('start_sprint', { sprint: s2.sprint })).error, 'unknown-sprint');
-  console.log('PASS Start sprint: refusals by role and field with no chat, every chat on its row (lead, review, codex and claude workers), press again keeps all, halfway then rest, an undelivered first message sent on the next press, claude row never on a profile, record ' + plan.slice(0, 12) + ', start_sprint asked with its place held, Off after the ask, 3 levels');
+  console.log('PASS Start sprint: refusals by role and field with no chat, every chat on its row (lead, review, codex and claude workers), press again keeps all, halfway then rest, an undelivered first message sent on the next press, claude row never on a profile, record ' + plan.slice(0, 12) + ', start_sprint asked with its place held, Off and a lower limit after the ask, 3 levels');
 });
