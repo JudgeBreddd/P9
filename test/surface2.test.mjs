@@ -20,9 +20,12 @@ function connect(address, port) {
 }
 
 test('Phase 11 surface 2: raw port, proxy headers and hostile Origin are refused without data leaving', async (t) => {
-  const server = await remoteDaemon(t);
   const address = nonLoopback();
+  // The dev space runs tests with no network, so the box has no non-loopback address and the raw-port check cannot run
+  // there (O78). It skips only off CI: on CI a missing address still fails, so the check is never lost where it runs.
+  if (!address && process.env.CI !== 'true') return t.skip('no non-loopback IPv4 address here (no network); this check runs on CI');
   assert.ok(address, 'no non-loopback IPv4 address available');
+  const server = await remoteDaemon(t);
   assert.equal(await connect(address, server.port), 'ECONNREFUSED');
 
   const forged = await server.remote('/files?path=note.txt', { headers: {
