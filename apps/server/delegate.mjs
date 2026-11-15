@@ -49,8 +49,8 @@ export const DELEGATE_TOOLS = (input) => {
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
       folder: { type: 'string', description: 'Where it starts, relative to the workspace. With worktree, every worker of your sprint comes from one repository: a folder of another is refused.' },
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
-    ['ready', 'Finish your assigned task after reporting each check and the weakest part. Do not use this for an unfinished task.', input({ commit: { type: 'string' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
-    ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
+    ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
+    ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. P9 sends the worker your note, counts its fixes, and asks the lead for a larger model at the third fix. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
     ['set_rules', 'Replace your sprint rules: one text, at most ' + MAX_RULES + ' characters, that P9 sends along with every message you send a chat you started, so a worker '
       + 'keeps them through a long task. Until you set them, P9 sends its own short default (state the folder and branch first, wait for what you started, end with pass or fail). '
       + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
@@ -398,13 +398,19 @@ export function createDelegate({ chat, allowed }) {
   }
   async function ready(caller, args, signal) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
-    const info = chat.info(caller), task = chat.sprint(caller).task;
+    const info = chat.info(caller), mine = chat.sprint(caller);
+    // No task from open_chat: the first item of its work queue not yet passed (sprint method rule 4), so the next one
+    // cannot be reported before this one passed review. Its checks are the worker's own (the plan line says them).
+    const next = !mine.task && chat.queue?.(caller)?.items.find((i) => i.state !== 'passed');
+    const task = mine.task ?? (next && { item: next.id, checks: null });
     if (!info?.parent || !task) return { error: 'no-task' };
     const turn = chat.activeTaskTurn(caller);
     if (info.state !== 'turn' || !turn) return { error: 'no-active-turn' };
     const stillCurrent = () => chat.info(caller)?.state === 'turn' && chat.activeTaskTurn(caller) === turn;
     // The field at fault, by name only: never what was sent (dogfood 3.5: three bare refusals told the worker nothing).
     const fault = !text(args.commit, 200) ? 'commit: 1 to 200 characters'
+      : !task.checks ? (!Array.isArray(args.results) || !args.results.length || args.results.length > 20 || args.results.some((r) => !(typeof r?.check === 'string' && text(r.check.trim(), 200))) ? 'results: 1 to 20 { check, result }, each check 1 to 200 characters, the checks your item names' : null)
+        ?? (args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank' : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null)
       : !Array.isArray(args.results) || args.results.length !== task.checks.length ? 'results: one { check, result } for each check of your task, no more'
         : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once (they are in the message that gave you the task)'
           : args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank'
@@ -434,11 +440,16 @@ export function createDelegate({ chat, allowed }) {
     if (signal?.aborted) return { error: 'cancelled' };
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!stillCurrent()) return { error: 'no-active-turn' };
-    const value = { commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
+    const value = { item: task.item, commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
     if (card({ id: 'ready-' + caller, kind: 'markdown', text: report(task, value, { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER }) }).error) return { error: 'report-too-large', detail: 'The completion card exceeds 8192 bytes; reduce the reported text or changed files.' };
-    chat.setSprint(caller, { ready: value, verdict: null, idleSince: null });
+    const was = mine.reviews?.[task.item];
+    chat.setSprint(caller, { ready: value, verdict: null, idleSince: null, reviews: { ...mine.reviews, [task.item]: { state: 'queued', commit: value.commit, fixes: was?.fixes ?? 0, at: value.at } } });
     readyTurns.set(caller, turn);
-    return { ready: value };
+    trail(info.parent);
+    // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
+    const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
+    if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${task.item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
+    return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
   function verdict(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -451,8 +462,28 @@ export function createDelegate({ chat, allowed }) {
     if (args.commit !== target.ready.commit) return { error: 'stale-commit' };
     if (!['pass', 'fix'].includes(args.result) || !text(args.note, 4000)) return { error: 'request-refused' };
     const value = { by: caller, commit: args.commit, result: args.result, note: args.note, at: Date.now() };
-    chat.setSprint(args.chat, { verdict: value });
-    return { verdict: value };
+    // The review record (sprint method rules 3 and 4): the fix count comes from verdicts, and the third fix is flagged.
+    const item = target.ready.item ?? target.task?.item, was = item && target.reviews?.[item];
+    const review = item && { state: args.result === 'pass' ? 'passed' : 'fix', commit: args.commit, fixes: (was?.fixes ?? 0) + (args.result === 'fix' ? 1 : 0), at: value.at, by: caller };
+    if (review?.fixes >= 3) review.larger = true;
+    chat.setSprint(args.chat, { verdict: value, ...(item && { reviews: { ...target.reviews, [item]: review } }) });
+    const worker = (chat.family?.() ?? []).find((c) => c.id === args.chat);
+    if (item && worker?.parent) {
+      trail(worker.parent);
+      const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
+      chat.prompt?.(args.chat, { text: said, when: 'queue' }, undefined, 'p9').catch(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+    }
+    return { verdict: value, ...(review && { review }) };
+  }
+  // The review trail (one file, one writer): P9 rewrites review-trail.md in the lead's sprint folder from its workers'
+  // review records; nobody else writes it (sprint-files.mjs).
+  const cell = (value) => String(value ?? '').replace(/[|\r\n]+/g, ' ').slice(0, 160);
+  function trail(lead) {
+    if (!chat.sprintFiles?.trail) return;
+    const rows = chat.family().filter((c) => c.parent === lead).flatMap((c) => Object.entries(chat.sprint(c.id).reviews ?? {})
+      .map(([item, r]) => `| ${cell(item)} | ${cell(c.title)} | ${cell(r.commit)} | ${r.state} | ${r.fixes} | ${r.larger ? 'yes' : ''} | ${new Date(r.at).toISOString()} |`));
+    try { chat.sprintFiles.trail(lead, '# Review trail\n\nWritten by P9 alone, at each ready and verdict: an edit here is replaced.\n\n| Item | Worker | Commit | State | Fix count | Larger model | When |\n|---|---|---|---|---|---|---|\n' + rows.join('\n') + (rows.length ? '\n' : '')); } catch { /* the record in P9 stands; the file is its copy */ }
   }
 
   // An archived chat is out of the sidebar, so no agent starts a turn in it (SECURITY.md § Delegate, "Archiving").

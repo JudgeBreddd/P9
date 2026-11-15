@@ -948,3 +948,23 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   assert.equal((await a.tool('open_chat', { text: 'x', key: 'three' })).error, undefined, 'close: true freed the place');
   console.log('PASS Delegate dogfood 3.5');
 });
+
+test('Work queue on the chat list: a keyed worker carries its role\'s items from the plan, done counted by P9 (0 until a pass), none for a chat with no key', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: open_chat does not ask
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'hello', title: 'Daemon', key: 'daemon' });
+  const loose = await a.tool('open_chat', { text: 'hello', title: 'Loose' });
+  await a.done(made.chat); await a.done(loose.chat);
+  // open_chat made the lead's sprint folder (with notes/daemon.md), in P9's own folder.
+  const sprint = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state]
+    .filter(Boolean).map((b) => path.join(b, 'sprints', a.conversation)).find((f) => fs.existsSync(path.join(f, 'notes', 'daemon.md')));
+  assert.ok(sprint, 'found the sprint folder');
+  fs.writeFileSync(path.join(sprint, 'sprint.md'), '# Plan\n\n## Items\n- [x] d1: one. Role: daemon.\n- [ ] w1: other. Role: window.\n- [ ] d2: two; role daemon\n');
+  const list = await rows(instance);
+  const row = list.find((r) => r.id === made.chat);
+  assert.deepEqual(row.queue, { done: 0, total: 2, items: [{ id: 'd1', text: 'd1: one. Role: daemon.', state: 'todo', fixes: 0 }, { id: 'd2', text: 'd2: two; role daemon', state: 'todo', fixes: 0 }] });
+  assert.equal(list.find((r) => r.id === loose.chat).queue, undefined);
+  assert.equal(row.key, undefined, 'the list started showing keys');
+  console.log('PASS Work queue on the chat list');
+});
