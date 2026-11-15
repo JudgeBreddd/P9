@@ -338,8 +338,13 @@ test('W1 in the window: the app raises the two-versions box on connect; Not now 
   let page = await app.firstWindow();
   await page.locator('#rChat').waitFor();
   await app.evaluate(({ dialog }) => { globalThis.asked = []; dialog.showMessageBox = async (...args) => { globalThis.asked.push(args.at(-1)); return { response: 0 }; }; });
+  // A switch is the IPC reaching the app. A call that fails may never have left the window (one still loading); swallowed,
+  // the wait below passed on the connection already up and the update status never came (O95). So a failed call is made
+  // again until the app has run ssh for the new connection; an extra switch is harmless here.
+  const calls = () => lines(path.join(directory, 'ssh.log')).then((l) => l.length);
   const connect = async () => {
-    await page.evaluate(() => window.p9.server('test-host')).catch(() => {});
+    const before = await calls();
+    await until(() => page.evaluate(() => window.p9.server('test-host')).then((r) => r?.ok, async () => await calls() > before), 'the switch to test-host reached the app');
     await until(() => page.evaluate(() => window.p9.server().then((s) => s.connected && s.host === 'test-host')).catch(() => false), 'connected to the server');
   };
   await connect();
