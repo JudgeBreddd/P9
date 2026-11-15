@@ -402,6 +402,14 @@ const connection = acp.connectAgent(stream, {
       await say('permission:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
       return { stopReason: 'end_turn' };
     }
+    // plan decline: Claude's plan approval in its real shape (ledger, adapter 0.106.0), then the failure it gave after "No, keep
+    // planning" in phone-1 (2026-11-15). It fails whatever the answer, so a test can show only the decline is turned into a cancel.
+    if (text === 'plan decline') {
+      await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'plan-1', kind: 'switch_mode', title: 'Approve Plan', status: 'pending' },
+        options: [{ optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' }, { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_always' },
+          { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' }] });
+      throw acp.RequestError.internalError(undefined, '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use');
+    }
     // perm-json <toolCall>: a permission request in claude-agent-acp's real shape (0.88.0 and 0.104.1 alike) (its options as recorded in
     // test/fixtures/acp/claude.json), for step 1d's own-project reads.
     if (text.startsWith('perm-json ')) {
