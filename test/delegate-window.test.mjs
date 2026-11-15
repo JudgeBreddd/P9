@@ -424,8 +424,8 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
   const a = await tools(t, instance, parent);
   const kids = [];
-  for (let i = 0; i < 5; i++) { const made = await a.tool('open_chat', { text: 'first', item: 'W' + i }); await a.done(made.chat); kids.push(made.chat); }
-  for (const id of kids.slice(0, 4)) assert.equal((await a.tool('stop_chat', { chat: id, close: true })).action, 'stopped'); // the fifth stays: a live worker keeps its row and has no clear
+  for (let i = 0; i < 5; i++) { const made = await a.tool('open_chat', { text: 'first', item: 'W' + i, done_means: 'x', checks: ['Tests pass'] }); assert.ok(made.chat, JSON.stringify(made)); await a.done(made.chat); kids.push(made.chat); }
+  for (const id of kids.slice(0, 4)) { const r = await a.tool('stop_chat', { chat: id, close: true }); assert.equal(r.action, 'stopped', JSON.stringify(r)); } // the fifth stays: a live worker keeps its row and has no clear
   // The way archive_chat clears one, before the window opens (Tyler's try on 2026-11-14).
   await call(instance, `/chat/${kids[0]}/archive`, 'POST', { archived: true });
   const { app, page, errors } = await launch(t, instance);
