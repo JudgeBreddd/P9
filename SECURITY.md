@@ -739,6 +739,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   receiving agent with one line in front, added by P9: it says the message is from another chat's
   agent and not from you, and names that chat. Your own messages carry no such line. It is a
   label, not a control: P9 does not stop the receiving agent from acting on the message.
+  Messages that waited for a turn's end go in as one prompt even when they come from different
+  senders (O109). Then every message in it carries its own line: each agent's message keeps the
+  line it would carry alone, and each of yours gets a line saying it is yours. A note told along
+  with a message of yours puts the same "yours" line in front of your message. Inside another
+  agent's text in such a prompt, P9 changes `[P9:` to `[P9 (quoted):`, so that text cannot pass
+  as one of P9's lines. A different mode and another chat's question still each get a turn of
+  their own.
 - **After a restart.** P9 resends nothing a restart cut off. When P9 starts and finds that a
   restart stopped a chat of a sprint in the middle of a turn, it sends one line to the chat at the
   top of that sprint, `[p9] P9 restarted. Interrupted mid-turn: <titles>. Not resent.`, which
