@@ -339,7 +339,7 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   // ">= 30": a worker's late note may wait with them.
   await until(async () => await pane.locator('[data-held]').count() >= 30, 'all 30 waiting messages drawn');
   const waiting = await pane.locator('[data-held]').count();
-  await pane.locator('.sp-row').first().waitFor({ timeout: 20000 }); // the sprint card: the lead has a worker
+  await pane.locator('.sp-row').first().waitFor({ state: 'attached', timeout: 20000 }); // the sprint card: the lead has a worker (its rows fold away)
   // The text box is on screen, uncovered and takes focus, measured once the layout has stopped moving.
   const box = pane.locator('.composer textarea');
   const onScreen = async (name) => {
