@@ -31,7 +31,7 @@ import { installCards } from './cards-modal.mjs';
 import { installFiles } from './files-view.mjs';
 import { installLanding } from './landing-move.mjs';
 
-// The admin password window (Shell.tsx, row I2), for row 61 on a remote.
+// The admin password window (shell-start.ts, row I2), for row 61 on a remote.
 let adminAsk = null;
 export function mountShell({ askAdmin } = {}) {
   // outer: mountShell's names that the modules split out of it (F9) read and set; getters and setters keep them live.
@@ -1361,7 +1361,7 @@ async function renderServerMenu() {
   }, () => {}));
   // U9: the same switch as This computer above, said plainly.
   if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); window.p9.server(null); };
-  // Builder, 2026-11-02: the after-connect window again with only the agents question (Shell.tsx), now rather than at the next poll.
+  // Builder, 2026-11-02: the after-connect window again with only the agents question (shell-start.ts), now rather than at the next poll.
   if ($('#serverAgents')) $('#serverAgents').onclick = async () => { serverPop.close(); await window.p9.remoteAgents(null).catch(() => {}); dispatchEvent(new Event('p9:status-now')); };
   $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }

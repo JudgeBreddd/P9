@@ -1303,7 +1303,7 @@ test('ssh-missing, and a dropped connection is a notification', { timeout: 10000
   assert.match(main, /serverError === 'ssh-key-needed' \|\| serverError === 'ssh-missing'\) return;/, 'no timed retry');
   const page = await readFile(path.join(root, 'apps/web/src/controller.mjs'), 'utf8');
   assert.match(page, /dropped: \['Lost the connection to ' \+ u\.host \+ ' for 30 seconds\. P9 keeps trying to connect again\.', 'bad', true\]/, 'kept as an alert');
-  const shell = await readFile(path.join(root, 'apps/web/src/Shell.tsx'), 'utf8');
+  const shell = await readFile(path.join(root, 'apps/web/src/shell-start.ts'), 'utf8');
   assert.match(shell, /'ssh-missing': 'This computer has no ssh program[^']*Try again\.'/);
   await rm(runtime, { recursive: true, force: true });
   console.log('PASS ssh-missing: a missing ssh program names itself; drops notify');

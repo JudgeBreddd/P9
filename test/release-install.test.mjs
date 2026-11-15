@@ -233,7 +233,7 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   assert.match(change, /changing = true;\s*try \{\s*const ran = await repairWindowsTask\(process\.resourcesPath, folder, task\)[^]*\} finally \{ changing = false; \}/, 'the change holds wake() off until it returns');
   // Fable review finding 1: the page names a saved folder that was not there at the daemon's start.
   assert.match(main, /h\.savedWorkspace \? \{ savedWorkspace: h\.savedWorkspace, workspace: h\.workspace \}/);
-  assert.match(readFileSync(path.join(root, 'apps', 'web', 'src', 'Shell.tsx'), 'utf8'), /result\.savedWorkspace\) \{\s*label\.textContent = 'Workspace folder not found: ' \+ result\.savedWorkspace/);
+  assert.match(readFileSync(path.join(root, 'apps', 'web', 'src', 'shell-start.ts'), 'utf8'), /result\.savedWorkspace\) \{\s*label\.textContent = 'Workspace folder not found: ' \+ result\.savedWorkspace/);
   assert.match(change, /win \? path\.dirname\(stateReal\)/, "on Windows %LOCALAPPDATA%\\P9, the state folder's parent, is refused");
   console.log('PASS v0.1.4 (text): findings 1-3 and the Windows workspace change are wired');
 });

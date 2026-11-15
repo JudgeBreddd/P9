@@ -1,4 +1,3 @@
 import { defineConfig } from 'astro/config';
-import react from '@astrojs/react';
 
-export default defineConfig({ integrations: [react()], output: 'static', build: { inlineStylesheets: 'never' } });
+export default defineConfig({ output: 'static', build: { inlineStylesheets: 'never' } });
