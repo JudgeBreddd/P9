@@ -9,21 +9,28 @@ import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 
 // B10's cleanup, one step (the Linux hang row, #134's CI log): its steps used to run rm(home) first, while codex-acp
 // was still cloning plugins into home, so rm threw ENOTEMPTY, and a cleanup step that throws skips every later one:
-// the adapter kills never ran and their pipes held the process open (the #111 hang). Each adapter runs in its own
-// process group, and one SIGKILL to the group stops the adapter, codex and git together (a kill to the adapter alone
-// leaves them writing). Then it waits for each to close, bounded, and only then removes home. On Windows a group
-// cannot be signalled: there the adapter alone is killed. ponytail: a child that leaves the group (setsid) is not
-// stopped; the bounded wait then fails with this test's name instead of hanging.
+// the adapter kills never ran, and pipes left open can hold the test process. (That race is shown by #134's log and the
+// planted writer below; it is not proven to be the whole of #111's hang.) Each adapter runs in its own process group,
+// and one SIGKILL to the group stops the adapter, codex and git together (a kill to the adapter alone leaves them
+// writing). Then it waits for each to close, bounded, and only then removes home. "Closed" is Node's 'close' (exit and
+// every pipe ended), tracked from spawn: an adapter that already exited can still have a child holding its stdout, so
+// exitCode is not enough. On Windows a group cannot be signalled: there the adapter alone is killed. ponytail: a child
+// that leaves the group (setsid) is not stopped; the bound then ends our side of its pipes and fails with this test's
+// name instead of hanging.
 const group = process.platform !== 'win32';
-async function stopAll(children, home) {
-  await Promise.all(children.map((child) => {
-    const closed = child.exitCode !== null || child.signalCode !== null ? null : new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('B10 cleanup: pid ' + child.pid + ' did not close in 10 s')), 10000);
-      child.once('close', () => { clearTimeout(timer); resolve(); });
-    });
+const track = (child) => Object.assign(child, { closed: new Promise((resolve) => child.once('close', resolve)) });
+async function stopAll(children, home, ms = 10000) {
+  const waits = await Promise.allSettled(children.map((child) => {
     try { if (group) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { /* ESRCH: already gone */ }
-    return closed;
+    let timer;
+    const late = new Promise((resolve, reject) => { timer = setTimeout(() => {
+      for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.destroy();
+      reject(new Error('B10 cleanup: pid ' + child.pid + ' did not close in ' + ms + ' ms'));
+    }, ms); });
+    return Promise.race([child.closed, late]).finally(() => clearTimeout(timer));
   }));
+  const failed = waits.find((wait) => wait.status === 'rejected');
+  if (failed) { await rm(home, { recursive: true, force: true }).catch(() => {}); throw failed.reason; }
   await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
@@ -61,7 +68,7 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   const children = [];
   t.after(() => stopAll(children, home));
   for (const adapter of ['claude-agent-acp', 'codex-acp']) {
-    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home }, detached: group });
+    const child = track(spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home }, detached: group }));
     children.push(child);
     let output = '', errors = '';
     child.stderr.on('data', (chunk) => { errors += chunk; });
@@ -92,24 +99,55 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   assert.equal(sdkProbe.stdout.trim(), 'function', sdkProbe.stderr);
 });
 
+// A killed grandchild is a zombie until its new parent reaps it: give that 2 s. (/proc state Z counts as gone.)
+const running = (pid) => { try { process.kill(pid, 0); } catch { return false; } try { return !/\) Z /.test(spawnSync('cat', ['/proc/' + pid + '/stat'], { encoding: 'utf8' }).stdout); } catch { return true; } };
+const alive = async (pid) => { for (let i = 0; i < 40 && running(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50)); return running(pid); };
+
 // The hang row's check: a child that keeps writing into home through a grandchild, as codex-acp's plugin clone does.
 // One cleanup step must leave neither of them running and home removed.
 test('B10 cleanup: one step stops each adapter with its whole process group, waits for it, then removes home', { skip: !group && 'no process groups on Windows', timeout: 60000 }, async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-home-'));
   const writer = "const fs = require('node:fs'), dir = process.argv[1]; for (let i = 0; ; i += 1) { try { fs.mkdirSync(dir + '/' + (i % 40), { recursive: true }); fs.writeFileSync(dir + '/' + (i % 40) + '/f' + i, 'x'); } catch {} }";
   const parent = "const c = require('node:child_process').spawn(process.execPath, ['-e', process.argv[1], process.argv[2]], { stdio: 'ignore' }); console.log(c.pid); setInterval(() => {}, 1000);";
-  const child = spawn(process.execPath, ['-e', parent, writer, path.join(home, '.codex', '.tmp', 'plugins-clone')], { detached: group });
+  const child = track(spawn(process.execPath, ['-e', parent, writer, path.join(home, '.codex', '.tmp', 'plugins-clone')], { detached: group }));
   t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } });
   const grandchild = Number(await new Promise((resolve) => child.stdout.once('data', (chunk) => resolve(String(chunk).trim()))));
   for (let i = 0; i < 100 && !(await readdir(path.join(home, '.codex', '.tmp', 'plugins-clone')).catch(() => [])).length; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   await stopAll([child], home);
-  // A killed grandchild is a zombie until its new parent reaps it: give that 2 s. (/proc state Z counts as gone.)
-  const running = (pid) => { try { process.kill(pid, 0); } catch { return false; } try { return !/\) Z /.test(spawnSync('cat', ['/proc/' + pid + '/stat'], { encoding: 'utf8' }).stdout); } catch { return true; } };
-  const alive = async (pid) => { for (let i = 0; i < 40 && running(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50)); return running(pid); };
   assert.equal(await alive(grandchild), false, 'the writer the adapter started still runs');
   assert.equal(await alive(child.pid), false);
   await assert.rejects(readdir(home), { code: 'ENOENT' }, 'home was not removed');
   console.log('PASS B10 cleanup');
+});
+
+// An adapter that has already exited while its child still holds its stdout: Node has seen exit but not 'close'. The
+// cleanup must still kill that child (same group) and wait for 'close'; and a child that left the group (setsid) holding
+// the pipe must fail by name within the bound, not resolve.
+test('B10 cleanup waits for close: an exited adapter whose child holds its stdout', { skip: !group && 'no process groups on Windows', timeout: 60000 }, async (t) => {
+  const holder = "setInterval(() => {}, 1000);";
+  const exits = (escape) => "const c = require('node:child_process').spawn(process.execPath, ['-e', process.argv[1]], { stdio: ['ignore', 'inherit', 'ignore'], detached: " + escape + " }); console.log(c.pid); c.unref();";
+  for (const escape of [false, true]) {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-home-'));
+    const child = track(spawn(process.execPath, ['-e', exits(escape), holder], { detached: group, stdio: ['ignore', 'pipe', 'ignore'] }));
+    const held = Number(await new Promise((resolve) => child.stdout.once('data', (chunk) => resolve(String(chunk).trim()))));
+    t.after(() => { try { process.kill(held, 'SIGKILL'); } catch { /* gone */ } });
+    if (child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve));
+    assert.ok(running(held), 'the child holding stdout runs after the adapter exited');
+    let closed = false;
+    child.closed.then(() => { closed = true; });
+    if (!escape) {
+      await stopAll([child], home);
+      assert.equal(closed, true, 'stopAll returned before the adapter closed');
+      assert.equal(await alive(held), false, 'the child holding stdout still runs');
+      await assert.rejects(readdir(home), { code: 'ENOENT' }, 'home was not removed');
+    } else {
+      const started = Date.now();
+      await assert.rejects(stopAll([child], home, 1500), /B10 cleanup: pid \d+ did not close in 1500 ms/);
+      assert.ok(Date.now() - started < 5000, 'the bound did not hold');
+      await assert.rejects(readdir(home), { code: 'ENOENT' }, 'home was not removed after the failed wait');
+    }
+  }
+  console.log('PASS B10 cleanup waits for close');
 });
 
 // Item 15 (Windows): CI run 40611561200 found rg.exe importing vcruntime140.dll on Windows arm64 with no copy beside it.
