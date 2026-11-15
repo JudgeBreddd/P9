@@ -26,6 +26,13 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command}-failed`);
 }
 
+// O90: pnpm 12 is a native binary, so npm_execpath (the running pnpm) is started as it is; before 12 it was a .cjs file
+// node had to run, and node on the binary fails before the build starts.
+function pnpm(args, options) {
+  const pm = process.env.npm_execpath;
+  if (/\.[cm]?js$/.test(pm)) run(process.execPath, [pm, ...args], options); else run(pm, args, options);
+}
+
 await mkdir(runtime, { recursive: true });
 if (!(await exists(path.join(runtime, 'bin', 'node'))) || !(await exists(path.join(runtime, 'LICENSE')))) {
   let bytes = await readFile(archive).catch(() => null);
@@ -66,7 +73,7 @@ if (!tmuxBytes || createHash('sha256').update(tmuxBytes).digest('hex') !== TMUX_
 // The dynamic symbols native addons link against stay. Outside the block so an older unstripped copy in .build is stripped too.
 run('strip', [path.join(runtime, 'bin', 'node')]);
 if (!process.env.npm_execpath) throw new Error('run-with-pnpm-package-linux');
-run(process.execPath, [process.env.npm_execpath, 'build']);
+pnpm(['build']);
 // The same notices as the Windows installer, in resources/licenses.
 const licenses = path.join(build, 'licenses');
 await mkdir(path.join(licenses, 'fonts'), { recursive: true });
@@ -90,7 +97,7 @@ await writeFile(path.join(licenses, 'daemon-NOTICES.md'), await bundleDaemon(roo
 // O1 (0.1.8): the static AppImage runtime (toolset 1.0.3, labelled beta by electron-builder) carries its own FUSE code, so
 // a stock Ubuntu Desktop opens it without libfuse2t64 and an admin password; the legacy default needs that package.
 // detectUpdateChannel off: latest-linux.yml and no channel in app-update.yml for a pre-release version too (package-windows.mjs).
-run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--linux', 'AppImage', '--x64', '--publish', 'never', '-c.detectUpdateChannel=false',
+pnpm(['dlx', 'electron-builder@26.15.3', '--linux', 'AppImage', '--x64', '--publish', 'never', '-c.detectUpdateChannel=false',
   '-c.toolsets.appimage=1.0.3', '-c.directories.output=dist/linux', '-c.publish.provider=github', '-c.publish.owner=' + REPO.split('/')[0], '-c.publish.repo=' + REPO.split('/')[1]]);
 // Unsigned like the Windows installers: SHA256SUMS-linux-x64 beside the AppImage is how a download is checked.
 const out = path.join(root, 'dist', 'linux');
