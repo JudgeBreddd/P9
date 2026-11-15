@@ -684,14 +684,15 @@ function sectionBody(m, body, g, o) {
   // closed with Back (which wrote the body) the frames are made fresh, as before. Without moveBefore every draw makes them again.
   const look = c => m.cardHtml[c.id]?.html + document.documentElement.classList.contains('dark');
   const keep = typeof body.moveBefore !== 'function' ? [] : (sp?.cards || []).filter(c => body.contains(m.frames[c.id]) && m.made?.[c.id] === look(c))
-    .map(c => { const f = m.frames[c.id], old = f.closest('[data-card]'); body.parentNode.moveBefore(f, body); return [c.id, f, old.dataset.rendered, old.querySelector('.card-note').textContent]; });
+    .map(c => { const f = m.frames[c.id], old = f.closest('[data-card]'); body.parentNode.moveBefore(f, body); return [c.id, f, old.dataset.rendered]; });
   const fresh = o.write(body, boxes.map(b => !b.box ? b.html : `<${b.box === 'mlist' ? 'ul' : 'div'} class="${b.box}">${b.html}</${b.box === 'mlist' ? 'ul' : 'div'}>`).join(''));
-  for (const [id, f, was, note] of keep) { // with the card's state: rendered or not, and the error it stopped with
+  for (const [id, f, was] of keep) { // with the card's state: rendered or not, and the error it stopped with
     const box = body.querySelector(`[data-card][data-tile="${CSS.escape(id)}"]`);
     if (!box) { f.remove(); continue; }
     box.querySelector('.card-frame').moveBefore(f, null);
     if (was !== undefined) box.dataset.rendered = was;
-    if (was === 'error') box.querySelector('.card-note').textContent = note;
+    // A card that throws while it draws says error and then rendered, so the error is kept on m, not read off the state.
+    if (m.cardErr?.[id]) box.querySelector('.card-note').textContent = m.cardErr[id];
   }
   // A frame in the box (unchanged markup, or a kept frame) gets a newer answer posted into it; an empty box gets a new frame.
   for (const c of sp?.cards || []) {
@@ -706,13 +707,13 @@ function sectionBody(m, body, g, o) {
     const onOpen = (p, since = performance.now()) => navigator.userActivation?.isActive && document.activeElement === m.frames[c.id]
       ? outer.openModal({ kind: 'hubtext', title: p.split('/').pop(), req: { id: c.id, path: p }, call: 'folderFile', back: o.back })
       : performance.now() - since < 1000 && outer.setTimeout(() => onOpen(p, since), 25);
-    (m.made ||= {})[c.id] = look(c);
+    (m.made ||= {})[c.id] = look(c); delete m.cardErr?.[c.id];
     const frame = m.frames[c.id] = mountCard(at, c.title, html, { ...outer.FRAME, onOpen, onState: (kind, text) => {
       const box = frame.closest('[data-card]'); // the card's box now: a kept frame has moved into a newer one
       if (box) box.dataset.rendered = kind;
       const now = m.tiles[c.id]?.json;
       if (kind === 'rendered' && now !== undefined) { m.sent[c.id] = now; frame.contentWindow?.postMessage({ p9: 'data', json: now }, '*'); }
-      if (kind === 'error' && box) box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
+      if (kind === 'error') { (m.cardErr ||= {})[c.id] = 'The card stopped with an error: ' + text; if (box) box.querySelector('.card-note').textContent = m.cardErr[c.id]; }
     } });
   }
   body.querySelectorAll('[data-cbtn]').forEach(b => b.onclick = () => outer.openModal({ kind: 'script', s: scriptById(b.dataset.cbtn), back: o.back }));
