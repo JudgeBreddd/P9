@@ -1,21 +1,38 @@
 // The sprint's files (sprint spec D1, D3, D4; SECURITY.md § Sprint files). Plain files in the sprint's folder in P9's
 // state, <ownership>/sprints/<lead chat id>/, beside the worker folders: the lead's agent, its workers and the owner
 // (project page) all read and edit them. Only these names: sprint.md; rules.md (the sprint rules set_rules writes, sent
-// with every lead message); roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent
-// with the sprint rules to that worker); notes/<key>.md (the worker keeps it itself: Now and Log).
-import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+// with every lead message); roles.json (each role's key, provider, model and effort: what Start sprint makes);
+// roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent with the sprint rules to
+// that worker); roles/<key>.work.md (the role's work: its first message at Start sprint); notes/<key>.md (the worker
+// keeps it itself: Now and Log); review-trail.md (P9's own: one row per reviewed item, rewritten at each ready and
+// verdict; nobody else writes it).
+import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const KEY = '[a-z0-9][a-z0-9._-]{0,63}'; // open_chat's key rule
-const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles/${KEY}\\.(?:instructions|rules)\\.md|notes/${KEY}\\.md)$`);
+const TRAIL = 'review-trail.md';
+const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles\\.json|review-trail\\.md|roles/${KEY}\\.(?:instructions|rules|work)\\.md|notes/${KEY}\\.md)$`);
 export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
 // What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
 export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
 // What a worker is told about its notes file, at its start and again after each compaction.
 export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
+// The work queue (sprint method rule 4; Tyler, 2026-11-13: "The item list is the chunks assigned to the worker"): the
+// plan's item lines whose role is this key, in order. The role is the word after "role" at the start of a clause
+// ("; role daemon;" or ". Role: daemon."); an item's id is its text before the first colon. A tick in the plan is a
+// model's say-so: P9 counts an item done from its own review record, never from the box.
+export function itemsOf(plan, key) {
+  const items = [];
+  for (const line of typeof plan === 'string' ? plan.split('\n') : []) {
+    const item = /^\s*- \[[ xX]\] (.+)$/.exec(line)?.[1].trim();
+    const role = item && [...item.matchAll(/(?:^|[;.]\s*)role:?\s+([a-z0-9][a-z0-9_-]*(?:\.[a-z0-9_-]+)*)/gi)].at(-1)?.[1].toLowerCase();
+    if (role && role === key) items.push({ id: item.split(':')[0].trim().slice(0, 200), text: item.slice(0, 500) });
+  }
+  return items;
+}
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {
@@ -33,22 +50,78 @@ export function createSprintFiles({ home }) {
     return file;
   };
   const read = (lead, name) => { const file = fileOf(lead, name); try { return file ? readFileSync(file, 'utf8') : null; } catch { return null; } };
-  // Whole or not at all: a temp file beside it, renamed over the old one. expect (the project page's save): the hash the
-  // file must still have, '' for one that must not exist; checked before and again right before the rename, else
-  // 'changed' and nothing written. ponytail: a writer landing between that last check and the rename is still replaced,
-  // as in packages/files guardedSave; no compare-and-rename syscall exists, and the agents' editors honour no lock.
-  function write(lead, name, text, expect) {
+  // Whole or not at all: a temp file beside it, put in place in one step. expect (the project page's save): the hash the
+  // file must still have, '' for one that must not exist, else 'changed' and the other writer's text kept (O97). The
+  // check and the swap are one guarded step: the file is renamed aside (a writer after that makes a new file), checked
+  // there, and the new text placed without replacing anything (placeNew), which fails if a writer made the file
+  // meanwhile. A writer still holding the old file open is caught up to the recheck after the placing: theirs is put
+  // back and the save is a conflict. ponytail: one that writes after that recheck writes to a file with no name, the same
+  // as after any whole-file write (temp and rename); no check can see a write after its last read without a lock every
+  // writer takes, and agents take none (O101). For the instant of the swap the file is absent to readers. 'no-links': a
+  // disk without hard links, where nothing can be placed whole without replacing (O100); the save is refused before
+  // anything is moved.
+  function put(lead, name, text, expect) {
     const file = fileOf(lead, name);
     if (!file || typeof text !== 'string' || text.length > MAX_FILE || !text.isWellFormed()) return false;
-    const same = () => { const now = read(lead, name); return expect === '' ? now === null : now !== null && hashOf(now) === expect; };
-    if (expect !== undefined && !same()) return 'changed';
+    if (expect !== undefined) { const now = read(lead, name); if (expect === '' ? now !== null : now === null || hashOf(now) !== expect) return 'changed'; }
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const temporary = file + '.p9-tmp-' + randomUUID();
     writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' });
-    if (expect !== undefined && !same()) { try { unlinkSync(temporary); } catch { /* gone */ } return 'changed'; }
-    try { renameSync(temporary, file); } catch (error) { try { unlinkSync(temporary); } catch { /* gone */ } throw error; }
-    return true;
+    try {
+      if (expect === undefined) { renameSync(temporary, file); return true; }
+      return swap(file, temporary, expect);
+    } finally { try { unlinkSync(temporary); } catch { /* renamed or gone */ } }
   }
+  // from put at to without ever replacing a file there, whole in one step: a hard link. false: to exists (a writer got
+  // there first). No copy instead: a copy writes the file in place, and an agent reading it meanwhile gets half (O100).
+  const placeNew = (from, to) => {
+    try { linkSync(from, to); return true; } catch (error) { if (error.code === 'EEXIST') return false; throw error; }
+  };
+  // Whether this disk has hard links: a throwaway file beside it, linked and both removed.
+  const NO_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+  function linksWork(file) {
+    const probe = file + '.p9-link-' + randomUUID();
+    writeFileSync(probe, '', { mode: 0o600, flag: 'wx' });
+    try { linkSync(probe, probe + '-2'); unlinkSync(probe + '-2'); return true; }
+    catch (error) { if (NO_LINKS.has(error.code)) return false; throw error; }
+    finally { unlinkSync(probe); }
+  }
+  const sameFile = (a, b) => { const x = statSync(a, { bigint: true }), y = statSync(b, { bigint: true }); return x.ino === y.ino && x.dev === y.dev; };
+  // A file set aside back at its name, unless a newer file is there (then it goes). If it cannot be placed (a full disk),
+  // it stays aside with its bytes and this throws with its path: nothing is deleted or replaced that was not put back.
+  function restore(aside, file) {
+    try { placeNew(aside, file); } catch (error) { throw Object.assign(new Error(`sprint file kept at ${aside}`), { cause: error, code: error.code }); }
+    unlinkSync(aside);
+  }
+  // Ours out again, only if the file at the name is still ours: it is taken aside first (one step), compared there (the
+  // same inode), and a newer writer's file put back. true: ours removed; false: a newer file is there.
+  function takeBack(file, temporary) {
+    const grab = file + '.p9-back-' + randomUUID();
+    try { renameSync(file, grab); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    if (sameFile(grab, temporary)) { unlinkSync(grab); return true; }
+    restore(grab, file);
+    return false;
+  }
+  function swap(file, temporary, expect) {
+    if (!linksWork(file)) return 'no-links';
+    if (expect === '') return placeNew(temporary, file) ? true : 'changed';
+    const aside = file + '.p9-old-' + randomUUID();
+    try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return 'changed'; throw error; } // deleted meanwhile
+    const kept = () => { try { return hashOf(readFileSync(aside, 'utf8')) === expect; } catch { return false; } };
+    let mine = false, newer = false;
+    try {
+      mine = kept() && placeNew(temporary, file);
+      // Written through a handle opened before the rename: theirs wins, and ours goes only if it is still at the name.
+      if (mine && !kept()) { mine = false; newer = !takeBack(file, temporary); }
+    } catch (error) {
+      if (!mine) restore(aside, file); // else ours is in place and the aside copy is kept
+      throw error;
+    }
+    if (mine || newer) unlinkSync(aside); else restore(aside, file);
+    return mine || 'changed';
+  }
+  // The review trail has one writer, P9 (trail below): the project page and set_rules cannot write it.
+  const write = (lead, name, text, expect) => (name === TRAIL ? false : put(lead, name, text, expect));
   // Made once, never over an edited file.
   const start = (lead, name, text) => { if (read(lead, name) === null && fileOf(lead, name)) write(lead, name, text); };
   return {
@@ -56,6 +129,7 @@ export function createSprintFiles({ home }) {
     fileOf,
     read,
     write,
+    trail: (lead, text) => put(lead, TRAIL, text),
     // D1: the sprint's folder and its plan, made at the lead's first worker.
     ensure(lead) { start(lead, 'sprint.md', PLAN); return folderOf(lead); },
     // D3, D4: a worker's notes, under its key or its chat ID (a worker without a key); roles: a keyed worker's role files
@@ -65,11 +139,18 @@ export function createSprintFiles({ home }) {
       start(lead, `notes/${key}.md`, NOTES);
       return fileOf(lead, `notes/${key}.md`);
     },
-    // Every file of a sprint with its text, in a fixed order: plan, rules, then roles and notes by name.
+    // A prep (Start sprint): the plan, the roles file and the lead's and reviewer's role files, before any chat exists.
+    prep(lead, roles) {
+      start(lead, 'sprint.md', PLAN);
+      start(lead, 'roles.json', JSON.stringify(roles, null, 2) + '\n');
+      for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, '');
+      return folderOf(lead);
+    },
+    // Every file of a sprint with its text, in a fixed order: plan, rules, roles.json, review trail, then roles and notes by name.
     list(lead) {
       const folder = folderOf(lead);
       if (!folder) return [];
-      const names = ['sprint.md', 'rules.md'];
+      const names = ['sprint.md', 'rules.md', 'roles.json', TRAIL];
       for (const dir of ['roles', 'notes']) {
         try { for (const f of readdirSync(path.join(folder, dir)).sort()) names.push(dir + '/' + f); } catch { /* none */ }
       }

@@ -8,7 +8,7 @@ import { phone } from './phone-c16-helpers.mjs';
 // service worker's own included (the context sees those). Logged as P1 lines; the asserts are the fix's.
 test('P1: the phone reads its app files once; a reload or a new login reads none again', { timeout: 180000 }, async (t) => {
   const server = await remoteDaemon(t, {});
-  const { page: setup, session } = await phone(t, server);
+  const { page: setup, session } = await phone(t, server, { serviceWorkers: 'allow' });
   const context = await setup.context().browser().newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());
   await context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
@@ -55,7 +55,7 @@ test('P1: the phone reads its app files once; a reload or a new login reads none
 // stayed uncontrolled (CI, 2026-11-10, phone-speed's wait for the worker). A hard reload makes that state on purpose.
 test('a phone page the service worker did not take over asks it to', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
-  const { page } = await phone(t, server);
+  const { page } = await phone(t, server, { serviceWorkers: 'allow' });
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 20000 });
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Page.reload', { ignoreCache: true });

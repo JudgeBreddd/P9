@@ -488,7 +488,11 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   assert.equal(await page.locator('#screen img').count(), 0);
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'clipboard-before');
   // An OSC 8 link, hovered and tapped, opens nothing (xterm's core would confirm and then window.open).
-  await type("clear; printf '\\x1b]8;;https://attacker.example/\\x07TAPLINK\\x1b]8;;\\x07 %s\\n' LINK-OK");
+  // The marker is joined only in the output: the typed line holds '%s-OK' and 'LINK' apart, so the wait cannot return on
+  // the typed line before clear and printf run (O80: nightly 9's run 43680592539 read a null TAPLINK box that way).
+  const tapLink = "clear; printf '\\x1b]8;;https://attacker.example/\\x07TAPLINK\\x1b]8;;\\x07 %s-OK\\n' LINK";
+  assert.ok(!tapLink.includes('LINK-OK'), 'the typed line must not hold the marker the wait looks for');
+  await type(tapLink);
   await shows('LINK-OK');
   const link = await page.locator('#screen .xterm-rows span', { hasText: 'TAPLINK' }).first().boundingBox();
   await page.mouse.move(link.x + 5, link.y + link.height / 2);
