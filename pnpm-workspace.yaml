@@ -1,3 +1,22 @@
 packages:
   - apps/*
   - packages/*
+
+# pnpm 12 reads overrides only from here (O90): package.json's "pnpm" field is no longer read.
+# #137: asn1js 4, the version the peculiar 3 ASN.1 packages need.
+overrides:
+  '@peculiar/x509': 3.1.0
+  '@peculiar/asn1-android': 3.0.0
+  '@peculiar/asn1-asym-key': 3.0.0
+  '@peculiar/asn1-cms': 3.0.0
+  '@peculiar/asn1-csr': 3.0.0
+  '@peculiar/asn1-ecc': 3.0.0
+  '@peculiar/asn1-pfx': 3.0.0
+  '@peculiar/asn1-pkcs8': 3.0.0
+  '@peculiar/asn1-pkcs9': 3.0.0
+  '@peculiar/asn1-rsa': 3.0.0
+  '@peculiar/asn1-schema': 3.0.0
+  '@peculiar/asn1-x509': 3.0.0
+  '@peculiar/asn1-x509-attr': 3.0.0
+  '@peculiar/asn1-x509-post-quantum': 3.0.0
+  'asn1js': 4.0.0
