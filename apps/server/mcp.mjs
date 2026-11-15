@@ -607,8 +607,9 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       : result.error ? result : { error: result.reason ?? 'save-failed', code: result.code };
   }
 
+  const { ownerStart, ...delegateCalls } = createDelegate({ chat, allowed });
   const calls = {
-    ...createDelegate({ chat, allowed }),
+    ...delegateCalls,
     describe_mission: () => describeMission(),
     validate_registry: (args) => validate('registry', args.text),
     validate_space: (args) => validate('space', args.text),
@@ -807,5 +808,5 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const reg = read(registry), spc = read(space), lists = (data, key) => (Array.isArray(data[key]) ? data[key].filter(object) : []);
     return { registry: registry.hash, space: space?.hash ?? null, protection: protection(), records: { scripts: lists(reg, 'scripts'), apps: lists(reg, 'apps'), pages: lists(reg, 'pages'), sections: lists(spc, 'sections') } };
   }
-  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates };
+  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates, ownerStart };
 }

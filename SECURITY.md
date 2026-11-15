@@ -902,8 +902,8 @@ A sprint's plan, rules, role files and workers' notes are plain files in the spr
 id>/` (the same folder as its worker folders, 0700). The lead's agent, its workers and you all read and edit them.
 Written before the code (sprint spec D1, D3, D4).
 
-- **Only these names.** `sprint.md`, `rules.md`, `roles/<key>.instructions.md`, `roles/<key>.rules.md` and
-  `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
+- **Only these names.** `sprint.md`, `rules.md`, `roles.json`, `roles/<key>.instructions.md`, `roles/<key>.rules.md`,
+  `roles/<key>.work.md` and `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
   ID; `open_chat` refuses a key shaped like a chat ID, so two workers never share notes). P9 reads or writes no other
   name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
@@ -936,6 +936,39 @@ Written before the code (sprint spec D1, D3, D4).
   edit them with their own file tools, under their own mode and your approvals. P9 gives them no write of its own.
 - **Removal.** Clean-up of a sprint's worker folders (§ Worker folders) removes the clone and the worker folders
   only; these files stay. P9 never deletes them. Deleting the lead chat leaves them too.
+
+## Start sprint
+
+You prepare a sprint before any of its chats exists, then one press starts it. Written before the code (0.1.9 phase
+4.5, daemon-1).
+
+- **A prep.** "New sprint" on the project page (desktop only), or an agent's `new_sprint` from a chat in that project,
+  makes a sprint folder `sprints/<sprint id>/` with an outline of `sprint.md`, `roles.json` and empty role files for
+  the lead and the reviewer. P9 keeps which project it belongs to and its title in its own database, never in a file an
+  agent can edit. Its files follow § Sprint files: the same names, the same writes, and the project page edits them.
+  `roles.json` names each chat the sprint will make: its key, its agent (`claude`, `codex` or a provider profile), its
+  model, its effort and optionally its mode.
+- **Who can start it.** You, with the Start press on the desktop (a desktop-only route; the phone has none), or an
+  agent's `start_sprint` from a chat in the same project. For the agent's call P9 asks you first in that chat, in every
+  mode, Unrestricted included. Your yes or your press is the approval record: P9 stores the time, who started it (you,
+  or that chat with your yes) and a SHA-256 of `sprint.md` and `roles.json` as they were. A sprint from another project
+  does not exist to that agent.
+- **What it makes.** The lead's chat, which takes the sprint's id (so the prep's folder is its own), then each other
+  row's chat under it, one by one with a short pause between them. A row other than `review` gets a worker folder
+  (§ Worker folders): a clone and worktree as `open_chat` makes them, from the project's address or the folder
+  `roles.json` names (checked as `open_chat` checks a folder). Each chat starts on exactly its row's agent, model and
+  effort. Your press counts as the yes for each of them, so P9 does not ask again per chat. Everything else
+  `open_chat` checks still applies: the agent lock, Settings > Delegation Off, Workers per chat, 3 levels deep, and a
+  chat under the lead never runs in a wider mode than the lead. Without a mode in its row, the lead starts in its
+  agent's default (Claude Auto, Codex Auto review) from your press, and in the calling chat's own mode from an agent's
+  call. An agent's call never makes a lead wider than the chat that called: a wider row is refused.
+- **Checked before anything is made.** Every row is checked first: a known key used once, a `lead` row, an agent P9 can
+  start, a model that agent (or that profile) lists, an effort it lists (empty when it has none), a mode it has, and no
+  more rows under the lead than Workers per chat. A value P9 cannot start is refused by its role and field. P9 never
+  swaps it for a default, and no chat is made.
+- **Pressing again.** A press that fails halfway keeps what it made. The next press keeps the lead (by its id) and every
+  chat already made (by its key), sends nothing to them again, and makes the rest. Two presses at the same time:
+  the second is refused while the first runs.
 
 ## Agent modes
 

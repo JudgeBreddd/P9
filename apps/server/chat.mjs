@@ -1136,9 +1136,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const folder = body.folder ?? (project ? projects.startFolder(project) : '');
       const there = () => (body.folder === undefined || body.folder === WORKER ? startOf({ folder, project: project?.id, parent: lineage?.parent, key: lineage?.key }).then(() => true, () => false) : folderThere(folder));
       if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
-      const id = randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
+      // lineage.id (Start sprint only, never a body field): the lead's chat takes its sprint's id, so the prep's folder is its own.
+      const id = lineage?.id ?? randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
       try { db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project, parent, key) VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null, lineage?.parent ?? null, lineage?.key ?? null); }
-      catch (error) { if (lineage?.key && /UNIQUE/.test(String(error.message))) return refused(409, 'key-taken'); throw error; }
+      catch (error) { if ((lineage?.key || lineage?.id) && /UNIQUE/.test(String(error.message))) return refused(409, 'key-taken'); throw error; }
       if (profile) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('profile:' + id, JSON.stringify(profile));
       emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(profile && { profile }), ...(lineage?.parent && { parent: lineage.parent }), ...(ID.test(op ?? '') && { op }) });
       return { status: 201, conversation: id };
