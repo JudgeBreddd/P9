@@ -478,6 +478,8 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await mkdir(path.join(sprint, 'roles'), { recursive: true, mode: 0o700 }); await mkdir(path.join(sprint, 'notes'), { mode: 0o700 });
   await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
   await writeFile(path.join(sprint, 'rules.md'), 'Only touch docs/.');
+  // A guarded save sets the old file aside before it places the new one, so for that instant sprint.md is absent (sprint-files.mjs): polls read that as ''.
+  const sprintText = () => readFile(path.join(sprint, 'sprint.md'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; });
   await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
   await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
   const { page, errors } = await launch(t, instance);
@@ -490,7 +492,7 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await box.waitFor({ timeout: 5000 });
   assert.match(await box.inputValue(), /Goal: the docs site\./);
   await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to sprint.md');
+  await until(async () => (await sprintText()).includes('w3: the changelog'), 'the edit saved to sprint.md');
   assert.match(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
   // The lead edits the plan after the page opened it; the user types, then opens another file. The save is refused: the
   // lead's text stays on disk, sprint.md stays open with the user's text, and the page says so with a way on.
@@ -503,11 +505,12 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   assert.match(await box.inputValue(), /w4: mine\n$/);
   assert.equal(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), '# Plan\n\nGoal: the lead\'s.\n');
   await note.getByRole('button', { name: 'Save mine over it' }).click();
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).endsWith('w4: mine\n'), 'Save mine over it saved');
-  assert.equal(await note.textContent(), '');
+  await until(async () => (await sprintText()).endsWith('w4: mine\n'), 'Save mine over it saved');
+  // The file lands before the reply reaches the page, and the page clears the note on the reply: wait for it.
+  await until(async () => (await note.textContent()) === '', 'the note cleared after Save mine over it');
   // Two saves started at once: the second goes after the first and names the file the first wrote, so it is not refused.
   await box.evaluate(async (b) => { for (const text of ['first save\n', 'second save\n']) { b.value = text; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); await new Promise((r) => setTimeout(r, 0)); } });
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')) === 'second save\n', 'the second of two overlapping saves landed');
+  await until(async () => (await sprintText()) === 'second save\n', 'the second of two overlapping saves landed');
   await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
   await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'a saved file switches');
   assert.equal(await page.locator('[data-sp-box]').inputValue(), 'Only touch docs/.');
@@ -615,11 +618,14 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   // As a click does: the pick has the focus when it changes (the page does not redraw under a focused text box).
   const pick = async (role, value) => { const s = page.locator(`[data-spr="agent"][data-role="${role}"]`); await s.focus(); await s.selectOption(value); };
   const roles = async () => JSON.parse(await readFile(path.join(folder, 'roles.json'), 'utf8')).roles;
+  // A guarded save sets roles.json aside before it places the new one, so for that instant it is absent (sprint-files.mjs
+  // swap): a poll reads that as null, which no check below takes as done.
+  const polled = () => roles().catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
   assert.deepEqual(await page.locator('[data-role-row]').evaluateAll((r) => r.map((x) => x.dataset.roleRow)), ['lead', 'review']);
   assert.deepEqual(await page.locator('[data-spr="agent"][data-role="lead"] option').evaluateAll((o) => o.map((x) => x.value)), ['', 'claude', 'codex'], 'the same agents Settings > Delegation offers, empty first');
   // The lead's agent: written to roles.json, the model and effort it had cleared.
   await pick('lead', 'codex');
-  await until(async () => (await roles())[0].provider === 'codex', 'the lead\'s agent saved to roles.json');
+  await until(async () => (await polled())?.[0]?.provider === 'codex', 'the lead\'s agent saved to roles.json');
   assert.deepEqual((await roles())[0], { key: 'lead', provider: 'codex', model: '', effort: '' });
   await page.locator('[data-spr="model"][data-role="lead"]').waitFor({ timeout: 5000 });
   // A worker: a name P9 refuses changes nothing; a good one adds its row, and its three files are listed before they exist.
@@ -627,7 +633,7 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await keyBox.fill('Bad Key'); await page.locator('[data-pj="sprole-add"]').click();
   assert.equal((await roles()).length, 2, 'a refused name added a role');
   await keyBox.fill('docs'); await page.locator('[data-pj="sprole-add"]').click();
-  await until(async () => (await roles()).some((r) => r.key === 'docs'), 'the worker saved to roles.json');
+  await until(async () => (await polled())?.some((r) => r.key === 'docs'), 'the worker saved to roles.json');
   await page.locator('[data-role-row="docs"]').waitFor({ timeout: 5000 });
   const work = page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' });
   assert.match(await work.textContent(), /its first message at Start · empty/);
@@ -643,11 +649,11 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   const theirs = { roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: '', model: '', effort: '' }, { key: 'docs', provider: 'codex', model: '', effort: '', mode: 'Read-only' }] };
   await writeFile(path.join(folder, 'roles.json'), JSON.stringify(theirs, null, 2) + '\n');
   await pick('review', 'claude');
-  await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue()) === 'claude', async () => 'the rows show the lead\'s roles.json; seen ' + JSON.stringify({ disk: await roles(), html: await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message), toasts: await page.locator('body').evaluate(() => [...document.querySelectorAll('[class*=toast]')].map((x) => x.textContent).join(' | ')) }));
+  await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue()) === 'claude', async () => 'the rows show the lead\'s roles.json; seen ' + JSON.stringify({ disk: await polled(), html: await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message), toasts: await page.locator('body').evaluate(() => [...document.querySelectorAll('[class*=toast]')].map((x) => x.textContent).join(' | ')) }));
   assert.deepEqual(await roles(), theirs.roles, 'a refused change wrote over the lead\'s file');
   assert.equal(await page.locator('[data-spr="agent"][data-role="review"]').inputValue(), '');
   await pick('review', 'claude');
-  await until(async () => (await roles())[1].provider === 'claude', 'the change made again saved');
+  await until(async () => (await polled())?.[1]?.provider === 'claude', 'the change made again saved');
   assert.equal((await roles())[2].mode, 'Read-only', 'the lead\'s mode kept');
   // A second pick made while the first one's save is still out: the first save's redraw sets every pick back to the file,
   // and the second save, queued behind it, still writes the second pick. The next roles.json save is held in the main
@@ -664,7 +670,7 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await until(() => app.evaluate(() => !!globalThis.letGo), 'the first save held');
   await pick('review', 'codex');
   await app.evaluate(() => globalThis.letGo());
-  await until(async () => (await roles())[1].provider === 'codex', async () => 'the second pick, made while the first save was held, saved; on disk ' + JSON.stringify(await roles()));
+  await until(async () => (await polled())?.[1]?.provider === 'codex', async () => 'the second pick, made while the first save was held, saved; on disk ' + JSON.stringify(await polled()));
   assert.deepEqual((await roles()).slice(0, 2).map((r) => r.provider), ['codex', 'codex'], 'both picks on disk');
   await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep ' + (await page.screenshot({ type: 'png' })).toString('base64'));
@@ -681,7 +687,7 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   // Remove: workers only; the lead and the reviewer have no Remove.
   assert.equal(await page.locator('[data-pj="sprole-rm"][data-role="lead"], [data-pj="sprole-rm"][data-role="review"]').count(), 0);
   await page.locator('[data-pj="sprole-rm"][data-role="docs"]').click();
-  await until(async () => !(await roles()).some((r) => r.key === 'docs'), 'the worker removed from roles.json');
+  await until(async () => (await polled())?.some((r) => r.key === 'docs') === false, 'the worker removed from roles.json');
   await page.locator('[data-role-row="docs"]').waitFor({ state: 'detached', timeout: 5000 });
   assert.deepEqual(errors, []);
 });
