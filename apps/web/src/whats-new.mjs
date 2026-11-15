@@ -10,8 +10,8 @@ export const WHATS_NEW = {
     "Phone: Mission and Files read as text, sheets stay above the keyboard, and attach is one tap.",
     "Phone: chats open faster, typing is lighter, and the first screen loads a third of the script.",
     "Send to remote refuses a folder over 200,000 files in seconds instead of timing out.",
-    "Pets load sooner on the landing page and in Settings while remote; the pets list opens at once.",
+    "Pets load sooner on the landing page and when reopening Settings while remote; the pets list opens faster.",
     "The window does less work while a reply streams and starts with a smaller script.",
-    "The daemon uses less CPU answering the window, and update checks run far less often.",
+    "The daemon uses less CPU answering the window; remote update progress is checked less often after a minute.",
   ],
 };
