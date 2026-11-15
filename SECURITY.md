@@ -903,11 +903,17 @@ id>/` (the same folder as its worker folders, 0700). The lead's agent, its worke
 Written before the code (sprint spec D1, D3, D4).
 
 - **Only these names.** `sprint.md`, `rules.md`, `roles.json`, `roles/<key>.instructions.md`, `roles/<key>.rules.md`,
-  `roles/<key>.work.md` and `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
+  `roles/<key>.work.md`, `notes/<key>.md` and `review-trail.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
   ID; `open_chat` refuses a key shaped like a chat ID, so two workers never share notes). P9 reads or writes no other
   name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
   (a temp file, then a rename).
+- **The review trail has one writer.** `review-trail.md` is P9's copy of its own review record: one row per item a
+  worker reported with `ready` (item, worker, commit, state, fix count, larger model), rewritten whole at each `ready`
+  and `verdict`. The project page and `set_rules` cannot write it, and an edit to it is replaced at the next write. A
+  worker's work queue (its role's item lines in `sprint.md`) and its done count come from P9's record, never from a
+  tick in the plan. `ready` and `verdict` send their messages as `queue` messages, in the sender's name `p9`: to the
+  worker's sibling with key `review` (ready), to the worker (verdict), and to the lead at an item's third fix.
 - **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker, and a notes outline for every
   worker. For a worker with a key it also makes empty role files. It never writes over a file that is already there.
 - **What reaches an agent.** `rules.md` is the sprint rules (`set_rules` writes it; a value kept from before this
