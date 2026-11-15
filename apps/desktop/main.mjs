@@ -1556,7 +1556,9 @@ export async function createDesktop({ state, open } = {}) {
       timer = setTimeout(() => appSite().then(site => { sites.app = site; window.webContents.reload(); }, () => {}), 800);
     });
   }
-  await window.loadURL(APP_URL);
+  // A reload that starts before this first load finishes (Ctrl+R, the hot reload above, a test) aborts it: the newer load
+  // took over, the window is fine. Before, the rejection ended createDesktop and start.cjs quit the app (CI agent-setup :359).
+  await window.loadURL(APP_URL).catch((error) => { if (error.code !== 'ERR_ABORTED') throw error; });
   if (open) request(open);
   return window;
 }

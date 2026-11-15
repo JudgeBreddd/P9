@@ -243,8 +243,8 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     },
     // One sprint file, from the project page: the lead chat must be in this project, the name one of the sprint's.
     // hash: the file as the page opened it (list's hash), '' to make one again that was deleted since. The lead and the
-    // workers edit these files too: one changed since is not replaced (sprintFiles.write checks it, last right before
-    // its rename), and 409 sends the files as they are now; the page keeps the user's text.
+    // workers edit these files too: one changed since is not replaced (sprintFiles.write checks it and puts the new
+    // text in place as one guarded step, O97), and 409 sends the files as they are now; the page keeps the user's text.
     async sprintFile(id, body) {
       const value = await record(id);
       if (!value) return refused(404, 'unknown-project');
