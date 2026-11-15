@@ -58,8 +58,10 @@ export const DELEGATE_TOOLS = (input) => {
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
       + 'or queue (after the running turn). An agent without steering cannot take a message into its running turn: while it works, auto and steer are refused (turn-running) and only queue reaches it. It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
       + 'when: note passes information on and asks for nothing (a result, a branch that is ready, something you found): it never starts a turn, the chat reads it in its running turn '
-      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work.',
-    input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] } }, ['chat', 'text'])],
+      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. '
+      + 'key (not with a note) gives a worker you started, reused for another role, that role\'s key first, so this message carries roles/<key>.rules.md; a worker in its own worktree keeps its key.',
+    input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] },
+      key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
@@ -462,6 +464,8 @@ export function createDelegate({ chat, allowed }) {
   async function sendChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!text(args.text, 100_000) || (args.when !== undefined && !['auto', 'steer', 'queue', 'note'].includes(args.when))) return { error: 'request-refused' };
+    if (args.key !== undefined && (typeof args.key !== 'string' || !KEY.test(args.key) || ID.test(args.key) || args.when === 'note'))
+      return { error: 'request-refused', detail: 'key: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID, and only with a message that asks for work, never a note.' };
     // A note asks for nothing and starts nothing, so it has no mode and is not held to the sender's: it reaches what
     // send_chat reaches, and a worker's parent always (SECURITY.md § Delegate, "Notes").
     if (args.when === 'note') {
@@ -486,7 +490,18 @@ export function createDelegate({ chat, allowed }) {
       const set = chat.delegation();
       if (running(target.parent, chat.family()) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
     }
-    const sent = await chat.prompt(args.chat, { text: args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
+    // O82: the new key is set before the message, so rulesFor reads the new role's rules file for it. The worker is told
+    // where its notes now live and where the old ones are; nothing is moved.
+    let told = '';
+    if (args.key !== undefined && args.key !== target.key) {
+      if (target.parent !== caller) return { error: 'request-refused', detail: 'Only the chat that started a worker can change its key.' };
+      if (target.folder === WORKER) return { error: 'request-refused', detail: 'A worker in its own worktree keeps its key: its folder and branch are named by it.' };
+      const keyed = chat.rekey(args.chat, args.key);
+      if (keyed.error) return keyed;
+      chat.sprintFiles.ensureWorker(caller, args.key);
+      told = `[P9: your role key is now ${args.key}: your rules come from roles/${args.key}.rules.md and your notes file is notes/${args.key}.md. Your notes so far are in notes/${target.key ?? args.chat}.md.]\n\n`;
+    }
+    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };
     return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn' };
   }

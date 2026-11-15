@@ -382,3 +382,40 @@ test('Sprint files: a key shaped like a chat ID is refused, so two workers never
   assert.ok(!(await a.tool('list_chats')).chats.some((c) => c.title === 'Alias'), 'no second worker made');
   console.log('PASS Sprint files: chat-ID keys refused');
 });
+
+test('Sprint files: O82 send_chat key re-keys a reused worker, so that message and the next carry the new role\'s rules', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  // A worker from an earlier phase, keyed for the reviewer's role.
+  const old = await a.tool('open_chat', { text: 'hello', title: 'Phone', key: 'review' });
+  assert.equal(old.error, undefined, JSON.stringify(old));
+  await a.done(old.chat);
+  const file = (name) => path.join(old.sprint, name);
+  fs.writeFileSync(file('roles/review.rules.md'), 'You never push.');
+  fs.mkdirSync(file('roles'), { recursive: true }); fs.writeFileSync(file('roles/phone.rules.md'), 'Phone builds and pushes.');
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const last = () => JSON.parse(fs.readFileSync(logFile, 'utf8').trim().split('\n').at(-1));
+  // Refused: a key with a note, and a key shaped badly; neither changes the key.
+  assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x', when: 'note', key: 'phone' })).error, 'request-refused');
+  assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x', key: 'Phone!' })).error, 'request-refused');
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === old.chat).key, 'review');
+  // Re-keyed: this message carries the phone rules, not the reviewer's, and tells the worker where its notes are.
+  const sent = await a.tool('send_chat', { chat: old.chat, text: 'go', key: 'phone' });
+  assert.equal(sent.error, undefined, JSON.stringify(sent));
+  const got = await a.done(old.chat);
+  assert.ok(last().includes('Phone builds and pushes.') && !last().includes('You never push.'), last());
+  assert.match(got.last, /^echo:\[P9: your role key is now phone: [^\]]*notes\/phone\.md\. Your notes so far are in notes\/review\.md\.\]\n\ngo$/);
+  assert.ok(fs.existsSync(file('notes/phone.md')) && fs.existsSync(file('notes/review.md')), 'new notes made, old notes kept');
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === old.chat).key, 'phone');
+  // The next plain message keeps the new role.
+  await a.tool('send_chat', { chat: old.chat, text: 'again' });
+  assert.equal((await a.done(old.chat)).last, 'echo:again');
+  assert.ok(last().includes('Phone builds and pushes.') && !last().includes('You never push.'), last());
+  // A key another of the lead's workers holds is refused.
+  const other = await a.tool('open_chat', { text: 'hi', title: 'Other', key: 'daemon' });
+  await a.done(other.chat);
+  assert.equal((await a.tool('send_chat', { chat: old.chat, text: 'x', key: 'daemon' })).error, 'key-taken');
+  console.log('PASS O82: re-keyed worker got the new role\'s rules on that message and the next; note, bad key and taken key refused');
+});

@@ -1360,6 +1360,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     sprint: sprintOf,
     setSprint,
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
+    // O82: a reused worker takes the key of the role it now does, so its next lead message carries that role's rules.
+    rekey(id, key) {
+      try { db.prepare('UPDATE conversations SET key = ? WHERE id = ?').run(key, id); return {}; }
+      catch (error) { if (/UNIQUE/.test(String(error.message))) return { error: 'key-taken' }; throw error; }
+    },
     // Peer help (delegate.mjs ask_chat). ask: text goes to chat id as a question from the chat `from`, after whatever
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.
     answering: (id) => !!live.get(id)?.solo,
