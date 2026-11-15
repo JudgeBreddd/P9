@@ -64,6 +64,8 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   const open = await composerOnScreen(page);
   assert.ok(open.inside && open.hit, 'the composer stays on screen with the strip open: ' + JSON.stringify(open));
   await shot(page, 'o109-phone-strip-open');
+  const shotOpen = await composerOnScreen(page);
+  assert.ok(shotOpen.inside && shotOpen.hit, 'the composer is still on screen after the open-strip screenshot: ' + JSON.stringify(shotOpen));
   await page.click('#queued summary');
 
   // (4) The long turn's step is shown over the box, without scrolling.
@@ -79,8 +81,12 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   await page.reload();
   await page.waitForSelector('#queued:not([hidden])', { timeout: 30000 });
   assert.doesNotMatch(await page.textContent('#chips'), /pinned/, 'closed stays closed');
+  const reloaded = await composerOnScreen(page);
+  assert.ok(reloaded.inside && reloaded.hit, 'the composer is on screen after a reload: ' + JSON.stringify(reloaded));
   more('card', { id: 'ready-0d4c1e2f-1a4c-4559-a431-f0e2d3c4b5a6', kind: 'note', text: 'Worker report: PR #177' });
   await page.reload();
   await page.waitForFunction(() => /3 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
   await shot(page, 'o109-phone-card-back');
+  const back = await composerOnScreen(page);
+  assert.ok(back.inside && back.hit, 'the composer is on screen when the pinned card comes back: ' + JSON.stringify(back));
 });
