@@ -591,3 +591,80 @@ test('projects: Clean up worker folders on the sprint section says what it remov
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-clean ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.deepEqual(errors, []);
 });
+
+// H1-H3, I1 (Start sprint's prep): New sprint on the project page makes a prep; its section
+// shows each role of roles.json as a row with the same Agent / Model / Effort picks as Settings > Delegation, adds and
+// removes workers, lists every role's files before they are written, and a roles.json the lead wrote meanwhile wins.
+test('projects: New sprint makes a prep whose roles and role files are edited on the page', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'site'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator('[data-pj="spnew"]').click();
+  await page.locator('#pjAsk input').fill('Docs sprint');
+  await page.locator('#pjAsk [value=yes]').click();
+  const section = page.locator('[data-sprint]');
+  await section.locator('[data-sp-prep]').waitFor({ timeout: 10000 });
+  const lead = await section.getAttribute('data-sprint');
+  assert.match(await section.locator('h2').textContent(), /Docs sprint/);
+  assert.equal(await section.locator('[data-pj="spclean"]').count(), 0, 'a prep has no worker folders to clean up');
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const folder = (await Promise.all(bases.map((b) => stat(path.join(b, 'sprints', lead)).then(() => path.join(b, 'sprints', lead), () => null)))).find(Boolean);
+  assert.ok(folder, 'found the prep\'s folder');
+  // As a click does: the pick has the focus when it changes (the page does not redraw under a focused text box).
+  const pick = async (role, value) => { const s = page.locator(`[data-spr="agent"][data-role="${role}"]`); await s.focus(); await s.selectOption(value); };
+  const roles = async () => JSON.parse(await readFile(path.join(folder, 'roles.json'), 'utf8')).roles;
+  assert.deepEqual(await page.locator('[data-role-row]').evaluateAll((r) => r.map((x) => x.dataset.roleRow)), ['lead', 'review']);
+  assert.deepEqual(await page.locator('[data-spr="agent"][data-role="lead"] option').evaluateAll((o) => o.map((x) => x.value)), ['', 'claude', 'codex'], 'the same agents Settings > Delegation offers, empty first');
+  // The lead's agent: written to roles.json, the model and effort it had cleared.
+  await pick('lead', 'codex');
+  await until(async () => (await roles())[0].provider === 'codex', 'the lead\'s agent saved to roles.json');
+  assert.deepEqual((await roles())[0], { key: 'lead', provider: 'codex', model: '', effort: '' });
+  await page.locator('[data-spr="model"][data-role="lead"]').waitFor({ timeout: 5000 });
+  // A worker: a name P9 refuses changes nothing; a good one adds its row, and its three files are listed before they exist.
+  const keyBox = page.locator('[data-sp-newkey]');
+  await keyBox.fill('Bad Key'); await page.locator('[data-pj="sprole-add"]').click();
+  assert.equal((await roles()).length, 2, 'a refused name added a role');
+  await keyBox.fill('docs'); await page.locator('[data-pj="sprole-add"]').click();
+  await until(async () => (await roles()).some((r) => r.key === 'docs'), 'the worker saved to roles.json');
+  await page.locator('[data-role-row="docs"]').waitFor({ timeout: 5000 });
+  const work = page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' });
+  assert.match(await work.textContent(), /its first message at Start · empty/);
+  assert.equal(existsSync(path.join(folder, 'roles', 'docs.work.md')), false);
+  await work.click();
+  const box = page.locator('[data-sp-box]');
+  await until(async () => (await box.getAttribute('data-name')) === 'roles/docs.work.md', 'the work file open');
+  await box.pressSequentially('Write the install page.');
+  await page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await until(async () => existsSync(path.join(folder, 'roles', 'docs.work.md')) && (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8')) === 'Write the install page.', 'the work file made by its first save');
+  // The lead writes roles.json meanwhile (with a mode): the page's next change is refused, the rows show the lead's file,
+  // and the change made again keeps the lead's mode.
+  const theirs = { roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: '', model: '', effort: '' }, { key: 'docs', provider: 'codex', model: '', effort: '', mode: 'Read-only' }] };
+  await writeFile(path.join(folder, 'roles.json'), JSON.stringify(theirs, null, 2) + '\n');
+  await pick('review', 'claude');
+  await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue()) === 'claude', async () => 'the rows show the lead\'s roles.json; seen ' + JSON.stringify({ disk: await roles(), html: await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message), toasts: await page.locator('body').evaluate(() => [...document.querySelectorAll('[class*=toast]')].map((x) => x.textContent).join(' | ')) }));
+  assert.deepEqual(await roles(), theirs.roles, 'a refused change wrote over the lead\'s file');
+  assert.equal(await page.locator('[data-spr="agent"][data-role="review"]').inputValue(), '');
+  await pick('review', 'claude');
+  await until(async () => (await roles())[1].provider === 'claude', 'the change made again saved');
+  assert.equal((await roles())[2].mode, 'Read-only', 'the lead\'s mode kept');
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  assert.match(await page.locator('[data-pj="spfile"]', { hasText: /^rules\.md/ }).textContent(), /none yet, P9's defaults are sent/);
+  assert.match(await page.locator('[data-pj="spfile"]', { hasText: 'roles/lead.work.md' }).textContent(), /· empty/);
+  await page.setViewportSize({ width: 900, height: 900 }); await page.waitForTimeout(600); // the panel settles at the new width
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  // Nothing in the section reaches past its right edge (each element's box, so a clipped one counts too), beyond the 8 px
+  // a row's hover background reaches out on each side by design (projects.css .crow).
+  const wide = await section.evaluate((e) => { const r = e.getBoundingClientRect().right + 9; return [...e.querySelectorAll('*')].filter((x) => x.getBoundingClientRect().right > r).map((x) => x.tagName + '.' + x.className + ' ' + Math.round(x.getBoundingClientRect().right - r + 1) + 'px ' + (x.textContent || '').slice(0, 40)); });
+  assert.deepEqual(wide, [], 'past the sprint section\'s edge at 900 wide');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep-narrow ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await page.setViewportSize({ width: 1400, height: 900 });
+  // Remove: workers only; the lead and the reviewer have no Remove.
+  assert.equal(await page.locator('[data-pj="sprole-rm"][data-role="lead"], [data-pj="sprole-rm"][data-role="review"]').count(), 0);
+  await page.locator('[data-pj="sprole-rm"][data-role="docs"]').click();
+  await until(async () => !(await roles()).some((r) => r.key === 'docs'), 'the worker removed from roles.json');
+  await page.locator('[data-role-row="docs"]').waitFor({ state: 'detached', timeout: 5000 });
+  assert.deepEqual(errors, []);
+});

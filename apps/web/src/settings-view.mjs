@@ -1,5 +1,5 @@
 // Settings and the setup wizard. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
-import { esc, info, modes, LOOSE } from './helpers.mjs';
+import { esc, info, modes, LOOSE, runnerPicks } from './helpers.mjs';
 import { missionKeys, missionShown, missionValue, PATH_KEYS } from './mission-files.mjs';
 import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts } from './security.mjs';
 import { maintenanceGroup, MAINTENANCE } from './maintenance.mjs';
@@ -205,14 +205,9 @@ function delegationGroup() {
   if (!window.p9?.chat || !outer.liveChat?.on) return '';
   const d = delegation, off = d ? '' : ' disabled';
   const sel = (attr, label, aria, opts, now) => `<label class="set-pick">${label}<select data-slot="input" ${attr}${off} aria-label="${aria}">${(now && !opts.some(([v]) => v === now) ? [...opts, [now, now]] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === (now ?? '') ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
-  const agents = [['', 'The parent chat\'s'], ...Object.keys(modes).map(a => [a, outer.names[a]]), ...outer.profiles.map(p => ['profile:' + p.id, p.name])];
   // One row per worker, in the order a chat's workers start. A row on a provider profile offers that profile's models.
-  const row = (w, i) => { const prof = w.agent.startsWith('profile:') ? outer.profiles.find(p => 'profile:' + p.id === w.agent) : null, a = prof ? 'claude' : w.agent;
-    const ml = prof ? prof.models.map(m => [m, m]) : [['', 'Not set'], ...(outer.lastModels[a]?.options || []).map(o => [o.value, o.name])];
-    const el = [['', 'Not set'], ...(outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || []).map(o => [o.value, o.name])];
-    return `<div class="set-row set-dg" data-dg-worker="${i}"><span><strong>Worker ${i + 1}</strong>${a && ml.length < 2 && el.length < 2 ? `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>` : ''}</span>`
-      + sel(`data-dg-agent="${i}"`, 'Agent', `Worker ${i + 1} agent`, agents, w.agent)
-      + (w.agent ? sel(`data-dg-model="${i}"`, 'Model', `Worker ${i + 1} model`, ml, w.model || (prof ? prof.models[0] : '')) + sel(`data-dg-effort="${i}"`, 'Effort', `Worker ${i + 1} effort`, el, w.effort) : '') + '</div>'; };
+  const row = (w, i) => { const p = runnerPicks(outer, w, { first: ['', 'The parent chat\'s'], attr: k => `data-dg-${k}="${i}"`, aria: k => `Worker ${i + 1} ${k}`, off });
+    return `<div class="set-row set-dg" data-dg-worker="${i}"><span><strong>Worker ${i + 1}</strong>${p.empty ? `<span class="muted sm">Start one ${outer.names[p.a]} chat first: its models and efforts are listed here after that.</span>` : ''}</span>` + p.html + '</div>'; };
   return `<fieldset class="set-group" id="setDelegation"><legend>Delegation ${info('Delegate: a chat\'s agent can start workers, each one a chat of its own. Here: who may start a sprint, how many workers a chat may run, and what each worker runs on.', 'settings')}</legend>`
     + '<p class="muted sm" data-dg-what>Delegate lets your agent hand parts of a job, or a whole build, to workers: on the same agent, or on any agent or provider profile set up in P9. Each worker is a full agent session of its own, an ordinary chat listed in the sidebar under the chat that started it. You can open it, read what it is doing and send it a message to steer it. A worker never runs in a wider mode than the chat that started it. Its approvals and questions also show in the chat that started it, so you answer every worker from one place.</p>'
     + `<div class="set-row"><span><strong>Who starts a sprint</strong><span class="muted sm">Off: agents cannot start workers. Ask me first: P9 asks you in the chat before a chat's first worker, in every mode. Agent decides: no question beyond the mode's own.</span></span>`
