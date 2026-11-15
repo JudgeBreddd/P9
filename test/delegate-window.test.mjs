@@ -319,6 +319,11 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   // coordinator's and the workers' notes did.
   const state = async () => (await call(instance, '/chat')).conversations.find((c) => c.id === parent).state;
   await until(async () => await state() !== 'turn', 'the lead is idle');
+  // The "Ready report pinned" note rides in front of the lead's next prompt, in the same text; a first prompt takes it, so
+  // the fake reads the second one as it is.
+  const ends = async () => (await events(instance, parent)).filter((e) => e.type === 'turn-end').length, before = await ends();
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'cwd' });
+  await until(async () => await ends() > before && await state() !== 'turn', 'the note read');
   const started = await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'tools 20' });
   try { await until(async () => await state() === 'turn', 'the lead is working'); } catch (error) { // what the daemon did instead
     const last = (await events(instance, parent)).slice(-20).map((e) => e.type + ':' + JSON.stringify(e.data).slice(0, 80));
