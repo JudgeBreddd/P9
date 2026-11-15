@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -45,11 +46,18 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   // when it threw the kill never ran and the adapters held the run open. codex-acp also starts `codex app-server` as its own
   // child, which a kill of the adapter leaves running with this HOME. So each adapter gets its own process group, and one
   // hook kills every group and waits until none of its processes is left (a zombie writes nothing) before home is removed.
-  const groups = [];
+  // Elsewhere (no /proc; B10 runs only on the Linux CI shards) the hook kills each adapter and waits for its exit first.
+  // ponytail: off Linux an adapter's own children are not waited for.
+  const linux = process.platform === 'linux', groups = [], children = [];
   const left = (group) => readdirSync('/proc').filter((pid) => /^\d+$/.test(pid)).filter((pid) => {
     try { const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'), [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' '); return state !== 'Z' && Number(pgrp) === group; } catch { return false; }
   });
   t.after(async () => {
+    for (const child of linux ? [] : children) if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
     for (const group of groups) try { process.kill(-group, 'SIGKILL'); } catch {}
     for (let i = 0; groups.some((group) => left(group).length); i++) {
       if (i === 100) throw new Error('adapter processes still running 10 s after SIGKILL: ' + groups.flatMap(left).join(' ') + '; home left at ' + home);
@@ -58,8 +66,8 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
     await rm(home, { recursive: true, force: true });
   });
   for (const adapter of ['claude-agent-acp', 'codex-acp']) {
-    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home }, detached: true });
-    groups.push(child.pid);
+    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home }, detached: linux });
+    if (linux) groups.push(child.pid); else children.push(child);
     let output = '', errors = '';
     child.stderr.on('data', (chunk) => { errors += chunk; });
     await new Promise((resolve) => {
