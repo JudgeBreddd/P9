@@ -690,18 +690,31 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep-narrow ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await page.setViewportSize({ width: 1400, height: 900 });
   // O110: a writer that empties roles.json, pauses, then writes. A save answered in the pause read roles.json empty: the
-  // rows stay (the last good ones) and show the written file once it is there, without a reload.
-  const file = path.join(folder, 'roles.json'), written = JSON.parse(await readFile(file, 'utf8'));
-  written.roles[0].provider = 'claude';
+  // rows stay (the last good ones) and show the written file once it is there, without a reload. A second sprint torn at
+  // the same time, met only in the first one's fresh read, keeps its rows too and shows its own file when written.
+  await page.locator('[data-pj="spnew"]').click();
+  await page.locator('#pjAsk input').fill('Site sprint');
+  await page.locator('#pjAsk [value=yes]').click();
+  await until(async () => (await page.locator('[data-sprint]').count()) === 2, 'the second prep');
+  const lead2 = (await page.locator('[data-sprint]').evaluateAll((e) => e.map((x) => x.dataset.sprint))).find((x) => x !== lead);
+  const file = path.join(folder, 'roles.json'), file2 = path.join(path.dirname(folder), lead2, 'roles.json');
+  const written = JSON.parse(await readFile(file, 'utf8')), written2 = JSON.parse(await readFile(file2, 'utf8'));
+  written.roles[0].provider = 'claude'; written2.roles[0].provider = 'codex';
+  const leadPick = (l) => page.locator(`[data-sprint="${l}"] [data-spr="agent"][data-role="lead"]`);
+  const seen = async (l) => (await leadPick(l).inputValue({ timeout: 1000 }).catch(() => null));
+  await until(async () => (await seen(lead2)) === '', 'the second prep\'s rows');
   await page.evaluate(() => { window.notReloaded = true; });
-  await writeFile(file, '');
+  await writeFile(file, ''); await writeFile(file2, '');
   await page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' }).click();
   await until(async () => (await box.getAttribute('data-name')) === 'roles/docs.work.md', 'the work file open again');
   await box.pressSequentially(' Then the FAQ.');
-  await page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await page.locator(`[data-sprint="${lead}"] [data-pj="spfile"]`, { hasText: /^sprint\.md/ }).click();
   await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8')).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
   await writeFile(file, JSON.stringify(written, null, 2) + '\n');
-  await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue().catch(() => null)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message));
+  await until(async () => (await seen(lead)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator(`[data-sprint="${lead}"] [data-sp-roles]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
+  assert.equal(await seen(lead2), '', 'the second sprint, still torn, keeps its rows');
+  await writeFile(file2, JSON.stringify(written2, null, 2) + '\n');
+  await until(async () => (await seen(lead2)) === 'codex', async () => 'the second sprint\'s rows show its written roles.json; seen ' + await page.locator(`[data-sprint="${lead2}"]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
   assert.equal(await page.evaluate(() => window.notReloaded), true, 'the page reloaded');
   // Remove: workers only; the lead and the reviewer have no Remove.
   assert.equal(await page.locator('[data-pj="sprole-rm"][data-role="lead"], [data-pj="sprole-rm"][data-role="review"]').count(), 0);

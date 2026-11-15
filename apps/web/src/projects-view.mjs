@@ -127,7 +127,7 @@ export function installProjects(o, api) {
   // again every half second until roles.json parses, so the rows never stay missing. Still bad after 5 s, it is the file
   // as written and its hint shows. ponytail: 10 reads; a writer paused longer than 5 s mid-file shows the hint until the
   // next save or a reload.
-  let rereading = false;
+  const rereading = new Set(); // id + ' ' + lead: each sprint's own reads, so two recovering at once both finish
   function takeFiles(sp, files, id) {
     if (rolesOf({ files }) === null && rolesOf(sp) !== null) {
       const good = sp.files.find(f => f.name === 'roles.json');
@@ -137,7 +137,7 @@ export function installProjects(o, api) {
     sp.files = files;
   }
   async function reread(id, lead) {
-    if (rereading) return; rereading = true;
+    const key = id + ' ' + lead; if (rereading.has(key)) return; rereading.add(key);
     try {
       for (let i = 0; i < 10; i++) {
         await new Promise(go => setTimeout(go, 500));
@@ -145,14 +145,23 @@ export function installProjects(o, api) {
         if (r?.status !== 200 || cur?.id !== id) return;
         const sp = r.body.project.sprints?.find(x => x.lead === lead);
         if (!sp || rolesOf(sp) !== null || i === 9) {
-          cur = r.body.project; renderPage(); fillBox(false);
+          adopt(r.body.project, lead); renderPage(); fillBox(false);
           // renderPage leaves the page alone while its file box has the focus: the rows alone are redrawn then.
           const rows = sp && document.activeElement?.matches?.('[data-sp-box]') && page.querySelector(`[data-sprint="${CSS.escape(lead)}"] :is([data-sp-roles], [data-sp-roles-bad])`);
           if (rows) rows.outerHTML = rolesHtml(sp, rolesOf(sp));
           return;
         }
       }
-    } finally { rereading = false; }
+    } finally { rereading.delete(key); }
+  }
+  // A fresh read of the project replaces cur: every sprint but the one read for (taken as it is) keeps its last good
+  // roles.json over a torn one, and is read again itself.
+  function adopt(next, lead) {
+    for (const sp of next.sprints ?? []) {
+      const was = sp.lead !== lead && cur?.id === next.id && cur.sprints?.find(x => x.lead === sp.lead);
+      if (was) { const files = sp.files; sp.files = was.files; takeFiles(sp, files, next.id); }
+    }
+    cur = next;
   }
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
@@ -305,8 +314,7 @@ export function installProjects(o, api) {
     if (r.status === 200 && r.body?.files) takeFiles(sp, r.body.files, project.id);
     else { if (r.status !== 409) failed(r); else say('roles.json changed in P9 meanwhile (the lead or an agent wrote it). The rows show it now; make your change again.', 'warn');
       const again = await call('project', { id: project.id });
-      if (again.status === 200 && cur?.id === project.id) { const was = sp.files, n = again.body.project.sprints?.find(x => x.lead === lead);
-        cur = again.body.project; if (n) { const files = n.files; n.files = was; takeFiles(n, files, project.id); } } }
+      if (again.status === 200 && cur?.id === project.id) adopt(again.body.project); }
     if (cur?.id === project.id) { renderPage(); fillBox(false); } // the focus stays on the pick just used
     return r.status === 200;
   }
