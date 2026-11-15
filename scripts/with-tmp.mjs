@@ -9,10 +9,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const dir = mkdtempSync(path.join(os.tmpdir(), 'p9-run-'));
 process.on('SIGINT', () => {}); // Ctrl+C stops the child; we stay to clean up.
-const [command, ...args] = process.argv.slice(2);
+const [command, ...rest] = process.argv.slice(2);
+// `node --test`: each file process also gets its own TMPDIR, removed when that file ends (tmp-per-file.mjs, O77).
+const perFile = pathToFileURL(path.join(import.meta.dirname, 'tmp-per-file.mjs')).href;
+const args = command === 'node' && rest.includes('--test') ? ['--import', perFile, ...rest] : rest;
 const result = spawnSync(command, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir, P9_LANDING: process.env.P9_LANDING ?? 'off' } });
 rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
 if (result.status === null) console.error(`with-tmp: ${command} ended by ${result.signal ?? result.error?.message}, no exit code`);
