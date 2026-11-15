@@ -117,7 +117,10 @@ test('O62: the message goes to the chat on screen, whatever the chat list says',
   await page.evaluate(() => { const select = document.querySelector('#conversation'); select.innerHTML = '<option value="">No conversations yet</option>'; document.querySelector('#send').click(); });
   for (let i = 0; i < 100 && !attempts.length; i++) await page.waitForTimeout(100);
   await page.waitForTimeout(500);
-  assert.deepEqual(attempts.map((attempt) => [attempt.chat, attempt.body.text]), [[A, 'to the open chat']], 'the send did not go to the open chat');
+  assert.deepEqual(attempts.map((attempt) => [attempt.chat, attempt.body.text]), [[A, 'to the open chat']],
+    // O71: the phone writes why a message was not sent under the box; name it, the box and the page in the failure.
+    'the send did not go to the open chat; ' + JSON.stringify(await page.evaluate(() => ({ composerNote: document.querySelector('#composerNote')?.textContent,
+      box: document.querySelector('#prompt')?.value, address: location.href }))));
   console.log('PASS O62: sent to the open chat with the list select empty');
 });
 
