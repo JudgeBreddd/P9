@@ -553,7 +553,13 @@ function chatBar(id: string, run: string) {
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
   const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
-  barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
+  barSig = html; const bar = one('[data-bar="chat"]'), next = document.createElement('template'); next.innerHTML = html;
+  // O107: the back button never changes, so the one on screen stays: replacing it would drop a keyboard user's focus
+  // when a later answer (the chat's folder, the model's name) redraws the rest of the bar.
+  const back = bar.firstElementChild, same = next.content.firstElementChild;
+  if (back && same && back.outerHTML === same.outerHTML) { same.remove(); while (back.nextSibling) back.nextSibling.remove(); bar.append(next.content); }
+  else bar.replaceChildren(next.content);
+  online();
 }
 // Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
 // so the browser's own back, the iOS edge swipe included, returns to the list.

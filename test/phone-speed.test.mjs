@@ -77,7 +77,7 @@ async function open(page, name, cacheOff) {
 test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads after the first screen, one chat is read first (A/B, numbers in the log)', { timeout: 600000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server);
-  const { page, session } = await phone(t, server);
+  const { page, session } = await phone(t, server, { serviceWorkers: 'allow' });
   await page.waitForFunction(() => performance.getEntriesByName('p9-chat-painted').length, null, { timeout: 30000 });
   // The worker is installed and running by now (phone() loads the page twice).
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 20000 });
