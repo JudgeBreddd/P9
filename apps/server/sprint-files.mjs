@@ -5,7 +5,7 @@
 // roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent with the sprint rules to
 // that worker); roles/<key>.work.md (the role's work: its first message at Start sprint); notes/<key>.md (the worker
 // keeps it itself: Now and Log).
-import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -54,15 +54,40 @@ export function createSprintFiles({ home }) {
   }
   // Link from to to, false if to exists (a writer got there first).
   const linkNew = (from, to) => { try { linkSync(from, to); return true; } catch (error) { if (error.code === 'EEXIST') return false; throw error; } };
+  const sameFile = (a, b) => { const x = statSync(a, { bigint: true }), y = statSync(b, { bigint: true }); return x.ino === y.ino && x.dev === y.dev; };
+  // A file set aside back at its name, unless a newer file is there (then it goes). If neither works (no hard links
+  // here, a full disk), it stays aside with its bytes and this throws: nothing is deleted that was not put back.
+  function restore(aside, file) {
+    try { linkNew(aside, file); } catch (error) {
+      try { lstatSync(file); } catch { try { renameSync(aside, file); return; } catch { /* below */ } }
+      throw Object.assign(new Error(`sprint file kept at ${aside}`), { cause: error });
+    }
+    unlinkSync(aside);
+  }
+  // Ours out again, only if the file at the name is still ours: it is taken aside first (one step), compared there, and a
+  // newer writer's file put back. true: ours removed; false: a newer file is there.
+  function takeBack(file, temporary) {
+    const grab = file + '.p9-back-' + randomUUID();
+    try { renameSync(file, grab); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    if (sameFile(grab, temporary)) { unlinkSync(grab); return true; }
+    restore(grab, file);
+    return false;
+  }
   function swap(file, temporary, expect) {
     if (expect === '') return linkNew(temporary, file);
     const aside = file + '.p9-old-' + randomUUID();
     try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     const kept = () => { try { return hashOf(readFileSync(aside, 'utf8')) === expect; } catch { return false; } };
-    let mine = kept() && linkNew(temporary, file);
-    if (mine && !kept()) { mine = false; unlinkSync(file); } // written through an open handle meanwhile: theirs wins
-    if (!mine) linkNew(aside, file); // theirs back, unless a newer file is there
-    unlinkSync(aside);
+    let mine = false, newer = false;
+    try {
+      mine = kept() && linkNew(temporary, file);
+      // Written through a handle opened before the rename: theirs wins, and ours goes only if it is still at the name.
+      if (mine && !kept()) { mine = false; newer = !takeBack(file, temporary); }
+    } catch (error) {
+      if (!mine) restore(aside, file); // else ours is in place and the aside copy is kept
+      throw error;
+    }
+    if (mine || newer) unlinkSync(aside); else restore(aside, file);
     return mine;
   }
   // Made once, never over an edited file.

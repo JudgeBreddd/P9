@@ -436,10 +436,46 @@ test('Sprint files: a lead write landing between the save\'s last check and its 
   lead(notes, "the worker's notes");
   const made = save('notes/w2.md', 'page', '');
   assert.deepEqual([made, files.read(LEAD, 'notes/w2.md')], ['changed', "the worker's notes"], `the save returned ${made} and left: ${files.read(LEAD, 'notes/w2.md')}`);
+  // Rollback (review FIX1): the save's text is linked in, then a write through a handle opened before the swap changes
+  // the old file, and another writer replaces the file at its name before the save takes its text back. The newer
+  // writer's file stays: the rollback removes only the save's own file.
+  const realLink = fs.linkSync;
+  t.mock.method(fs, 'linkSync', (from, to) => {
+    realLink.call(fs, from, to);
+    if (!String(from).includes('.p9-tmp-')) return;
+    const aside = fs.readdirSync(folder).find((f) => f.startsWith('sprint.md.p9-old-'));
+    fs.writeFileSync(path.join(folder, aside), 'through an old handle');
+    fs.writeFileSync(file + '.other', "the worker's newer file"); fs.renameSync(file + '.other', file);
+  });
+  syncBuiltinESMExports();
+  const back = save('sprint.md', 'page', hashOf("the lead's edit"));
+  assert.deepEqual([back, files.read(LEAD, 'sprint.md')], ['changed', "the worker's newer file"], `the save returned ${back} and left: ${files.read(LEAD, 'sprint.md')}`);
   // Nothing in the way: the save lands, and no temp or aside file is left.
-  assert.equal(files.write(LEAD, 'sprint.md', 'page', hashOf("the lead's edit")), true);
+  assert.equal(files.write(LEAD, 'sprint.md', 'page', hashOf("the worker's newer file")), true);
   assert.equal(files.read(LEAD, 'sprint.md'), 'page');
   const left = [...fs.readdirSync(folder), ...fs.readdirSync(path.join(folder, 'notes'))].filter((f) => f.includes('.p9-'));
   assert.deepEqual(left, [], 'no temp or aside files left');
   console.log('PASS O97 guarded swap');
+});
+
+test('Sprint files: a save whose link fails for another reason throws and leaves the file at its name (O97 link error)', { timeout: 10000 }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const files = createSprintFiles({ home: dir }), folder = path.join(dir, LEAD);
+  files.ensure(LEAD); files.write(LEAD, 'sprint.md', "the worker's newer file");
+  const realLink = fs.linkSync;
+  const save = (name, text, hash) => { try { return files.write(LEAD, name, text, hash); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); } };
+  // A link that fails for another reason (no hard links on this disk, a full disk): the save throws, and the file is
+  // back at its name with its text, never left only aside or deleted.
+  for (const only of [true, false]) {
+    t.mock.method(fs, 'linkSync', (from, to) => {
+      if (only && !String(from).includes('.p9-tmp-')) return realLink.call(fs, from, to);
+      throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' });
+    });
+    syncBuiltinESMExports();
+    let thrown = null; try { save('sprint.md', 'page', hashOf("the worker's newer file")); } catch (error) { thrown = error.code; }
+    assert.deepEqual([thrown, files.read(LEAD, 'sprint.md')], ['EPERM', "the worker's newer file"], `${only ? 'the save\'s link' : 'every link'} failing: threw ${thrown}, left: ${files.read(LEAD, 'sprint.md')}`);
+  }
+  assert.deepEqual(fs.readdirSync(folder).filter((f) => f.includes('.p9-')), [], 'no temp or aside files left');
+  console.log('PASS O97 link error');
 });
