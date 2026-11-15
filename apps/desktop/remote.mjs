@@ -100,9 +100,9 @@ export async function sshHosts(file = path.join(os.homedir(), '.ssh', 'config'))
 // Where a host's forward lives: the same path on every reconnect, so main's state folder stays valid across a drop.
 export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir()) => path.join(runtime, 'p9-server', host);
 
-function readServer(host, ssh) {
+function readServer(host, ssh, signal) {
   // 60 s: a background start waits up to 30 s for its daemon.
-  return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536 }, (error, out, err) => {
+  return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536, signal }, (error, out, err) => {
     // No ssh program on this computer (owner, 2026-11-02): said as such, not as an unreachable remote.
     if (error) return reject(error.code === 'ENOENT' ? new Error('ssh-missing') : sshFailure(err));
     // U8: a slim line before the JSON marks the Temporary remote's small P9 (remote-install.mjs slimScript).
@@ -188,7 +188,7 @@ export function restartServer(host, ssh = 'ssh') {
 // reach the port; the server daemon's cookie still guards every route (threat model row 50, Windows).
 export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {}, signal, tcp = WINDOWS }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
-  const { remoteSocket, remoteEditor, credentials, background, slim } = await readServer(host, ssh);
+  const { remoteSocket, remoteEditor, credentials, background, slim } = await readServer(host, ssh, signal);
   const state = serverFolder(host, runtime), parent = path.dirname(state);
   await mkdir(state, { recursive: true, mode: 0o700 });
   await chmod(parent, 0o700); await chmod(state, 0o700);
@@ -234,10 +234,11 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   child.stdin.on('error', () => {});
   let closed = false, exited = false, ready = false;
   const close = async () => { closed = true; if (!exited) child.kill(); unrelay(); await cancel(); await rm(state, { recursive: true, force: true }); };
-  child.on('exit', () => { exited = true; unrelay(); if (!closed) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); if (ready) onDrop(); } });
+  // Before ready, the loop below sees exited and closes (awaited); only a drop removes the folder here.
+  child.on('exit', () => { exited = true; unrelay(); if (!closed && ready) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); onDrop(); } });
   // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon.
   for (let i = 0; i < 60; i++) {
-    if (exited) break;
+    if (exited || signal?.aborted) break;
     if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check, background, slim }; }
     await new Promise(resolve => setTimeout(resolve, 250));
   }

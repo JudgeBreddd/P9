@@ -545,6 +545,25 @@ function renderList() {
   if (seeded) keepRead();
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
+// O107, O108: the bar is patched by position instead of rewritten, so the back, model and Stop buttons stay the same nodes and
+// a keyboard user's focus stays on them. ponytail: the desktop's controller.mjs sync without its form handling (the bar has no
+// form controls); importing that module would pull the desktop into the phone bundle.
+function patchBar(old: Node, next: Node) {
+  const olds = [...old.childNodes], news = [...next.childNodes];
+  news.forEach((n, i) => {
+    const o = olds[i];
+    if (!o) old.appendChild(n);
+    else if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) old.replaceChild(n, o);
+    else if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; }
+    else if (!o.isEqualNode(n)) {
+      const e = o as Element, f = n as Element;
+      for (const { name } of [...e.attributes]) if (!f.hasAttribute(name)) e.removeAttribute(name);
+      for (const { name, value } of [...f.attributes]) if (e.getAttribute(name) !== value) e.setAttribute(name, value);
+      patchBar(o, n);
+    }
+  });
+  olds.slice(news.length).forEach((n) => (n as ChildNode).remove());
+}
 // The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
 let barSig = '';
 let agentLists: Record<string, unknown> = {}; // O47: each agent's lists as the daemon keeps them (GET /chat)
@@ -553,12 +572,8 @@ function chatBar(id: string, run: string) {
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
   const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
-  barSig = html; const bar = one('[data-bar="chat"]'), next = document.createElement('template'); next.innerHTML = html;
-  // O107: the back button never changes, so the one on screen stays: replacing it would drop a keyboard user's focus
-  // when a later answer (the chat's folder, the model's name) redraws the rest of the bar.
-  const back = bar.firstElementChild, same = next.content.firstElementChild;
-  if (back && same && back.outerHTML === same.outerHTML) { same.remove(); while (back.nextSibling) back.nextSibling.remove(); bar.append(next.content); }
-  else bar.replaceChildren(next.content);
+  barSig = html; const next = document.createElement('template'); next.innerHTML = html;
+  patchBar(one('[data-bar="chat"]'), next.content); // O107, O108: a later draw (the folder answer, the model's name, the run state) keeps a focused button
   online();
 }
 // Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
