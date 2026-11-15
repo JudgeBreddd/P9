@@ -25,8 +25,13 @@ test('Startup speed: time to the first window, its first paint and the chat list
       const page = await app.firstWindow({ timeout: 20000 });
       const window = Date.now() - t0;
       await page.waitForURL(/^p9:\/\/app\//, { timeout: 20000 });
-      await page.locator('#rChat').waitFor({ timeout: 20000 });
-      const shell = Date.now() - t0;
+      // O76: read on the page's own clock. The test tool's first lookup in a page takes 0.75 to 1.5 s since the shell lost
+      // React (#116), while the page shows the chat button about 100 ms after it loads (8 launches, 2026-11-15), so a
+      // tool-side wait timed the tool. ponytail: why that first lookup is slow is not known.
+      const shell = Math.round(await page.evaluate(() => new Promise((resolve) => { const look = () => {
+        const e = document.querySelector('#rChat');
+        if (e && e.getBoundingClientRect().width && getComputedStyle(e).visibility === 'visible') resolve(performance.timeOrigin + performance.now()); else setTimeout(look, 5);
+      }; look(); })) - t0);
       const fcpAt = await page.evaluate(() => new Promise((resolve) => new PerformanceObserver((list, observer) => {
         const e = list.getEntriesByName('first-contentful-paint')[0]; if (e) { observer.disconnect(); resolve(performance.timeOrigin + e.startTime); }
       }).observe({ type: 'paint', buffered: true })));
