@@ -5,7 +5,7 @@
 // roles/<key>.instructions.md (sent once, at the worker's start); roles/<key>.rules.md (sent with the sprint rules to
 // that worker); roles/<key>.work.md (the role's work: its first message at Start sprint); notes/<key>.md (the worker
 // keeps it itself: Now and Log).
-import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -35,21 +35,35 @@ export function createSprintFiles({ home }) {
     return file;
   };
   const read = (lead, name) => { const file = fileOf(lead, name); try { return file ? readFileSync(file, 'utf8') : null; } catch { return null; } };
-  // Whole or not at all: a temp file beside it, renamed over the old one. expect (the project page's save): the hash the
-  // file must still have, '' for one that must not exist; checked before and again right before the rename, else
-  // 'changed' and nothing written. ponytail: a writer landing between that last check and the rename is still replaced,
-  // as in packages/files guardedSave; no compare-and-rename syscall exists, and the agents' editors honour no lock.
+  // Whole or not at all: a temp file beside it, put in place in one step. expect (the project page's save): the hash the
+  // file must still have, '' for one that must not exist, else 'changed' and the other writer's text kept (O97). The
+  // check and the swap are one guarded step: the file is renamed aside (a writer after that makes a new file), checked
+  // there, and the new text linked in, which fails if a writer made the file meanwhile. ponytail: a writer still holding
+  // the old file open is caught only up to the recheck after the link; for that instant the file is absent to readers.
   function write(lead, name, text, expect) {
     const file = fileOf(lead, name);
     if (!file || typeof text !== 'string' || text.length > MAX_FILE || !text.isWellFormed()) return false;
-    const same = () => { const now = read(lead, name); return expect === '' ? now === null : now !== null && hashOf(now) === expect; };
-    if (expect !== undefined && !same()) return 'changed';
+    if (expect !== undefined) { const now = read(lead, name); if (expect === '' ? now !== null : now === null || hashOf(now) !== expect) return 'changed'; }
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const temporary = file + '.p9-tmp-' + randomUUID();
     writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' });
-    if (expect !== undefined && !same()) { try { unlinkSync(temporary); } catch { /* gone */ } return 'changed'; }
-    try { renameSync(temporary, file); } catch (error) { try { unlinkSync(temporary); } catch { /* gone */ } throw error; }
-    return true;
+    try {
+      if (expect === undefined) { renameSync(temporary, file); return true; }
+      return swap(file, temporary, expect) ? true : 'changed';
+    } finally { try { unlinkSync(temporary); } catch { /* renamed or gone */ } }
+  }
+  // Link from to to, false if to exists (a writer got there first).
+  const linkNew = (from, to) => { try { linkSync(from, to); return true; } catch (error) { if (error.code === 'EEXIST') return false; throw error; } };
+  function swap(file, temporary, expect) {
+    if (expect === '') return linkNew(temporary, file);
+    const aside = file + '.p9-old-' + randomUUID();
+    try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    const kept = () => { try { return hashOf(readFileSync(aside, 'utf8')) === expect; } catch { return false; } };
+    let mine = kept() && linkNew(temporary, file);
+    if (mine && !kept()) { mine = false; unlinkSync(file); } // written through an open handle meanwhile: theirs wins
+    if (!mine) linkNew(aside, file); // theirs back, unless a newer file is there
+    unlinkSync(aside);
+    return mine;
   }
   // Made once, never over an edited file.
   const start = (lead, name, text) => { if (read(lead, name) === null && fileOf(lead, name)) write(lead, name, text); };

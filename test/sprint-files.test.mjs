@@ -394,8 +394,11 @@ test('Sprint files: a save\'s reply lists the file as it wrote it, so a writer l
   sprintFiles.ensure(LEAD);
   const file = path.join(dir, 'sprints', LEAD, 'sprint.md'), opened = sprintFiles.list(LEAD).find((f) => f.name === 'sprint.md');
   // The lead's agent writes sprint.md just after the page's save renamed its text into place, before the reply's list.
-  const real = fs.renameSync;
-  t.mock.method(fs, 'renameSync', (from, to) => { real.call(fs, from, to); if (String(from).includes('.p9-tmp-')) fs.writeFileSync(file, 'the lead\'s edit'); });
+  // The save's text reaches the file by a rename or a link from its temp file; the lead writes right after either.
+  for (const name of ['renameSync', 'linkSync']) {
+    const real = fs[name];
+    t.mock.method(fs, name, (from, to) => { real.call(fs, from, to); if (String(from).includes('.p9-tmp-')) fs.writeFileSync(file, 'the lead\'s edit'); });
+  }
   syncBuiltinESMExports();
   let saved;
   try { saved = await projects.sprintFile(PROJECT, { lead: LEAD, name: 'sprint.md', text: 'mine', hash: opened.hash }); }
@@ -408,4 +411,35 @@ test('Sprint files: a save\'s reply lists the file as it wrote it, so a writer l
   assert.equal(next.status, 409); assert.equal(next.error, 'sprint-file-changed');
   assert.equal(fs.readFileSync(file, 'utf8'), 'the lead\'s edit');
   console.log('PASS O93 save reply is the saved text');
+});
+
+test('Sprint files: a lead write landing between the save\'s last check and its swap is kept, and the save gets a conflict (O97)', { timeout: 10000 }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const files = createSprintFiles({ home: dir }), folder = path.join(dir, LEAD), file = path.join(folder, 'sprint.md');
+  files.ensure(LEAD); files.write(LEAD, 'notes/w1.md', 'notes');
+  // Forced: the lead's agent writes the file just before the save's text arrives there, by whatever step (rename or link)
+  // takes it from the temp file: after every check the save makes.
+  const lead = (target, text) => {
+    for (const name of ['renameSync', 'linkSync']) {
+      const real = fs[name];
+      t.mock.method(fs, name, (from, to) => { if (String(from).includes('.p9-tmp-')) fs.writeFileSync(target, text); return real.call(fs, from, to); });
+    }
+    syncBuiltinESMExports();
+  };
+  const save = (name, text, hash) => { try { return files.write(LEAD, name, text, hash); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); } };
+  lead(file, "the lead's edit");
+  const got = save('sprint.md', 'page', hashOf(files.read(LEAD, 'sprint.md')));
+  assert.deepEqual([got, files.read(LEAD, 'sprint.md')], ['changed', "the lead's edit"], `the save returned ${got} and left: ${files.read(LEAD, 'sprint.md')}`);
+  // The same for a file the page makes again ('' = must not exist).
+  const notes = path.join(folder, 'notes', 'w2.md');
+  lead(notes, "the worker's notes");
+  const made = save('notes/w2.md', 'page', '');
+  assert.deepEqual([made, files.read(LEAD, 'notes/w2.md')], ['changed', "the worker's notes"], `the save returned ${made} and left: ${files.read(LEAD, 'notes/w2.md')}`);
+  // Nothing in the way: the save lands, and no temp or aside file is left.
+  assert.equal(files.write(LEAD, 'sprint.md', 'page', hashOf("the lead's edit")), true);
+  assert.equal(files.read(LEAD, 'sprint.md'), 'page');
+  const left = [...fs.readdirSync(folder), ...fs.readdirSync(path.join(folder, 'notes'))].filter((f) => f.includes('.p9-'));
+  assert.deepEqual(left, [], 'no temp or aside files left');
+  console.log('PASS O97 guarded swap');
 });
