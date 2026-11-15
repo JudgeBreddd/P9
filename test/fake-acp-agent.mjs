@@ -402,6 +402,17 @@ const connection = acp.connectAgent(stream, {
       await say('permission:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
       return { stopReason: 'end_turn' };
     }
+    // plan approve: Claude's plan approval as adapter 0.106.0 sends it (ledger, phone-2, 2026-11-13): an empty "Approve Plan"
+    // call, the plan in its update, then the approval carrying the plan again.
+    if (text === 'plan approve') {
+      const plan = [{ type: 'content', content: { type: 'text', text: '# Ship the phone plan\n\n## Steps\n\n1. Show the plan on the approval\n2. Keep the choices below it' } }];
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'plan-2', title: 'Approve Plan', kind: 'switch_mode', status: 'pending', content: [] } });
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'plan-2', content: plan } });
+      const result = await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'plan-2', kind: 'switch_mode', title: 'Approve Plan', status: 'pending', content: plan },
+        options: [{ optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' }, { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' }] });
+      await say('plan:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
+      return { stopReason: 'end_turn' };
+    }
     // perm-json <toolCall>: a permission request in claude-agent-acp's real shape (0.88.0 and 0.104.1 alike) (its options as recorded in
     // test/fixtures/acp/claude.json), for step 1d's own-project reads.
     if (text.startsWith('perm-json ')) {
