@@ -154,7 +154,7 @@ export function createDelegate({ chat, allowed }) {
     const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };
-    // Settings > Delegation, Who starts a sprint: Off refuses every new worker.
+    // Settings > Delegation, Who may start workers: Off refuses every new worker.
     if (set.start === 'off') return OFF;
     let depth = 0;
     for (let at = family.find((c) => c.id === caller); at?.parent && depth < 50; at = family.find((c) => c.id === at.parent)) depth += 1;
