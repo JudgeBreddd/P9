@@ -647,7 +647,12 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   // The lead writes roles.json meanwhile (with a mode): the page's next change is refused, the rows show the lead's file,
   // and the change made again keeps the lead's mode.
   const theirs = { roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: '', model: '', effort: '' }, { key: 'docs', provider: 'codex', model: '', effort: '', mode: 'Read-only' }] };
-  await writeFile(path.join(folder, 'roles.json'), JSON.stringify(theirs, null, 2) + '\n');
+  // The work file's save answers with every sprint file as the daemon reads them after the write: the lead writes only
+  // once that answer is on the page (the work file's row no longer empty), and in one step, a whole file put in place.
+  // A reader between a truncate and its write reads roles.json as empty, and the page shows no rows to pick.
+  await until(async () => !/· empty/.test(await work.textContent()), 'the work file\'s save answered on the page');
+  await writeFile(path.join(folder, 'roles.json.new'), JSON.stringify(theirs, null, 2) + '\n');
+  await rename(path.join(folder, 'roles.json.new'), path.join(folder, 'roles.json'));
   await pick('review', 'claude');
   await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue()) === 'claude', async () => 'the rows show the lead\'s roles.json; seen ' + JSON.stringify({ disk: await polled(), html: await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message), toasts: await page.locator('body').evaluate(() => [...document.querySelectorAll('[class*=toast]')].map((x) => x.textContent).join(' | ')) }));
   assert.deepEqual(await roles(), theirs.roles, 'a refused change wrote over the lead\'s file');
