@@ -148,13 +148,19 @@ const checks = {
   async backFocus(page, side) {
     await page.waitForSelector('h1:text("Chats")');
     await newChat(page);
-    for (let i = 0; i < 20 && !(await page.evaluate(() => document.activeElement?.matches('.bar .back'))); i++) await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement?.matches('.bar .back')), true, 'Tab reaches the back button');
-    await shot(page, 'phone-back-focus-' + side, { x: 0, y: 0, width: 390, height: 120 });
-    const ring = await page.evaluate(() => {
-      const b = document.activeElement, c = getComputedStyle(b), r = b.getBoundingClientRect(), top = b.closest('section').getBoundingClientRect().top;
+    // The ring is read in the same step that finds focus on the button (O106): a new chat's bar is drawn again when its
+    // folder answer comes (the model name), which replaces the button and sends focus to the page; on a slow runner that
+    // lands after the Tab loop, and a later read then had no focused button.
+    const read = () => page.evaluate(() => {
+      const b = document.activeElement;
+      if (!b?.matches('.bar .back')) return null;
+      const c = getComputedStyle(b), r = b.getBoundingClientRect(), top = b.closest('section').getBoundingClientRect().top;
       return { style: c.outlineStyle, width: parseFloat(c.outlineWidth), offset: parseFloat(c.outlineOffset), above: top - (r.top - parseFloat(c.outlineOffset) - parseFloat(c.outlineWidth)) };
     });
+    let ring = await read();
+    for (let i = 0; i < 20 && !ring; i++) { await page.keyboard.press('Tab'); ring = await read(); }
+    assert.notEqual(ring, null, 'Tab reaches the back button');
+    await shot(page, 'phone-back-focus-' + side, { x: 0, y: 0, width: 390, height: 120 });
     assert.notEqual(ring.style, 'none', 'a keyboard user still sees where focus is');
     assert.ok(ring.above <= 0, 'the ring reaches ' + ring.above + ' px above the screen it is drawn in: ' + JSON.stringify(ring));
   },
