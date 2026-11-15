@@ -143,6 +143,10 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     await page.click('#fMission [data-group="Home"]');
     const card = (id) => page.locator(`#mdlBody [data-card][data-tile="${id}"]`);
     const inbox = card('inbox').frameLocator('iframe');
+    // A draw of the whole window on demand: the section's text changes on disk and the rail's Mission button reads it again.
+    const redraw = async (text) => { await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [{ ...space().sections[0], text }] }));
+      await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+      await page.locator('#mdlBody [data-space-text]', { hasText: text }).waitFor({ timeout: 10000 }); };
     await inbox.locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
     assert.equal(await inbox.locator('#label').textContent(), '<b>not markup</b>', 'the JSON arrived as data: markup in it stays text');
     assert.equal(await inbox.locator('#label b').count(), 0);
@@ -201,6 +205,18 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       // A changed answer must still reach the card (on the next pull, or the one after: a tile's answer is kept 30 s).
       await writeFile(path.join(ws, 'hub/nums.json'), JSON.stringify({ count: 13, label: '<b>not markup</b>' }));
       await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 65000 });
+      // O94: that changed answer drew the whole window, and every card kept its frame (a click in a card then still lands).
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a changed answer draws the window and keeps every card frame');
+      await redraw('Custom cards, drawn again.');
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a changed section keeps every card frame too');
+      assert.match(await card('throws').locator('.card-note').innerText(), /card boom/, 'a kept card still says the error it stopped with');
+      // Where an element cannot move without reloading (no Element.moveBefore: phone Safari, older browsers), each draw makes
+      // the frames again, and the last answer still reaches the new frame.
+      await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
+      await redraw('Custom cards, no moveBefore.');
+      assert.deepEqual(await frames(), Array(6).fill('new'), 'without moveBefore every card frame is made again');
+      await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 15000 });
+      await page.evaluate(() => { Element.prototype.moveBefore = window.__mb; });
     }
     await card('inbox').scrollIntoViewIfNeeded();
     shot('m5-desktop-1280-' + theme, await page.screenshot());
@@ -269,12 +285,15 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       await card('logs').scrollIntoViewIfNeeded();
       await sleep(1000);
       assert.equal(await page.locator('#mdlT').innerText(), 'Home · 7 items', 'p9open with no click opens nothing');
+      await logs.locator('body[data-ready]').waitFor({ timeout: 10000 });
+      await card('logs').locator('iframe').evaluate((f) => { f.dataset.o94 = 'before a.log'; });
       await clickAfterBack('#a', page.locator('#mdlBody pre', { hasText: 'the whole log, not its last lines' }), 'm5-257');
       assert.equal(await page.locator('#mdlT').innerText(), 'a.log');
       shot('wall15-log-open', await page.screenshot());
       await page.click('#mdlBack');
       await card('logs').scrollIntoViewIfNeeded();
       await logs.locator('body[data-ready]').waitFor({ timeout: 10000 }); // Back draws the window whole: a new frame
+      assert.equal(await card('logs').locator('iframe').evaluate((f) => f.dataset.o94 ?? 'fresh'), 'fresh', 'after Back the card frames are made fresh (O94 keeps only a frame still in the window)');
       await clickAfterBack('#b', page.locator('#mdlBody pre', { hasText: 'Could not read it' }), 'm5-212');
       assert.equal(await page.locator('#mdlFoot [data-fix]').count(), 0, 'no Fix with Claude on a file that did not open');
       await page.click('#mdlBack');
