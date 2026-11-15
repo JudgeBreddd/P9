@@ -1260,13 +1260,19 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
       const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ?? '') + n.text + '\n\n' })), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)];
       if (rules?.started) sending.add(id);
+      // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
+      const done = (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
       // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
       new Promise((resolve) => resolve(session.agent.prompt({ sessionId: session.sessionId, prompt }))).then(
-        // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-        (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } },
+        done,
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
-        (error) => { if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
+        (error) => {
+          // phone-1 (2026-11-15): after "No, keep planning" on the plan approval, Claude's adapter can fail the prompt with
+          // this diagnostic instead of ending it as cancelled (seen twice on adapter 0.106.0, not reproduced outside P9).
+          // A decline is a cancel the user chose, so it ends the same way; any other failure still shows its error.
+          if (session.planDeclined === turn && /\[ede_diagnostic\][^]*stop_reason=tool_use/.test(String(error?.message))) return done({ stopReason: 'cancelled' });
+          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;
@@ -1300,6 +1306,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // The route's own check ran before later awaits; a device revoked since then must not approve the agent's action.
       stillAuthorized();
       pending.resolve(answer);
+      // The plan approval (Claude's ExitPlanMode is its only switch_mode tool call) declined in this turn: see the prompt's failure handler.
+      if (pending.kind === 'approval' && pending.request.toolCall?.kind === 'switch_mode') session.planDeclined = answer.outcome?.optionId === 'reject' ? session.turn : null;
       emit(id, 'answered', { request: body.request, answer, ...(from && { from }) });
       return { status: 200, ok: true };
     },
