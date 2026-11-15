@@ -6,7 +6,7 @@
 // that worker); roles/<key>.work.md (the role's work: its first message at Start sprint); notes/<key>.md (the worker
 // keeps it itself: Now and Log); review-trail.md (P9's own: one row per reviewed item, rewritten at each ready and
 // verdict; nobody else writes it).
-import { constants, copyFileSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -55,7 +55,8 @@ export function createSprintFiles({ home }) {
   // check and the swap are one guarded step: the file is renamed aside (a writer after that makes a new file), checked
   // there, and the new text placed without replacing anything (placeNew), which fails if a writer made the file
   // meanwhile. ponytail: a writer still holding the old file open is caught only up to the recheck after the placing;
-  // for that instant the file is absent to readers.
+  // for that instant the file is absent to readers. 'no-links': a disk without hard links, where nothing can be placed
+  // whole without replacing (O100); the save is refused before anything is moved.
   function put(lead, name, text, expect) {
     const file = fileOf(lead, name);
     if (!file || typeof text !== 'string' || text.length > MAX_FILE || !text.isWellFormed()) return false;
@@ -65,16 +66,23 @@ export function createSprintFiles({ home }) {
     writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' });
     try {
       if (expect === undefined) { renameSync(temporary, file); return true; }
-      return swap(file, temporary, expect) ? true : 'changed';
+      return swap(file, temporary, expect);
     } finally { try { unlinkSync(temporary); } catch { /* renamed or gone */ } }
   }
-  // from put at to without ever replacing a file there: a hard link, or where a link fails (a disk without hard links) an
-  // exclusive copy, which fails if to exists and removes its partial file on error. false: to exists (a writer got
-  // there first); 'copy': placed by the copy.
+  // from put at to without ever replacing a file there, whole in one step: a hard link. false: to exists (a writer got
+  // there first). No copy instead: a copy writes the file in place, and an agent reading it meanwhile gets half (O100).
   const placeNew = (from, to) => {
-    try { linkSync(from, to); return true; } catch (error) { if (error.code === 'EEXIST') return false; }
-    try { copyFileSync(from, to, constants.COPYFILE_EXCL); return 'copy'; } catch (error) { if (error.code === 'EEXIST') return false; throw error; }
+    try { linkSync(from, to); return true; } catch (error) { if (error.code === 'EEXIST') return false; throw error; }
   };
+  // Whether this disk has hard links: a throwaway file beside it, linked and both removed.
+  const NO_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+  function linksWork(file) {
+    const probe = file + '.p9-link-' + randomUUID();
+    writeFileSync(probe, '', { mode: 0o600, flag: 'wx' });
+    try { linkSync(probe, probe + '-2'); unlinkSync(probe + '-2'); return true; }
+    catch (error) { if (NO_LINKS.has(error.code)) return false; throw error; }
+    finally { unlinkSync(probe); }
+  }
   const sameFile = (a, b) => { const x = statSync(a, { bigint: true }), y = statSync(b, { bigint: true }); return x.ino === y.ino && x.dev === y.dev; };
   // A file set aside back at its name, unless a newer file is there (then it goes). If it cannot be placed (a full disk),
   // it stays aside with its bytes and this throws with its path: nothing is deleted or replaced that was not put back.
@@ -83,32 +91,31 @@ export function createSprintFiles({ home }) {
     unlinkSync(aside);
   }
   // Ours out again, only if the file at the name is still ours: it is taken aside first (one step), compared there (the
-  // same inode, or for a copy the same bytes), and a newer writer's file put back. true: ours removed; false: a newer
-  // file is there.
-  function takeBack(file, temporary, copied) {
+  // same inode), and a newer writer's file put back. true: ours removed; false: a newer file is there.
+  function takeBack(file, temporary) {
     const grab = file + '.p9-back-' + randomUUID();
     try { renameSync(file, grab); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-    if (copied ? readFileSync(grab).equals(readFileSync(temporary)) : sameFile(grab, temporary)) { unlinkSync(grab); return true; }
+    if (sameFile(grab, temporary)) { unlinkSync(grab); return true; }
     restore(grab, file);
     return false;
   }
   function swap(file, temporary, expect) {
-    if (expect === '') return !!placeNew(temporary, file);
+    if (!linksWork(file)) return 'no-links';
+    if (expect === '') return placeNew(temporary, file) ? true : 'changed';
     const aside = file + '.p9-old-' + randomUUID();
-    try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    try { renameSync(file, aside); } catch (error) { if (error.code === 'ENOENT') return 'changed'; throw error; } // deleted meanwhile
     const kept = () => { try { return hashOf(readFileSync(aside, 'utf8')) === expect; } catch { return false; } };
     let mine = false, newer = false;
     try {
-      const placed = kept() && placeNew(temporary, file);
-      mine = !!placed;
+      mine = kept() && placeNew(temporary, file);
       // Written through a handle opened before the rename: theirs wins, and ours goes only if it is still at the name.
-      if (mine && !kept()) { mine = false; newer = !takeBack(file, temporary, placed === 'copy'); }
+      if (mine && !kept()) { mine = false; newer = !takeBack(file, temporary); }
     } catch (error) {
       if (!mine) restore(aside, file); // else ours is in place and the aside copy is kept
       throw error;
     }
     if (mine || newer) unlinkSync(aside); else restore(aside, file);
-    return mine;
+    return mine || 'changed';
   }
   // The review trail has one writer, P9 (trail below): the project page and set_rules cannot write it.
   const write = (lead, name, text, expect) => (name === TRAIL ? false : put(lead, name, text, expect));
