@@ -1884,15 +1884,19 @@ async function refreshing(button: HTMLButtonElement, load: () => Promise<unknown
 // daemon hands over only a vendor's sign-in URL and Codex's code; the link is set as a property and opens only on a tap.
 type SignIn = { signedIn: boolean; running: boolean; url: string | null; code: string | null; unsupported: boolean; exit: number | null };
 const SIGN_IN: [agent: 'claude' | 'codex', name: string, page: string][] = [['claude', 'Claude', 'Claude'], ['codex', 'Codex', 'OpenAI']];
-let signInShown = '', signInTimer = 0, signInData: Record<string, SignIn> | null = null;
+let signInShown = '', signInTimer = 0, signInAsked = 0, signInData: Record<string, SignIn> | null = null;
 const signInNote: Record<string, string> = {};
 async function loadSignIn() {
   clearTimeout(signInTimer);
-  const box = one('#signIn');
+  const box = one('#signIn'), asked = ++signInAsked;
   // Unreachable after a first answer: the cards stay as last seen (a code typed in the box with them) and say so.
-  let stale = false;
-  try { signInData = await request('/phone/sign-in'); }
+  let stale = false, answer: Record<string, SignIn> | undefined;
+  try { answer = await request('/phone/sign-in'); }
   catch { stale = true; }
+  // O68 c: answers can come back out of order (the page's first-load ask can land after a later one), and an older
+  // answer drew over a newer one. Only the newest ask is drawn; it also sets the next poll.
+  if (asked !== signInAsked) return;
+  if (answer) signInData = answer;
   const data = signInData;
   if (!data) { box.innerHTML = '<article class="card warn"><h2>Sign-in unavailable</h2><p>The daemon did not answer.</p></article>'; signInShown = ''; return; }
   const key = JSON.stringify([data, signInNote, stale]);
