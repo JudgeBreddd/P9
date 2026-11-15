@@ -478,6 +478,8 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await mkdir(path.join(sprint, 'roles'), { recursive: true, mode: 0o700 }); await mkdir(path.join(sprint, 'notes'), { mode: 0o700 });
   await writeFile(path.join(sprint, 'sprint.md'), '# Plan\n\nGoal: the docs site.\n\n## Items\n- [ ] w1: the install page\n- [ ] w2: the FAQ\n\n## What I will need from you\n- A review of the FAQ wording\n');
   await writeFile(path.join(sprint, 'rules.md'), 'Only touch docs/.');
+  // A guarded save sets the old file aside before it places the new one, so for that instant sprint.md is absent (sprint-files.mjs): polls read that as ''.
+  const sprintText = () => readFile(path.join(sprint, 'sprint.md'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; });
   await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
   await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
   const { page, errors } = await launch(t, instance);
@@ -490,7 +492,7 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await box.waitFor({ timeout: 5000 });
   assert.match(await box.inputValue(), /Goal: the docs site\./);
   await box.press('Control+End'); await box.pressSequentially('- [ ] w3: the changelog\n');
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).includes('w3: the changelog'), 'the edit saved to sprint.md');
+  await until(async () => (await sprintText()).includes('w3: the changelog'), 'the edit saved to sprint.md');
   assert.match(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), /FAQ wording\n- \[ \] w3: the changelog\n$/);
   // The lead edits the plan after the page opened it; the user types, then opens another file. The save is refused: the
   // lead's text stays on disk, sprint.md stays open with the user's text, and the page says so with a way on.
@@ -503,11 +505,12 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   assert.match(await box.inputValue(), /w4: mine\n$/);
   assert.equal(await readFile(path.join(sprint, 'sprint.md'), 'utf8'), '# Plan\n\nGoal: the lead\'s.\n');
   await note.getByRole('button', { name: 'Save mine over it' }).click();
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')).endsWith('w4: mine\n'), 'Save mine over it saved');
-  assert.equal(await note.textContent(), '');
+  await until(async () => (await sprintText()).endsWith('w4: mine\n'), 'Save mine over it saved');
+  // The file lands before the reply reaches the page, and the page clears the note on the reply: wait for it.
+  await until(async () => (await note.textContent()) === '', 'the note cleared after Save mine over it');
   // Two saves started at once: the second goes after the first and names the file the first wrote, so it is not refused.
   await box.evaluate(async (b) => { for (const text of ['first save\n', 'second save\n']) { b.value = text; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); await new Promise((r) => setTimeout(r, 0)); } });
-  await until(async () => (await readFile(path.join(sprint, 'sprint.md'), 'utf8')) === 'second save\n', 'the second of two overlapping saves landed');
+  await until(async () => (await sprintText()) === 'second save\n', 'the second of two overlapping saves landed');
   await page.locator('[data-pj="spfile"]', { hasText: 'rules.md' }).click();
   await until(async () => (await page.locator('[data-sp-box]').getAttribute('data-name')) === 'rules.md', 'a saved file switches');
   assert.equal(await page.locator('[data-sp-box]').inputValue(), 'Only touch docs/.');

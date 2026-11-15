@@ -252,6 +252,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if ((row(body.lead)?.project ?? prepOf(body.lead)?.project) !== id || !sprintFiles?.exists(body.lead)) return refused(404, 'unknown-sprint');
       const saved = sprintFiles.write(body.lead, body.name, body.text, body.hash);
       if (saved === 'changed') return { status: 409, error: 'sprint-file-changed', files: sprintFiles.list(body.lead) };
+      if (saved === 'no-links') return refused(507, 'sprint-file-no-links');
       if (!saved) return refused(400, 'request-refused');
       // The saved file as written, not as read back: a writer landing between the rename and the list would otherwise
       // become the page's base, and its next save would replace that writer's text unasked (O93).
