@@ -26,6 +26,7 @@ const until = async (check, what, ms = 20000) => {
 const rows = (file, sql, ...args) => {
   if (!existsSync(file)) return [];
   const db = new DatabaseSync(file, { readOnly: true });
+  db.exec('PRAGMA busy_timeout = 5000'); // wait out a daemon write (CI 2026-11-15 on PR 173: "database is locked")
   try { return db.prepare(sql).all(...args); } catch (e) { if (/no such table/.test(e.message)) return []; throw e; } finally { db.close(); }
 };
 async function turn(instance, id, text, images) {
