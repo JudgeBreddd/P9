@@ -234,8 +234,14 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
         // The cause: a card frame (its own process) that was out of view draws nothing, and until it has drawn again Chromium gives
         // a click on it to the page's <iframe> element, so the card never sees it ("pointerdown on the page: art-frame"). Its
         // script runs anyway, so data-ready says nothing about that. Scroll it in and let it draw two frames before the click.
-        await logs.locator(button).scrollIntoViewIfNeeded();
-        await frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        // CI #115 linux 6: the scroll below waited 30 s for the button to be stable. Playwright's check counts frames inside the
+        // card, and a card frame that layout pushed back out of view draws none. Scroll the frame itself in from the page
+        // (no stability wait there), then bound each wait and print what moved instead of a bare timeout.
+        const moved = (what) => async (e) => { throw new Error(`${name}: ${what}; ms:\n` + (await page.evaluate(() => window.__m5).catch(() => [])).map(([ms, s]) => `${ms} ${s}`).join('\n'), { cause: e }); };
+        await card('logs').locator('iframe').evaluate((f) => f.scrollIntoView({ block: 'center' }));
+        await logs.locator(button).scrollIntoViewIfNeeded({ timeout: 10000 }).catch(moved('the button never stood still'));
+        await Promise.race([frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+          sleep(10000).then(() => { throw new Error('no frame drawn in 10 s'); })]).catch(moved('the card drew no frame'));
         const t = [[Date.now(), 'click ' + button + ' starts']];
         await logs.locator(button).click();
         t.push([Date.now(), 'click returned']);
@@ -292,8 +298,12 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   for (const title of ['Inbox', 'Probe', 'Broken script', 'Throws']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
   await pinbox.frameLocator('iframe').locator('#count', { hasText: '13' }).waitFor({ timeout: 20000 }); // the desktop's changed answer
-  await phone.locator('#mission dialog[open] [data-tile="broken"] .card-note', { hasText: 'not JSON' }).waitFor({ timeout: 15000 });
-  await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
+  // A note that never says it prints what each card row held (open or not, its note, the frame's state), so a miss explains itself.
+  const held = (e) => phone.evaluate(() => [...document.querySelectorAll('#mission [data-tile]')].map((tile) => ({ id: tile.dataset.tile, inOpenWindow: !!tile.closest('dialog[open]'),
+    rowOpen: tile.closest('details')?.open, timer: tile.dataset.timer, rendered: tile.dataset.rendered, note: tile.querySelector('.card-note')?.textContent ?? tile.textContent.slice(0, 200) })))
+    .then((all) => { throw new Error('the phone\'s cards held: ' + JSON.stringify(all), { cause: e }); });
+  await phone.locator('#mission dialog[open] [data-tile="broken"] .card-note', { hasText: 'not JSON' }).waitFor({ timeout: 15000 }).catch(held);
+  await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 }).catch(held);
   // One 30 s refresh brings the card new JSON but never runs it again: its error line must stay.
   const refreshed = phone.waitForResponse((r) => r.url().includes('/mission/data?id=throws'));
   await phone.clock.fastForward(30000);

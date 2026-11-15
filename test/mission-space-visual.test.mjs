@@ -199,9 +199,13 @@ test('Mission wave 2 on the desktop: repeated titles, file order and named built
   const space = () => readFile(path.join(instance.workspace, SETTINGS.space), 'utf8').then((text) => JSON.parse(text).sections);
   const settle = async (done) => { for (let i = 0; i < 50 && !done(await space()); i += 1) await new Promise((resolve) => setTimeout(resolve, 100)); return space(); };
   assert.equal((await settle((all) => all[3].text)).find((s) => s.id === 'capture').text, 'From the field editor');
+  // The save writes the file before the form is made again from it (mission-editor.mjs send: reload after refreshMission), so the
+  // old form, its Fields box still open, stays on screen meanwhile: a press on it is lost with it. Wait for the new form.
+  const form = (e) => page.locator('#mdlBody').innerText().catch(() => '(no form)').then((text) => { throw new Error('the form held: ' + text.slice(0, 1500), { cause: e }); });
+  await page.locator('#mdlBody [data-fields-row]').waitFor({ state: 'detached', timeout: 10000 }).catch(form);
   await page.locator('#mdlBody [data-medit] [data-row]').first().waitFor({ timeout: 10000 });
   await row('Tools').first().locator('[data-down]').click();
-  await page.locator('#mdlBody [data-row] [data-msg]', { hasText: 'Press Confirm save' }).waitFor({ timeout: 5000 });
+  await page.locator('#mdlBody [data-row] [data-msg]', { hasText: 'Press Confirm save' }).waitFor({ timeout: 5000 }).catch(form);
   await row('Tools').first().locator('[data-down]').click();
   assert.deepEqual((await settle((all) => all[0].id !== 'tools-a')).map((s) => s.id).slice(0, 3), ['sprints', 'tools-a', 'tools-b']);
   await page.locator('#mdlBody [data-medit] [data-row]').first().waitFor({ timeout: 10000 });

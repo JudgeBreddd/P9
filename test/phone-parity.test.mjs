@@ -50,7 +50,10 @@ async function newChat(page, agent, made201 = () => {}, folder = '') {
     let at = ''; for (const part of folder.split('/')) { at = [at, part].filter(Boolean).join('/'); await page.locator('[data-chat-folder-at="' + at + '"]').click(); }
     await page.locator('[data-chat-folder-select]').click();
     await page.waitForFunction((id) => location.hash.startsWith('#chat=') && location.hash !== '#chat=' + id, id, { timeout: 10000 });
-    return decodeURIComponent((await page.evaluate(() => location.hash)).slice(6));
+    // The folder's chat replaces the first one (phone.ts: a new chat, then the hash, then its read): shown as above, not just named.
+    const next = decodeURIComponent((await page.evaluate(() => location.hash)).slice(6));
+    await page.waitForFunction((id) => document.querySelector('#conversation').value === id && !document.querySelector('#events').textContent.includes('Loading') && !document.querySelector('#sheet').open, next, { timeout: 10000 });
+    return next;
   }
   return id;
 }
@@ -233,7 +236,9 @@ test('P10: an agent\'s question is answered or declined on the phone', { timeout
 
 test('P10: effort and fast mode, slash commands and a recent chat\'s folder on the phone', { timeout: 90000 }, async (t) => {
   const { page, server } = await phoneOn(t);
-  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 });
+  // A reply that does not come says what the chat showed and which chat was on screen.
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 })
+    .catch(async (e) => { throw new Error(`no reply "${want}"; ` + JSON.stringify(await page.evaluate(() => ({ hash: location.hash, conversation: document.querySelector('#conversation').value, prompt: document.querySelector('#prompt').value, note: document.querySelector('#composerNote').textContent, events: document.querySelector('#events').innerText.slice(-1500) }))), { cause: e }); });
   assert.equal((await server.desk('/chat', 'POST', { provider: 'claude', folder: 'proj/sub' })).status, 201);
   await page.reload();
   await page.waitForSelector('#chatList [data-chat]', { timeout: 10000 });
