@@ -353,10 +353,10 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
     await box.click({ timeout: 5000 });
     assert.equal(await box.evaluate((el) => document.activeElement === el), true, name + ': the text box takes focus');
   };
-  // Folded: the strip says how many wait.
+  // Folded: the box first (what Tyler could not find), then the strip says how many wait.
+  await onScreen('folded');
   assert.equal(await pane.locator('.queue > summary').innerText(), waiting + ' queued');
   assert.equal(await pane.locator('.queue').evaluate((el) => el.open), false);
-  await onScreen('folded');
   // Open: all of them listed, each with its Take back, and the box still on screen.
   await pane.locator('.queue > summary').click();
   assert.equal(await pane.locator('.queue').evaluate((el) => el.open), true);
