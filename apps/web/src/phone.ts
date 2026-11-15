@@ -383,7 +383,7 @@ const build = perChat((events) => {
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
         const image = type === 'agent' && imgSrc(data.content); if (image) (blocks.at(-1)!.images ??= []).push(image);
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
-      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) });
+      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) ?? (data.kind === 'switch_mode' ? '' : undefined) });
       else if (update === 'tool_call_update') {
         const tool = blocks.find((block) => block.kind === 'tool' && block.id === data.toolCallId);
         if (tool) {
@@ -391,11 +391,13 @@ const build = perChat((events) => {
           if (typeof data.title === 'string' && data.title) tool.text = data.title;
           const more = toolText(data); if (more) tool.detail = ((tool.detail ? tool.detail + '\n' : '') + more).slice(0, DETAIL_CAP);
           if (data.content) tool.images = toolImages(data.content);
+          // phone-2: Claude's plan call arrives empty and its plan comes in this update (ledger 409673-409674).
+          if (tool.plan !== undefined) tool.plan = artPlan({ ...data, kind: 'switch_mode' }) ?? tool.plan;
         }
       }
     }
     else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
-    else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [] });
+    else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [], plan: artPlan((data.toolCall ?? {}) as Json) });
     else if (kind === 'answered') {
       const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
       if (asked) asked.request = undefined;
@@ -426,7 +428,9 @@ function blockHtml(block: Block) {
   if (kind === 'ask' && !block.closed) return `<article data-kind="ask" class="msg ask open"><div>${escape(block.text)}</div>${questionForm(String(block.id), block.form ?? null)}</article>`;
   if (kind === 'approval' || kind === 'ask') {
     const open = kind === 'ask' ? !block.closed : !!block.request;
-    return `<article data-kind="${kind}" class="msg ask${open ? ' open' : ''}"><div>${escape(block.text)}</div>${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
+    // phone-2: an open plan approval shows the plan itself above its choices (rendered as a reply is), and opens whole.
+    const plan = block.request && block.plan ? `<div class="ask-plan msg md">${mdReply.parse(block.plan) as string}</div><button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : '';
+    return `<article data-kind="${kind}" class="msg ask${open ? ' open' : ''}"><div>${escape(block.text)}</div>${plan}${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
       `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`;
   }
   return `<article data-kind="${kind}" class="note">${escape(block.text)}</article>`;
