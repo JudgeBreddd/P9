@@ -168,7 +168,7 @@ const checks = {
     assert.notEqual(ring.style, 'none', 'a keyboard user still sees where focus is');
     assert.ok(ring.above <= 0, 'the ring reaches ' + ring.above + ' px above the screen it is drawn in: ' + JSON.stringify(ring));
     assert.ok(held.length > 0, 'the folder request was held');
-    await page.unroute(folder); for (const r of held) await r.continue();
+    for (const r of held) await r.continue(); await page.unroute(folder);
     await page.waitForFunction(() => document.querySelector('#modelBtn')?.textContent.includes('·'));
     assert.equal(await page.evaluate(() => document.activeElement?.matches('.bar .back:focus-visible') ?? false), true, 'focus stays on the back button when the bar is redrawn');
   },

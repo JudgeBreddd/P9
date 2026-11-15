@@ -247,7 +247,13 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
           const answers = async (f) => Promise.race([f.evaluate(() => 'answers').catch((x) => 'gone: ' + x.message.split('\n')[0]), sleep(2000).then(() => 'no answer in 2 s')]);
           const win = await answers(page);
           t.push([Date.now(), `the window ${win}, the card frame ${await answers(frame)}; frames: ${page.frames().length}`]);
-          console.log(`P9_SHOT ${name}-miss ` + (await page.screenshot({ timeout: 5000 }).catch(() => Buffer.from(''))).toString('base64'));
+          // A stalled card frame can stall the page's screenshot too (#152 runs: empty). Then take the window's last drawn frame from
+          // the main process; if neither comes, say why in the timeline instead of printing an empty image.
+          const bound = (p, what) => Promise.race([p, sleep(5000).then(() => { throw new Error(what + ': nothing in 5 s'); })]);
+          const why = [], png = await page.screenshot({ timeout: 5000 }).then((b) => b.toString('base64') || why.push('page screenshot: empty') && '').catch((x) => { why.push('page screenshot: ' + x.message.split('\n')[0]); })
+            || await bound(app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.capturePage().then((i) => i.isEmpty() ? Promise.reject(new Error('empty image')) : i.toPNG().toString('base64'))), 'window capture')
+              .then((b) => (t.push([Date.now(), 'screenshot from the window capture (' + why[0] + ')']), b)).catch((x) => { why.push('window capture: ' + x.message.split('\n')[0]); });
+          if (png) console.log(`P9_SHOT ${name}-miss ${png}`); else t.push([Date.now(), 'no screenshot: ' + why.join('; ')]);
           const all = [...t, ...win === 'answers' ? await page.evaluate(() => window.__m5) : [], ...said].sort((a, b) => a[0] - b[0]);
           page.off('console', hear);
           throw new Error(`${name}: ${what}; the window says ${JSON.stringify(await page.locator('#mdlT').innerText({ timeout: 2000 }).catch(() => '?'))}; ms from the click:\n` + all.map(([ms, s]) => `${ms - t[0][0]} ${s}`).join('\n'), { cause: e });
