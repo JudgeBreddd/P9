@@ -332,9 +332,19 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.click('[data-nav="mission"]');
   await phone.click('#mission [data-open]:has-text("Home")', { timeout: 15000 });
   await phone.clock.install(); // the tiles' 30 s refresh is then the page's own timer, moved on below
+  // O71: Mission redraws rows as its fresh answer and the opened cards arrive, so a tap can land as a row moves and leave it
+  // closed (Throws, CI #121's group 6 dump). After each tap, wait for that row to be open; tap again if it is not. A row
+  // counts as open only if it is still open 200 ms later: a close from a redraw can come just after the tap opened it.
   // Bottom row first: a row grows when it opens and again when its card loads, which moves every row below it.
   // Tapping from the bottom up means no row still to be tapped can move under the pointer.
-  for (const title of ['Throws', 'Broken script', 'Probe', 'Inbox']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
+  for (const title of ['Throws', 'Broken script', 'Probe', 'Inbox']) {
+    const isOpen = () => phone.locator(`#mission dialog[open] details:has(> summary:has-text("${title}"))`).evaluate((row) => row.open).catch(() => false);
+    const staysOpen = async () => await isOpen() && (await phone.waitForTimeout(200), await isOpen());
+    for (let tap = 0; tap < 3 && !await staysOpen(); tap++) {
+      await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
+      for (let i = 0; i < 10 && !await isOpen(); i++) await phone.waitForTimeout(100);
+    }
+  }
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
   await pinbox.frameLocator('iframe').locator('#count', { hasText: '13' }).waitFor({ timeout: 20000 }); // the desktop's changed answer
   // A note that never says it prints what each card row held (open or not, its note, the frame's state), so a miss explains itself.

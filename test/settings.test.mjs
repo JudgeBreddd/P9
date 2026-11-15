@@ -927,8 +927,10 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
   assert.ok(await page.locator('[data-roll]').isHidden());
   await page.click('[data-theme-pick="custom"]');
   const first = await html('--primary');
-  await page.click('[data-roll]');
-  const rolled = await html('--primary');
+  // --primary is oklch(0.78 0.16 <hue>) with a random whole-degree hue, so one roll in about 360 repeats the hue.
+  // A repeat is a fair roll, not a broken button: roll up to 5 times (all 5 repeating is about 1 in 6e12).
+  let rolled = first;
+  for (let i = 0; i < 5 && rolled === first; i++) { await page.click('[data-roll]'); rolled = await html('--primary'); }
   assert.notEqual(rolled, first, 'Roll again changes the palette');
   assert.equal(await page.locator('[data-theme-pick="custom"]').evaluate((c) => getComputedStyle(c).getPropertyValue('--primary').trim()), rolled, 'the dice card shows the rolled palette');
   await page.click('[data-theme-pick="event-horizon-prime"]');
