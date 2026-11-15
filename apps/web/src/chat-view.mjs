@@ -1,7 +1,10 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
-import { pinned, applyCard } from './pinned.mjs';
+import { pinned, applyCard, isReport, reportKey } from './pinned.mjs';
+// O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
+const SHUT = { keys: null, get() { if (!this.keys) try { this.keys = new Set(JSON.parse(localStorage.getItem('p9-reports-closed') || '[]')); } catch { this.keys = new Set(); } return this.keys; },
+  add(k) { this.get().add(k); try { localStorage.setItem('p9-reports-closed', JSON.stringify([...this.keys])); } catch {} } };
 import { strip, chip, turnKey, lineDiff } from './composer.mjs';
 import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
@@ -281,6 +284,9 @@ const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; 
 function event(e, s) {
   switch (e.t) {
     case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}><div class="who">${e.ask ? 'Question from ' + esc(outer.S.sessions.find(x => x.id === e.ask)?.title ?? 'another chat') + ' · answered read-only' : e.info ? 'Note from ' + esc(outer.S.sessions.find(x => x.id === e.info)?.title ?? 'another chat') + ' · information only' : 'You'}${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
+    // O109: a worker report scrolls with the chat once it is not the one pinned above the box (closed, or a newer one came).
+    case 'report': { const c = s.cards?.get(e.id), on = c && c.text === e.text && s.events.findLast(x => x.t === 'report') === e && !SHUT.get().has(reportKey(s, c));
+      return on ? '' : `<div class="report" data-report="${esc(e.id)}"><div class="eyebrow">Worker report</div><div class="msg agent">${outer.mdOf(e)}</div></div>`; }
     case 'agent': return `<div class="msg agent"><div class="who">${outer.names[s.agent]}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent])}</div>`;
     case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
@@ -606,7 +612,7 @@ function pane(s, i, bare) {
         ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.profile ? 'disabled ' : s.leaving ? 'disabled ' : s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.profile ? 'A chat on a provider profile stays on this computer: its key is not sent to a remote' : s.leaving ? 'Moving this chat to the remote' : s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(outer.serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
       ${bare ? '' : tools()}</div>
     <div class="hist">${body}</div>
-    <div class="bottom"><div class="col">${pinned(s, outer.mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
+    <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get())}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? strip(s, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
@@ -710,6 +716,7 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
     p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
+    p.querySelectorAll('[data-card-close]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardClose); if (c) SHUT.add(reportKey(s, c)); renderChats(); });
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
@@ -903,7 +910,7 @@ function applyChat(ev, into) {
     case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;
     case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
-    case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
+    case 'card': case 'unpin': applyCard(s, ev.type, d); if (ev.type === 'card' && isReport(String(d.id))) s.events.push({ t: 'report', id: String(d.id), text: String(d.text ?? '') }); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': s.modelsAt = ev.at; if (!into && !s.profile) outer.newLists(s.agent, ev.at, Array.isArray(d.model?.options) && d.model, Array.isArray(d.pickers) && d.pickers);
       if (Array.isArray(d.model?.options)) { s.models = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
       if (Array.isArray(d.pickers)) { s.pickers = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; }
