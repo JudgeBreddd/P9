@@ -948,3 +948,58 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   assert.equal((await a.tool('open_chat', { text: 'x', key: 'three' })).error, undefined, 'close: true freed the place');
   console.log('PASS Delegate dogfood 3.5');
 });
+
+test('Work queue on the chat list: a keyed worker carries its role\'s items from the plan, done counted by P9 (0 until a pass), none for a chat with no key', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: open_chat does not ask
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'hello', title: 'Daemon', key: 'daemon' });
+  const loose = await a.tool('open_chat', { text: 'hello', title: 'Loose' });
+  await a.done(made.chat); await a.done(loose.chat);
+  // open_chat made the lead's sprint folder (with notes/daemon.md), in P9's own folder.
+  const sprint = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state]
+    .filter(Boolean).map((b) => path.join(b, 'sprints', a.conversation)).find((f) => fs.existsSync(path.join(f, 'notes', 'daemon.md')));
+  assert.ok(sprint, 'found the sprint folder');
+  fs.writeFileSync(path.join(sprint, 'sprint.md'), '# Plan\n\n## Items\n- [x] d1: one. Role: daemon.\n- [ ] w1: other. Role: window.\n- [ ] d2: two; role daemon\n');
+  const list = await rows(instance);
+  const row = list.find((r) => r.id === made.chat);
+  assert.deepEqual(row.queue, { done: 0, total: 2, items: [{ id: 'd1', text: 'd1: one. Role: daemon.', state: 'todo', fixes: 0 }, { id: 'd2', text: 'd2: two; role daemon', state: 'todo', fixes: 0 }] });
+  assert.equal(list.find((r) => r.id === loose.chat).queue, undefined);
+  assert.equal(row.key, undefined, 'the list started showing keys');
+  console.log('PASS Work queue on the chat list');
+});
+
+test('Work queue on the daemon: a pass moves a queue worker to its next item; its next message ends the old ready, so a late verdict on it is refused and the pass stays', { timeout: 150000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Queue', work: { kind: 'new', parent: '', name: 'queue' } })).body.project.id;
+  const a = await agent(t, instance, { project });
+  const w = await a.tool('open_chat', { text: 'mcp', title: 'Daemon', key: 'daemon' }), r = await a.tool('open_chat', { text: 'mcp', title: 'Reviewer', key: 'review' });
+  const worker = await connect(t, instance, w.chat), reviewer = await connect(t, instance, r.chat);
+  await a.done(w.chat); await a.done(r.chat);
+  const sprint = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state]
+    .filter(Boolean).map((b) => path.join(b, 'sprints', a.conversation)).find((f) => fs.existsSync(path.join(f, 'notes', 'daemon.md')));
+  fs.writeFileSync(path.join(sprint, 'sprint.md'), '# Plan\n\n## Items\n- [ ] d1: one. Role: daemon.\n- [ ] d2: two. Role: daemon.\n');
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['init', '-q', '-b', 'main', w.folder]);
+  execFileSync('git', ['-C', w.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', w.folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const report = { commit: head, results: [{ check: 'unit', result: 'pass' }], weakest: 'none' };
+  // ready is called inside a turn: 'late' keeps one running for 1.5 s.
+  const ready = async () => { await a.tool('send_chat', { chat: w.chat, text: 'late' }); const got = await worker.tool('ready', report); await a.done(w.chat); return got; };
+
+  const first = await ready();
+  assert.equal(first.ready?.item, 'd1', JSON.stringify(first));
+  assert.equal(first.queued, r.chat);
+  const pass = await reviewer.tool('verdict', { chat: w.chat, commit: first.ready.commit, result: 'pass', note: 'ok' });
+  assert.equal(pass.review?.state, 'passed', JSON.stringify(pass));
+  // P9's "start your next item" is the worker's next message: it ends the d1 report.
+  await a.done(w.chat);
+  assert.match((await notices(instance, w.chat)).join('\n'), /\[p9\] d1 passed review/);
+  assert.equal((await reviewer.tool('verdict', { chat: w.chat, commit: first.ready.commit, result: 'fix', note: 'late' })).error, 'not-ready');
+  const row = (await rows(instance)).find((c) => c.id === w.chat);
+  assert.deepEqual([row.queue.done, row.queue.total, row.queue.items.map((i) => i.state)], [1, 2, ['passed', 'todo']]);
+  assert.equal((await ready()).ready?.item, 'd2');
+  assert.match(fs.readFileSync(path.join(sprint, 'review-trail.md'), 'utf8'), /\| d1 \| Daemon \| .+ \| passed \| 0 \|/);
+  console.log('PASS Work queue on the daemon');
+});
