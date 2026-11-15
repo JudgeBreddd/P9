@@ -287,3 +287,59 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
   assert.deepEqual(order.slice(order.indexOf('lead') + 1, order.indexOf('lead') + 5).sort(), ['worker0', 'worker1', 'worker2', 'worker3']);
   assert.equal(order[order.indexOf('lead') + 5], 'toggle');
 });
+
+// O109 (Tyler, 2026-11-15: "I cant see what the lead is doing or find the composer"): a busy lead chat, with a worker (the
+// sprint card), the worker's report pinned and 30 messages waiting for its turn, keeps its text box on screen and usable
+// at his window's size. Then the turn ends: the waiting messages go, and every one leaves the strip.
+test('O109: 30 queued messages, a sprint card and a worker report leave the composer on screen; delivered ones leave the strip', { timeout: 150000 }, async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const made = await a.tool('open_chat', { text: 'first', item: 'B4', done_means: 'report is visible', checks: ['Tests pass'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await tools(t, instance, made.chat);
+  await a.done(made.chat);
+  writeFileSync(path.join(instance.workspace, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', instance.workspace]);
+  execFileSync('git', ['-C', instance.workspace, 'add', '.']);
+  execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const weakest = Array.from({ length: 12 }, (_, i) => 'Line ' + (i + 1) + ' of a long weakest part, as a real report has.').join('\n\n');
+  assert.ok((await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest })).ready);
+  // The lead's turn runs on (an approval it waits on), and 30 messages wait for its end, as the coordinator's and the
+  // workers' notes did.
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'permission' });
+  await until(async () => (await events(instance, parent)).some((e) => e.type === 'approval'), 'the lead waits on an approval');
+  for (let i = 1; i <= 30; i++) assert.equal((await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'Queued note ' + i + ': ' + 'x'.repeat(80), when: 'queue' })).when, 'queue');
+  const { app, page, errors } = await launch(t, instance);
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
+  await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  const pane = page.locator(`.pane[data-id="${parent}"]`);
+  await pane.locator(`.card-pin[data-card="ready-${made.chat}"]`).waitFor({ timeout: 20000 });
+  await until(async () => await pane.locator('[data-held]').count() === 30, 'all 30 waiting messages drawn');
+  await pane.locator('.sp-row').first().waitFor({ timeout: 20000 }); // the sprint card: the lead has a worker
+  await page.waitForTimeout(500);
+  const box = pane.locator('.composer textarea');
+  const seen = await box.evaluate((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }; });
+  await shot(page, 'o109-busy-lead');
+  console.log('O109 composer ' + JSON.stringify(seen));
+  assert.ok(seen.bottom <= seen.height && seen.top >= 0 && seen.hit, 'the text box is on screen and nothing covers it: ' + JSON.stringify(seen));
+  await box.click({ timeout: 5000 });
+  assert.equal(await box.evaluate((el) => document.activeElement === el), true, 'the text box takes focus');
+  // The strip says how many wait, and the user can still take one back.
+  assert.equal(await pane.locator('.queue > summary').innerText(), '30 queued');
+  // The turn ends: the waiting messages go (one sender, so one prompt) and the strip empties.
+  await pane.locator('[data-approve="allow"]').click({ timeout: 15000 });
+  await until(async () => (await events(instance, parent)).some((e) => e.type === 'user' && e.data.held?.length === 30), 'the 30 delivered as one prompt');
+  await until(async () => await pane.locator('[data-held]').count() === 0, 'no delivered message still reads Queued');
+  assert.equal(await pane.locator('.queue').count(), 0);
+  assert.deepEqual(errors, []);
+  console.log('PASS O109: composer on screen and focusable with 30 queued, a sprint card and a worker report at 1568x1348; all 30 left the strip when delivered');
+});
