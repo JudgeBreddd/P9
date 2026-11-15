@@ -689,6 +689,20 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   assert.deepEqual(wide, [], 'past the sprint section\'s edge at 900 wide');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-prep-narrow ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await page.setViewportSize({ width: 1400, height: 900 });
+  // O110: a writer that empties roles.json, pauses, then writes. A save answered in the pause read roles.json empty: the
+  // rows stay (the last good ones) and show the written file once it is there, without a reload.
+  const file = path.join(folder, 'roles.json'), written = JSON.parse(await readFile(file, 'utf8'));
+  written.roles[0].provider = 'claude';
+  await page.evaluate(() => { window.notReloaded = true; });
+  await writeFile(file, '');
+  await page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' }).click();
+  await until(async () => (await box.getAttribute('data-name')) === 'roles/docs.work.md', 'the work file open again');
+  await box.pressSequentially(' Then the FAQ.');
+  await page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8')).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
+  await writeFile(file, JSON.stringify(written, null, 2) + '\n');
+  await until(async () => (await page.locator('[data-spr="agent"][data-role="lead"]').inputValue().catch(() => null)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator('[data-sp-roles]').innerHTML().catch((e) => e.message));
+  assert.equal(await page.evaluate(() => window.notReloaded), true, 'the page reloaded');
   // Remove: workers only; the lead and the reviewer have no Remove.
   assert.equal(await page.locator('[data-pj="sprole-rm"][data-role="lead"], [data-pj="sprole-rm"][data-role="review"]').count(), 0);
   await page.locator('[data-pj="sprole-rm"][data-role="docs"]').click();

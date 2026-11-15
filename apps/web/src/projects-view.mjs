@@ -122,6 +122,38 @@ export function installProjects(o, api) {
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
   const rolesOf = sp => { try { const d = JSON.parse(sp.files.find(f => f.name === 'roles.json')?.text ?? ''); return Array.isArray(d?.roles) && d.roles.every(r => r && typeof r.key === 'string') ? d.roles : null; } catch { return null; } };
+  // O110: a roles.json read between an outside writer's truncate and its write comes back empty or cut short. The page
+  // keeps the last good one it had (its hash too, so a pick made meanwhile is refused as changed) and reads the project
+  // again every half second until roles.json parses, so the rows never stay missing. Still bad after 5 s, it is the file
+  // as written and its hint shows. ponytail: 10 reads; a writer paused longer than 5 s mid-file shows the hint until the
+  // next save or a reload.
+  let rereading = false;
+  function takeFiles(sp, files, id) {
+    if (rolesOf({ files }) === null && rolesOf(sp) !== null) {
+      const good = sp.files.find(f => f.name === 'roles.json');
+      files = files.some(f => f.name === 'roles.json') ? files.map(f => (f.name === 'roles.json' ? good : f)) : [...files, good];
+      reread(id, sp.lead);
+    }
+    sp.files = files;
+  }
+  async function reread(id, lead) {
+    if (rereading) return; rereading = true;
+    try {
+      for (let i = 0; i < 10; i++) {
+        await new Promise(go => setTimeout(go, 500));
+        const r = cur?.id === id && await call('project', { id }, { quiet: true });
+        if (r?.status !== 200 || cur?.id !== id) return;
+        const sp = r.body.project.sprints?.find(x => x.lead === lead);
+        if (!sp || rolesOf(sp) !== null || i === 9) {
+          cur = r.body.project; renderPage(); fillBox(false);
+          // renderPage leaves the page alone while its file box has the focus: the rows alone are redrawn then.
+          const rows = sp && document.activeElement?.matches?.('[data-sp-box]') && page.querySelector(`[data-sprint="${CSS.escape(lead)}"] :is([data-sp-roles], [data-sp-roles-bad])`);
+          if (rows) rows.outerHTML = rolesHtml(sp, rolesOf(sp));
+          return;
+        }
+      }
+    } finally { rereading = false; }
+  }
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
   const roleFiles = sp => (sp.prep ? ['rules.md'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
@@ -270,9 +302,11 @@ export function installProjects(o, api) {
     let doc; try { doc = JSON.parse(f?.text ?? ''); } catch { return true; }
     if (!Array.isArray(doc?.roles) || change(doc.roles) === false) return true;
     const r = await call('sprintFile', { id: project.id, lead, name: 'roles.json', text: JSON.stringify(doc, null, 2) + '\n', hash: f.hash }, { quiet: true });
-    if (r.status === 200 && r.body?.files) sp.files = r.body.files;
+    if (r.status === 200 && r.body?.files) takeFiles(sp, r.body.files, project.id);
     else { if (r.status !== 409) failed(r); else say('roles.json changed in P9 meanwhile (the lead or an agent wrote it). The rows show it now; make your change again.', 'warn');
-      const again = await call('project', { id: project.id }); if (again.status === 200 && cur?.id === project.id) cur = again.body.project; }
+      const again = await call('project', { id: project.id });
+      if (again.status === 200 && cur?.id === project.id) { const was = sp.files, n = again.body.project.sprints?.find(x => x.lead === lead);
+        cur = again.body.project; if (n) { const files = n.files; n.files = was; takeFiles(n, files, project.id); } } }
     if (cur?.id === project.id) { renderPage(); fillBox(false); } // the focus stays on the pick just used
     return r.status === 200;
   }
@@ -299,7 +333,7 @@ export function installProjects(o, api) {
     // A file deleted since: refused as changed (the draft stays, listed); mine makes it again ('' = must not exist).
     const r = await call('sprintFile', { id: project.id, lead: sp.lead, name, text: d.text, hash: mine ? f?.hash ?? '' : d.hash }, { quiet: true });
     const here = cur?.id === project.id ? cur.sprints?.find(x => x.lead === sp.lead) : null; // the page may have reloaded meanwhile
-    for (const x of new Set([sp, here])) if (x && r.body?.files) x.files = r.body.files;
+    for (const x of new Set([sp, here])) if (x && r.body?.files) takeFiles(x, r.body.files, project.id);
     const now = sp.files.find(x => x.name === name), shown = !!here && sprintOpen === id;
     if (r.status === 200) {
       spNote.delete(id);
