@@ -82,10 +82,12 @@ run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPo
 // detectUpdateChannel off: a pre-release version (0.1.9-beta.1, a candidate's -rc.1) would otherwise write beta.yml, not the
 // latest.yml the feed job attaches, and put channel: beta in app-update.yml, so that install asks for beta.yml from every
 // stable release. Off, every build writes latest.yml; a nightly install asks for beta.yml and falls back to latest.yml.
-const cacheDir = process.env.npm_config_cache_dir || (process.platform === 'win32' ? path.join(path.parse(root).root, 'p9') : undefined);
+// pnpm 11+ reads only pnpm_config_* (O90): npm_config_* names would be dropped silently and the long default path come back.
+// An npm_config_cache_dir you set is still honoured, passed on under the name pnpm reads.
+const cacheDir = process.env.pnpm_config_cache_dir || process.env.npm_config_cache_dir || (process.platform === 'win32' ? path.join(path.parse(root).root, 'p9') : undefined);
 run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', `--${arch}`, '--publish', 'never', '-c.detectUpdateChannel=false',
   '-c.publish.provider=github', '-c.publish.owner=' + REPO.split('/')[0], '-c.publish.repo=' + REPO.split('/')[1]],
-  { env: { ...process.env, ...(cacheDir ? { npm_config_cache_dir: cacheDir, npm_config_virtual_store_dir_max_length: '40' } : {}),
+  { env: { ...process.env, ...(cacheDir ? { pnpm_config_cache_dir: cacheDir, pnpm_config_virtual_store_dir_max_length: '40' } : {}),
     ...(arch === 'arm64' ? { ELECTRON_BUILDER_7Z_FILTER: 'BCJ2' } : {}) } });
 // v1 installers are unsigned (README): SHA256SUMS beside them is how a download is checked.
 const out = path.join(root, 'dist', 'windows');
