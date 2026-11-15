@@ -4,14 +4,13 @@
     "O50: dependency updates arrive as PRs by themselves. Bot PRs merge by the same rule as any PR: CI green and a non-author verdict that read the changelog.",
     "One rule for every package Renovate offers: a version under 3 days old is held back. No branch and no PR is made for it; it is listed by name under 'Pending Status Checks' on the Dependency Dashboard issue until it is old enough.",
     "Security fixes are not held (Renovate's vulnerability alerts skip the wait; they need Dependabot alerts turned on in the repository settings).",
-    "Each group is one PR: major and smaller updates are not split (separateMajorMinor off).",
+    "Major updates come apart from the rest (O81, owner, 2026-11-15: \"split + check\"): patch and minor updates stay one PR per group and merge by the usual rule; each major package family is its own PR (the editor packages, Electron, TypeScript, marked, pnpm, peculiar), and any other major comes in one 'everything else (major)' PR. Before each nightly the coordinator lists the bot's open PRs and gives each major its own plan row, so none waits unseen.",
     "Not covered: the age of packages pulled in underneath (the lockfile's transitive entries); Renovate does not pass the wait to pnpm. Whether the packageManager pnpm pin is held by the wait is not stated in Renovate's documentation."
   ],
   "extends": ["config:recommended"],
   "timezone": "America/Chicago",
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
-  "separateMajorMinor": false,
   "enabledManagers": ["npm", "github-actions"],
   "packageRules": [
     {
@@ -39,6 +38,48 @@
       "matchManagers": ["github-actions"],
       "groupName": "actions",
       "schedule": ["* 0-3 * * 1"]
+    },
+    {
+      "description": "A major update of the editor packages is its own PR.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["@codingame/**", "vscode"],
+      "groupName": "major: editor"
+    },
+    {
+      "description": "A major update of the Electron package is its own PR.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["electron"],
+      "groupName": "major: Electron"
+    },
+    {
+      "description": "A major update of the TypeScript package is its own PR.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["typescript"],
+      "groupName": "major: TypeScript"
+    },
+    {
+      "description": "A major update of the marked package is its own PR.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["marked"],
+      "groupName": "major: marked"
+    },
+    {
+      "description": "A major update of the pnpm package is its own PR.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["pnpm"],
+      "groupName": "major: pnpm"
+    },
+    {
+      "description": "A major update of the peculiar packages is its own PR.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["@peculiar/**"],
+      "groupName": "major: peculiar"
     }
   ]
 }
