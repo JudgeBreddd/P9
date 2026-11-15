@@ -145,7 +145,9 @@ test('D5: Dev Focus without the editor server names it and installs it with one 
   assert.equal(served.hits.length, 0, 'nothing downloaded before the button');
 
   page = nextPage();
-  await dev.locator('#install').click();
+  // Install closes this page and opens Dev Focus again (main.mjs reopenDev): on a fast install that close can land before
+  // the click returns. The new page and the one download below are what show the click worked.
+  await dev.locator('#install').click().catch(error => { if (!/has been closed/.test(error.message)) throw error; });
   dev = await page;
   await dev.locator('#cause').waitFor({ timeout: left() });
   assert.equal(served.hits.length, 1);
