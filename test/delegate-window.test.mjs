@@ -315,11 +315,11 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   const ready = await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest });
   assert.ok(ready.ready, JSON.stringify(ready));
   await a.done(made.chat);
-  // The lead works on (ten tool steps of 3 s, then it ends by itself), and 30 messages wait for its end, as the
+  // The lead works on (twenty tool steps of 3 s, about 66 s, then it ends by itself; long enough to launch the window and look), and 30 messages wait for its end, as the
   // coordinator's and the workers' notes did.
   const state = async () => (await call(instance, '/chat')).conversations.find((c) => c.id === parent).state;
   await until(async () => await state() !== 'turn', 'the lead is idle');
-  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'tools 10' });
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'tools 20' });
   await until(async () => await state() === 'turn', 'the lead is working');
   for (let i = 1; i <= 30; i++) assert.equal((await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'Queued note ' + i + ': ' + 'x'.repeat(80), when: 'queue' })).when, 'queue');
   const { app, page, errors } = await launch(t, instance);
