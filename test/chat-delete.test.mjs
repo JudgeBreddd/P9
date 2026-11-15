@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { Worker } from 'node:worker_threads';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { MEMORY_CONVERSATION as MEM } from '../apps/server/memory.mjs';
 
@@ -124,6 +125,25 @@ test('a database made before its table reads as no rows until the table is there
   await until(() => rows(file, 'SELECT * FROM turns WHERE conversation = ?', 'A').length, 'the row once the table exists', 5000);
   assert.throws(() => rows(file, 'SELECT * FROM turns WHERE nope = 1'), /no such column/);
   db.close();
+});
+
+test('a read while another connection holds the write lock waits for it instead of throwing "database is locked"', async () => {
+  // Forced: a second connection holds BEGIN EXCLUSIVE on a file not in WAL mode yet, for 1 s, from a worker thread
+  // (the read blocks this thread). CI on PR 173 saw the read throw SQLITE_BUSY once; which daemon write held it is not proven.
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'chat-delete-')), 'telemetry.db');
+  const db = new DatabaseSync(file);
+  db.exec("CREATE TABLE turns (conversation TEXT); INSERT INTO turns VALUES ('A')");
+  db.close();
+  const holder = new Worker(`const { workerData, parentPort } = require('node:worker_threads');
+    const db = new (require('node:sqlite').DatabaseSync)(workerData.file);
+    db.exec('BEGIN EXCLUSIVE'); parentPort.postMessage('locked');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    db.exec('COMMIT'); db.close();`, { eval: true, workerData: { file } });
+  await once(holder, 'message');
+  const start = Date.now();
+  assert.deepEqual(rows(file, 'SELECT * FROM turns').map((r) => ({ ...r })), [{ conversation: 'A' }]);
+  assert.ok(Date.now() - start >= 500, 'the read waited for the lock');
+  await once(holder, 'exit');
 });
 
 test('empty-only replacement cannot delete a delegated child', async (t) => {
