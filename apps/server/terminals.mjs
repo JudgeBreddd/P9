@@ -203,12 +203,28 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
       if (client.stdin.writableLength > 1024 * 1024) return end(1008, 'input-too-fast');
       client.stdin.write(line);
     };
-    let pending = '', held = [], heldBytes = 0;
+    let pending = '', held = null, heldBytes = 0, snapping = 0, drawn = Promise.resolve();
+    // Control mode sends only new output, so a phone attaching to a running shell first gets the screen as it stands.
+    // O83 (Builder, 2026-11-15): after a resize too. tmux reflows its own screen, but the terminal in the page reflows its
+    // copy differently (it keeps the cursor row, so lines that unwrap when it widens leave blank rows at the top and its
+    // cursor no longer where tmux's is). Output that arrives meanwhile is held; snapshots run one at a time, in order.
+    // ponytail: output arriving during the capture can show twice; a redraw (Ctrl+L) clears it.
+    const snapshot = () => {
+      snapping++; held ??= [];
+      drawn = drawn.then(() => Promise.all([tmux(['capture-pane', '-p', '-e', '-t', '=' + name(id) + ':']), tmux(['display-message', '-p', '-t', '=' + name(id) + ':', '#{cursor_x} #{cursor_y}'])]))
+        .then(([screen, cursor]) => {
+          const [x, y] = cursor.stdout.trim().split(' ').map(Number);
+          send(Buffer.from('\x1b[2J\x1b[H' + screen.stdout.replace(/\n$/, '').split('\n').join('\x1b[0m\r\n') + '\x1b[0m\x1b[' + (y + 1) + ';' + (x + 1) + 'H'));
+        }, () => {})
+        .finally(() => { if (--snapping) return; const queued = held; held = null; heldBytes = 0; queued.forEach(send); });
+    };
     client.stdout.setEncoding('latin1');
     client.stdout.on('data', (chunk) => {
       const lines = (pending + chunk).split('\n');
       pending = lines.pop();
       for (const line of lines) {
+        // tmux reports every new pane size, whichever client set it (this one, a phone, another window), once it has reflowed.
+        if (line.startsWith('%layout-change ')) { snapshot(); continue; }
         const match = /^%output %\d+ (.*)$/.exec(line);
         if (!match) continue;
         const bytes = Buffer.from(match[1].replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))), 'latin1');
@@ -217,14 +233,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
         else held.push(bytes);
       }
     });
-    // Control mode sends only new output, so a phone attaching to a running shell first gets the screen as it stands.
-    // ponytail: output arriving during the capture can show twice; a redraw (Ctrl+L) clears it.
-    Promise.all([tmux(['capture-pane', '-p', '-e', '-t', '=' + name(id) + ':']), tmux(['display-message', '-p', '-t', '=' + name(id) + ':', '#{cursor_x} #{cursor_y}'])])
-      .then(([screen, cursor]) => {
-        const [x, y] = cursor.stdout.trim().split(' ').map(Number);
-        send(Buffer.from('\x1b[2J\x1b[H' + screen.stdout.replace(/\n$/, '').split('\n').join('\x1b[0m\r\n') + '\x1b[0m\x1b[' + (y + 1) + ';' + (x + 1) + 'H'));
-      }, () => {})
-      .finally(() => { const queued = held; held = null; queued.forEach(send); });
+    snapshot();
     client.stdin.on('error', () => {});
     let killed = false;
     client.once('exit', () => {
