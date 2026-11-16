@@ -1005,6 +1005,12 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   one that did is sent nothing. A P9 restart in the middle of that first turn counts as not reached, so that chat may
   read its work twice. Two presses at the same time:
   the second is refused while the first runs.
+- **Workers a lead opens later.** A sprint's workers come only from its role rows, never from Settings > Delegation.
+  A chat is a sprint lead when New sprint made its sprint or its sprint folder has a `roles.json` (`open_chat` writes
+  neither, so a plain chat's workers stay Delegate's). Its `open_chat` must name the key of a `roles.json` row; the
+  worker starts on exactly that row and is named for it. No key, a key with no row, a missing or broken `roles.json`
+  or a row P9 cannot start is refused by its role and field before any chat is made or any worker place is taken.
+  A worker the plan has no role for needs a role row in Sprint Setup first.
 
 ## Agent modes
 

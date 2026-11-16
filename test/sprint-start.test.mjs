@@ -317,8 +317,35 @@ test('Sprint roles: a worker the lead opens for a role starts on its roles.json 
   // Its own values named are what the row starts: allowed.
   const same = await L.tool('open_chat', { text: 'config', key: 'window', model: 'haiku', effort: 'low' });
   assert.match(await config(instance, same.chat), /^config:model=haiku,effort=low,/);
-  // Stated limit: a key with no role row still starts the Delegate way (its Settings row, row 1's match).
+  // Workers come only from role rows: no key, a key with no row, a row P9 cannot start, a broken or missing roles.json
+  // are refused before anything is made, and take no worker place (the lead has one place left; a role row takes it).
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 3, workers: Array(3).fill(opus) })).status, 200);
+  const before = (await rows(instance)).length;
+  const keyless = await L.tool('open_chat', { text: 'config' });
+  assert.deepEqual([keyless.error, keyless.field], ['role-refused', 'key'], JSON.stringify(keyless));
   const late = await L.tool('open_chat', { text: 'config', key: 'late' });
-  assert.match(await config(instance, late.chat), /^config:model=opus,effort=high,/, 'a key with no role row did not start on its Delegation row');
-  console.log('PASS Sprint roles: phone and window started on their roles.json row (haiku/low) under Delegation rows of opus/high, named for the role; opus and high for window were refused by field with nothing made; a key with no role row took its Delegation row');
+  assert.deepEqual([late.error, late.role, late.field], ['role-refused', 'late', 'key'], JSON.stringify(late));
+  assert.match(late.detail, /role row first: add it in Sprint Setup/);
+  const roles = [lead, { key: 'phone', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'window', provider: 'claude', model: 'haiku', effort: 'low' }];
+  write('roles.json', JSON.stringify({ roles: [...roles, { key: 'bad', provider: 'claude', model: 'nope', effort: 'low' }] }));
+  const bad = await L.tool('open_chat', { text: 'config', key: 'bad' });
+  assert.deepEqual([bad.error, bad.role, bad.field], ['role-refused', 'bad', 'model'], JSON.stringify(bad));
+  write('roles.json', '{ "roles": [');
+  const broken = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.deepEqual([broken.error, broken.field], ['role-refused', 'roles.json'], JSON.stringify(broken));
+  fs.unlinkSync(path.join(s.folder, 'roles.json'));
+  const missing = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.deepEqual([missing.error, missing.field], ['role-refused', 'roles.json'], JSON.stringify(missing));
+  assert.match(missing.detail, /roles\.json in .* is missing/);
+  assert.equal((await rows(instance)).length, before, 'a refused sprint worker made a chat');
+  write('roles.json', JSON.stringify({ roles: [...roles, { key: 'late', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const added = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.equal(added.error, undefined, 'a refusal took a worker place: ' + JSON.stringify(added));
+  assert.match(await config(instance, added.chat), /^config:model=haiku,effort=low,/);
+  // A plain chat (no sprint made by New sprint, no roles.json) is unchanged: its keyed worker starts on its Delegation row.
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const plain = await (await attach(t, instance, first)).tool('open_chat', { text: 'config', key: 'late' });
+  assert.equal(plain.error, undefined, JSON.stringify(plain));
+  assert.match(await config(instance, plain.chat), /^config:model=opus,effort=high,/, 'a plain chat\'s worker did not start on its Delegation row');
+  console.log('PASS Sprint roles: phone and window started on their roles.json row (haiku/low) under Delegation rows of opus/high, named for the role; opus and high for window were refused by field with nothing made; no key, a key with no row, a bad row, a broken and a missing roles.json were refused with nothing made and no place taken; a plain chat\'s worker took its Delegation row');
 });

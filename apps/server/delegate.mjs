@@ -166,22 +166,27 @@ export function createDelegate({ chat, allowed }) {
     // Settings > Delegation has one row per worker. A new worker takes the first row no running worker of this chat holds.
     const taken = new Set([...kids.map((c) => chat.slot(c.id)), ...(holding.get(caller) ?? [])]);
     let at = 0; while (taken.has(at)) at += 1;
-    // A sprint's role (Tyler, 2026-11-16: "the role becomes the chat name so its easy to see which worker is which"): a key
-    // with a row in the caller's roles.json starts as that row, named for it, whatever Settings > Delegation says, exactly
-    // as Start sprint starts it. A provider, model or effort named that the row does not start is refused by field. A key
-    // with no row (a late worker the plan has no role for) still starts the Delegate way.
-    if (opts.profile === undefined && args.key !== undefined && chat.sprintFiles.exists(caller)) {
-      let parsed; try { parsed = JSON.parse(chat.sprintFiles.read(caller, 'roles.json') ?? 'null'); } catch { parsed = null; }
-      const row = Array.isArray(parsed?.roles) ? parsed.roles.find((r) => r && r.key === args.key) : undefined;
-      if (row) {
-        const role = roleOf(row, chat.profiles.list().profiles);
-        if (role.error) return role;
-        const has = { provider: role.provider, model: role.model, effort: role.effortId ? role.effort : undefined };
-        const off = ['provider', 'model', 'effort'].find((k) => args[k] !== undefined && args[k] !== has[k]);
-        if (off) return { error: 'role-refused', role: row.key, field: off, detail: `Role ${row.key}, ${off}: "${args[off]}" is not what its roles.json row starts (${has[off] ?? 'the agent\'s default'}). Leave provider, model and effort out: the role's row decides.` };
-        args = { ...args, ...has, title: row.key, ...(args.mode === undefined && role.mode && { mode: role.mode }) };
-        opts = { ...opts, profile: role.profile };
-      }
+    // A sprint's workers come only from its role rows, never from Settings > Delegation (OPEN-ITEMS 0.1.9: "the parent
+    // cannot create an unapproved worker"). A sprint lead is a chat whose sprint New sprint made (P9 keeps prep:<id>) or
+    // whose sprint folder has a roles.json; open_chat writes neither, so a plain chat's workers stay Delegate's. Its
+    // worker names the key of a valid roles.json row and starts as that row, named for it (Tyler, 2026-11-16: "the role
+    // becomes the chat name so its easy to see which worker is which"); anything else is refused before a chat or a slot
+    // is taken. A provider, model or effort named that the row does not start is refused by field.
+    const roles = opts.profile === undefined && chat.sprintFiles.exists(caller) ? chat.sprintFiles.read(caller, 'roles.json') : undefined;
+    if (opts.profile === undefined && (chat.projects.prepOf(caller) || (roles !== undefined && roles !== null))) {
+      let parsed; try { parsed = JSON.parse(roles ?? 'null'); } catch { parsed = null; }
+      const file = 'roles.json in ' + (chat.sprintFiles.folderOf(caller) ?? 'the sprint folder');
+      if (!Array.isArray(parsed?.roles)) return { error: 'role-refused', role: args.key ?? null, field: 'roles.json', detail: `${file} is ${roles == null ? 'missing' : 'not { "roles": [ ... ] }'}: a sprint's workers start only from its role rows. Fix the file in Sprint Setup.` };
+      if (args.key === undefined) return { error: 'role-refused', role: null, field: 'key', detail: `A sprint's worker needs key: one of its roles.json rows (${parsed.roles.map((r) => r?.key).filter((k) => typeof k === 'string' && k !== 'lead').join(', ') || 'none yet'}).` };
+      const row = parsed.roles.find((r) => r && r.key === args.key);
+      if (!row || args.key === 'lead') return { error: 'role-refused', role: args.key, field: 'key', detail: `Role ${args.key}: ${file} has no row for it. A worker the plan has no role for needs a role row first: add it in Sprint Setup.` };
+      const role = roleOf(row, chat.profiles.list().profiles);
+      if (role.error) return role;
+      const has = { provider: role.provider, model: role.model, effort: role.effortId ? role.effort : undefined };
+      const off = ['provider', 'model', 'effort'].find((k) => args[k] !== undefined && args[k] !== has[k]);
+      if (off) return { error: 'role-refused', role: row.key, field: off, detail: `Role ${row.key}, ${off}: "${args[off]}" is not what its roles.json row starts (${has[off] ?? 'the agent\'s default'}). Leave provider, model and effort out: the role's row decides.` };
+      args = { ...args, ...has, title: row.key, ...(args.mode === undefined && role.mode && { mode: role.mode }) };
+      opts = { ...opts, profile: role.profile };
     }
     // Delegate (not Start sprint, which passes its role rows as opts.profile): a worker is only what a Settings row starts
     // (SECURITY.md § Delegate). A named provider, model or effort picks the first free row that starts exactly that; none
