@@ -405,6 +405,17 @@ export function createDelegate({ chat, allowed, usage }) {
       if (file.error) return { error: 'scripts-refused', detail: file.error };
       const moved = { error: 'scripts-changed', detail: 'hooks.json is not the one that was shown. Look at the sprint\'s scripts again, then start it.' };
       if (!caller && file.scripts.length && hooksHash !== hashOf(hooksText)) return moved;
+      // What a wait may have changed (the user's answer, a before-start script's minute): the lock, Delegation, Workers
+      // per chat and the modes, read again. leadMode is the one read last, so no chat is made wider than its caller is now.
+      const again = () => {
+        if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
+        const now = chat.delegation();
+        if (now.start === 'off') return OFF;
+        // A lower Workers per chat: the place held is this start's own, so it does not count against it.
+        if (reserved && running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
+        ({ leadMode, ...refusal } = modes());
+        return refusal.error ? refusal : null;
+      };
       if (caller) {
         const request = { toolCallId: 'p9-mcp-' + randomUUID(), kind: 'execute',
           title: `P9: start the sprint "${(prep?.title ?? lead.title).slice(0, 120)}": ${[roles.lead, ...roles.rest].map(said).join(', ')}. This is your approval of its plan (sha256 ${plan.slice(0, 12)}).`
@@ -412,22 +423,17 @@ export function createDelegate({ chat, allowed, usage }) {
         if (!await chat.approve(caller, request, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
         if (signal?.aborted) return { error: 'cancelled' };
         // Anything may have changed while the user was asked: checked again before any chat is made.
-        if (chat.lock(caller).on) return { error: 'agent-lock-on' };
-        const now = chat.delegation();
-        if (now.start === 'off') return OFF;
-        // A lower Workers per chat: the place held is this start's own, so it does not count against it.
-        if (reserved && running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
-        ({ leadMode, ...refusal } = modes());
-        if (refusal.error) return refusal;
+        const no = again();
+        if (no) return no;
         if ((chat.sprintFiles.read(sprint, 'hooks.json') ?? null) !== hooksText) return moved;
       }
       // before-start: the scripts being approved by this very start. A refusal records nothing and makes nothing.
       const refused = await hooks.fire(sprint, 'before-start', null, file.scripts);
       if (refused) return refused;
       if (signal?.aborted) return { error: 'cancelled' };
-      // A script may have taken a minute: the switches are read again before anything is recorded or made.
-      if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
-      if (chat.delegation().start === 'off') return OFF;
+      // A script may have taken a minute: every check is made again before anything is recorded or made.
+      const late = again();
+      if (late) return late;
       // The press is the approval record: the plan's hash, when and by whom.
       const started = { at: Date.now(), plan, by: caller ?? 'owner', scripts: file.scripts };
       chat.projects.recordStart(sprint, started);

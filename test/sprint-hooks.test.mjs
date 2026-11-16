@@ -156,7 +156,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   fs.rmSync(outFile);
   // The same for an agent's start_sprint and the agent lock: the user's yes, then the lock while the script runs.
   const asker = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
-  await call(instance, `/chat/${asker}/prompt`, 'POST', { text: 'mcp' });
+  await call(instance, `/chat/${asker}/prompt`, 'POST', { text: 'mcp', mode: 'Auto' });
   const A = await attach(t, instance, asker);
   fs.writeFileSync(hold, '');
   going = A.tool('start_sprint', { sprint });
@@ -171,6 +171,32 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.equal((await page()).started, undefined, 'a locked start left an approval record');
   assert.equal((await rows(instance)).length, before + 1, 'a locked start made a chat');
   fs.rmSync(outFile);
+  // Held again: start_sprint asked, allowed, and before-start waiting. `during` changes something, then the script ends.
+  const heldStart = async (during) => {
+    fs.writeFileSync(hold, '');
+    const seen = (await events(instance, asker)).filter((e) => e.type === 'approval').length, run = A.tool('start_sprint', { sprint });
+    const q = await eventually(async () => (await events(instance, asker)).filter((e) => e.type === 'approval')[seen], 'the start question');
+    await call(instance, `/chat/${asker}/answer`, 'POST', { request: q.data.request, answer: { optionId: 'allow' } });
+    await ran('before-start'); await during(); fs.rmSync(hold);
+    const reply = await run; fs.rmSync(outFile); return reply;
+  };
+  // The caller's mode narrowed while the script runs (the lock on and off again leaves a chat in Manual): the lead's
+  // row asks for Auto, now wider than its caller, so nothing is recorded or made.
+  await call(instance, `/chat/${asker}/prompt`, 'POST', { text: 'config', mode: 'Auto' }); await replied(instance, asker, 'config:'); // the lock above left it in Manual
+  write('roles.json', JSON.stringify({ folder: 'repo', roles: [{ ...lead, mode: 'Auto' }] }));
+  got = await heldStart(async () => { for (const on of [true, false]) assert.equal((await call(instance, '/agent-lock', 'POST', { on })).status, 200); });
+  assert.deepEqual([got.error, got.role, got.field], ['role-refused', 'lead', 'mode'], JSON.stringify(got)); assert.match(got.detail, /never wider than you: your mode is Manual/);
+  assert.equal((await page()).started, undefined, 'a start wider than its caller left an approval record');
+  assert.equal((await rows(instance)).length, before + 1, 'a start wider than its caller made a chat');
+  write('roles.json', JSON.stringify({ folder: 'repo', roles: [lead] }));
+  // Workers per chat lowered while the script runs (one worker running, 2 -> 1): nothing is recorded or made.
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: was.workers ?? [] })).status, 200);
+  const kid = await A.tool('open_chat', { text: 'x', title: 'Kid', key: 'kid' }); assert.ok(kid.chat, JSON.stringify(kid));
+  got = await heldStart(async () => assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: was.workers ?? [] })).status, 200));
+  assert.equal(got.error, 'too-many-chats', JSON.stringify(got));
+  assert.equal((await page()).started, undefined, 'a start over the lowered limit left an approval record');
+  assert.equal((await rows(instance)).length, before + 2, 'a start over the lowered limit made a chat');
+  assert.equal((await call(instance, '/delegation', 'POST', { start: was.start, max: was.max, workers: was.workers ?? [] })).status, 200);
 
   // The press that approves: the record holds the scripts, and each run is told the sprint's state.
   got = await press({ hooks: shown.hash });
@@ -186,7 +212,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null }]);
   assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, review: null }]);
   assert.deepEqual([bs.workers, bs.verdicts], [[], []]);
-  assert.equal(bs.log.length, 3, 'the earlier refusal and the two held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
+  assert.equal(bs.log.length, 5, 'the earlier refusal and the four held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
   assert.ok(!JSON.stringify(bs).includes(instance.credentials.token ?? '\u0000no-token'), 'the state carries the daemon\'s token');
   const ss = await ran('sprint-start');
   assert.deepEqual([ss.blocking, ss.script.name, ss.sprint.started.by, ss.sprint.started.plan], [false, 'started', 'owner', listed.started.plan]);

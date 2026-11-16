@@ -1065,7 +1065,8 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
   Start makes nothing and records nothing, a worker is not started. The refusal carries the script's name, its exit
   and its last output line (at most 300 characters, control characters removed), to the page or to the agent's tool.
   A script's exit 0 allows nothing by itself: every other check of the action still applies after it, and
-  Delegation off and the agent lock are read again when `before-start` ends, before anything is recorded or made. A notice never
+  when `before-start` ends, Delegation off, the agent lock, Workers per chat and the modes (never wider than the
+  caller is now) are all read again, before anything is recorded or made. A notice never
   delays or refuses anything; its result is only logged.
 - **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
   sprint: its id, title and folder, the approval record, the project's id and name, the role rows, the plan's items
