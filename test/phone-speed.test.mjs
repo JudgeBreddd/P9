@@ -12,7 +12,7 @@ const FAST3G = { offline: false, latency: 563, downloadThroughput: 180000, uploa
 const CHATS = 6, TURNS = 60;
 
 function seed(server) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   const chat = db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)');
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   const text = 'A long answer line that a real agent writes, with some detail in it. '.repeat(8);

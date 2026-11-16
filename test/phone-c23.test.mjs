@@ -11,7 +11,7 @@ import { claudeWindow } from '../apps/server/limits.mjs';
 
 // The dev space keeps no files: pictures go out in the log as "P9_SHOT <name> <base64>".
 const shot = async (page, name, options = {}) => { const png = await page.screenshot(options); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
-const db = (server) => new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+const db = (server) => new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
 const MOVED = '00000000-0000-4000-8000-0000000000c2';
 // A 1x1 PNG, for the attach picker.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');

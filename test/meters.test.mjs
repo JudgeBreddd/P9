@@ -129,7 +129,7 @@ test('cache clock claude: a long prompted turn that works on its own starts the 
     await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'long work' });
     await until(async () => (await call(instance, '/chat/events?after=0&only=' + id)).events.some((e) => e.data?.toolCallId === 'lw-2'), 'long work going');
     // The last turn end, the prompt and the first steps were half an hour ago; the turn goes on live.
-    const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+    const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
     try { db.prepare('UPDATE events SET at = at - 1800000 WHERE conversation = ?').run(id); } finally { db.close(); }
   };
   const { page, pane, errors } = await open(t, 'claude', { before });
@@ -151,7 +151,7 @@ for (const provider of ['claude', 'codex']) {
   test('cache clock ' + provider + ': unprompted agent work after the turn ended starts the clock again', { timeout: 90000 }, async (t) => {
     // The turn ended half an hour ago: everything logged so far is moved back 30 min; the work goes on live.
     const back = (instance, id) => {
-      const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+      const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
       try { db.prepare('UPDATE events SET at = at - 1800000 WHERE conversation = ?').run(id); } finally { db.close(); }
     };
     const { page, pane, errors } = await open(t, provider, { text: 'background quiet', done: (e) => e.data?.toolCallId === 'bg-2', before: back });

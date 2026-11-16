@@ -11,7 +11,7 @@ const A = '00000000-0000-4000-8000-0000000000a1';
 const shots = process.env.P9_SCREENSHOTS || '/tmp';
 const shot = async (page, name) => { const png = await page.screenshot({ type: 'png', path: shots + '/' + name + '.png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 function seed(server) {
-  const ledger = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const ledger = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   ledger.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(A, 'claude', 'Attach here', 'idle', Date.now());
   const event = ledger.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   for (const [type, data] of [['user', { text: 'hello' }], ['update', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi.' } }], ['turn-end', { stopReason: 'end_turn' }]]) event.run(A, type, JSON.stringify(data), Date.now());
