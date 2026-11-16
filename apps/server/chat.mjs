@@ -988,11 +988,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // a cancel it goes back to the window's box instead. Each keeps its sender's authority (a revoked phone sends nothing).
   // O125 point 1: a message may replace one still waiting, by its ID, when both come from the same sender. The old one
   // leaves the queue as 'replaced' (unheld, never dropped); another sender's ID, or one no longer waiting, replaces nothing.
+  // A message that replaces one still waiting is held with it, whatever its path would have been (FIX1: a steer would
+  // send the correction now and leave the old wording to go later). A foreign sender's ID, or one no longer waiting, is not a replace.
+  const waitingReplace = (session, body) => body.replaces !== undefined && [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
   function hold(id, session, body, images, when) {
     if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     const item = { id: randomUUID(), body, images, allowed: captureAuthority() };
-    const old = body.replaces === undefined ? undefined : [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
+    const old = waitingReplace(session, body);
     if (old) {
       const list = session.held.includes(old) ? session.held : session.queued;
       list.splice(list.indexOf(old), 1);
@@ -1205,7 +1208,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try {
           // No steering: 409 as before, and the window keeps the message queued itself.
           // During a turn that answers another chat, everything waits for its end.
-          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo ? 'queue' : body.when ?? 'steer');
+          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo ? 'queue' : body.when ?? 'steer');
           if (solo) return refused(409, 'turn-running');
           return await steer(id, body, images);
         } finally { release(); }
