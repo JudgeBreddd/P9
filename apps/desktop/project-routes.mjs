@@ -15,7 +15,8 @@ export const projectRoutes = (uuid) => {
     cleanSprint: ({ lead, ...rest }) => uuid(lead) && !Object.keys(rest).length && ['POST', '/sprints/' + lead + '/clean', {}],
     // SECURITY.md § Start sprint: a sprint to prepare, and the owner's Start press (the approval record of its plan).
     newSprint: ({ id, title, ...rest }) => uuid(id) && typeof title === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprints', { title }],
-    startSprint: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/start', {}],
+    // hooks: the SHA-256 of the hooks.json the page showed, so the press approves the scripts the owner saw (SECURITY.md § Sprint scripts).
+    startSprint: ({ sprint, hooks, ...rest }) => uuid(sprint) && !Object.keys(rest).length && (hooks === undefined || /^[0-9a-f]{64}$/.test(hooks)) && ['POST', '/sprints/' + sprint + '/start', hooks ? { hooks } : {}],
     sprintSettings: ({ id, source, setup, ...rest }) => uuid(id) && typeof source === 'string' && typeof setup === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-settings', { source, setup }],
     removeProjectFile: ({ id, name, ...rest }) => uuid(id) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files/remove', { name }],
     startedIn: ({ folder, ...rest }) => typeof folder === 'string' && folder.length <= 4096 && !Object.keys(rest).length && ['GET', '/chat/started-in?' + new URLSearchParams({ folder })],

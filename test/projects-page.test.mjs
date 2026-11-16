@@ -486,7 +486,7 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
   const row = page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' });
   await row.waitFor({ timeout: 10000 });
-  assert.equal(await page.locator('[data-pj="spfile"]').count(), 4);
+  assert.equal(await page.locator('[data-pj="spfile"]').count(), 5); // sprint.md, rules.md, the role file, the notes file, and hooks.json (listed before it is made)
   await row.click();
   const box = page.locator('[data-sp-box]');
   await box.waitFor({ timeout: 5000 });
@@ -743,6 +743,10 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   const roles = (dir) => JSON.stringify({ folder: dir, roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w2', provider: 'claude', model: 'default', effort: 'low' }] });
   await writeFile(path.join(folder, 'roles.json'), roles('plain'));
   await writeFile(path.join(folder, 'roles', 'lead.work.md'), 'config'); await writeFile(path.join(folder, 'roles', 'w2.work.md'), 'config');
+  // S19: a script in hooks.json (at a point P9 does not fire yet, so nothing runs here). The page lists it before the
+  // press, the press names the file it showed (the daemon refuses one that does not), and the record shows it approved.
+  const script = { name: 'tidy <b>up</b>', command: '/usr/bin/true --sprint "$(id)"', point: 'after-close' };
+  await writeFile(path.join(folder, 'hooks.json'), JSON.stringify({ scripts: [script] }));
   const planOf = async () => createHash('sha256').update(await readFile(path.join(folder, 'sprint.md'), 'utf8') + '\0' + await readFile(path.join(folder, 'roles.json'), 'utf8')).digest('hex');
   const { app, page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
@@ -750,6 +754,10 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   await section.locator('[data-sp-prep]').waitFor({ timeout: 10000 });
   assert.equal((await start.textContent()).trim(), 'Start sprint');
   assert.equal(await record.count(), 0, 'a prep shows a start record');
+  const pendingScripts = section.locator('[data-sp-scripts="pending"]');
+  assert.match(await pendingScripts.textContent(), /^Start sprint approves this script\. P9 will run it as you, outside every agent's mode:tidy <b>up<\/b> \(after-close\): \/usr\/bin\/true --sprint "\$\(id\)"$/);
+  assert.equal(await pendingScripts.locator('b').count(), 0, 'a script name was drawn as HTML');
+  assert.equal(await section.locator('[data-sp-scripts="approved"]').count(), 0);
   // The press is held in the main process: the button says so and is off, and a second press sends nothing.
   await app.evaluate(({ ipcMain }) => {
     const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
@@ -760,10 +768,31 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
       const r = await h(e, action, ...rest); if (action === 'startSprint') (globalThis.answers ||= []).push(JSON.stringify(r).slice(0, 600)); return r;
     });
   });
-  // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
+  // S19: hooks.json is changed by someone else while this press's draft saves (the save's reply carries every file).
+  // The press approved the scripts drawn with its button, so it is not sent: the new list shows and waits for a press.
+  const hooksFile = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json');
+  const putHooks = async (rows) => assert.equal((await call(instance, '/projects/' + p.id + '/sprint-file', 'POST', { lead: sprint, name: 'hooks.json', hash: (await hooksFile()).hash, text: JSON.stringify({ scripts: rows }) })).status, 200);
   await section.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
   await app.evaluate(() => { globalThis.saves = []; });
-  const box = section.locator('[data-sp-box]'); await box.fill((await box.inputValue()) + '\nApproved as edited.\n');
+  const box = section.locator('[data-sp-box]'); await box.fill((await box.inputValue()) + '\nFirst draft.\n');
+  await start.click();
+  await until(() => app.evaluate(() => globalThis.saves.length > 0), 'the first draft\'s save held');
+  await putHooks([script, { name: 'inject', command: '/usr/bin/false', point: 'before-start', blocking: true }]);
+  await app.evaluate(() => { const held = globalThis.saves; globalThis.saves = null; held.forEach((go) => go()); });
+  await said.waitFor({ timeout: 10000 });
+  assert.match(await said.textContent(), /^Not started: hooks\.json changed before your press went out\./);
+  assert.equal(await app.evaluate(() => globalThis.presses), 0, 'a press went out for scripts its owner never saw');
+  assert.match(await pendingScripts.textContent(), /inject \(before-start, blocking\): \/usr\/bin\/false$/);
+  assert.equal((await start.textContent()).trim(), 'Start sprint'); assert.equal(await start.isDisabled(), false);
+  assert.equal((await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).started, undefined);
+  await putHooks([script]);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads a project's files when it is opened
+  await until(async () => !/inject/.test(await pendingScripts.textContent()), 'the page shows the restored hooks.json');
+  console.log('PASS S19 page held save: a hooks.json that arrived while the draft saved is shown, not approved');
+  // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
+  const box0 = section.locator('[data-sp-box]'); if (!await box0.count()) await section.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await app.evaluate(() => { globalThis.saves = []; });
+  await box.fill((await box.inputValue()) + '\nApproved as edited.\n');
   await start.click();
   await until(() => app.evaluate(() => globalThis.saves.length > 0), 'the draft\'s save held');
   assert.equal(await start.isDisabled(), true, 'the button is on while its draft saves');
@@ -797,6 +826,16 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   assert.match(await record.textContent(), new RegExp('sha256 ' + (await planOf()).slice(0, 12) + '\\.$'));
   assert.equal(await app.evaluate(() => globalThis.presses), 2);
   assert.equal(await start.isDisabled(), false);
+  assert.match(await section.locator('[data-sp-scripts="approved"]').textContent(), /^Scripts you approved at Start\. P9 runs these as you, outside every agent's mode, and only these:tidy <b>up<\/b> \(after-close\): /);
+  assert.equal(await pendingScripts.count(), 0, 'the approved file still reads as pending');
+  assert.deepEqual((await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).started.scripts, [{ ...script, blocking: false }]);
+  // The file changed after Start (an agent can write it): the page says so and shows what the next press would approve.
+  const was = (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
+  assert.equal((await call(instance, '/projects/' + p.id + '/sprint-file', 'POST', { lead: sprint, name: 'hooks.json', hash: was, text: JSON.stringify({ scripts: [script, { name: 'gate', command: 'node gate.mjs', point: 'before-new-worker', blocking: true }] }) })).status, 200);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads a project's files when it is opened
+  await pendingScripts.waitFor({ timeout: 10000 });
+  assert.match(await pendingScripts.textContent(), /^hooks\.json has changed since\. Not run until you press Start again, which approves these scripts\..*gate \(before-new-worker, blocking\): node gate\.mjs$/);
+  console.log('PASS S19 page: the sprint section lists the scripts Start approves, the approved copy after it, and a file changed since');
   await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT start-again ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.deepEqual(errors, []);

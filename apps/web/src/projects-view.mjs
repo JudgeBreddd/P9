@@ -35,7 +35,18 @@ export function installProjects(o, api) {
   const startText = r => r.status === 200 ? 'Started: ' + r.body.chats.map(c => c.key + (c.existing ? ' (kept)' : '')).join(', ') + '.'
     : 'Not started: ' + (r.body?.detail || r.body?.error || r.status) + (r.body?.chats?.length ? ' Made so far: ' + r.body.chats.map(c => c.key).join(', ') + '.' : '');
   const startedHtml = sp => sp.started ? `<p class="hint" data-sp-started>Started ${esc(new Date(sp.started.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} by ${sp.started.by === 'owner' ? 'you' : esc(find(sp.started.by)?.title ?? 'a chat\'s agent, on your yes')}: your approval of its plan, sha256 <span class="mono" title="${esc(sp.started.plan)}">${esc(sp.started.plan.slice(0, 12))}</span>.</p>` : '';
-  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
+  // The sprint's scripts (SECURITY.md § Sprint scripts): what Start approves, command by command, and what P9 runs now.
+  // The server parses hooks.json for real and refuses a file it cannot read; this only shows it.
+  const scriptsOf = sp => { const text = sp.files.find(f => f.name === 'hooks.json')?.text ?? ''; if (!text.trim()) return [];
+    try { const rows = JSON.parse(text)?.scripts; return Array.isArray(rows) && rows.every(r => r && typeof r.name === 'string' && typeof r.command === 'string' && typeof r.point === 'string') ? rows : null; } catch { return null; } };
+  const scriptLine = s => `${s.name} (${s.point}${s.blocking === true ? ', blocking' : ''}): ${s.command}`;
+  const scriptsHtml = sp => { const file = scriptsOf(sp), ok = sp.started?.scripts ?? [], same = file && JSON.stringify(file.map(scriptLine)) === JSON.stringify(ok.map(scriptLine));
+    const list = rows => `<ul class="sp-scripts">${rows.map(s => `<li class="mono">${esc(scriptLine(s))}</li>`).join('')}</ul>`;
+    return (ok.length ? `<div class="hint" data-sp-scripts="approved">Scripts you approved at Start. P9 runs these as you, outside every agent's mode, and only these:${list(ok)}</div>` : '')
+      + (file === null ? '<p class="hint" data-sp-scripts="unread" role="alert">hooks.json is not a scripts list: Start will refuse it and say why.</p>'
+        : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
+        : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
+  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
@@ -114,21 +125,21 @@ export function installProjects(o, api) {
   }
   // D1, D3, D4: a sprint's files, kept in P9; its lead and workers edit them too. One open at a time, saved as you type.
   function sprintHtml(sp) {
-    const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker', 'roles.json': 'the roles above' };
+    const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker', 'roles.json': 'the roles above', 'hooks.json': 'the sprint\'s scripts: P9 runs only what you approved at Start', 'hooks.log': 'P9\'s log of script runs, read only', 'review-trail.md': 'P9\'s record of reviews, read only' };
     const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this role gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this role with the sprint rules' : /\.work\.md$/.test(n) ? 'its first message at Start' : 'the worker keeps it itself');
-    const roles = rolesOf(sp), files = [...sp.files, ...roleFiles(sp).filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
-    const fixed = ['sprint.md', 'rules.md', 'roles.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : 3;
-    files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < 3 ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+    const roles = rolesOf(sp), files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
+    const fixed = ['sprint.md', 'rules.md', 'roles.json', 'hooks.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : fixed.length;
+    files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < fixed.length ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
     return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
-      ${startedHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
+      ${startedHtml(sp)}${scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
       ${rolesHtml(sp, roles)}
       ${[...files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
         const sz = what(f.name) + (f.gone ? ' · deleted, your text not saved' : drafts.has(sp.lead + ' ' + f.name) ? ' · not saved'
           : f.unmade && f.name === 'rules.md' ? ' · none yet, P9\'s defaults are sent' : f.unmade || f.text === '' ? ' · empty' : '');
         return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz" title="${esc(sz)}">${esc(sz)}</span></button>`
-          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false">${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
+          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false"${f.name === 'hooks.log' || f.name === 'review-trail.md' ? ' readonly' : ''}>${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
@@ -189,8 +200,8 @@ export function installProjects(o, api) {
       + `<div class="sp-add"><input data-slot="input" class="mono" data-sp-newkey data-lead="${esc(sp.lead)}" maxlength="64" spellcheck="false" autocomplete="off" placeholder="worker name, for example docs" aria-label="New worker's name"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sprole-add" data-lead="${esc(sp.lead)}">${svg.plus}Add worker</button></div></div>`;
   }
   // A draft whose file was deleted since (a worker, the lead): still listed, with its text, until saved again or discarded.
-  const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && !roleFiles(sp).includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
-  const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id) && !roleFiles(sp).includes(id.slice(sp.lead.length + 1)); };
+  const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
+  const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1)); };
   const spNoteHtml = id => (spNote.get(id) !== 'failed' && isGone(id) ? 'This file was deleted in P9 after you opened it (the lead or a worker removed it). Your text is still here, not saved. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spmine">Save it again</button> <button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sptheirs">Discard my text</button>' : null) ?? ({ changed: 'This file changed in P9 after you opened it (the lead or a worker edited it). Your text is still here, not saved. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spmine">Save mine over it</button> <button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sptheirs">Show theirs</button>',
     failed: 'Not saved. Your text is still here. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spretry">Try again</button>' })[spNote.get(id)] ?? '';
   function archivedHtml() {
@@ -272,10 +283,14 @@ export function installProjects(o, api) {
     // An open file's draft is saved first: the press approves the plan as it is on disk. The page is read again after, in
     // place (the user may be elsewhere by then: nothing is opened for them).
     // The press is out from the click, its draft's save too: a second press while that save is held sends nothing.
-    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return; starting.add(lead); clearTimeout(saveT); renderPage(); fillBox(false);
+    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return;
+      // The scripts this press approves are the ones drawn with its button (SECURITY.md § Sprint scripts): a hooks.json that
+      // reached the page since (a save's reply carries every file) is shown, and waits for a press of its own.
+      const shown = b.dataset.hooks ?? '', hooksNow = () => cur?.sprints?.find(s => s.lead === lead)?.files.find(f => f.name === 'hooks.json')?.hash ?? ''; starting.add(lead); clearTimeout(saveT); renderPage(); fillBox(false);
       if (!await saveSprint().catch(() => false)) { starting.delete(lead); renderPage(); return fillBox(); }
+      if (hooksNow() !== shown) { starting.delete(lead); startSaid.set(lead, 'Not started: hooks.json changed before your press went out. Look at the scripts listed here, then press Start again.'); renderPage(); return fillBox(); }
       pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
-      const r = await call('startSprint', { sprint: lead }, { quiet: true }).finally(() => starting.delete(lead));
+      const r = await call('startSprint', { sprint: lead, ...(shown && { hooks: shown }) }, { quiet: true }).finally(() => starting.delete(lead));
       startSaid.set(lead, startText(r));
       const again = cur?.id === id && await call('project', { id }, { quiet: true });
       if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);

@@ -148,7 +148,7 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const plan = createHash('sha256').update(fs.readFileSync(path.join(prep.body.folder, 'sprint.md'), 'utf8') + '\0' + text).digest('hex');
   listed = (await call(instance, '/projects/' + project)).body.project.sprints.find((s) => s.lead === sprint);
   assert.equal(listed.prep, false);
-  assert.deepEqual({ ...listed.started, at: typeof listed.started.at }, { at: 'number', plan, by: 'owner' });
+  assert.deepEqual({ ...listed.started, at: typeof listed.started.at }, { at: 'number', plan, by: 'owner', scripts: [] });
   assert.deepEqual(press.body.started, listed.started);
 
   // Pressing again: everything is kept, nothing is made or sent again.
@@ -224,9 +224,13 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   fs.writeFileSync(path.join(made.folder, 'roles.json'), roles([lead, review]));
   fs.writeFileSync(path.join(made.folder, 'roles/lead.work.md'), 'config'); fs.writeFileSync(path.join(made.folder, 'roles/review.work.md'), 'config');
   const n3 = (await rows(instance)).length;
+  // S19: the sprint's scripts are in the question the user answers (a point P9 does not fire yet, so nothing runs here).
+  const tidy = { name: 'tidy', command: 'node tidy.mjs', point: 'after-close' };
+  fs.writeFileSync(path.join(made.folder, 'hooks.json'), JSON.stringify({ scripts: [tidy] }));
   let pending = a.tool('start_sprint', { sprint: made.sprint });
   let asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', a.cursor);
   assert.match(asked.hit.data.toolCall.title, /^P9: start the sprint "S3": lead \(claude opus high\), review \(claude haiku low\)\. This is your approval of its plan/);
+  assert.match(asked.hit.data.toolCall.title, /It also approves this script, which P9 will run as you, outside every agent's mode: .*tidy.*node tidy\.mjs/);
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'reject' } });
   assert.equal((await pending).error, 'not-allowed');
   assert.equal((await rows(instance)).length, n3, 'a rejected start made a chat');
@@ -242,6 +246,17 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const byTool = await pending;
   assert.equal(byTool.error, undefined, JSON.stringify(byTool));
   assert.equal(byTool.started.by, a.conversation);
+  assert.deepEqual(byTool.started.scripts, [{ ...tidy, blocking: false }]);
+  // hooks.json changed while the user was asked: the yes was to another file, so nothing is approved or run.
+  pending = a.tool('start_sprint', { sprint: made.sprint });
+  asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
+  fs.writeFileSync(path.join(made.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'swap', command: 'node swap.mjs', point: 'before-new-worker', blocking: true }] }));
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  assert.equal((await pending).error, 'scripts-changed');
+  const scr = await a.tool('sprint_scripts', { sprint: made.sprint });
+  assert.deepEqual([scr.approved?.scripts.map((x) => x.name), scr.file.scripts?.map((x) => x.name), scr.pending], [['tidy'], ['swap'], true], JSON.stringify(scr));
+  fs.writeFileSync(path.join(made.folder, 'hooks.json'), JSON.stringify({ scripts: [tidy] }));
+  console.log('PASS S19 agent start: the question lists the scripts; a file changed during the question is refused');
   assert.equal((await rows(instance)).find((r) => r.id === made.sprint).parent, a.conversation);
   for (const [row, c] of [[lead, byTool.chats[0]], [review, byTool.chats[1]]]) assert.match(await config(instance, c.chat), new RegExp(`^config:model=${row.model},effort=${row.effort},`));
   // Delegation turned Off while the user is asked: Allow makes nothing.
