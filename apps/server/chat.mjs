@@ -61,10 +61,12 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // agents read, write and run under their own permission checks.
 // The ACP version P9 asks each agent for (0.1.9 O52). ACP 2 is still a draft to its authors, so each agent has its own
 // number here and P9_ACP_VERSION=1 in the daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
-// ponytail: Claude's adapter (0.106.0) has no `_session/steering` on 2, so a message sent mid-turn waits for the
-// turn's end (session.steering is false; Builder, 2026-11-10: "thats really enough for me"). On 2 it does take a
-// second session/prompt into the running turn, but then sends the whole answer again; P9 does not use that yet.
-const ACP_ASK = { claude: 2, codex: 2 };
+// Claude asks for 1 (0.1.9 phase 4.5, OPEN-ITEMS "A message cannot be sent while a turn runs"): its adapter (0.106.0)
+// has `_session/steering` only on 1, and without it a message sent mid-turn waited for the turn's end instead of going
+// in at the next tool-call boundary (session.steering, hold() and toolStep() below). Tyler, 2026-11-15: "steer should
+// send to the agent betwen turns (tool calls) but not cancel a running tool call". Back to 2 once the adapter
+// advertises steering there: test/real-adapter-steering.test.mjs asks with this table and fails until it does.
+const ACP_ASK = { claude: 1, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
 // The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.

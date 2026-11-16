@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import * as acp from '../apps/server/acp.mjs';
-import { adapterEntry, clientCapabilities } from '../apps/server/chat.mjs';
+import { acpAsk, adapterEntry, clientCapabilities } from '../apps/server/chat.mjs';
 import { launchTree, endTree } from '../apps/server/process-tree.mjs';
 
 for (const provider of ['claude', 'codex']) {
@@ -22,8 +22,8 @@ for (const provider of ['claude', 'codex']) {
     const agent = acp.connectClient(acp.ndJsonStream(Writable.toWeb(tree.child.stdin), Readable.toWeb(tree.child.stdout)), { sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
       createElicitation: async () => ({ action: 'cancel' }) });
     const timeout = (what) => new Promise((resolve, reject) => setTimeout(() => reject(new Error(what + ' timed out; stderr: ' + stderr)), 30000));
-    // The same call as chat.mjs connect().
-    const init = await Promise.race([agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }), timeout('initialize')]);
+    // The same call as chat.mjs connect(), with the ACP version P9 asks this agent for (ACP_ASK).
+    const init = await Promise.race([agent.initialize({ protocolVersion: acpAsk(provider), clientCapabilities }), timeout('initialize')]);
     console.log('REAL ' + provider + ' initialize: ' + JSON.stringify({ protocolVersion: init.protocolVersion, agent: init.agentInfo, meta: init._meta }));
     assert.equal(init._meta?.steering?.supported === true, true, 'steering advertised to P9 (chat.mjs reads exactly this)');
     // Routed: an unknown session is refused by the steering handler, not with method-not-found (-32601). Claude throws
