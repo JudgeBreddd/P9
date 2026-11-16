@@ -255,6 +255,18 @@ export async function appliedCleanly(sprintDir) {
   return !!done && !done.cause && Array.isArray(done.left) && done.left.length === 0;
 }
 
+// The close view (SECURITY.md "The result, always three lists"): the apply's written, rolled back and left lists as
+// recorded, and whether it is partial (below). Null until the owner has applied.
+export async function closeOf(sprintDir) {
+  const done = await readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then(JSON.parse, () => null);
+  if (!done) return null;
+  const written = done.written ?? [], rolledBack = done.rolledBack ?? [], left = done.left ?? [];
+  // Partial: something is left AND the owner's folder has P9 content in it (a write kept, or a restore that failed). A conflict
+  // lists its paths as left but writes nothing, so it is refused, not partial.
+  const changed = written.length > 0 || rolledBack.length > 0 || left.some(l => /^rollback-failed/.test(l.reason));
+  return { source: done.source, at: done.at, cause: done.cause ?? null, written, rolledBack, left, partial: left.length > 0 && changed };
+}
+
 async function readRecord(sprintDir) {
   return readFile(path.join(sprintDir, 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
 }

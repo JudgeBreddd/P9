@@ -236,6 +236,10 @@ export function setupRoutes(outer) {
   // Desktop only (SECURITY.md § Sprint from a folder with no remote, "Applying to your folder is a yes"): the change the
   // owner is shown, then the owner's yes for exactly that change. Not on the phone routes, and no agent tool calls these.
   outer.app.get('/sprints/:id/apply', async (c) => c.json(await outer.chat.workers.preview(c.req.param('id'))));
+  outer.app.get('/sprints/:id/close', async (c) => {
+    const result = await outer.chat.workers.close(c.req.param('id'));
+    return c.json(result, result.error === 'request-refused' ? 400 : result.error === 'not-applied' ? 404 : 200);
+  });
   outer.app.post('/sprints/:id/apply', async (c) => {
     const id = c.req.param('id'), body = await outer.json(c);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join() !== 'shown,yes' || body.yes !== true || typeof body.shown !== 'string') {

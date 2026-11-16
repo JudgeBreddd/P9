@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
 import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
-import { appliedCleanly, applySprint, previewSprint, startCopy } from './folder-copy.mjs';
+import { appliedCleanly, applySprint, closeOf, previewSprint, startCopy } from './folder-copy.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -287,5 +287,10 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     if (!home || !ID.test(sprint ?? '')) return { refused: 'request-refused' };
     return queued(sprint, () => applySprint(dirOf(sprint), consent));
   }
-  return { make, where, clean, preview, apply };
+  // The close view: read-only, so it runs without the sprint's queue. Null (not-applied) until the owner's apply is recorded.
+  async function close(sprint) {
+    if (!home || !ID.test(sprint ?? '')) return { error: 'request-refused' };
+    return (await closeOf(dirOf(sprint))) ?? { error: 'not-applied' };
+  }
+  return { make, where, clean, preview, apply, close };
 }
