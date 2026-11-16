@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
 import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
-import { applySprint, previewSprint, startCopy } from './folder-copy.mjs';
+import { appliedCleanly, applySprint, previewSprint, startCopy } from './folder-copy.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -269,8 +269,10 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it. The
     // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
     if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) {
-      // The copy (folder-copy.mjs) is not removed here: it goes only once its work is applied, a rule the apply slice adds.
-      for (const part of ['workers', 'ready', 'clone']) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
+      // The copy (folder-copy.mjs) goes only once its work is applied cleanly (appliedCleanly); its apply record stays.
+      const parts = ['workers', 'ready', 'clone'];
+      if (await appliedCleanly(dirOf(sprint))) parts.push('copy');
+      for (const part of parts) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
       await rmdir(dirOf(sprint)).catch(() => {});
     }
     return { removed, kept };

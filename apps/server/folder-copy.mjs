@@ -248,6 +248,13 @@ export async function applySprint(sprintDir, { yes, shown, tag, between, afterWr
   return done;
 }
 
+// Clean-up may remove the copy only once its work is applied: apply-result.json with no cause and nothing left. A partial
+// or refused apply keeps the copy (the owner's changes are still in it).
+export async function appliedCleanly(sprintDir) {
+  const done = await readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then(JSON.parse, () => null);
+  return !!done && !done.cause && Array.isArray(done.left) && done.left.length === 0;
+}
+
 async function readRecord(sprintDir) {
   return readFile(path.join(sprintDir, 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
 }
