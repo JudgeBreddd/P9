@@ -1086,7 +1086,7 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   const sentPrompts = () => (fs.existsSync(path.join(folder, 'prompts.log')) ? fs.readFileSync(path.join(folder, 'prompts.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.stringify(JSON.parse(line))) : []);
   fs.writeFileSync(path.join(folder, 'go'), '');
   for (let i = 0; !sentPrompts().some((line) => line.includes('corrected wording')) && i < 200; i += 1) await pause(100);
-  assert.ok(sentPrompts().some((line) => line.includes('corrected wording')), 'the corrected wording was not sent with the queue: prompts ' + JSON.stringify(sentPrompts()) + ' events ' + JSON.stringify((await events(instance, made.chat)).map((e) => [e.type, e.data?.text ?? e.data?.why ?? ''])));
+  assert.ok(sentPrompts().some((line) => line.includes('corrected wording')), 'the corrected wording was not sent with the queue: prompts ' + JSON.stringify(sentPrompts()) + ' folder ' + folder + ' files ' + JSON.stringify(fs.readdirSync(folder)) + ' events ' + JSON.stringify((await events(instance, made.chat)).map((e) => [e.type, e.data?.text ?? e.data?.why ?? ''])));
   assert.ok(!sentPrompts().some((line) => line.includes('old wording')), 'the replaced wording was sent: ' + JSON.stringify(sentPrompts()));
   // The corrected wording is already delivered: its ID replaces nothing now.
   const late = await a.tool('send_chat', { chat: made.chat, text: 'later', replaces: fixed.held });
