@@ -203,18 +203,22 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
       if (client.stdin.writableLength > 1024 * 1024) return end(1008, 'input-too-fast');
       client.stdin.write(line);
     };
-    let pending = '', held = null, heldBytes = 0, snapping = 0, drawn = Promise.resolve();
-    // Control mode sends only new output, so a phone attaching to a running shell first gets the screen as it stands.
+    let pending = '', held = null, heldBytes = 0, snapping = 0, waiting = false, drawn = Promise.resolve();
+    // Control mode sends only new output, so a phone attaching to a running shell first gets the screen as it stands, and
+    // the lines above it (the page keeps 2000).
     // O83 (Builder, 2026-11-15): after a resize too. tmux reflows its own screen, but the terminal in the page reflows its
-    // copy differently (it keeps the cursor row, so lines that unwrap when it widens leave blank rows at the top and its
-    // cursor no longer where tmux's is). Output that arrives meanwhile is held; snapshots run one at a time, in order.
+    // copy differently (lines that unwrap when it widens left blank rows at the top; a line tmux pushed up when it narrowed
+    // stayed on screen), and its cursor is then not where tmux's is. So the page's copy is replaced by tmux's, scrollback
+    // included, so a line a narrower size pushed off the top is still there above. Output that arrives meanwhile is held;
+    // snapshots run one at a time, and resizes that land while one waits to start share it.
     // ponytail: output arriving during the capture can show twice; a redraw (Ctrl+L) clears it.
     const snapshot = () => {
-      snapping++; held ??= [];
-      drawn = drawn.then(() => Promise.all([tmux(['capture-pane', '-p', '-e', '-t', '=' + name(id) + ':']), tmux(['display-message', '-p', '-t', '=' + name(id) + ':', '#{cursor_x} #{cursor_y}'])]))
+      if (waiting) return;
+      waiting = true; snapping++; held ??= [];
+      drawn = drawn.then(() => { waiting = false; return Promise.all([tmux(['capture-pane', '-p', '-e', '-S', '-2000', '-t', '=' + name(id) + ':']), tmux(['display-message', '-p', '-t', '=' + name(id) + ':', '#{cursor_x} #{cursor_y}'])]); })
         .then(([screen, cursor]) => {
           const [x, y] = cursor.stdout.trim().split(' ').map(Number);
-          send(Buffer.from('\x1b[2J\x1b[H' + screen.stdout.replace(/\n$/, '').split('\n').join('\x1b[0m\r\n') + '\x1b[0m\x1b[' + (y + 1) + ';' + (x + 1) + 'H'));
+          send(Buffer.from('\x1b[3J\x1b[2J\x1b[H' + screen.stdout.replace(/\n$/, '').split('\n').join('\x1b[0m\r\n') + '\x1b[0m\x1b[' + (y + 1) + ';' + (x + 1) + 'H'));
         }, () => {})
         .finally(() => { if (--snapping) return; const queued = held; held = null; heldBytes = 0; queued.forEach(send); });
     };

@@ -446,7 +446,7 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   await shot('d17-terminal-link');
   // O4: the terminal resizing while the pointer rests on a link (the dock's first size landing late on a slow runner, a
   // dock drag, a window resize) must not lose the next Ctrl+click: what is under the pointer at the click opens.
-  const softRow = rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }), at = await softRow.boundingBox();
+  const at = await rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }).boundingBox();
   const px = at.x + at.width / 2, py = at.y + at.height / 2, width = () => Number(tmux('display-message', '-p', '-t', target, '#{pane_width}').trim());
   await page.mouse.move(px, py); await page.waitForTimeout(300);
   const wide = width();
@@ -454,8 +454,11 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   for (const end = Date.now() + 5000; Date.now() < end && width() === wide; await wait(100));
   assert.notEqual(width(), wide, 'the terminal took the new size');
   await page.waitForTimeout(500);
-  const still = await softRow.boundingBox();
-  assert.ok(still && py > still.y && py < still.y + still.height && px > still.x, 'the pointer still rests on the link');
+  // The page shows tmux's screen after a resize (O83): narrower, tmux moves the URL's first row up into the scrollback, so
+  // the pointer rests on its second row, which is the same link.
+  const under = await page.evaluate((y) => [...document.querySelectorAll('#termView .xterm-rows > div')]
+    .find((row) => { const box = row.getBoundingClientRect(); return y > box.top && y < box.bottom; })?.textContent.trim() ?? '', py);
+  assert.ok(under && soft.includes(under), 'the pointer still rests on the link: ' + JSON.stringify(under));
   await page.keyboard.down('Control'); await page.mouse.down(); await page.mouse.up(); await page.keyboard.up('Control');
   for (const end = Date.now() + 5000; Date.now() < end && (await read()).split('\n').length < 4; await wait(100));
   assert.deepEqual((await read()).trim().split('\n'), [soft, hard, soft], 'a Ctrl+click right after a resize opens the link under the pointer');
