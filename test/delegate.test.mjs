@@ -1067,6 +1067,7 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
   const folder = path.resolve(instance.workspace, made.folder);
   await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
+  fs.writeFileSync(path.join(folder, 'log-prompts'), ''); // the fake agent logs every prompt from here on (without it, prompts.log stays empty)
   const old = await a.tool('send_chat', { chat: made.chat, text: 'old wording', when: 'queue' });
   assert.ok(old.held, JSON.stringify(old));
   const fixed = await a.tool('send_chat', { chat: made.chat, text: 'corrected wording', replaces: old.held });
