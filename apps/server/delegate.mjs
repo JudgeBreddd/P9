@@ -38,7 +38,7 @@ export const DELEGATE_TOOLS = (input) => {
     start_sprint: 'Do not start a sprint the user has not agreed to.',
   };
   return [
-    ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours, so name one only when the user asked for it; mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
+    ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours. Named, each must be what one of the user\'s free Settings > Delegation rows starts; anything else is refused (delegation-refused, naming the field and what the rows allow), never swapped. mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
       + 'than yours, never wider. The same key from you returns the chat it made before instead of a second one. The user is asked first, except in Unrestricted mode. '
       + 'rules replaces your sprint rules (see set_rules). Returns the chat\'s ID, the folder it works in and your sprint\'s folder: sprint.md there is your plan to fill in, rules.md your sprint rules, '
       + 'roles/<key>.instructions.md what a worker gets at its start and roles/<key>.rules.md what it gets with your rules; notes/<key>.md (notes/<chat ID>.md without a key) is the worker\'s own. Follow it with wait_chat.',
@@ -166,12 +166,31 @@ export function createDelegate({ chat, allowed }) {
     // Settings > Delegation has one row per worker. A new worker takes the first row no running worker of this chat holds.
     const taken = new Set([...kids.map((c) => chat.slot(c.id)), ...(holding.get(caller) ?? [])]);
     let at = 0; while (taken.has(at)) at += 1;
+    // Delegate (not Start sprint, which passes its role rows as opts.profile): a worker is only what a Settings row starts
+    // (SECURITY.md § Delegate). A named provider, model or effort picks the first free row that starts exactly that; none
+    // is refused by field, never swapped for something near it.
+    if (opts.profile === undefined && ['provider', 'model', 'effort'].some((k) => args[k] !== undefined)) {
+      const free = set.workers.map((row, i) => ({ i, ...seen(pick(row, me, {}, undefined)) })).filter((r) => !taken.has(r.i));
+      let fit = free;
+      for (const k of ['provider', 'model', 'effort']) {
+        if (args[k] === undefined) continue;
+        const next = fit.filter((r) => r[k] === args[k]);
+        if (!next.length) {
+          const allowed = [...new Set(fit.map((r) => r[k] ?? 'the agent\'s default (leave ' + k + ' out)'))], given = ['provider', 'model'].filter((x) => x !== k && args[x] !== undefined && fit !== free);
+          return { error: 'delegation-refused', field: k, detail: `${k} "${args[k]}" is not one the user allows: no free Settings > Delegation row starts it${given.length ? ' with ' + given.map((x) => `${x} "${args[x]}"`).join(' and ') : ''}. `
+            + `Allowed ${k}: ${allowed.join(', ') || 'none (no free row)'}. Leave provider, model and effort out to start the next row as the user set it, or ask the user to change Settings > Delegation.` };
+        }
+        fit = next;
+      }
+      at = fit[0].i;
+      args = { ...args, provider: undefined, model: undefined, effort: undefined };
+    }
     holding.set(caller, [...(holding.get(caller) ?? []), at]);
     try { return await startWorker(caller, args, signal, { me, family, set, depth, at, ...opts }); }
     finally { const left = holding.get(caller).filter((n) => n !== at); if (left.length) holding.set(caller, left); else holding.delete(caller); }
   }
-  async function startWorker(caller, args, signal, { me, family, set, depth, at, approved = false, profile: named }) {
-    const row = set.workers[at] ?? { agent: '', model: '', effort: '' };
+  // What a worker starts on: from a Settings row (args empty), or from what the call named (Start sprint's role rows).
+  function pick(row = { agent: '', model: '', effort: '' }, me, args, named) {
     // A row on a provider profile that was removed since says nothing: the worker starts like a row left on "the parent's".
     const rowProfile = row.agent.startsWith('profile:') ? chat.profiles.list().profiles.find((p) => p.id === row.agent.slice(8)) ?? null : null;
     const rowProvider = row.agent.startsWith('profile:') ? (rowProfile ? 'claude' : '') : row.agent;
@@ -183,8 +202,6 @@ export function createDelegate({ chat, allowed }) {
     const listed = (options, value) => value && (!options || options.some((o) => o.value === value)) ? value : '';
     const dflt = { model: !mine ? '' : rowProfile ? (rowProfile.models.includes(row.model) ? row.model : rowProfile.models[0]) : listed(known?.model?.options, row.model),
       effort: mine ? listed(known?.pickers?.find((o) => o.category === 'thought_level')?.options, row.effort) : '' };
-    const picked = modeFor(caller, { provider, mode: null }, args.mode);
-    if (picked.error) return picked;
     // A row on a profile starts the worker on that profile. With no row of its own, a profile chat's worker stays on its
     // parent's profile and model (a profile chat's model is fixed for the chat).
     // Start sprint (named is set, null for a built-in agent): the row's provider is final, never a Settings or parent profile.
@@ -193,6 +210,14 @@ export function createDelegate({ chat, allowed }) {
     const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider && listed(known?.model?.options, me.model)) || undefined);
     const effortId = (provider === me.provider && me.effort?.id) || chat.lists()[provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
     const effort = args.effort ?? ((effortId && dflt.effort) || (provider === me.provider ? me.effort?.value : undefined));
+    return { provider, known, rowProfile, mine, profile, model, effortId, effort };
+  }
+  // The provider, model and effort a pick sends, as a parent would name them.
+  const seen = (w) => ({ provider: w.provider, model: w.profile ? w.profile.model : w.model, effort: w.effortId ? w.effort : undefined });
+  async function startWorker(caller, args, signal, { me, family, set, depth, at, approved = false, profile: named }) {
+    const { provider, rowProfile, mine, profile, model, effortId, effort } = pick(set.workers[at], me, args, named);
+    const picked = modeFor(caller, { provider, mode: null }, args.mode);
+    if (picked.error) return picked;
     if (args.effort !== undefined && !effortId) return { error: 'effort-unknown', detail: 'That agent\'s effort list is not known yet; leave effort out.' };
     const folder = args.folder ?? (me.folder.startsWith(':') ? undefined : me.folder); // ':…' is a project's own files: the project places the chat
     const title = args.title ?? args.text.trim().split('\n')[0].slice(0, 60);
