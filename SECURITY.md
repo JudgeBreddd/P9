@@ -917,37 +917,42 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
 A sprint can start from a folder with no `origin`, or from a folder inside a larger repository, which the worker-folder
 clone (above) cannot serve: `git clone` needs a repository of its own. Written before the code (sprint spec daemon-3).
 
-- **What is copied.** P9 copies the folder the lead chat's sprint names into the sprint's own state, in
-  `sprints/<that chat's id>/copy/`, 0700 like the clone. The copy holds what git tracks or would track in that folder:
-  a tracked file, or a new file git does not ignore, as clean-up counts them. Files git ignores (build output, a local
-  env file, a database, a key) are not copied, and the sprint says so, with how many were left out. Symbolic links are not
-  followed and not copied: each is listed as left out. A folder inside a larger repository is copied alone, by its own
-  path; the parent repository's files and history are not read.
-- **Where the copy's history comes from.** P9 runs `git init` in the copy and makes one commit of what it copied,
-  with the author P9 uses for its own commits. The owner's folder has no history in the copy: no `.git` from it is
-  copied, and it is not fetched or pushed. The copy has no `origin`, so nothing leaves the machine from it.
+- **What is copied: tracked files only.** P9 copies into the sprint's own state, `sprints/<that chat's id>/copy/` (0700,
+  like the clone), every file the owner's folder tracks (in git's index), as it is on disk now: an unsaved edit to a
+  tracked file is copied with the edit. Symbolic links are not followed and not copied. A folder inside a larger
+  repository is copied alone, by its own path; the parent repository's files and history are not read.
+- **What is not copied, and what the sprint sees instead.** Untracked files are not copied, even when git does not
+  ignore them: a new file you have not yet added to git stays in your folder and is not in the copy. Files git
+  ignores (build output, a local env file, a database, a key) are not copied either. The copy is therefore not your
+  whole working tree. The sprint is told, in its own record, the count and the names of each left-out file and link
+  (names only; their contents are never read into the sprint), so an agent can see that a file exists without it
+  being there. A worker that needs one of them will not find it in the copy.
+- **Where the copy's history comes from.** P9 runs `git init` in the copy and makes one commit of the tracked files
+  copied, with the author P9 uses for its own commits. None of your `.git` is copied: your history, branches and stash
+  are not in the copy. The copy has no `origin`, so nothing leaves the machine from it; it is never fetched or pushed.
 - **A "PR" is a branch.** A worker's change is a branch of the copy (`sprint/<first 8 of the chat id>/<key>`, as for
   worker folders) with a verdict and a merge in the copy's own history. A merge is a commit in the copy only; nothing is
   pushed to any remote.
 - **Applying to your folder is a yes, and nothing else writes there.** When a sprint closes, P9 shows the change from
   the copy's start to its main line: each file added, changed or removed. Only on your yes does P9 apply it to the
-  original folder. The apply is all or nothing: P9 first checks every file the change touches against the original, and
-  if any file differs from the copy's start (you changed it since the copy was made), or the original is gone or is
-  now a link, it applies nothing and lists each conflict with its file name. A file that is not in the change is never
-  written or deleted. Applied files go through `packages/files`, the one module that mutates workspace files, under
-  the same File protection and folder check as a save. P9 does not stage, commit or change the branch of the original
-  repository; the change lands as working files, for you to review and commit.
+  original folder. The apply is all or nothing: before it writes anything, P9 checks every file the change touches
+  against the original. If any one of them differs from the copy's start (you changed it after the copy was made), or
+  the original is gone or is now a link, P9 refuses the whole apply: it writes no file, not the changed one and not the
+  rest, and lists each conflict by file name. It never overwrites a file that changed. A file that is not in the change
+  is never written or deleted. Applied files go through `packages/files`, the one module that mutates workspace files,
+  under the same File protection and folder check as a save. P9 does not stage, commit or change the branch of the
+  original repository; the change lands as working files, for you to review and commit.
 - **Your folder is read at copy time only.** The copy is made from the folder as it is when the sprint starts, and
   P9 reads it as a folder the lead chat may use (the same check as a worker folder). A folder inside the sprint's own
   state, or one that holds the workspace, P9's state or the home folder, is refused before anything is copied.
 - **A sprint's copy is kept until clean-up.** Like a clone, it is removed only by clean-up, from the desktop, with the
   rule for worker folders: nothing unsaved in it, and its work applied. Clean-up never deletes your original folder.
 - **Disk.** One copy per sprint plus one working folder per worker, in P9's own folder, until cleaned up. The copy is
-  the size of the tracked and not-ignored files of your folder at the time it was made.
-- **What remains.** The copy is a snapshot: a change you make to your folder during a sprint is not seen by the
-  sprint, and the apply refuses it as a conflict, not a merge. Files git ignores are not carried over, so a worker that
-  needs one (a generated file, a local setting) will not find it in the copy. A sprint's agents read and run the copied
-  files in their own modes, as they would in any folder you point a chat at.
+  the size of the tracked files of your folder at the time it was made.
+- **What remains.** The copy is a snapshot taken when the sprint starts: a change you make to a tracked file during the
+  sprint is not seen by it, and the apply refuses that file as a conflict, not a merge. Untracked and ignored files are
+  never carried over, as above, so the copy is not a full backup of your folder. A sprint's agents read and run the
+  copied files in their own modes, as they would in any folder you point a chat at.
 
 ## Sprint files
 
