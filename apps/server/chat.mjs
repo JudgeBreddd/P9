@@ -996,14 +996,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     stillAuthorized();
     const item = { id: randomUUID(), body, images, allowed: captureAuthority() };
     const old = waitingReplace(session, body);
+    // FIX2: a replacement takes the replaced message's place and delivery: queued stays queued (never steered in now).
+    const oldQueued = old !== undefined && session.queued.includes(old);
     if (old) {
-      const list = session.held.includes(old) ? session.held : session.queued;
+      const list = oldQueued ? session.queued : session.held;
       list.splice(list.indexOf(old), 1);
       unheld(id, [old], 'replaced');
     }
-    (when === 'queue' ? session.queued : session.held).push(item);
-    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when, ...(old && { replaces: old.id }) });
-    return { status: 202, held: item.id, when, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
+    const mode = old ? (oldQueued ? 'queue' : 'steer') : when;
+    (mode === 'queue' ? session.queued : session.held).push(item);
+    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: mode, ...(old && { replaces: old.id }) });
+    return { status: 202, held: item.id, when: mode, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   const unheld = (id, items, why) => { for (const item of items) { emit(id, 'unheld', { id: item.id, text: item.body.text, why }); solos.get(item.body)?.end({ error: why }); } };
