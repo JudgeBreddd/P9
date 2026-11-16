@@ -704,7 +704,8 @@ function paint(root, ss, only) {
     // 712: clearing a worker archives its chat (the daemon's archive, so every window and the sidebar agree; Archived view undoes it).
     p.querySelectorAll('[data-sprint-clear]').forEach(b => b.onclick = async () => {
       const ws = b.dataset.sprintClear === '*' ? kin(s.id).filter(k => !k.archived && clearable(k)) : outer.S.sessions.filter(k => k.id === b.dataset.sprintClear);
-      for (const k of ws) { const r = await outer.liveChat.call('archiveChat', { id: k.id, archived: true }); if (r.status === 200) k.archived = true; }
+      // 712: a cleared worker's report closes with it (SHUT, as its own x does); another worker's report stays.
+      for (const k of ws) { const r = await outer.liveChat.call('archiveChat', { id: k.id, archived: true }); if (r.status !== 200) continue; k.archived = true; const c = s.cards?.get('ready-' + k.id); if (c) SHUT.add(reportKey(s, c)); }
       outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-open]').forEach(b => b.onclick = () => { show(b.dataset.sprintOpen); outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-ask]').forEach(b => b.onclick = () => p.querySelector(`[data-ask="${CSS.escape(b.dataset.sprintAsk)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));

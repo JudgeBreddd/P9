@@ -466,12 +466,17 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   assert.equal(await card.locator(`[data-sprint-clear="${kids[5]}"]`).count(), 1, 'a stopped ready worker has no clear');
   // One stopped worker cleared from its row; the live one has no clear.
   assert.equal(await card.locator(`[data-sprint-clear="${kids[4]}"]`).count(), 0, 'a live worker offers a clear');
+  // 712 FIX2: kids[5]'s report is the one pinned; clearing another worker (kids[1]) leaves it.
+  const report = (n) => pane.locator(`.card-pin[data-card="ready-${kids[n]}"]`);
+  assert.equal(await report(5).count(), 1, 'the worker report is not pinned');
   await card.locator(`[data-sprint-clear="${kids[1]}"]`).click({ timeout: 5000 });
   await until(async () => await row(kids[1]).count() === 0, 'the cleared worker left the card');
+  assert.equal(await report(5).count(), 1, 'clearing another worker closed this worker\'s report');
   await shot(page, 'o712-one-cleared');
   // The rest of the stopped ones at once; the live one stays.
   // Two ordinary stopped and one stopped ready: the count names all three and Clear takes exactly those.
   await card.locator('[data-sprint-clear="*"]', { hasText: 'Clear 3 stopped' }).click({ timeout: 5000 });
+  await until(async () => await report(5).count() === 0, 'a cleared worker\'s report is still pinned');
   await until(async () => { for (const n of [2, 3, 5]) if (await row(kids[n]).count()) return false; return true; }, 'all stopped workers left the card');
   assert.equal(await row(kids[4]).count(), 1, 'the live worker left the card');
   assert.equal(await card.locator('[data-sprint-clear="*"]').count(), 0, 'Clear all still shows with nothing stopped');
@@ -483,9 +488,10 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   await page.locator(`#navList .row[data-chat="${parent}"]`).click();
   await row(kids[4]).waitFor({ state: 'attached', timeout: 20000 });
   for (const id of gone) assert.equal(await row(id).count(), 0, 'a cleared worker came back after a reload');
+  assert.equal(await report(5).count(), 0, 'a cleared worker\'s report came back after a reload');
   const box = await pane.locator('.composer textarea').evaluate((el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }; });
   assert.ok(box.top >= 0 && box.bottom <= box.height && box.hit, 'the text box is on screen: ' + JSON.stringify(box));
   await shot(page, 'o712-reloaded');
   assert.deepEqual(errors, []);
-  console.log('PASS 712: archived worker off the card; one stopped cleared by its x; a stopped ready row has an x; Clear 3 stopped took two plain and one ready; archived in the daemon; still gone after a reload; text box on screen');
+  console.log('PASS 712: archived worker off the card; one stopped cleared by its x; a stopped ready row has an x; Clear 3 stopped took two plain and one ready; archived in the daemon; still gone after a reload; clearing another worker left the pinned report, clearing its own worker closed it; text box on screen');
 });
