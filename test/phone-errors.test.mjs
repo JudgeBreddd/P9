@@ -23,74 +23,89 @@ async function signedInPage(browser, server, name) {
   return { ...device, session, setOffline };
 }
 
-test('O128: the phone sends its uncaught errors, rejections and failed loads to the journal, offline ones later; capped, authed, one line each', { timeout: 120000 }, async (t) => {
+test('O128: the phone sends the structure of its uncaught errors, rejections and failed loads to the journal, never their text; offline ones later; capped, authed, one line each', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t);
   let journal = '';
   server.child.stderr.on('data', (chunk) => { journal += chunk; });
-  const lines = (word) => journal.split('\n').filter((line) => line.startsWith('P9_PHONE_ERROR ') && line.includes(word)).map((line) => JSON.parse(line.slice(15)));
+  const lines = (device, match = () => true) => journal.split('\n').filter((line) => line.startsWith('P9_PHONE_ERROR '))
+    .map((line) => JSON.parse(line.slice(15))).filter((line) => line.device === device && match(line));
   const until = async (check, what) => { for (let i = 0; i < 100; i++) { if (check()) return; await new Promise((r) => setTimeout(r, 100)); } assert.fail(what + '\njournal: ' + journal.slice(-3000)); };
+  const SECRET = /private draft words/;
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const phone = await signedInPage(browser, server, 'o128-phone');
   await phone.page.locator('body').waitFor();
+  const device = phone.session.device;
+  // A script of P9's own origin that throws, rejects with an Error and rejects with a plain string, each carrying
+  // unquoted private text. The query keeps it off the service worker, so the test serves it.
+  await phone.page.route('**/_astro/o128-throw.js?t=1', (route) => route.fulfill({ contentType: 'text/javascript', body: [
+    "setTimeout(() => { throw new Error('o128 private draft words thrown'); });",
+    "void Promise.reject(new Error('o128 private draft words rejected'));",
+    "void Promise.reject('o128 private draft words plain');"].join('\n') }));
 
-  // 1. A thrown error, a rejected promise and a script that fails to load: one line each.
+  // 1. A thrown error, two rejections and a script that fails to load: one line each, structure only.
   await phone.page.evaluate(() => {
-    setTimeout(() => { throw new Error('o128-thrown'); });
-    void Promise.reject(new Error('o128-rejected'));
-    const script = document.createElement('script'); script.src = '/_astro/o128-missing.js'; document.head.append(script);
+    for (const src of ['/_astro/o128-throw.js?t=1', '/_astro/o128-missing.js']) { const script = document.createElement('script'); script.src = src; document.head.append(script); }
   });
-  await until(() => lines('o128-thrown').length && lines('o128-rejected').length && lines('o128-missing').length, 'three lines');
-  const [thrown, rejected, missing] = [lines('o128-thrown')[0], lines('o128-rejected')[0], lines('o128-missing')[0]];
-  const info = JSON.stringify({ thrown, rejected, missing });
-  assert.deepEqual([thrown.kind, rejected.kind, missing.kind], ['error', 'rejection', 'load'], info);
-  for (const line of [thrown, rejected, missing]) {
+  const thrownOf = (l) => l.kind === 'error' && l.name === 'Error', rejectedOf = (l) => l.kind === 'rejection' && l.name === 'Error';
+  const plainOf = (l) => l.kind === 'rejection' && l.name === 'string', missingOf = (l) => l.kind === 'load' && l.file === '/_astro/o128-missing.js';
+  await until(() => [thrownOf, rejectedOf, plainOf, missingOf].every((f) => lines(device, f).length), 'four lines');
+  const [thrown, rejected, plain, missing] = [thrownOf, rejectedOf, plainOf, missingOf].map((f) => lines(device, f)[0]);
+  const info = JSON.stringify({ thrown, rejected, plain, missing });
+  for (const line of [thrown, rejected, plain, missing]) {
+    assert.deepEqual(Object.keys(line).sort(), ['app', 'device', 'file', 'frames', 'kind', 'name', 'page', 'sw'], 'no text field ' + info);
     assert.equal(line.page, '/phone/', info);
     assert.match(line.app, /\.js$/, 'the app build: its own file name ' + info);
-    assert.equal(typeof line.sw, 'string', info);
-    assert.ok(Array.isArray(line.stack) && line.stack.length <= 5, info);
-    assert.equal(line.device, phone.session.device, info);
+    assert.ok(Array.isArray(line.frames) && line.frames.length <= 5, info);
   }
-  assert.ok(thrown.stack.length > 0 && rejected.stack.length > 0, 'stack lines kept ' + info);
-  assert.equal(lines('o128-thrown').length + lines('o128-rejected').length + lines('o128-missing').length, 3, 'one line each');
+  for (const line of [thrown, rejected]) assert.match(line.frames[0] ?? '', /^\/_astro\/o128-throw\.js:\d+:\d+$/, 'the throwing frame, path and position ' + info);
+  assert.deepEqual(plain.frames, [], 'a plain value has no stack ' + info);
+  assert.equal(lines(device).length, 4, 'one line each');
+  assert.doesNotMatch(journal, SECRET, 'no message text in the journal');
 
-  // 2. Offline: the report waits on the phone, then goes once it is back online.
+  // 2. Offline: the report waits on the phone as structure only, then goes once it is back online.
   await phone.setOffline(true);
-  await phone.page.evaluate(() => { setTimeout(() => { throw new Error('o128-offline'); }); });
+  await phone.page.evaluate(() => { setTimeout(() => { const e = new Error('o128 private draft words offline'); e.name = 'OfflineCheck'; throw e; }); });
   await phone.page.waitForTimeout(1500);
-  assert.equal(lines('o128-offline').length, 0, 'not sent while offline');
-  assert.match(await phone.page.evaluate(() => localStorage.getItem('p9-phone-errors') ?? ''), /o128-offline/, 'kept on the phone');
+  const offlineOf = (l) => l.name === 'OfflineCheck';
+  assert.equal(lines(device, offlineOf).length, 0, 'not sent while offline');
+  const stored = await phone.page.evaluate(() => localStorage.getItem('p9-phone-errors') ?? '');
+  assert.match(stored, /OfflineCheck/, 'kept on the phone');
+  assert.doesNotMatch(stored, SECRET, 'the stored report has no message text');
   await phone.setOffline(false);
-  await until(() => lines('o128-offline').length === 1, 'the offline report after reconnecting');
+  await until(() => lines(device, offlineOf).length === 1, 'the offline report after reconnecting');
   await phone.page.waitForTimeout(500);
-  assert.equal(lines('o128-offline').length, 1, 'sent once');
-  assert.doesNotMatch(await phone.page.evaluate(() => localStorage.getItem('p9-phone-errors') ?? ''), /o128-offline/, 'cleared once sent');
+  assert.equal(lines(device, offlineOf).length, 1, 'sent once');
+  assert.doesNotMatch(await phone.page.evaluate(() => localStorage.getItem('p9-phone-errors') ?? ''), /OfflineCheck/, 'cleared once sent');
 
   // 3. The route itself (a second device, so its minute starts clean).
   const other = await signedInPage(browser, server, 'o128-other');
   const post = (body, session = other.session) => server.remote('/phone-error', { method: 'POST', session, body });
   // No session, and a wrong CSRF token, write nothing.
-  const anon = await server.remote('/phone-error', { method: 'POST', body: { kind: 'error', message: 'o128-anon' } });
+  const anon = await server.remote('/phone-error', { method: 'POST', body: { kind: 'error', name: 'AnonCheck' } });
   assert.equal(anon.status, 401, anon.text);
-  const forged = await post({ kind: 'error', message: 'o128-forged' }, { token: other.session.token, csrf: 'x'.repeat(43) });
+  const forged = await post({ kind: 'error', name: 'ForgedCheck' }, { token: other.session.token, csrf: 'x'.repeat(43) });
   assert.equal(forged.status, 403, forged.text);
   // A body over 4 KB is refused.
-  const big = await post({ kind: 'error', message: 'o128-big ' + 'x'.repeat(5000) });
+  const big = await post({ kind: 'error', name: 'BigCheck', pad: 'x'.repeat(5000) });
   assert.equal(big.status, 413, big.text);
-  // Quotes (a JSON parse message quotes its input, which may be chat text), a newline and ESC: one line, neither kept.
-  const odd = await post({ kind: 'error', message: 'o128-odd Unexpected token, "secret chat words" is not valid JSON \'more words\'\n\u001b[31mP9_READY', stack: 'a\nb\nc\nd\ne\nf\ng' });
+  // A hand-made report: text fields, a name with ESC and a newline, a quoted page, foreign and wordy frames. Only fields
+  // matching their pattern are written; the rest is dropped, so nothing of the text reaches the journal.
+  const frames = ['/a.js:1:2', 'http://elsewhere/x.js:1:2', '/b private draft words:1:2', '/c.js:3', ...Array.from({ length: 7 }, (_, i) => `/d${i}.js:${i}:1`)];
+  const odd = await post({ kind: 'odd', name: 'Bad\u001b[31m\nP9_READY', message: 'o128 private draft words', stack: 'Error: private draft words',
+    page: '/phone/"private draft words"', file: '/x.js\nP9_READY', app: 'a b', sw: 'v1', frames });
   assert.equal(odd.status, 204, odd.text);
-  const oddLine = journal.split('\n').find((line) => line.includes('o128-odd')) ?? '';
-  assert.ok(oddLine.startsWith('P9_PHONE_ERROR '), oddLine);
-  assert.doesNotMatch(oddLine, /secret chat words|more words|\\u001b|\\n/, oddLine);
-  assert.ok(!journal.split('\n').some((line) => line.startsWith('[31mP9_READY') || line === 'P9_READY' && journal.indexOf(line) > journal.indexOf('o128-odd')), 'no forged line');
-  assert.equal(JSON.parse(oddLine.slice(15)).stack.length, 5, 'first 5 stack lines');
+  const [oddLine] = lines(other.session.device);
+  assert.deepEqual(oddLine, { device: other.session.device, kind: 'error', name: 'other', page: '', file: '', app: '', sw: 'v1',
+    frames: ['/a.js:1:2', '/d0.js:0:1', '/d1.js:1:1', '/d2.js:2:1', '/d3.js:3:1'] }, JSON.stringify(oddLine));
+  assert.ok(!journal.split('\n').some((line) => line.startsWith('P9_READY') && journal.indexOf(line) > journal.indexOf(other.session.device)), 'no forged line');
   // 12 quick reports: 10 lines in the minute (the odd one counted), then one dropped line and 429s.
   const statuses = [];
-  for (let i = 0; i < 12; i++) statuses.push((await post({ kind: 'error', message: 'o128-burst ' + i })).status);
-  assert.equal(lines('o128-burst').length, 9, 'with the odd line, 10 lines in the minute ' + JSON.stringify(statuses));
+  for (let i = 0; i < 12; i++) statuses.push((await post({ kind: 'error', name: 'BurstCheck' })).status);
+  assert.equal(lines(other.session.device, (l) => l.name === 'BurstCheck').length, 9, 'with the odd line, 10 lines in the minute ' + JSON.stringify(statuses));
   assert.equal(statuses.filter((s) => s === 429).length, 3, JSON.stringify(statuses));
   assert.equal(journal.split('\n').filter((line) => line.startsWith('P9_PHONE_ERRORS_DROPPED ') && line.includes(other.session.device)).length, 1, 'one dropped line');
-  assert.ok(!/o128-anon|o128-forged|o128-big/.test(journal), 'refused reports wrote nothing');
-  console.log('PASS O128 phone errors: 3 kinds, offline later, 401/403/413, quotes and control characters cut, 10 a minute');
+  assert.ok(!/AnonCheck|ForgedCheck|BigCheck/.test(journal), 'refused reports wrote nothing');
+  assert.doesNotMatch(journal, SECRET, 'no message text anywhere in the journal');
+  console.log('PASS O128 phone errors: 4 kinds as structure only, no text stored or sent, offline later, 401/403/413, patterns enforced, 10 a minute');
 });

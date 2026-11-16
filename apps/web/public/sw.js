@@ -4,9 +4,11 @@
 // anything with a query go to the network untouched; nothing signed-in is kept. The page registers /sw.js?v=<its own
 // build file>, so a new build installs a new worker, whose activate deletes every older cache.
 // O128 (threat model row O128): this worker's own failures go to the open phone pages, which send them to the journal.
-// A failed network fetch while offline is expected, so only failures while online are told.
+// A failed network fetch while offline is expected, so only failures while online are told. The open page keeps only
+// the error's type name and this origin's stack frames (the message is posted so the page can cut it off the stack).
 const tell = (error) => { if (!navigator.onLine) return; self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((pages) => {
-  for (const page of pages) page.postMessage({ p9SwError: { message: String(error?.message ?? error), stack: String(error?.stack ?? '') } });
+  for (const page of pages) page.postMessage({ p9SwError: error && typeof error === 'object'
+    ? { name: String(error.name ?? ''), message: String(error.message ?? ''), stack: String(error.stack ?? '') } : { name: typeof error } });
 }); };
 self.addEventListener('error', (event) => tell(event.error ?? event.message));
 self.addEventListener('unhandledrejection', (event) => tell(event.reason));
