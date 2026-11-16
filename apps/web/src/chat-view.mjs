@@ -1029,7 +1029,8 @@ async function loadChat() {
       replaying = false;
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
-      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      // 712: a stub carries its archive too; without it, after a restart an archived chat came back to the card and the sidebar.
+      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out).
       for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
       outer.loadProjects?.();
