@@ -1062,8 +1062,8 @@ test('O109: the user\'s message told along with an agent\'s note that waited is 
 test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued wording, not steer it now; a foreign or delivered ID replaces nothing', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
-  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
-  const a = await agent(t, instance, { project });
+  // No project: a project chat's folder is not where this fake reads its go file (the gate turn never ended).
+  const a = await agent(t, instance);
   const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
   const folder = path.resolve(instance.workspace, made.folder);
   await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
@@ -1076,10 +1076,9 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   assert.equal(gone.length, 1, 'the replaced wording is not marked');
   assert.equal(gone[0].data.why, 'replaced');
   assert.ok(!(await events(instance, made.chat)).some((e) => e.type === 'user' && e.data.text === 'corrected wording'), 'the correction went into the running turn now, not with the queue');
-  // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either.
-  const b = await agent(t, instance, { project });
-  // Queued, not steered: a steered message in the gate turn kept the fake from taking the queue after its go file.
-  const foreign = await b.tool('send_chat', { chat: made.chat, text: 'foreign', when: 'queue', replaces: fixed.held });
+  // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either. The foreign sender is
+  // the user (a prompt to the chat, no agent sender), so the sender check alone refuses the replace.
+  const foreign = (await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'foreign', when: 'queue', replaces: fixed.held })).body;
   assert.equal(foreign.replaced, null, 'a foreign sender replaced a waiting message: ' + JSON.stringify(foreign));
   assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === fixed.held).length, 0, 'a foreign sender removed a waiting message');
   // The queue goes out as the next prompt after the gate turn (as the other queue tests read it): wait for that prompt.
