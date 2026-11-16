@@ -746,9 +746,11 @@ export function createDelegate({ chat, allowed }) {
     if (parent && last !== null && NOTHING_FOR.test(last)) return void chat.setSprint(id, { endNote: { at: Date.now(), text: last } });
     if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + last : ' failed; read_chat shows why.');
-    chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }) }, undefined, 'p9')
-      .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue', ...(waitingNote.has(id) && { replaces: waitingNote.get(id) }) }, undefined, 'p9')
-        .then((queued) => { if (queued.held) waitingNote.set(id, queued.held); })).catch(() => {});
+    // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
+    const replacing = waitingNote.has(id) ? { replaces: waitingNote.get(id) } : {};
+    chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }), ...replacing }, undefined, 'p9')
+      .then((sent) => (sent.status === 409 ? chat.prompt(parent.id, { text: line, when: 'queue', ...replacing }, undefined, 'p9') : sent))
+      .then((sent) => { if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {});
   });
 
   // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and
