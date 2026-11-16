@@ -238,7 +238,10 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       await redraw('Custom cards, no moveBefore.').catch(async (e) => { throw new Error('the new section text never showed: ' + await timeline(), { cause: e }); });
       await sleep(1500);
       console.log('P9M5HELD ' + await timeline()); // the forcing's order, shown on a pass too
-      assert.equal(await page.locator('#mdlBody [data-space-text]').innerText(), 'Custom cards, no moveBefore.', 'an older overview answering last does not draw the old text back: ' + (await app.evaluate(() => globalThis.__m5held)).join(', '));
+      // Any draw after the new text counts, not only the end state: another read can put the new text back before a check (run 003805).
+      const drawn = (await page.evaluate(() => window.__m5text)).map((x) => x.slice(14)), first = drawn.indexOf('Custom cards, no moveBefore.');
+      assert.deepEqual(drawn.slice(first).filter((x) => x !== 'Custom cards, no moveBefore.' && x !== 'none'), [], 'an older overview answering last does not draw the old text back: ' + await timeline());
+      assert.equal(await page.locator('#mdlBody [data-space-text]').innerText(), 'Custom cards, no moveBefore.', 'the window ends on the new text: ' + await timeline());
       assert.deepEqual(await frames(), Array(6).fill('new'), 'without moveBefore every card frame is made again');
       await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 15000 });
       await page.evaluate(() => { Element.prototype.moveBefore = window.__mb; });
