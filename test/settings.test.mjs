@@ -2128,7 +2128,7 @@ test('Speed (E2): a listed chat the bridge will not narrow to still goes live, b
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const real = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare("INSERT INTO conversations (id, provider, title, state, created) VALUES ('fixture-claude', 'claude', 'claude', 'idle', ?)").run(Date.now());
   db.close();
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-fallback-')), 'profile');
