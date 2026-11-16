@@ -929,7 +929,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   // 'slow' turn that step steers into (CI: the steer met an idle chat, reason mode-failed, at the assertion below).
   await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data?.text?.startsWith('[p9] D1 passed review'));
   await a.done(made.chat);
-  // Finding 4: an agent without steering (Claude's today) cannot take a steer into its running turn; the refusal names queue.
+  // Finding 4: an agent without steering (Claude's on ACP 2) cannot take a steer into its running turn; the refusal names queue.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
   const before = (await call(instance, '/chat/events?after=0&only=' + made.chat)).body.cursor; // the first slow turn's 'working' is older

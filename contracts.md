@@ -77,6 +77,9 @@ reach it.
 `test/fixtures/acp/<provider>.json` holds one real turn with an approval: Claude writes `hello.txt`
 (Write tool, `allow-once`); Codex, in `read-only` mode, runs `curl -sI` (`allow_once`). Each records the
 adapter version it was captured against. Both are raw ACP 2 traffic, so the replay runs the translator.
+The replay sends the recorded `initialize` reply whatever P9 asks, so the contract test asks for the version
+the fixture was recorded on (`P9_ACP_VERSION`). Since 0.1.9 phase 4.5 P9 asks Claude for ACP 1 (`ACP_ASK` in
+`chat.mjs`), so Claude's default path has no recorded 0.106.0 turn until `claude.json` is re-recorded on 1.
 
 To re-record after an upgrade (real logins, a few cents of usage): run a scratch daemon with
 `--acp-override test/acp-record.mjs` (`daemon()` in `test/helpers.mjs` takes the argument), drive one turn

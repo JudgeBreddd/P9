@@ -509,8 +509,8 @@ test('O55: a send empties the box on every path; an empty Send posts nothing', {
   await shot(page, 'phone-o55-box-empty-after-send');
 });
 
-// O55 (2026-11-12, "the send button mid-turn does not send and the text stays"): Claude's adapter on ACP 2 takes no steering
-// (chat.mjs ACP_ASK), so the daemon answers a mid-turn send 409 turn-running. The phone now keeps it for the turn's end
+// O55 (2026-11-12, "the send button mid-turn does not send and the text stays"): an agent that takes no steering (Claude's adapter on ACP 2)
+// (chat.mjs ACP_ASK has asked Claude for 1 since phase 4.5), so the daemon answers a mid-turn send 409 turn-running. The phone now keeps it for the turn's end
 // as the desktop does: the box empties, the phone says Queued, and it is sent when the turn ends. Fails on main (the text stayed
 // with "Not sent: turn-running"). A turn answering another chat's question (solo) is held by the daemon already (202), and
 // only the daemon's own peer-help path can start one, so this test does not drive it.

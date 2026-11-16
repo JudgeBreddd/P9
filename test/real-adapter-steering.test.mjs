@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import * as acp from '../apps/server/acp.mjs';
-import { adapterEntry, clientCapabilities } from '../apps/server/chat.mjs';
+import { acpAsk, adapterEntry, clientCapabilities } from '../apps/server/chat.mjs';
 import { launchTree, endTree } from '../apps/server/process-tree.mjs';
 
 for (const provider of ['claude', 'codex']) {
@@ -22,8 +22,8 @@ for (const provider of ['claude', 'codex']) {
     const agent = acp.connectClient(acp.ndJsonStream(Writable.toWeb(tree.child.stdin), Readable.toWeb(tree.child.stdout)), { sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
       createElicitation: async () => ({ action: 'cancel' }) });
     const timeout = (what) => new Promise((resolve, reject) => setTimeout(() => reject(new Error(what + ' timed out; stderr: ' + stderr)), 30000));
-    // The same call as chat.mjs connect().
-    const init = await Promise.race([agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }), timeout('initialize')]);
+    // The same call as chat.mjs connect(), with the ACP version P9 asks this agent for (ACP_ASK).
+    const init = await Promise.race([agent.initialize({ protocolVersion: acpAsk(provider), clientCapabilities }), timeout('initialize')]);
     console.log('REAL ' + provider + ' initialize: ' + JSON.stringify({ protocolVersion: init.protocolVersion, agent: init.agentInfo, meta: init._meta }));
     assert.equal(init._meta?.steering?.supported === true, true, 'steering advertised to P9 (chat.mjs reads exactly this)');
     // Routed: an unknown session is refused by the steering handler, not with method-not-found (-32601). Claude throws
@@ -36,3 +36,22 @@ for (const provider of ['claude', 'codex']) {
     console.log('PASS real ' + provider + ': steering advertised to P9 on protocol ' + init.protocolVersion + ', _session/steering routed (' + (error ? error.code : result.outcome) + ')');
   });
 }
+
+// The hold on #193 (O52 / O121): Claude is asked for ACP 1 in chat.mjs (ACP_ASK.claude), because its ACP 2 surface has no
+// steering. This case asks ACP 2 directly and asserts steering is NOT offered. When the adapter gains it there, this goes
+// red: set ACP_ASK.claude back to 2 (O121) and retire this case.
+test('real claude adapter on ACP 2: steering is not offered yet (set ACP_ASK.claude back to 2, O121)', { timeout: 60000 }, async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-steer2-'));
+  process.env.HOME = home;
+  const tree = launchTree([process.execPath, adapterEntry('claude')], home);
+  t.after(() => endTree(tree));
+  let stderr = '';
+  tree.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4000); });
+  const agent = acp.connectClient(acp.ndJsonStream(Writable.toWeb(tree.child.stdin), Readable.toWeb(tree.child.stdout)), { sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
+    createElicitation: async () => ({ action: 'cancel' }) });
+  const timeout = (what) => new Promise((resolve, reject) => setTimeout(() => reject(new Error(what + ' timed out; stderr: ' + stderr)), 30000));
+  const init = await Promise.race([agent.initialize({ protocolVersion: 2, clientCapabilities }), timeout('initialize')]);
+  console.log('REAL claude ACP 2 initialize: ' + JSON.stringify({ protocolVersion: init.protocolVersion, meta: init._meta }));
+  assert.equal(init._meta?.steering?.supported === true, false, 'steering not offered on ACP 2 (set ACP_ASK.claude back to 2, O121)');
+  console.log('PASS real claude on ACP 2: steering not offered, so ACP_ASK.claude stays 1');
+});
