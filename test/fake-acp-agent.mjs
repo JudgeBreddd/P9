@@ -1,6 +1,6 @@
 // Test-only ACP agent, ported from agent-first-workspace's _engine/fake-acp-agent.ts. The prompt text picks the
 // behaviour: "permission" asks for approval, "ask" sends a form question ("ask-later" after 2 s of work, "ask-text" a free-text one), "stream <n>" streams 3n updates, "background" ends
-// its turn and works on unprompted without end, asking once ("background quiet" never); messages steered (_session/steering, off with a no-steering file) or prompted
+// its turn and works on unprompted without end, asking once ("background quiet" never); messages steered (_session/steering, off with a no-steering file, and as Claude asked for ACP 2) or prompted
 // into it come back as "got:<text>" at its next step, "ask-strict" one with required, integer,
 // multi-select, pattern and format fields (some limits null) and optional choices, "ask-object" one with a nested
 // object P9 cannot render, "slow" waits for cancel, "crash" exits, "auth-required" fails the turn signed out, "detach" starts a setsid sleeper and replies with its
@@ -119,17 +119,21 @@ const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', current
 const commands = (sessionId) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'available_commands_update',
   availableCommands: [{ name: 'compact', description: 'Clear history but keep a summary' }, { name: 'context', description: 'Show context use' }, { name: 'review', description: 'Review the changes' }] } });
 
+let steering = true;
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 const connection = acp.connectAgent(stream, {
-  async initialize() {
+  async initialize(params) {
+    // As Claude asked for ACP 2 it offers no steering, like claude-agent-acp 0.106.0 (test/real-adapter-steering.test.mjs).
+    // ponytail: it still answers protocol 1 and speaks v1; only the steering offer follows the version P9 asked for.
+    steering = !existsSync('no-steering') && !(process.argv[2] === 'claude' && params?.protocolVersion >= 2);
     if (existsSync('hang-init')) await new Promise(() => {});
     if (existsSync('slow-init')) await new Promise((resolve) => setTimeout(resolve, 10000));
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: !existsSync('no-images') }, sessionCapabilities: { resume: {}, close: {} } },
-      ...(!existsSync('no-steering') && { _meta: { steering: { supported: true } } }) };
+      ...(steering && { _meta: { steering: { supported: true } } }) };
   },
   // Like claude-agent-acp 0.88's _session/steering with idleBehavior promptRequired.
   async extMethod(method, params) {
-    if (method !== '_session/steering' || existsSync('no-steering')) throw acp.RequestError.methodNotFound(method);
+    if (method !== '_session/steering' || !steering) throw acp.RequestError.methodNotFound(method);
     sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
     if (!turns.has(params.sessionId) && process.argv[2] === 'codex') {
