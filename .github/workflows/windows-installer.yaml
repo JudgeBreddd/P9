@@ -71,7 +71,9 @@ jobs:
         with:
           node-version: 26.10.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      # Retried: a GitHub/npm 50x during install (Electron's zip comes from github.com) failed whole runs (2026-11-08 outage).
+      - run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
+        shell: bash
       - name: Candidate version
         if: inputs.version != ''
         shell: bash
@@ -978,7 +980,9 @@ jobs:
         with:
           node-version: 26.10.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      # Retried: a GitHub/npm 50x during install (Electron's zip comes from github.com) failed whole runs (2026-11-08 outage).
+      - run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
+        shell: bash
       - name: Candidate version
         if: inputs.version != ''
         env:
