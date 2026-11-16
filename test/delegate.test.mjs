@@ -1118,6 +1118,19 @@ test('O125 point 2: a worker whose end line says nothing for its parent sends no
   assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for you', 'the worker status did not keep its end line');
 });
 
+// O125 point 2: "nothing for the parent" is the wording the PR body uses, so it must match too.
+test('O125 point 2: an end line that says nothing for the parent sends no note either', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'nothing for the parent', title: 'Kid' });
+  assert.equal((await a.done(made.chat)).last, 'echo:nothing for the parent');
+  await pause(500);
+  assert.deepEqual(await notices(instance, a.conversation), [], 'the parent got a note that said nothing for the parent');
+  const status = (await events(instance, made.chat)).filter((e) => e.type === 'sprint-state' && e.data.endNote);
+  assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for the parent', 'the worker status did not keep its end line');
+});
+
 // O125 point 2: only the newest note from a worker waits for its parent's turn; a newer one replaces the older by its ID.
 test('O125 point 2: two notes from one worker waiting for a parent in a turn: the second replaces the first, one goes as the next prompt', { timeout: 120000 }, async (t) => {
   // No steering (as Claude on ACP 2 offers none): a note meant for a running parent is refused (409) and waits.
