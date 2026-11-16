@@ -94,14 +94,17 @@ test('D14: the terminal is never under a panel: floating above a full side panel
   await page.waitForFunction(() => document.querySelector('.stage')?.dataset.sideMode === 'full', null, { timeout: 5000 });
   if (await page.locator('#dock[hidden]').count()) await page.keyboard.press('Control+Backquote');
   if (!(await page.locator('#dock.float').count())) await page.click('#dFloat');
-  // After the float click the dock settles (its left edge went 497 to 516 px over about 120 ms in a probe, and the side panel
-  // below it can still be drawn over it). Wait for that state itself, not for time: the float class on, the box the same on two
-  // animation frames in a row, and the point the check reads landing on the dock. The check below is unchanged.
+  // Coming back to Chat Focus re-opens the left panel (.lpanel, width transition .22s, panel.css). The floating dock is centred on
+  // the stage, so it slides right by about 60 px for those 220 ms: recorded frame by frame in the dev space, its left edge went
+  // 438, 467, 486, 497 px while the panel went 117, 174, 212, 234 px wide. The box read and the point read are two calls, so a
+  // dock that moves between them leaves the point off its left edge, on the side panel. Wait for the settled layout itself: the
+  // dock shown and floating, the panel's transition finished, and the dock's box the same on two animation frames in a row.
+  // The hit test below is unchanged and is not part of the wait, so a dock that stays covered still fails it.
   await page.waitForFunction(() => {
-    const d = document.querySelector('#dock'), r = d?.classList.contains('float') && d.getBoundingClientRect();
-    const k = r && [r.x, r.y, r.width, r.height].join(), same = k && k === window.__d14Last;
+    const d = document.querySelector('#dock'), r = !d.hidden && d.classList.contains('float') && d.getBoundingClientRect();
+    const k = r && !document.querySelector('.lpanel').getAnimations().length && [r.x, r.y, r.width, r.height].join(), same = k && k === window.__d14Last;
     window.__d14Last = k;
-    return !!same && !!document.elementFromPoint(r.x + 20, r.y + r.height / 2)?.closest('#dock');
+    return !!same;
   }, null, { polling: 'raf', timeout: 5000 });
   const box = await page.locator('#dock').boundingBox();
   assert.equal(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('#dock'), [box.x + 20, box.y + box.height / 2]), true, 'the terminal is above the full side panel');
