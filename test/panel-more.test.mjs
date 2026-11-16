@@ -121,9 +121,15 @@ test('panel: help with no project, Show more, Ctrl Tab, Split, drag with Undo, w
   await three.page.locator(`#navList .row[data-chat="${asks}"] .mk-needs svg`).waitFor({ state: 'attached', timeout: 5000 }); // shown, it is in the time's place; the clicked row has focus, so the time shows
   const row = three.page.locator(`#navList .row[data-chat="${second}"]`);
   await row.locator('.mk-run').waitFor({ state: 'attached', timeout: 5000 });
-  await row.hover();
-  assert.ok(await row.locator('.when').isVisible(), 'the time shows on hover');
-  const [when, stopAt] = [await row.locator('.when').boundingBox(), await three.page.locator(`#navList .rstop[data-stop="${second}"]`).boundingBox()];
+  // The list can still grow or reorder above this row after the hover (a late render), so the row slides out from under the
+  // parked mouse; Chromium drops :hover at the next frame and .when is display:none without it (a 40 px shift plus two frames
+  // gives the CI null box). So hover and read the boxes together, again until both are there.
+  let when, stopAt;
+  await until(async () => {
+    await row.hover();
+    [when, stopAt] = [await row.locator('.when').boundingBox(), await three.page.locator(`#navList .rstop[data-stop="${second}"]`).boundingBox()];
+    return when && stopAt;
+  }, 'the time shows on hover', 5000);
   assert.ok(when.x + when.width <= stopAt.x, 'the time sits left of Stop, not under it');
   assert.equal(await three.page.evaluate(() => document.querySelector('#nav').style.getPropertyValue('--pw')), '420px', 'the width after a restart');
 
