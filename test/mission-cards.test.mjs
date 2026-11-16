@@ -277,59 +277,60 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       // CI-only failure (M5 :212, :223, :257): a click in the logs card right after Back is sometimes lost. Record what moves in the
       // window and what reaches the card's frame around the click; on a miss print it, with a screenshot, instead of a bare timeout.
       const clickAfterBack = async (button, opened, name) => {
-        protocolLog(true);
-        await page.evaluate(() => { const log = window.__m5 = [], at = s => log.push([Date.now(), s]), body = document.querySelector('#mdlBody');
-          const of = f => f.closest('[data-card]')?.dataset.tile ?? '?', ro = new ResizeObserver(es => es.forEach(e => at(`size ${of(e.target)} ${Math.round(e.contentRect.height)}`)));
-          body.querySelectorAll('iframe').forEach(f => ro.observe(f));
-          new MutationObserver(rs => rs.forEach(r => { r.addedNodes.forEach(n => n.nodeName === 'IFRAME' && (at('new frame ' + of(n)), ro.observe(n))); r.removedNodes.forEach(n => n.nodeName === 'IFRAME' && at('frame gone')); })).observe(body, { childList: true, subtree: true });
-          body.addEventListener('scroll', () => at('scroll ' + body.scrollTop));
-          addEventListener('message', e => e.data?.p9 === 'frame' && e.data.kind !== 'selection' && at(`message ${e.data.kind} ${e.data.path ?? e.data.h ?? ''}`));
-          new MutationObserver(() => at('title ' + document.querySelector('#mdlT').textContent)).observe(document.querySelector('#mdlT'), { childList: true, characterData: true, subtree: true });
-          document.addEventListener('pointerdown', e => at(`pointerdown on the page: ${e.target.id || e.target.className || e.target.nodeName} at ${e.clientX},${e.clientY}`), true);
-          const r = document.querySelector('[data-tile="logs"] iframe').getBoundingClientRect(); at(`logs frame top ${Math.round(r.top)} height ${Math.round(r.height)}, body top ${Math.round(body.getBoundingClientRect().top)}`); });
-        const frame = await (await card('logs').locator('iframe').elementHandle()).contentFrame();
-        const said = [], hear = m => m.text().startsWith('P9M5 ') && said.push([+m.text().split(' ')[1], 'in the card: ' + m.text().split(' ').slice(2).join(' ')]);
-        page.on('console', hear); // the card's own record, kept even when the frame is made again before the miss is seen
-        await frame.evaluate(() => { const at = s => console.log(`P9M5 ${Date.now()} ${s}`), open = window.p9open;
-          for (const k of ['pointermove', 'pointerdown', 'pointerup', 'click']) addEventListener(k, e => at(`${k} on ${e.target.id || e.target.nodeName} at ${e.clientX},${e.clientY}, activation ${navigator.userActivation?.isActive}`), { capture: true, once: k === 'pointermove' });
-          window.p9open = path => { at(`p9open ${path}, activation ${navigator.userActivation?.isActive}`); return open(path); }; });
-        // The cause: a card frame (its own process) that was out of view draws nothing, and until it has drawn again Chromium gives
-        // a click on it to the page's <iframe> element, so the card never sees it ("pointerdown on the page: art-frame"). Its
-        // script runs anyway, so data-ready says nothing about that. Scroll it in and let it draw two frames before the click.
-        // CI #115 linux 6: the scroll below waited 30 s for the button to be stable. Playwright's check counts frames inside the
-        // card, and a card frame that layout pushed back out of view draws none. Scroll the frame itself in from the page
-        // (no stability wait there), then bound each wait and print what moved instead of a bare timeout.
-        const moved = (what) => async (e) => { throw new Error(`${name}: ${what}; ms:\n` + (await page.evaluate(() => window.__m5).catch(() => [])).map(([ms, s]) => `${ms} ${s}`).join('\n'), { cause: e }); };
-        await card('logs').locator('iframe').evaluate((f) => f.scrollIntoView({ block: 'center' }));
-        await logs.locator(button).scrollIntoViewIfNeeded({ timeout: 10000 }).catch(moved('the button never stood still'));
-        await Promise.race([frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
-          sleep(10000).then(() => { throw new Error('no frame drawn in 10 s'); })]).catch(moved('the card drew no frame'));
-        const t = [[Date.now(), 'click ' + button + ' starts']];
-        const record = async (what, e) => { // the timeline from the click, and whether the window and the card frame still answer
-          const tail = pwLog.slice(-200); protocolLog(false);
-          if (tail.length) console.log(`${name}: Playwright protocol, the last ${tail.length} lines before "${what}" (O129):\n` + tail.join('\n'));
-          const answers = async (f) => Promise.race([f.evaluate(() => 'answers').catch((x) => 'gone: ' + x.message.split('\n')[0]), sleep(2000).then(() => 'no answer in 2 s')]);
-          const win = await answers(page);
-          t.push([Date.now(), `the window ${win}, the card frame ${await answers(frame)}; frames: ${page.frames().length}`]);
-          // A stalled card frame can stall the page's screenshot too (#152 runs: empty). Then take the window's last drawn frame from
-          // the main process; if neither comes, say why in the timeline instead of printing an empty image.
-          const bound = (p, what) => Promise.race([p, sleep(5000).then(() => { throw new Error(what + ': nothing in 5 s'); })]);
-          const why = [], png = await page.screenshot({ timeout: 5000 }).then((b) => b.toString('base64') || why.push('page screenshot: empty') && '').catch((x) => { why.push('page screenshot: ' + x.message.split('\n')[0]); })
-            || await bound(app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.capturePage().then((i) => i.isEmpty() ? Promise.reject(new Error('empty image')) : i.toPNG().toString('base64'))), 'window capture')
-              .then((b) => (t.push([Date.now(), 'screenshot from the window capture (' + why[0] + ')']), b)).catch((x) => { why.push('window capture: ' + x.message.split('\n')[0]); });
-          if (png) console.log(`P9_SHOT ${name}-miss ${png}`); else t.push([Date.now(), 'no screenshot: ' + why.join('; ')]);
-          const all = [...t, ...win === 'answers' ? await page.evaluate(() => window.__m5) : [], ...said].sort((a, b) => a[0] - b[0]);
-          page.off('console', hear);
-          throw new Error(`${name}: ${what}; the window says ${JSON.stringify(await page.locator('#mdlT').innerText({ timeout: 2000 }).catch(() => '?'))}; ms from the click:\n` + all.map(([ms, s]) => `${ms - t[0][0]} ${s}`).join('\n'), { cause: e });
-        };
-        // CI #142 linux 6 (:257): the click hung 30 s after "performing click action" (input sent, no answer). Bound it at 10 s:
-        // the waits above already scrolled the button in and saw the card draw, and here a click takes well under a second.
-        await logs.locator(button).click({ timeout: 10000 }).catch((e) => record('the click did not finish in 10 s', e));
-        t.push([Date.now(), 'click returned']);
-        console.log(`${name}: click took ${t[1][0] - t[0][0]} ms`);
-        await opened.waitFor({ timeout: 10000 }).catch((e) => record('lost click', e));
-        page.off('console', hear);
-        protocolLog(false);
+        protocolLog(true); // switched off again in finally, also when a wait below throws before the click
+        let hear;
+        try {
+          await page.evaluate(() => { const log = window.__m5 = [], at = s => log.push([Date.now(), s]), body = document.querySelector('#mdlBody');
+            const of = f => f.closest('[data-card]')?.dataset.tile ?? '?', ro = new ResizeObserver(es => es.forEach(e => at(`size ${of(e.target)} ${Math.round(e.contentRect.height)}`)));
+            body.querySelectorAll('iframe').forEach(f => ro.observe(f));
+            new MutationObserver(rs => rs.forEach(r => { r.addedNodes.forEach(n => n.nodeName === 'IFRAME' && (at('new frame ' + of(n)), ro.observe(n))); r.removedNodes.forEach(n => n.nodeName === 'IFRAME' && at('frame gone')); })).observe(body, { childList: true, subtree: true });
+            body.addEventListener('scroll', () => at('scroll ' + body.scrollTop));
+            addEventListener('message', e => e.data?.p9 === 'frame' && e.data.kind !== 'selection' && at(`message ${e.data.kind} ${e.data.path ?? e.data.h ?? ''}`));
+            new MutationObserver(() => at('title ' + document.querySelector('#mdlT').textContent)).observe(document.querySelector('#mdlT'), { childList: true, characterData: true, subtree: true });
+            document.addEventListener('pointerdown', e => at(`pointerdown on the page: ${e.target.id || e.target.className || e.target.nodeName} at ${e.clientX},${e.clientY}`), true);
+            const r = document.querySelector('[data-tile="logs"] iframe').getBoundingClientRect(); at(`logs frame top ${Math.round(r.top)} height ${Math.round(r.height)}, body top ${Math.round(body.getBoundingClientRect().top)}`); });
+          const frame = await (await card('logs').locator('iframe').elementHandle()).contentFrame();
+          const said = []; hear = m => m.text().startsWith('P9M5 ') && said.push([+m.text().split(' ')[1], 'in the card: ' + m.text().split(' ').slice(2).join(' ')]);
+          page.on('console', hear); // the card's own record, kept even when the frame is made again before the miss is seen
+          await frame.evaluate(() => { const at = s => console.log(`P9M5 ${Date.now()} ${s}`), open = window.p9open;
+            for (const k of ['pointermove', 'pointerdown', 'pointerup', 'click']) addEventListener(k, e => at(`${k} on ${e.target.id || e.target.nodeName} at ${e.clientX},${e.clientY}, activation ${navigator.userActivation?.isActive}`), { capture: true, once: k === 'pointermove' });
+            window.p9open = path => { at(`p9open ${path}, activation ${navigator.userActivation?.isActive}`); return open(path); }; });
+          // The cause: a card frame (its own process) that was out of view draws nothing, and until it has drawn again Chromium gives
+          // a click on it to the page's <iframe> element, so the card never sees it ("pointerdown on the page: art-frame"). Its
+          // script runs anyway, so data-ready says nothing about that. Scroll it in and let it draw two frames before the click.
+          // CI #115 linux 6: the scroll below waited 30 s for the button to be stable. Playwright's check counts frames inside the
+          // card, and a card frame that layout pushed back out of view draws none. Scroll the frame itself in from the page
+          // (no stability wait there), then bound each wait and print what moved instead of a bare timeout.
+          const moved = (what) => async (e) => { throw new Error(`${name}: ${what}; ms:\n` + (await page.evaluate(() => window.__m5).catch(() => [])).map(([ms, s]) => `${ms} ${s}`).join('\n'), { cause: e }); };
+          await card('logs').locator('iframe').evaluate((f) => f.scrollIntoView({ block: 'center' }));
+          await logs.locator(button).scrollIntoViewIfNeeded({ timeout: 10000 }).catch(moved('the button never stood still'));
+          await Promise.race([frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+            sleep(10000).then(() => { throw new Error('no frame drawn in 10 s'); })]).catch(moved('the card drew no frame'));
+          const t = [[Date.now(), 'click ' + button + ' starts']];
+          const record = async (what, e) => { // the timeline from the click, and whether the window and the card frame still answer
+            const tail = pwLog.slice(-200); protocolLog(false);
+            if (tail.length) console.log(`${name}: Playwright protocol, the last ${tail.length} lines before "${what}" (O129):\n` + tail.join('\n'));
+            const answers = async (f) => Promise.race([f.evaluate(() => 'answers').catch((x) => 'gone: ' + x.message.split('\n')[0]), sleep(2000).then(() => 'no answer in 2 s')]);
+            const win = await answers(page);
+            t.push([Date.now(), `the window ${win}, the card frame ${await answers(frame)}; frames: ${page.frames().length}`]);
+            // A stalled card frame can stall the page's screenshot too (#152 runs: empty). Then take the window's last drawn frame from
+            // the main process; if neither comes, say why in the timeline instead of printing an empty image.
+            const bound = (p, what) => Promise.race([p, sleep(5000).then(() => { throw new Error(what + ': nothing in 5 s'); })]);
+            const why = [], png = await page.screenshot({ timeout: 5000 }).then((b) => b.toString('base64') || why.push('page screenshot: empty') && '').catch((x) => { why.push('page screenshot: ' + x.message.split('\n')[0]); })
+              || await bound(app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.capturePage().then((i) => i.isEmpty() ? Promise.reject(new Error('empty image')) : i.toPNG().toString('base64'))), 'window capture')
+                .then((b) => (t.push([Date.now(), 'screenshot from the window capture (' + why[0] + ')']), b)).catch((x) => { why.push('window capture: ' + x.message.split('\n')[0]); });
+            if (png) console.log(`P9_SHOT ${name}-miss ${png}`); else t.push([Date.now(), 'no screenshot: ' + why.join('; ')]);
+            const all = [...t, ...win === 'answers' ? await page.evaluate(() => window.__m5) : [], ...said].sort((a, b) => a[0] - b[0]);
+            page.off('console', hear);
+            throw new Error(`${name}: ${what}; the window says ${JSON.stringify(await page.locator('#mdlT').innerText({ timeout: 2000 }).catch(() => '?'))}; ms from the click:\n` + all.map(([ms, s]) => `${ms - t[0][0]} ${s}`).join('\n'), { cause: e });
+          };
+          // CI #142 linux 6 (:257): the click hung 30 s after "performing click action" (input sent, no answer). Bound it at 10 s:
+          // the waits above already scrolled the button in and saw the card draw, and here a click takes well under a second.
+          await logs.locator(button).click({ timeout: 10000 }).catch((e) => record('the click did not finish in 10 s', e));
+          t.push([Date.now(), 'click returned']);
+          console.log(`${name}: click took ${t[1][0] - t[0][0]} ms`);
+          await opened.waitFor({ timeout: 10000 }).catch((e) => record('lost click', e));
+        } finally { if (hear) page.off('console', hear); protocolLog(false); }
       };
       await card('logs').scrollIntoViewIfNeeded();
       await sleep(1000);
