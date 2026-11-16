@@ -67,7 +67,7 @@ test('Agent warnings, desktop: a grey line above the reply, not in it; its i say
 test('Agent warnings, phone: a grey line above the reply, not in it; its i says what it means', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seedChat(server);
-  const d = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db')), now = Date.now();
+  const d = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 }), now = Date.now();
   const chunk = (text) => d.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(CHAT, 'update', JSON.stringify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }), now);
   d.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(CHAT, 'user', JSON.stringify({ text: 'She came out great' }), now);
   chunk('Warning: ' + WS + '\n\n'); chunk('Warning: Some new thing the agent program says\n\n'); chunk(REPLY);

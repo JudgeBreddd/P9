@@ -23,7 +23,7 @@ async function setup(paths) {
 // One long chat the daemon never ran: a question, five tool calls (the first with a hostile title and output), a long reply with
 // hostile markup, and an approval nobody has answered. The phone reads it from the ledger like any other chat.
 function seed(server) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(SEED, 'claude', 'Seeded long chat', 'idle', Date.now());
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   const add = (type, data) => event.run(SEED, type, JSON.stringify(data), Date.now());
