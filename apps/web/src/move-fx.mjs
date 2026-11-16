@@ -1,104 +1,7 @@
-// The landing page and the move animation. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
+// The send-to-server move: its notice, the plan and pick steps, and the animation. Split out of controller.mjs's mountShell (F9);
+// names that stay in mountShell come in through outer. The landing page that shared this file is gone (O122).
 
-export function installLanding(outer) {
-const NO_SKY = { ok: false, set() {}, frame() {}, size() {} };
-const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return outer.focusOn(f) ? f : Object.keys(outer.focusNames).find(outer.focusOn); };
-function landingStart() {
-  if (outer.LAND.started) return;
-  outer.LAND.started = true;
-  if (!outer.landOn) return;
-  let landed = false; try { landed = !!sessionStorage.getItem('p9-landed'); } catch {}
-  if (landed || outer.settings.startLast) { outer.land.removeAttribute('data-pending'); outer.setFocus(lastFocus(), true); return; }
-  // The intro (the mark and its orbit drawn in) belongs to the WebGL sky; with the video, P9 opens on the same page the mark
-  // in the top bar opens (Builder, 2026-10-31: "the first one is wrong").
-  openLanding(outer.LAND_BG === 'original');
-}
-function openLanding(intro) {
-  outer.land.removeAttribute('data-pending');
-  intro &&= !outer.still;
-  outer.land.classList.remove('leaving');
-  outer.land.dataset.stage = intro ? 'intro' : 'main';
-  outer.land.toggleAttribute('data-run', intro);
-  if (!outer.land.open) outer.land.showModal();
-  outer.landVideo?.refresh();
-  outer.land.focus();
-  landGreeting(); landStatus(); landPets();
-  outer.land.querySelectorAll('[data-land]').forEach(b => { b.hidden = !outer.focusOn(b.dataset.land); });
-  outer.LAND.v = intro ? { uDist: 30, uShift: 0, uIgnite: 0, uStars: 0, uDim: 1 } : { ...outer.SKY_MAIN };
-  if (intro) { tweenSky({ uDist: 22, uIgnite: 1, uStars: 1 }, 2400); outer.LAND.intro = outer.setTimeout(landMain, 2600); }
-  if (!outer.sky.ok) return;
-  if (outer.still) { outer.sky.size(1); outer.sky.set({ ...outer.LAND.v, uSpin: 4, uTime: 4 }); outer.sky.frame(); }
-  else if (!outer.LAND.raf) { outer.LAND.drawn = 0; outer.LAND.raf = requestAnimationFrame(skyFrame); }
-}
-function landMain() {
-  if (outer.land.dataset.stage === 'main') return;
-  clearTimeout(outer.LAND.intro);
-  outer.land.dataset.stage = 'main';
-  tweenSky(outer.SKY_MAIN, 900);
-}
-const tweenSky = (to, ms) => { Object.assign(outer.LAND, { from: { ...outer.LAND.v }, to, t0: performance.now(), ms }); };
-// The intro draws at 60 % of the window's pixels; behind the main stage, all of them at 30 frames a second (45 % looked
-// soft on a 1x screen, Builder, 2026-10-19).
-function skyFrame(now) {
-  outer.LAND.raf = requestAnimationFrame(skyFrame);
-  const main = outer.land.dataset.stage === 'main' && !outer.LAND.to;
-  if (main && now - outer.LAND.drawn < 33) return;
-  const dt = outer.LAND.drawn ? Math.min(0.1, (now - outer.LAND.drawn) / 1000) : 0; outer.LAND.drawn = now;
-  if (outer.LAND.to) {
-    const k = Math.min(1, (now - outer.LAND.t0) / outer.LAND.ms), e = 1 - (1 - k) ** 5;
-    for (const key in outer.LAND.to) outer.LAND.v[key] = outer.LAND.from[key] + (outer.LAND.to[key] - outer.LAND.from[key]) * e;
-    if (k === 1) outer.LAND.to = null;
-  }
-  outer.LAND.spin += dt * (outer.land.dataset.stage === 'main' ? 0.25 : 0.8);
-  outer.sky.size(main ? 1 : 0.6);
-  outer.sky.set({ ...outer.LAND.v, uSpin: outer.LAND.spin, uTime: now / 1000 });
-  outer.sky.frame();
-}
-function leaveLanding() {
-  if (!outer.land.open || outer.land.classList.contains('leaving')) return;
-  outer.land.classList.add('leaving');
-  outer.setTimeout(() => outer.land.close(), outer.still ? 0 : 420);
-}
-// Half the greetings know the time of day, half do not. The name goes in as text, never as markup.
-const GREET = {
-  morning: ['Good morning, {n}', 'Morning, {n}. Coffee first?', 'Rise and build, {n}'],
-  afternoon: ['Good afternoon, {n}', 'Afternoon, {n}. Where were we?'],
-  evening: ['Good evening, {n}', 'Evening, {n}. One more thing?'],
-  night: ['Burning the midnight oil, {n}?', 'Still up, {n}?', 'Night shift, {n}?'],
-  any: ['{n} returns!', 'Welcome back, {n}', 'What are we building, {n}?', 'The agents missed you, {n}', 'Gravity pulled you back, {n}'],
-};
-function landGreeting(now = new Date()) {
-  const h = now.getHours(), name = outer.settings.name || '';
-  let lines = Math.random() < 0.5 ? GREET[h < 5 ? 'night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 22 ? 'evening' : 'night'] : GREET.any;
-  if (!name) lines = lines.filter(l => !l.startsWith('{n}')).map(l => l.replace(', {n}', ''));
-  const [before, after = ''] = lines[Math.floor(Math.random() * lines.length)].split('{n}');
-  const em = document.createElement('em'); em.textContent = name;
-  outer.$('#landHi').replaceChildren(before, ...(name ? [em, after] : []));
-}
-// What is going on, refreshed each second while the landing shows.
-function landStatus() {
-  const running = outer.S.sessions.filter(s => s.state === 'running').length, need = outer.S.sessions.filter(s => s.pending).length + outer.S.reviews.filter(r => !outer.S.quiet.has(r.file)).length;
-  const parts = [running && `${running} chat${running === 1 ? '' : 's'} running`, need && `${need} need${need === 1 ? 's' : ''} you`].filter(Boolean);
-  outer.$('#landSub').textContent = parts.length ? parts.join(' · ') : 'All quiet. Where to?';
-  outer.LAND.status = outer.setTimeout(() => { if (outer.land.open) landStatus(); }, 1000);
-}
-// Up to 12 installed pets, each on its own clock: idle, waving, jumping, thinking, waiting, running. A click makes one jump.
-const LAND_ROWS = ['0', '0', '3', '4', '8', '6', '7'];
-async function landPets() {
-  const box = outer.$('#landPets'), list = window.p9?.listPets ? (await window.p9.listPets().catch(() => null))?.pets?.slice(0, 12) ?? [] : [];
-  // All at once, not one after another (window-4, O14): each look is its own IPC read and decode.
-  await Promise.all(list.filter(p => !outer.IND.looks.has(p.name)).map(async p => outer.IND.looks.set(p.name, await outer.petLook(p.name))));
-  if (!outer.land.open) return;
-  box.innerHTML = list.filter(p => outer.IND.looks.get(p.name)).map(p => outer.petCanvas(p.name, '0', innerHeight < 700 ? 60 : 72, false)).join('');
-  box.querySelectorAll('canvas.pet').forEach(cv => {
-    const look = outer.IND.looks.get(cv.dataset.petName), rows = LAND_ROWS.filter(r => r === '0' || look.rows[r] > 1);
-    cv.title = look.displayName; cv.dataset.phase = Math.floor(Math.random() * 8);
-    const act = (row, ms) => { clearTimeout(cv.timer); cv.dataset.rows = row; cv.timer = outer.setTimeout(() => { if (cv.isConnected) act(rows[Math.floor(Math.random() * rows.length)], 1800 + Math.random() * 4200); }, ms); };
-    act('0', 600 + Math.random() * 3000);
-    cv.onclick = () => act(look.rows[4] > 1 ? '4' : '3', 1500);
-  });
-  outer.tickPets();
-}
+export function installMove(outer) {
 const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending ' + (outer.fxFiles === outer.FX.id ? 'the files and the chat' : 'the chat') + ' to ' + h,
   landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
 const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
@@ -231,5 +134,5 @@ function moveReloaded() {
 // probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
 // ~/.ssh/config hosts never saved or used are not asked.
 const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
-  return { NO_SKY, lastFocus, landingStart, openLanding, landMain, leaveLanding, leave, onMove, moveReloaded, SERVER_STATE };
+  return { leave, onMove, moveReloaded, SERVER_STATE };
 }

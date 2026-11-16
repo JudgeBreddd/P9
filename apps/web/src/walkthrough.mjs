@@ -1,5 +1,5 @@
 // First-login walkthrough (Builder, 2026-10-18: "I want to view and approve the walkthrough before its integrated into the
-// app official"; approved as written: "A."). It starts once, the first time the landing page closes; the command menu's
+// app official"; approved as written: "A."). It starts once, on the first start (controller.mjs firstStart); the command menu's
 // "Walkthrough" runs it again.
 // Each step: the element it points at (none = centred), the focus mode to show first, and what the guide pet says.
 export const WALKTHROUGH = [

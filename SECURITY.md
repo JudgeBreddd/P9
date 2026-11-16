@@ -219,7 +219,7 @@ model row 24). Since phases 18-19 also: p9.look(look), p9.getSettings() and p9.s
 p9.fileProtection(on?) (§ File protection), the pet calls p9.listPets(), p9.loadPet(name), p9.addPets(), p9.importPets(),
 p9.installPets(text) and p9.removePet(name) (threat model row 16), the terminal dock's p9.terminal(action, payload),
 p9.terminalOpen(id), p9.terminalSend(serial, frame), p9.terminalClose(serial) and p9.onTerminal(callback) (threat model
-row 13), and p9.landing, a boolean rather than a call. For each, the main process checks its own
+row 13), and p9.firstRun, a boolean rather than a call. For each, the main process checks its own
 webContents, main frame and exact page URL. getStatus takes no arguments and
 returns only ok/unavailable. mission and chat accept only actions from a fixed
 table with slug- or UUID-shaped IDs (chat may add an operation ID), and map each action to one fixed
@@ -1129,7 +1129,7 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
   icon must be a PNG, JPEG, WebP or ICO by its bytes, is cached in P9's state folder (7 days, a miss 1 day) and is
   shown as an image only. Your own pictures (the Picture button in Edit names and icons) are saved beside your
   registry only after you confirm, at most 256 KB, and agents cannot set them.
-- **Landing page name.** The landing greeting's name comes from Settings (or your account's
+- **Your name.** The name cards use ("needs <name>") comes from Settings (or your account's
   first name, once, if the file is new); it is shown as text on your own screen and never sent
   anywhere.
 

@@ -1,4 +1,4 @@
-// The landing page's black hole (Builder, 2026-10-19: "Event Horizon effect using the brand pack as reference"): each pixel's
+// The black hole drawn behind Send to server's move (#moveSky; it was the landing page's until O122) (Builder, 2026-10-19: "Event Horizon effect using the brand pack as reference"): each pixel's
 // light ray is bent around a Schwarzschild hole (radius 1) on its way out, so the far side of the accretion disk shows above
 // and below the shadow, as in docs/brand/p9-image-pack.png. Gold-to-violet disk, a blue photon ring, a blue-violet sky.
 // WebGL 1 only; with no WebGL the canvas keeps its CSS fallback and `ok` is false.

@@ -57,12 +57,12 @@ export { FILE_PROTECTION_RISK }; // the warning's words, in protocol so the phon
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
 // Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
 const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
-// name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
+// name: what cards waiting on the user call them ("needs <name>"; '' says "needs you").
 // xfer: Send files' limits (apps/desktop/xfer.mjs), each a whole number from 1 to its ceiling.
 const XFER_DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(XFER_LIMITS).map(([key, limit]) => [key, limit.default])));
 const checkXfer = x => exactly(x, 'fileMiB,files,sendGiB') && Object.entries(XFER_LIMITS).every(([key, limit]) => Number.isInteger(x[key]) && x[key] >= 1 && x[key] <= limit.max);
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
-  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false, xfer: XFER_DEFAULTS });
+  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', xfer: XFER_DEFAULTS });
 const NAME = /^[^\p{Cc}\p{Cf}]{0,40}$/u;
 const exactly = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === keys;
 const petName = name => name === null || (typeof name === 'string' && PET_NAME.test(name));
@@ -71,24 +71,26 @@ const checkPet = p => exactly(p, 'claude,codex,on,pane,size,system,top') && type
   && [p.claude, p.codex, p.system].every(petName) && spot(p.top) && spot(p.pane)
   && { on: p.on, size: p.size, claude: p.claude, codex: p.codex, system: p.system, top: p.top && [...p.top], pane: p.pane && [...p.pane] };
 export function checkSettings(value) {
-  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,xfer,zoom') || !checkXfer(value.xfer) || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
-      || typeof value.name !== 'string' || !NAME.test(value.name) || typeof value.startLast !== 'boolean'
+  if (!exactly(value, 'closeOnSend,focus,name,pet,xfer,zoom') || !checkXfer(value.xfer) || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
+      || typeof value.name !== 'string' || !NAME.test(value.name)
       || value.zoom < 0.5 || value.zoom > 3 || !exactly(value.focus, 'chat,dev,mission') || !exactly(value.pet, 'chat,dev,mission')) return null;
   const focus = value.focus, pet = { chat: checkPet(value.pet.chat), dev: checkPet(value.pet.dev), mission: checkPet(value.pet.mission) };
   if (![focus.chat, focus.dev, focus.mission].every(on => typeof on === 'boolean') || !(focus.chat || focus.dev || focus.mission)) return null;
   if (!pet.chat || !pet.dev || !pet.mission) return null;
-  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast,
+  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name,
     xfer: { fileMiB: value.xfer.fileMiB, files: value.xfer.files, sendGiB: value.xfer.sendGiB } };
 }
 // Older files: no pet, one pet name, or one pet per agent ({ claude, codex, system }) become every focus's pets, shown in Chat only.
-// Files from before the landing page get its name (the account's, below) and startLast off.
+// Files from before the name get the account's (below). startLast (0.1.8's "Start in my last focus mode") went with the landing
+// page (O122): an old file's is dropped, so the file still loads.
 export function upgradeSettings(file, name = '') {
   const old = file?.pet;
   if (old === undefined || old === null || typeof old === 'string' || exactly(old, 'claude,codex,system')) {
     const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old; // an older file keeps its own (no) pet
     file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
   }
-  return { name, startLast: false, xfer: XFER_DEFAULTS, ...file };
+  const { startLast, ...rest } = file ?? {};
+  return { name, xfer: XFER_DEFAULTS, ...rest };
 }
 // Windows keeps the full name in the output of "net user <login>"; the label is localized, so another language falls back to the login name.
 // ponytail: local accounts only (a work-domain full name needs "net user /domain"); a Microsoft account with no full name set also falls back.
@@ -427,7 +429,7 @@ export async function createDesktop({ state, open } = {}) {
     ...(overlay && { titleBarStyle: 'hidden', titleBarOverlay: overlay }),
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + version, ...(['off', 'original'].includes(process.env.P9_LANDING) ? ['--p9-landing=' + process.env.P9_LANDING] : []), // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_FIRST_RUN === 'off' ? ['--p9-first-run=off'] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
   // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
