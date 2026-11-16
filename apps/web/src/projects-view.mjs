@@ -26,6 +26,13 @@ export function installProjects(o, api) {
   // go one at a time, so each one names the file the one before it wrote.
   // cleaned: lead -> what "Clean up worker folders" last answered (SECURITY.md § Worker folders, "Who cleans up").
   const cleaned = new Map();
+  // window-10, Start sprint (SECURITY.md § Start sprint): lead -> what the last press answered; starting: the presses still out,
+  // so a redraw meanwhile keeps the button off. The press is the approval record; the page shows the one P9 kept.
+  const startSaid = new Map(), starting = new Set();
+  const startText = r => r.status === 200 ? 'Started: ' + r.body.chats.map(c => c.key + (c.existing ? ' (kept)' : '')).join(', ') + '.'
+    : 'Not started: ' + (r.body?.detail || r.body?.error || r.status) + (r.body?.chats?.length ? ' Made so far: ' + r.body.chats.map(c => c.key).join(', ') + '.' : '');
+  const startedHtml = sp => sp.started ? `<p class="hint" data-sp-started>Started ${esc(new Date(sp.started.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} by ${sp.started.by === 'owner' ? 'you' : esc(find(sp.started.by)?.title ?? 'a chat\'s agent, on your yes')}: your approval of its plan, sha256 <span class="mono" title="${esc(sp.started.plan)}">${esc(sp.started.plan.slice(0, 12))}</span>.</p>` : '';
+  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
@@ -109,8 +116,9 @@ export function installProjects(o, api) {
     const roles = rolesOf(sp), files = [...sp.files, ...roleFiles(sp).filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
     const fixed = ['sprint.md', 'rules.md', 'roles.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : 3;
     files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < 3 ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
+      ${startedHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
       ${rolesHtml(sp, roles)}
       ${[...files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
@@ -258,6 +266,15 @@ export function installProjects(o, api) {
     if (k === 'sprole-rm') return saveRoles(b.dataset.lead, rs => { const i = rs.findIndex(r => r.key === b.dataset.role); if (i >= 0) rs.splice(i, 1); else return false; });
     // A file whose save was refused stays open with its draft: nothing switches over unsaved text.
     if (k === 'spfile') { clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); } const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return fillBox(); }
+    // An open file's draft is saved first: the press approves the plan as it is on disk. The page is read again after, in
+    // place (the user may be elsewhere by then: nothing is opened for them).
+    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return; clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); }
+      starting.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
+      const r = await call('startSprint', { sprint: lead }, { quiet: true }).finally(() => starting.delete(lead));
+      startSaid.set(lead, startText(r));
+      const again = cur?.id === id && await call('project', { id }, { quiet: true });
+      if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);
+      o.loadProjects(); renderPage(); return fillBox(false); }
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
     if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }
