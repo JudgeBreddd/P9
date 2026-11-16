@@ -19,8 +19,9 @@ const csrf = () => {
   try { return JSON.parse(localStorage.getItem('p9-csrf') ?? 'null')?.token ?? null; } catch { return null; }
 };
 let sending = false, retry = 0, wait = 2000;
-// No answer: try the same stored report again later. The failed send never reached the daemon, so it counts against
-// nothing there; the wait doubles to a minute so a daemon that stays unreachable sees at most one try a minute.
+// No answer: try the same stored report again later. No answer leaves delivery unknown: usually the send never left,
+// but if only the answer was lost the daemon already wrote the line and the retry writes it again (at most once more
+// per try; no exactly-once). The wait doubles to a minute, so a daemon that stays unreachable sees one try a minute.
 const later = () => { if (retry) return; retry = setTimeout(() => { retry = 0; void flush(); }, wait); wait = Math.min(wait * 2, 60000); };
 async function flush() {
   if (sending || !navigator.onLine) return;

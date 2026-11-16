@@ -333,7 +333,8 @@ enrollment mutation; a missing or different Origin is 403.
   stores or sends a report. The daemon refuses a body over 4 KB, keeps 10 lines a minute per device, writes only
   fields that match their pattern (letters for the name, plain paths, `path:line:column` frames) and drops the rest,
   and writes each report as one JSON line. A send that gets no answer is tried again by the phone with the same stored
-  report: after 2 s, doubling to once a minute, one at a time, while the phone is online.
+  report: after 2 s, doubling to once a minute, one at a time, while the phone is online. No answer leaves delivery
+  unknown, so when only the answer was lost the same line can appear twice in the journal.
 
 What an agent or a terminal can do with what it can see: P9 gives children no session
 cookie, CSRF token or desktop cookie (the allowlisted environment), and the remote port
