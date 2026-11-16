@@ -186,8 +186,10 @@ export function createDelegate({ chat, allowed }) {
       const role = roleOf(row, chat.profiles.list().profiles);
       if (role.error) return role;
       const has = { provider: role.provider, model: role.model, effort: role.effortId ? role.effort : undefined };
-      const off = ['provider', 'model', 'effort'].find((k) => args[k] !== undefined && args[k] !== has[k]);
-      if (off) return { error: 'role-refused', role: row.key, field: off, detail: `Role ${row.key}, ${off}: "${args[off]}" is not what its roles.json row starts (${has[off] ?? 'the agent\'s default'}). Leave provider, model and effort out: the role's row decides.` };
+      // A profile role's provider is named as its row writes it, profile:<id> (list_providers), or as claude, the agent it runs; never another profile.
+      const own = role.profile ? 'profile:' + role.profile : undefined;
+      const off = ['provider', 'model', 'effort'].find((k) => args[k] !== undefined && args[k] !== has[k] && !(k === 'provider' && args[k] === own));
+      if (off) return { error: 'role-refused', role: row.key, field: off, detail: `Role ${row.key}, ${off}: "${args[off]}" is not what its roles.json row starts (${(off === 'provider' && own) || (has[off] ?? 'the agent\'s default')}). Leave provider, model and effort out: the role's row decides.` };
       args = { ...args, ...has, title: row.key, ...(args.mode === undefined && role.mode && { mode: role.mode }) };
       opts = { ...opts, profile: role.profile };
     }

@@ -317,6 +317,23 @@ test('Sprint roles: a worker the lead opens for a role starts on its roles.json 
   // Its own values named are what the row starts: allowed.
   const same = await L.tool('open_chat', { text: 'config', key: 'window', model: 'haiku', effort: 'low' });
   assert.match(await config(instance, same.chat), /^config:model=haiku,effort=low,/);
+  // FIX1 (#225): a role on a provider profile is named as its row writes it, profile:<id>; another profile, or another
+  // agent, is refused by field and makes nothing.
+  const post = async (name) => (await call(instance, '/profiles', 'POST', { name, baseUrl: 'https://models.example.test/api/', models: ['glm-5.3'], key: 'sk-profile-test-0f3a9c71d2e84b56' })).body.profile.id;
+  const mineId = await post('Far Cloud'), otherId = await post('Other Cloud');
+  write('roles.json', JSON.stringify({ roles: [lead, { key: 'far', provider: 'profile:' + mineId, model: 'glm-5.3', effort: 'low' }] }));
+  const atFar = (await rows(instance)).length;
+  const foreign = await L.tool('open_chat', { text: 'config', key: 'far', provider: 'profile:' + otherId });
+  assert.deepEqual([foreign.error, foreign.role, foreign.field], ['role-refused', 'far', 'provider'], JSON.stringify(foreign));
+  assert.match(foreign.detail, new RegExp('row starts \\(profile:' + mineId + '\\)'), foreign.detail);
+  assert.equal((await L.tool('open_chat', { text: 'config', key: 'far', provider: 'codex' })).field, 'provider');
+  assert.equal((await rows(instance)).length, atFar, 'a role named on another profile made a chat');
+  const farRole = await L.tool('open_chat', { text: 'config', key: 'far', provider: 'profile:' + mineId, model: 'glm-5.3' });
+  assert.equal(farRole.error, undefined, 'a profile role named as its own row writes it was refused: ' + JSON.stringify(farRole));
+  assert.equal((await rows(instance)).find((r) => r.id === farRole.chat).title, 'far');
+  await L.tool('wait_chat', { chat: farRole.chat });
+  assert.equal((await L.tool('stop_chat', { chat: farRole.chat, close: true })).error, undefined);
+  console.log('PASS Sprint roles FIX1: a profile role opened when named profile:<its id>; another profile and another agent were refused on provider with no chat');
   // Workers come only from role rows: no key, a key with no row, a row P9 cannot start, a broken or missing roles.json
   // are refused before anything is made, and take no worker place (the lead has one place left; a role row takes it).
   assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 3, workers: Array(3).fill(opus) })).status, 200);
