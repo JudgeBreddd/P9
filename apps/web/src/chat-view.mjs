@@ -1,10 +1,8 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
-import { pinned, applyCard, isReport, reportKey } from './pinned.mjs';
+import { pinned, applyCard, isReport, reportKey, SHUT } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
-const SHUT = { keys: null, get() { if (!this.keys) try { this.keys = new Set(JSON.parse(localStorage.getItem('p9-reports-closed') || '[]')); } catch { this.keys = new Set(); } return this.keys; },
-  add(k) { this.get().add(k); try { localStorage.setItem('p9-reports-closed', JSON.stringify([...this.keys])); } catch {} } };
 import { strip, chip, turnKey, lineDiff } from './composer.mjs';
 import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
