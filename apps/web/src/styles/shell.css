@@ -270,6 +270,7 @@ select option::checkmark{color:var(--primary)}
 .sprint .sp-rows li:has(.sp-clear){display:flex;align-items:center}
 .sprint .sp-rows li:has(.sp-clear) .sp-row{flex:1;min-width:0}
 .sprint .sp-clear{flex:none;width:24px;height:24px;border:0;border-radius:4px;background:none;color:var(--muted-foreground);font:inherit;cursor:pointer}
+.sprint .sp-clearall{display:block;margin:2px 0 4px auto}
 .sprint .sp-clear:hover{background:var(--accent);color:var(--foreground)}
 .sprint .sp-head{min-width:0;display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:0;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
 .sprint .sp-head:hover{background:var(--accent)}
