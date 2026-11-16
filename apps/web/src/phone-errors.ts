@@ -1,7 +1,9 @@
 // O128 (threat model row O128): the phone's uncaught errors, rejected promises, failed script and style loads and its
 // service worker's failures go to the daemon's journal (POST /phone-error, one line each). Imported first by phone.ts, so
 // it listens before the rest of the app runs. Reports wait in this phone's storage (at most 20) while it is offline or
-// signed out, and go when it is back online or on the next open. A report is structure only, made here before it is
+// signed out, and go when it is back online or on the next open. A send that got no answer is tried again by itself:
+// after 2 s, then doubling to once a minute, one timer at a time, while the phone is online (the 'online' event can come
+// a moment before the network is really back). A report is structure only, made here before it is
 // stored or sent: the error's type name (or the thrown value's type), the page, build names, a failed file's path and
 // up to 5 stack frames of this origin as path:line:column. Never the message: it can carry chat or typed text. The
 // daemon checks every field again. ponytail: a report made while signed out waits for the next signed-in open; the
@@ -16,7 +18,10 @@ const csrf = () => {
   const tab = sessionStorage.getItem('p9-csrf'); if (tab) return tab;
   try { return JSON.parse(localStorage.getItem('p9-csrf') ?? 'null')?.token ?? null; } catch { return null; }
 };
-let sending = false;
+let sending = false, retry = 0, wait = 2000;
+// No answer: try the same stored report again later. The failed send never reached the daemon, so it counts against
+// nothing there; the wait doubles to a minute so a daemon that stays unreachable sees at most one try a minute.
+const later = () => { if (retry) return; retry = setTimeout(() => { retry = 0; void flush(); }, wait); wait = Math.min(wait * 2, 60000); };
 async function flush() {
   if (sending || !navigator.onLine) return;
   sending = true;
@@ -26,7 +31,9 @@ async function flush() {
       let status = 0;
       try { status = (await fetch('/phone-error', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': token }, body: JSON.stringify(next) })).status; } catch {}
       // Kept for later: no network, or not signed in (401, 403). Anything else was answered and is done (204), or never will be (400, 413, 429).
-      if (!status || status === 401 || status === 403) return;
+      if (!status) return later();
+      if (status === 401 || status === 403) return;
+      wait = 2000;
       keep(queued().slice(1));
     }
   } finally { sending = false; }
