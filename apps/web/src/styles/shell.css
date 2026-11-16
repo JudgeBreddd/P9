@@ -230,7 +230,10 @@ select option::checkmark{color:var(--primary)}
 .toast .sub{grid-column:2;font-size:11px;color:var(--muted-foreground)}
 @keyframes toast-out{to{opacity:0;translate:0 8px}}
 /* note 8: messages queued behind a running turn */
-.queue{display:flex;flex-direction:column;gap:4px}
+.queue{flex:none;font-size:12px;color:var(--muted-foreground)}
+.queue>summary{cursor:pointer;padding:3px 6px;width:max-content;border-radius:8px}
+.queue>summary:hover{color:var(--foreground)}
+.queue .qs{display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow:auto;margin-top:4px}
 .queue .q{display:flex;align-items:center;gap:8px;padding:5px 6px 5px 10px;border:1px dashed var(--border);border-radius:8px;font-size:12px;color:var(--muted-foreground)}
 .queue .q span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .queue .q button{border:0;background:none;color:inherit;cursor:pointer;padding:2px;display:grid}
@@ -393,6 +396,9 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 /* ---- Bottom: meters + composer ---- */
 .bottom{padding:6px 20px 8px}
 .bottom .col{gap:8px}
+/* O109: the text box stays on screen whatever is pinned or waiting: what sits above it (.pinned, .queue) scrolls inside its
+   own cap, and the bottom never takes more than 70% of the window, so the history keeps the rest. */
+.bottom .col{max-height:70vh}.bottom .col>*{flex:none}.bottom .col>.pinned{flex:0 1 auto;min-height:0}
 .meters{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:14px;align-items:center;font-size:11px;color:var(--muted-foreground)}
 .meter{display:grid;gap:4px}
 .meter .l{display:flex;justify-content:space-between}
