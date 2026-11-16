@@ -1056,3 +1056,34 @@ test('O109: the user\'s message told along with an agent\'s note that waited is 
   assert.deepEqual(last.slice(-2), [USER + '\n\n', 'mine'], JSON.stringify(last));
   console.log('PASS O109 note: the user\'s message after an agent\'s note went under the user\'s own line');
 });
+
+// O125 #199 FIX1 (reviewer P2): a send_chat with replaces and the default auto goes into the queue with the message it
+// replaces, not into the running turn now. A foreign sender's ID and an ID no longer waiting replace nothing.
+test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued wording, not steer it now; a foreign or delivered ID replaces nothing', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
+  const folder = path.resolve(instance.workspace, made.folder);
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
+  const old = await a.tool('send_chat', { chat: made.chat, text: 'old wording', when: 'queue' });
+  assert.ok(old.held, JSON.stringify(old));
+  const fixed = await a.tool('send_chat', { chat: made.chat, text: 'corrected wording', replaces: old.held });
+  assert.equal(fixed.replaced, old.held, 'default auto did not replace: ' + JSON.stringify(fixed));
+  const gone = (await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === old.held);
+  assert.equal(gone.length, 1, 'the replaced wording is not marked');
+  assert.equal(gone[0].data.why, 'replaced');
+  assert.ok(!(await events(instance, made.chat)).some((e) => e.type === 'user' && e.data.text === 'corrected wording'), 'the correction went into the running turn now, not with the queue');
+  // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either.
+  const b = await agent(t, instance);
+  const foreign = await b.tool('send_chat', { chat: made.chat, text: 'foreign', replaces: fixed.held });
+  assert.equal(foreign.replaced, null, 'a foreign sender replaced a waiting message: ' + JSON.stringify(foreign));
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === fixed.held).length, 0, 'a foreign sender removed a waiting message');
+  fs.writeFileSync(path.join(folder, 'go'), '');
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'user' && event.data.text === 'corrected wording');
+  const sent = (await events(instance, made.chat)).filter((e) => e.type === 'user').map((e) => e.data.text);
+  assert.ok(!sent.includes('old wording'), 'the replaced wording was sent: ' + JSON.stringify(sent));
+  // The corrected wording is already delivered: its ID replaces nothing now.
+  const late = await a.tool('send_chat', { chat: made.chat, text: 'later', replaces: fixed.held });
+  assert.equal(late.replaced, null, 'a delivered ID replaced something: ' + JSON.stringify(late));
+});
