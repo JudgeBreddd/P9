@@ -326,6 +326,11 @@ enrollment mutation; a missing or different Origin is 403.
   control (one opened while it was starting, or a hard reload) asks it to take over with a `claim` message. Only a
   page of P9's own origin can send that, and taking over changes only where that page's `/_astro/` files come from,
   so a forged `claim` gains nothing.
+- **Phone errors in the server's log (threat model row O128).** The phone sends its own errors (message, stack lines,
+  page and build names; never chat text) to the server's log through `POST /phone-error`, behind the same sign-in,
+  Origin and CSRF checks as the rest of the phone. The daemon refuses a body over 4 KB, keeps 10 lines a minute per
+  device, turns control characters into spaces, drops anything in quotes from the message, and writes each report as
+  one JSON line.
 
 What an agent or a terminal can do with what it can see: P9 gives children no session
 cookie, CSRF token or desktop cookie (the allowlisted environment), and the remote port
