@@ -549,9 +549,6 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 .agent-ind[hidden]{display:none}
 .agent-ind .glyph{color:var(--primary);width:1em;text-align:center;font-size:14px}
 .agent-ind[data-state=waiting] .glyph{color:var(--warning,#f5a524)}
-#indPets{display:flex;gap:2px}#indPets canvas.pet{cursor:default}
-.agent-ind[data-pet]{align-self:flex-start;margin-bottom:-8px}  /* the 52 px pet hangs 8 px below the 44 px bar */
-.agent-ind[data-pet] #indText{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-events:auto}
 .pane{position:relative}
 .pane>canvas.pet{position:absolute;z-index:5;transform:translate(-50%,-50%)}
