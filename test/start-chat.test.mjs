@@ -77,36 +77,6 @@ test('Start in Chat: the first view is Chat, no landing media is asked for, and 
   console.log('PASS start in Chat: ' + JSON.stringify(seen.at(-1)));
 });
 
-// A file from 0.1.8 that turned Chat Focus off (Dev on, Mission off) used to open in Dev, and the top-left mark refused Chat.
-// O122 says Chat always: the file loads with Chat back on and everything else kept (Reviewer FIX1 on #202).
-test('Start in Chat: an old file with Chat Focus off opens in Chat and keeps its other settings', { timeout: 120000 }, async (t) => {
-  const instance = await daemon(t);
-  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-start-off-')), profile = path.join(home, 'profile');
-  await mkdir(profile, { recursive: true });
-  await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1.1, closeOnSend: true, focus: { chat: false, dev: true, mission: false }, name: 'Tess', startLast: true }));
-  await versionSeen(profile);
-  const env = { ...process.env, P9_FIRST_RUN: 'off' }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_LANDING;
-  const { page } = await launch(t, instance, profile, env);
-  await page.locator('.shell').waitFor({ timeout: 20000 });
-  const seen = [];
-  for (let i = 0; i < 20; i++) { seen.push(await page.evaluate(() => document.querySelector('.shell').dataset.focus)); await page.waitForTimeout(100); }
-  assert.deepEqual([...new Set(seen)], ['chat'], 'Chat is the only view drawn');
-  const kept = await page.evaluate(() => window.p9.getSettings());
-  assert.deepEqual({ focus: kept.focus, zoom: kept.zoom, closeOnSend: kept.closeOnSend, name: kept.name, startLast: 'startLast' in kept },
-    { focus: { chat: true, dev: true, mission: false }, zoom: 1.1, closeOnSend: true, name: 'Tess', startLast: false });
-  assert.deepEqual(await page.evaluate(() => ['chat', 'dev', 'mission'].map((f) => !document.querySelector(`[data-focus-btn="${f}"]`)?.hidden)), [true, true, false]);
-  // Dev, then the top-left mark: back in Chat.
-  await page.evaluate(() => document.querySelector('[data-focus-btn="dev"]').click());
-  await page.waitForFunction(() => document.querySelector('.shell').dataset.focus === 'dev');
-  await page.click('#brandBtn');
-  await page.waitForFunction(() => document.querySelector('.shell').dataset.focus === 'chat', null, { timeout: 3000 });
-  await page.click('#setBtn');
-  await page.locator('#setDlg[open]').waitFor();
-  await page.click('[data-set-page="Chat Focus"]').catch(() => {});
-  assert.deepEqual(await page.evaluate(() => { const b = document.querySelector('#setF-chat'); return b && [b.checked, b.disabled]; }), [true, true], "Chat's box is on and cannot be turned off");
-  console.log('PASS chat-off file opens in Chat: ' + JSON.stringify(kept.focus));
-});
-
 // The first run used to start when the landing page closed. With no landing, it starts with the window: the wizard while a
 // setup check fails (this daemon has no settings), then the walkthrough.
 test('Start in Chat: the first run opens the setup wizard by itself, then the walkthrough', { timeout: 120000 }, async (t) => {

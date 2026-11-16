@@ -667,7 +667,7 @@ $('#dHide').onclick = toggleTerm;
 try { localStorage.removeItem('p9-focus-looks'); } catch {}
 // All three focus panes stay in the DOM; switching only flips visibility, so nothing re-renders.
 // U8: the slim Temporary P9 on a remote has no Mission Control (Always on installs the full P9, which has it).
-const focusOn = f => f === 'chat' || !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim); // O122: Chat is always on (P9 opens there)
+const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim);
 function setFocus(f) {
   if (!focusOn(f)) return; // turned off in Settings, or not on this remote
   S.focus = f;

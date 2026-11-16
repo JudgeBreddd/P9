@@ -319,7 +319,7 @@ function renderSettings() {
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + profilesGroup()
     + delegationGroup() + sprintGroup()
-    + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Chat Focus stays on: P9 opens there. Turn off Dev Focus or Mission Control if you do not use them.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => f === 'chat' ? box('setF-chat', n, true, 'Always on: P9 opens here.', true) : box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
+    + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (outer.pets ? petSettings() : '')
     + securityGroup(box)
     + (outer.missionFiles?.settings ? missionGroup() : '')
