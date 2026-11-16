@@ -1062,3 +1062,45 @@ test('O109: the user\'s message told along with an agent\'s note that waited is 
   assert.deepEqual(last.slice(-2), [USER + '\n\n', 'mine'], JSON.stringify(last));
   console.log('PASS O109 note: the user\'s message after an agent\'s note went under the user\'s own line');
 });
+
+// O125 #199 FIX1 (reviewer P2): a send_chat with replaces and the default auto goes into the queue with the message it
+// replaces, not into the running turn now. A foreign sender's ID and an ID no longer waiting replace nothing.
+test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued wording, not steer it now; a foreign or delivered ID replaces nothing', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  // No project: a project chat's folder is not where this fake reads its go file (the gate turn never ended).
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
+  const folder = path.resolve(instance.workspace, made.folder);
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
+  fs.writeFileSync(path.join(folder, 'log-prompts'), ''); // the fake agent logs every prompt from here on (without it, prompts.log stays empty)
+  const old = await a.tool('send_chat', { chat: made.chat, text: 'old wording', when: 'queue' });
+  assert.ok(old.held, JSON.stringify(old));
+  const fixed = await a.tool('send_chat', { chat: made.chat, text: 'corrected wording', replaces: old.held });
+  assert.equal(fixed.replaced, old.held, 'default auto did not replace: ' + JSON.stringify(fixed));
+  const gone = (await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === old.held);
+  assert.equal(gone.length, 1, 'the replaced wording is not marked');
+  assert.equal(gone[0].data.why, 'replaced');
+  assert.ok(!(await events(instance, made.chat)).some((e) => e.type === 'user' && e.data.text === 'corrected wording'), 'the correction went into the running turn now, not with the queue');
+  // FIX2: the correction keeps the replaced wording's delivery (queue), so it is not steered into the running turn.
+  const heldFix = (await events(instance, made.chat)).find((e) => e.type === 'held' && e.data.id === fixed.held);
+  assert.equal(heldFix?.data.when, 'queue', 'the correction for a queued wording is not queued: ' + JSON.stringify(heldFix));
+  // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either. The foreign sender is
+  // the user (a prompt to the chat, no agent sender), so the sender check alone refuses the replace.
+  const foreign = (await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'foreign', when: 'queue', replaces: fixed.held })).body;
+  assert.equal(foreign.replaced, null, 'a foreign sender replaced a waiting message: ' + JSON.stringify(foreign));
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === fixed.held).length, 0, 'a foreign sender removed a waiting message');
+  // The queue goes out as the next prompt after the gate turn (as the other queue tests read it): wait for that prompt.
+  const sentPrompts = () => (fs.existsSync(path.join(folder, 'prompts.log')) ? fs.readFileSync(path.join(folder, 'prompts.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.stringify(JSON.parse(line))) : []);
+  fs.writeFileSync(path.join(folder, 'go'), '');
+  for (let i = 0; !sentPrompts().some((line) => line.includes('corrected wording')) && i < 200; i += 1) await pause(100);
+  assert.ok(sentPrompts().some((line) => line.includes('corrected wording')), 'the corrected wording was not sent with the queue: prompts ' + JSON.stringify(sentPrompts()) + ' folder ' + folder + ' files ' + JSON.stringify(fs.readdirSync(folder)) + ' events ' + JSON.stringify((await events(instance, made.chat)).map((e) => [e.type, e.data?.text ?? e.data?.why ?? ''])));
+  assert.ok(!sentPrompts().some((line) => line.includes('old wording')), 'the replaced wording was sent: ' + JSON.stringify(sentPrompts()));
+  // Delivery (FIX2): the fake gate is a file-wait turn with no tool call, so no tool completion is exercised here. This
+  // checks only that the correction is never steered into the turn and reaches the next prompt at turn end.
+  const steered = (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.steered && String(e.data.text).includes('corrected wording'));
+  assert.equal(steered.length, 0, 'the correction was steered into the current turn at the tool boundary: ' + JSON.stringify(steered));
+  // The corrected wording is already delivered: its ID replaces nothing now.
+  const late = await a.tool('send_chat', { chat: made.chat, text: 'later', replaces: fixed.held });
+  assert.equal(late.replaced, null, 'a delivered ID replaced something: ' + JSON.stringify(late));
+});
