@@ -1154,3 +1154,24 @@ test('O125 point 2: two notes from one worker waiting for a parent in a turn: th
   const kid = await notices(instance, a.conversation);
   assert.equal(kid.filter((text) => text.includes('Kid ended its turn')).length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
 });
+
+// O125 point 2 FIX1: a steerable parent running a tool holds the worker's first note (202), so the second must replace it too.
+test('O125 point 2: two notes from one worker while the steerable parent runs a tool: the second replaces the first, one goes', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  fs.writeFileSync(path.join(instance.workspace, 'slow-tools'), '');
+  const a = await agent(t, instance);
+  assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'tool-open' })).status, 202);
+  await until(instance, (event) => event.conversation === a.conversation && JSON.stringify(event).includes('Run tool 1'));
+  const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
+  const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
+  for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
+  const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
+  assert.ok(replaced.hit.data.text.includes('Kid ended its turn'), 'the replaced note is not the worker note: ' + JSON.stringify(replaced.hit.data));
+  for (let i = 0; i < 300 && (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn')).length < 1; i += 1) await pause(100);
+  await pause(1000);
+  const kid = (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
+  assert.equal(kid.length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
+});
