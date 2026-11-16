@@ -373,11 +373,11 @@ function placeSprints() {
     sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));
   }
 }
-// The live fields (task, ready, verdict, idleSince) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
+// The live fields (task, ready, verdict, idleSince, work) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
 // Until then a batch of events marks the list stale and it is read again, a field the list no longer has cleared.
-const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent]));
+const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent]));
   for (const c of conversations) { const s = outer.S.sessions.find(x => x.id === c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
-  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent])); };
+  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent])); };
 setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
 const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));
