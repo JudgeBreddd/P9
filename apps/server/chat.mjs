@@ -986,13 +986,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // when one completes or fails, so it lands between steps; with no tool call running it is steered in at once, as
   // before. Queue: sent when the turn ends. At the end, whatever still waits goes as the next prompt, held first; after
   // a cancel it goes back to the window's box instead. Each keeps its sender's authority (a revoked phone sends nothing).
+  // O125 point 1: a message may replace one still waiting, by its ID, when both come from the same sender. The old one
+  // leaves the queue as 'replaced' (unheld, never dropped); another sender's ID, or one no longer waiting, replaces nothing.
   function hold(id, session, body, images, when) {
     if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     const item = { id: randomUUID(), body, images, allowed: captureAuthority() };
+    const old = body.replaces === undefined ? undefined : [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
+    if (old) {
+      const list = session.held.includes(old) ? session.held : session.queued;
+      list.splice(list.indexOf(old), 1);
+      unheld(id, [old], 'replaced');
+    }
     (when === 'queue' ? session.queued : session.held).push(item);
-    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when });
-    return { status: 202, held: item.id, when };
+    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when, ...(old && { replaces: old.id }) });
+    return { status: 202, held: item.id, when, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   const unheld = (id, items, why) => { for (const item of items) { emit(id, 'unheld', { id: item.id, text: item.body.text, why }); solos.get(item.body)?.end({ error: why }); } };
@@ -1188,6 +1196,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof body?.text !== 'string' || !imagesOk(images) || (!body.text.trim() && !images.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
       if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }
+      if (body.replaces !== undefined && (typeof body.replaces !== 'string' || body.replaces.length > 64)) { release(); return refused(400, 'request-refused'); }
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
