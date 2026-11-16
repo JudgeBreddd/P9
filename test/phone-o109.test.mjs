@@ -83,6 +83,11 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   assert.doesNotMatch(await page.textContent('#chips'), /pinned/, 'closed stays closed');
   const reloaded = await composerOnScreen(page);
   assert.ok(reloaded.inside && reloaded.hit, 'the composer is on screen after a reload: ' + JSON.stringify(reloaded));
+  // The same card sent again, unchanged, is not new: the chip stays closed (the desktop's report order must not leak into the phone's cards).
+  more('card', { id: 'sprint', kind: 'note', text: 'SPRINT: 7 workers' });
+  await page.reload();
+  await page.waitForSelector('#queued:not([hidden])', { timeout: 30000 });
+  assert.doesNotMatch(await page.textContent('#chips'), /pinned/, 'an unchanged card sent again reopened the closed chip');
   more('card', { id: 'ready-0d4c1e2f-1a4c-4559-a431-f0e2d3c4b5a6', kind: 'note', text: 'Worker report: PR #177' });
   await page.reload();
   await page.waitForFunction(() => /3 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });

@@ -11,7 +11,7 @@ export const reportKey = (s, c) => s.id + '|' + c.id + '|' + c.text.length + '|'
 // others scroll with the chat (chat-view's 'report' events). Not given (phone), every card is pinned as before.
 export function pinned(s, mdOf, shut) {
   const plan = s.events.find(e => e.t === 'plan'), all = [...(s.cards?.values() ?? [])];
-  const top = shut && all.filter(c => isReport(c.id)).sort((a, b) => b.at - a.at)[0], open = top && !shut.has(reportKey(s, top)) ? top : null;
+  const top = shut && all.filter(c => isReport(c.id)).sort((a, b) => s.cardAt.get(b.id) - s.cardAt.get(a.id))[0], open = top && !shut.has(reportKey(s, top)) ? top : null;
   const cards = shut ? all.filter(c => !isReport(c.id) || c === open) : all;
   if (!plan?.entries.length && !cards.length) return '';
   return `<div class="pinned" aria-label="Pinned">${plan?.entries.length ? `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan <button type="button" class="open-plan" data-open-plan="entries" title="Open the plan to comment on it">Open</button></div><ul style="margin:0;padding:0">${plan.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${mark(st)}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>` : ''}`
@@ -22,5 +22,6 @@ export function pinned(s, mdOf, shut) {
 export function applyCard(s, type, d) {
   s.cards ||= new Map();
   if (type === 'unpin') s.cards.delete(d.id);
-  else s.cards.set(d.id, { id: String(d.id), kind: String(d.kind), text: String(d.text ?? ''), at: s.cardAt = (s.cardAt ?? 0) + 1 });
+  // The arrival order lives beside the cards, not in them: the phone compares its cards as they are (its closed chip), so a card object stays { id, kind, text }.
+  else { s.cards.set(d.id, { id: String(d.id), kind: String(d.kind), text: String(d.text ?? '') }); (s.cardAt ||= new Map()).set(d.id, (s.cardSeq = (s.cardSeq ?? 0) + 1)); }
 }
