@@ -601,9 +601,15 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
   start with no shell, the short allow-list environment and a 10 s limit, reads the first
   line, and keeps the key in memory only for that start. The command is split on spaces
   into a program and its arguments; nothing in it is read by a shell.
-- **Who can set one.** The desktop window only. The phone, the P9 MCP server and agents have
-  no route to read, add, change or remove a profile. The command is run as you, by the
+- **Who can set one.** The desktop window only. The phone has no route to a profile. The P9
+  MCP server and agents have none to add, change or remove one, or to read its base URL, its
+  key or its command. The command is run as you, by the
   daemon; the desktop window can already open a real terminal, so it gains nothing by it.
+- **What an agent can read.** `list_providers` (§ Delegate) gives a chat's agent each
+  profile's id, name and model names, and nothing else of it: what it needs to name a profile
+  in `open_chat` or in a sprint's roles.json, the same choice the desktop's pickers give you.
+  Naming one starts nothing you did not allow: `open_chat` still starts only what a free
+  Settings > Delegation row starts, and a sprint still starts only on your press.
 - **What the page gets back.** Name, base URL, model names, and whether a key or a command
   is set. Never the key, and never the command's output. A saved key cannot be read back:
   it can only be replaced or removed.
@@ -652,7 +658,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -714,7 +720,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `archive_chat` and `answer_chat` are refused while it
-  is on, as are `ready` and `verdict`. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
 - **Approvals.** An agent may answer an approval or a question asked by a chat it started,
