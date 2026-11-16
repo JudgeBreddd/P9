@@ -46,34 +46,38 @@ test('Chat state: each row shows a spinning ring while working, a green circle w
   await row(working).locator('.mk-run[data-busy]').waitFor({ timeout: 15000 });
   await row(waiting).locator('.mk-needs svg').waitFor({ timeout: 15000 });
 
-  // Each mark as drawn: the theme's colours resolved in the panel, so the check holds in every theme.
-  const marks = await page.evaluate((ids) => {
-    const panel = document.querySelector('#navList'), probe = document.createElement('i');
-    panel.append(probe);
-    const resolve = (v) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
-    const colours = { ok: resolve('--ok'), destructive: resolve('--destructive'), warn: resolve('--warn') };
-    probe.remove();
-    const mk = (id) => document.querySelector(`#navList .row[data-chat="${id}"] .mk`);
-    const pseudo = (el, which) => { const s = getComputedStyle(el, which); return { content: s.content, bg: s.backgroundColor, w: s.width, h: s.height, radius: s.borderRadius, top: s.borderTopColor, right: s.borderRightColor, topWidth: s.borderTopWidth }; };
-    const spin = (el) => document.getAnimations().filter((a) => a.effect?.target === el).map((a) => ({ pseudo: a.effect.pseudoElement, transforms: a.effect.getKeyframes().map((k) => k.transform).filter(Boolean), running: a.playState === 'running' }));
-    return { colours, idle: { before: pseudo(mk(ids.idle), '::before'), after: pseudo(mk(ids.idle), '::after'), anims: spin(mk(ids.idle)) },
-      working: { before: pseudo(mk(ids.working), '::before'), after: pseudo(mk(ids.working), '::after'), anims: spin(mk(ids.working)) },
-      waiting: { colour: getComputedStyle(mk(ids.waiting)).color, hand: !!mk(ids.waiting).querySelector('svg') } };
-  }, { idle, working, waiting });
-  const info = JSON.stringify(marks);
-  // Idle: a filled green circle, standing still.
-  assert.equal(marks.idle.before.bg, marks.colours.ok, 'idle: filled with the theme green ' + info);
-  assert.ok(marks.idle.before.w === marks.idle.before.h && marks.idle.before.radius === '50%', 'idle: a circle ' + info);
-  assert.equal(marks.idle.anims.length, 0, 'idle: nothing moves ' + info);
-  // Working: a green ring with a gap, turning without end.
-  const ring = [marks.working.before, marks.working.after].find((p) => p.content !== 'none' && p.topWidth !== '0px');
-  assert.ok(ring && ring.radius === '50%' && ring.top === marks.colours.ok && ring.right === 'rgba(0, 0, 0, 0)', 'working: an open green ring ' + info);
-  assert.ok(marks.working.anims.some((a) => a.running && a.transforms.some((x) => /rotate|matrix/.test(x))), 'working: the ring spins ' + info);
-  assert.ok(![marks.working.before, marks.working.after].some((p) => p.content !== 'none' && p.bg === marks.colours.ok), 'working: no filled dot beside the ring ' + info);
-  // Waiting: the hand, in the theme red.
-  assert.equal(marks.waiting.hand, true, info);
-  assert.equal(marks.waiting.colour, marks.colours.destructive, 'waiting: red hand ' + info);
-  assert.notEqual(marks.colours.destructive, marks.colours.warn, info);
+  // Each mark as drawn: the theme's colours resolved in the panel, so the check holds in every theme. Checked in the open
+  // panel's rows and again in the collapsed strip.
+  const checkMarks = async (where, sel) => {
+    const marks = await page.evaluate(({ ids, sel }) => {
+      const panel = document.querySelector('#nav'), probe = document.createElement('i');
+      panel.append(probe);
+      const resolve = (v) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
+      const colours = { ok: resolve('--ok'), destructive: resolve('--destructive'), warn: resolve('--warn') };
+      probe.remove();
+      const mk = (id) => document.querySelector(sel.replace('ID', id));
+      const pseudo = (el, which) => { const s = getComputedStyle(el, which); return { content: s.content, bg: s.backgroundColor, w: s.width, h: s.height, radius: s.borderRadius, top: s.borderTopColor, right: s.borderRightColor, topWidth: s.borderTopWidth }; };
+      const spin = (el) => document.getAnimations().filter((a) => a.effect?.target === el).map((a) => ({ pseudo: a.effect.pseudoElement, transforms: a.effect.getKeyframes().map((k) => k.transform).filter(Boolean), running: a.playState === 'running' }));
+      const of = (id) => ({ before: pseudo(mk(id), '::before'), after: pseudo(mk(id), '::after'), anims: spin(mk(id)) });
+      return { colours, idle: of(ids.idle), working: of(ids.working),
+        waiting: { colour: getComputedStyle(mk(ids.waiting)).color, hand: !!mk(ids.waiting).querySelector('svg') } };
+    }, { ids: { idle, working, waiting }, sel });
+    const info = where + ' ' + JSON.stringify(marks);
+    // Idle: a filled green circle, standing still.
+    assert.equal(marks.idle.before.bg, marks.colours.ok, 'idle: filled with the theme green ' + info);
+    assert.ok(marks.idle.before.w === marks.idle.before.h && marks.idle.before.radius === '50%', 'idle: a circle ' + info);
+    assert.equal(marks.idle.anims.length, 0, 'idle: nothing moves ' + info);
+    // Working: a green ring with a gap, turning without end.
+    const ring = [marks.working.before, marks.working.after].find((p) => p.content !== 'none' && p.topWidth !== '0px');
+    assert.ok(ring && ring.radius === '50%' && ring.top === marks.colours.ok && ring.right === 'rgba(0, 0, 0, 0)', 'working: an open green ring ' + info);
+    assert.ok(marks.working.anims.some((a) => a.running && a.transforms.some((x) => /rotate|matrix/.test(x))), 'working: the ring spins ' + info);
+    assert.ok(![marks.working.before, marks.working.after].some((p) => p.content !== 'none' && p.bg === marks.colours.ok), 'working: no filled dot beside the ring ' + info);
+    // Waiting: the hand, in the theme red.
+    assert.equal(marks.waiting.hand, true, info);
+    assert.equal(marks.waiting.colour, marks.colours.destructive, 'waiting: red hand ' + info);
+    assert.notEqual(marks.colours.destructive, marks.colours.warn, info);
+  };
+  await checkMarks('rows', '#navList .row[data-chat="ID"] .mk');
 
   // The top bar keeps the spinner and its words, and shows no pet (two agents active, one waiting).
   await page.locator('#agentInd[data-state="waiting"]').waitFor({ timeout: 15000 });
@@ -84,6 +88,17 @@ test('Chat state: each row shows a spinning ring while working, a green circle w
   await page.mouse.move(0, 0);
   await shot(row(working), 'row-working'); await shot(row(idle), 'row-idle'); await shot(row(waiting), 'row-waiting');
   await shot(page.locator('#nav'), 'chat-bar-states'); await shot(page.locator('.topbar'), 'top-bar');
+
+  // The collapsed strip shows the same three states.
+  await page.keyboard.press('Control+b');
+  await page.locator('#nav[data-collapsed]').waitFor({ timeout: 5000 });
+  const bot = (id) => page.locator(`#nav .bot[data-chat="${id}"]`);
+  await bot(working).and(page.locator('[data-busy]')).waitFor({ timeout: 15000 });
+  await bot(idle).and(page.locator('[data-s="running"]:not([data-busy])')).waitFor({ timeout: 15000 });
+  await bot(waiting).locator('.bm svg').waitFor({ timeout: 15000 });
+  await checkMarks('strip', '#nav .bot[data-chat="ID"] .bm');
+  await page.mouse.move(0, 0);
+  await shot(page.locator('#nav'), 'strip-states');
 });
 
 test('Chat state: pets off in every focus mode loads no pet sheet at startup; turning them on loads them', { timeout: 90000 }, async (t) => {

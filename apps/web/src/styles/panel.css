@@ -161,6 +161,7 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 .lpanel .bot .bm svg{width:15px;height:15px}
 .lpanel .bot[data-s=""] .bm{display:none}
 .lpanel .bot[data-s="running"] .bm::before{width:9px;height:9px;background:var(--ok)}
+.lpanel .bot[data-s="running"][data-busy] .bm::before{width:11px;height:11px;box-sizing:border-box;background:none;border:2px solid var(--ok);border-right-color:transparent;animation:lp-spin .9s linear infinite}
 .lpanel .bot[data-s="unread"] .bm::before{background:var(--foreground)}
 .lpanel .bot[data-s="needs"] .bm{color:var(--destructive)}
 .lpanel .bot[data-s="failed"] .bm{color:var(--destructive)}
@@ -238,7 +239,7 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 .ptool .state[data-s="needs"]{color:var(--warn);white-space:nowrap;flex-shrink:0}
 .ptool .state[data-s="failed"]{color:var(--destructive)}
 
-@media (prefers-reduced-motion:reduce){.lpanel .mk-run::after,.lpanel .row[data-moved],.lpanel .bot[data-busy]>svg,.lp-toast{animation:none}.lpanel{transition:none}}
+@media (prefers-reduced-motion:reduce){.lpanel .mk-run::after,.lpanel .row[data-moved],.lpanel .bot[data-busy]>svg,.lpanel .bot[data-busy] .bm::before,.lp-toast{animation:none}.lpanel{transition:none}}
 
 .welcome .chat-folder{color:inherit;font:inherit;background:var(--secondary);border:1px solid var(--border);border-radius:8px;padding:4px 8px;text-decoration:none;cursor:pointer;overflow-wrap:anywhere}
 .welcome .chat-folder:focus-visible{outline:2px solid var(--ring)}
