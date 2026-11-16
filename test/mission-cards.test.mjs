@@ -217,7 +217,21 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       // Where an element cannot move without reloading (no Element.moveBefore: phone Safari, older browsers), each draw makes
       // the frames again, and the last answer still reaches the new frame.
       await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
+      // M5 CI (job 133105928886): the wait below timed out with the section still on its old text. Overview reads overlap (the 20 s
+      // poll, a Mission click) and can answer out of order; the older answer, last, drew the window back. Here an overview asked
+      // before the write answers just after the one asked after it (Electron's handler map is internal: a missing one fails here).
+      const held = await app.evaluate(({ ipcMain }) => { const map = ipcMain._invokeHandlers, real = map?.get('p9:mission');
+        if (!real) return 'not held: ' + (map ? 'no p9:mission handler' : 'no ipcMain._invokeHandlers'); let stale = null, fresh = null;
+        map.set('p9:mission', (e, kind, ...a) => { const p = Promise.resolve(real(e, kind, ...a)); if (kind !== 'overview') return p;
+          if (!stale) return (stale = p.then((r) => new Promise((res) => { fresh = () => setTimeout(() => res(r), 0); })));
+          if (fresh) { map.set('p9:mission', real); return p.then((r) => { fresh(); return r; }); }
+          return p; });
+        return 'held'; });
+      assert.equal(held, 'held');
+      await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click()); await sleep(300);
       await redraw('Custom cards, no moveBefore.');
+      await sleep(1500);
+      assert.equal(await page.locator('#mdlBody [data-space-text]').innerText(), 'Custom cards, no moveBefore.', 'an older overview answering last does not draw the old text back');
       assert.deepEqual(await frames(), Array(6).fill('new'), 'without moveBefore every card frame is made again');
       await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 15000 });
       await page.evaluate(() => { Element.prototype.moveBefore = window.__mb; });
