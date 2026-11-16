@@ -11,7 +11,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // The hang row: a file whose test blocks the event loop (a synchronous 60 s child run) or that hangs outside any test
 // must name itself in the log and let the files after it report, using the node --test flags exactly as the Linux CI
 // Tests line has them. On main's line both were silent (only '✔ ok a' after 30 s).
-test('a hung test file names itself in the log and the files after it still report (per-file limit)', { timeout: 60000 }, async (t) => {
+test('a hung test file names itself in the log and the files after it still report (per-file limit)', { timeout: 60000, skip: process.platform !== 'linux' && 'the per-file limit is on the Linux CI Tests line' }, async (t) => {
   const yaml = await readFile(path.join(root, '.github', 'workflows', 'test.yaml'), 'utf8');
   const line = yaml.split('\n').find((text) => text.includes('scripts/with-tmp.mjs node --test'));
   assert.ok(line, 'the Linux Tests line in test.yaml');
