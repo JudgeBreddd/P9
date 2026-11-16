@@ -107,7 +107,7 @@ jobs:
           set -o pipefail
           # O71: a test with no timeout of its own fails after 10 min with its name, and a file whose tests are done exits
           # even if a child it started still holds a handle (two jobs hung 29 min with no name, #108 and #111).
-          # The hang row (0.1.9 phase 4.5): test/file-limit.mjs names a file still running after 600 s and kills it, which
+          # The hang row (0.1.9 phase 4.5): test/file-limit.mjs names a file still running after 1200 s and kills it, which
           # --test-timeout cannot when the file's event loop is blocked or it hangs outside a test (test/file-limit.test.mjs).
           # The job log gets lines cut at 2,000 characters; tests.log (the artifact) keeps them whole. #115's linux (6) job
           # log stopped at the first P9_SHOT line (a 69 KB picture), so its failing test and summary never showed there.
