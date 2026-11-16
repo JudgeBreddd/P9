@@ -1080,10 +1080,12 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   const foreign = await b.tool('send_chat', { chat: made.chat, text: 'foreign', replaces: fixed.held });
   assert.equal(foreign.replaced, null, 'a foreign sender replaced a waiting message: ' + JSON.stringify(foreign));
   assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === fixed.held).length, 0, 'a foreign sender removed a waiting message');
+  // The queue goes out as the next prompt after the gate turn (as the other queue tests read it): wait for that prompt.
+  const sentPrompts = () => (fs.existsSync(path.join(folder, 'prompts.log')) ? fs.readFileSync(path.join(folder, 'prompts.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.stringify(JSON.parse(line))) : []);
   fs.writeFileSync(path.join(folder, 'go'), '');
-  await until(instance, (event) => event.conversation === made.chat && event.type === 'user' && event.data.text === 'corrected wording');
-  const sent = (await events(instance, made.chat)).filter((e) => e.type === 'user').map((e) => e.data.text);
-  assert.ok(!sent.includes('old wording'), 'the replaced wording was sent: ' + JSON.stringify(sent));
+  for (let i = 0; !sentPrompts().some((line) => line.includes('corrected wording')) && i < 200; i += 1) await pause(100);
+  assert.ok(sentPrompts().some((line) => line.includes('corrected wording')), 'the corrected wording was not sent with the queue');
+  assert.ok(!sentPrompts().some((line) => line.includes('old wording')), 'the replaced wording was sent: ' + JSON.stringify(sentPrompts()));
   // The corrected wording is already delivered: its ID replaces nothing now.
   const late = await a.tool('send_chat', { chat: made.chat, text: 'later', replaces: fixed.held });
   assert.equal(late.replaced, null, 'a delivered ID replaced something: ' + JSON.stringify(late));
