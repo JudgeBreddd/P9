@@ -291,7 +291,9 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
 // O109 (Tyler, 2026-11-15: "I cant see what the lead is doing or find the composer"): a busy lead chat, with a worker (the
 // sprint card), the worker's report pinned and 30 messages waiting for its turn, keeps its text box on screen and usable
 // at his window's size. Then the turn ends: the waiting messages go, and every one leaves the strip.
-test('O109: 30 queued messages, a sprint card and a worker report leave the composer on screen; delivered ones leave the strip', { timeout: 150000 }, async (t) => {
+// The O109 setup: a lead with one worker whose long report is pinned, working through a 66 s turn, with `queued` messages
+// waiting for its end; the window at Tyler's size with the lead open.
+async function busyLead(t, queued) {
   const { writeFileSync } = await import('node:fs');
   const { execFileSync } = await import('node:child_process');
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
@@ -329,13 +331,17 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
     const last = (await events(instance, parent)).slice(-20).map((e) => e.type + ':' + JSON.stringify(e.data).slice(0, 80));
     assert.fail(error.message + ' | prompt answered ' + JSON.stringify(started) + ' | state ' + await state() + ' | last events ' + last.join(' || '));
   }
-  for (let i = 1; i <= 30; i++) assert.equal((await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'Queued note ' + i + ': ' + 'x'.repeat(80), when: 'queue' })).when, 'queue');
+  for (let i = 1; i <= queued; i++) assert.equal((await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'Queued note ' + i + ': ' + 'x'.repeat(80), when: 'queue' })).when, 'queue');
   const { app, page, errors } = await launch(t, instance);
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
   await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
   await page.locator(`#navList .row[data-chat="${parent}"]`).click();
   const pane = page.locator(`.pane[data-id="${parent}"]`);
   await pane.locator(`.card-pin[data-card="ready-${made.chat}"]`).waitFor({ timeout: 20000 });
+  return { instance, parent, made, a, kid, head, app, page, errors, pane, weakest };
+}
+test('O109: 30 queued messages, a sprint card and a worker report leave the composer on screen; delivered ones leave the strip', { timeout: 150000 }, async (t) => {
+  const { parent, page, errors, pane } = await busyLead(t, 30);
   // ">= 30": a worker's late note may wait with them.
   await until(async () => await pane.locator('[data-held]').count() >= 30, 'all 30 waiting messages drawn');
   const waiting = await pane.locator('[data-held]').count();
@@ -374,4 +380,36 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   assert.equal(await pane.locator('.queue').count(), 0);
   assert.deepEqual(errors, []);
   console.log('PASS O109: composer on screen and focusable with 30 queued, a sprint card and a worker report at 1568x1348; all 30 left the strip when delivered');
+});
+
+// O109 (3) and (4): the worker report above the box can be closed; it goes into the chat (where it scrolls with it), stays
+// closed after a reload, and the next report shows above the box again. While the lead works, the line under the chat
+// names its latest step, so what it is doing shows without scrolling.
+test('O109: a worker report closes into the chat and only a new one comes back; a long turn shows its latest step', { timeout: 150000 }, async (t) => {
+  const { parent, made, a, kid, head, page, errors, pane } = await busyLead(t, 0);
+  const card = pane.locator(`.card-pin[data-card="ready-${made.chat}"]`), old = pane.locator(`.hist [data-report="ready-${made.chat}"]`);
+  const step = pane.locator('.working .step');
+  await until(async () => await step.count() === 1 && /^Run tool \d+$/.test(await step.innerText()), 'the working line names the latest step');
+  const box = await step.evaluate((el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight }; });
+  assert.ok(box.top >= 0 && box.bottom <= box.height, 'the step is on screen: ' + JSON.stringify(box));
+  console.log('O109 step ' + await step.innerText() + ' ' + JSON.stringify(box));
+  await shot(page, 'o109-step');
+  await card.locator('[data-card-close]').click({ timeout: 5000 });
+  await until(async () => await card.count() === 0, 'the report closed');
+  await until(async () => await old.count() === 1 && (await old.innerText()).includes('Line 12 of a long weakest part'), 'the closed report in the chat');
+  await shot(page, 'o109-closed');
+  await page.reload();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await old.waitFor({ timeout: 20000 });
+  assert.equal(await card.count(), 0, 'still closed after a reload');
+  await shot(page, 'o109-closed-reloaded');
+  await a.tool('send_chat', { chat: made.chat, text: 'late' }); // ready needs the worker mid-turn
+  const again = await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest: 'A second report: something new' });
+  assert.ok(again.ready, JSON.stringify(again));
+  await until(async () => await card.count() === 1 && (await card.innerText()).includes('A second report: something new'), 'the new report pinned above the box');
+  assert.ok(await old.count() >= 1, 'the first report still in the chat');
+  await shot(page, 'o109-new-report');
+  assert.deepEqual(errors, []);
+  console.log('PASS O109 report+step: step named on screen; report closed into the chat, stayed closed after a reload, a new one pinned again');
 });
