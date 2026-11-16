@@ -150,6 +150,28 @@ test('CP7: Esc on a turn the daemon has no handle on leaves the chat idle, with 
   console.log('PASS CP7: Esc with no daemon turn left the chat idle and showed no error');
 });
 
+// O-702 (Tyler, 2026-11-15: desktop said Steer and Queue, the phone Steer and Interrupt): the desktop chip shows the
+// phone card's three words in its order, each with the phone's title, and its Interrupt stops the turn and sends the text
+// as the next prompt, as Ctrl Enter does. The phone card is read from phone.astro, so a word changed on one screen fails here.
+test('CP11: the chip shows Steer, Queue, Interrupt as the phone does; Interrupt stops the turn and sends', { timeout: 120000 }, async (t) => {
+  const { instance, id, pane, type, agentSaid } = await setup(t, 'cp11', { files: ['slow-tools'] });
+  const card = (await readFile(path.join(root, 'apps/web/src/pages/phone.astro'), 'utf8')).match(/<div id="midTurn"[^]*?<\/div>/)[0];
+  const phone = [...card.matchAll(/<button [^>]*data-when="(\w+)" title="([^"]+)">(\w+)<\/button>/g)].map(([, when, title, word]) => [word, when, title]);
+  await pane.locator('.composer textarea').click(); await type('tools 1'); await pane.page().keyboard.press('Enter');
+  await started(instance, id, 'tool-1');
+  const chip = pane.locator('.hint [data-when]');
+  await chip.first().waitFor({ timeout: 5000 });
+  const desktop = await chip.evaluateAll((all) => all.map((b) => [b.firstChild.textContent.trim(), b.dataset.when, b.title]));
+  assert.equal(phone.length, 3, 'the phone card has three buttons');
+  assert.deepEqual(desktop, phone, 'same words, order and titles on both screens');
+  await type('now');
+  await pane.locator('.hint [data-when="now"]').click();
+  await until(() => agentSaid('echo:now'), 'Interrupt sent the text as the next prompt', 25000);
+  assert.deepEqual([await users(instance, id), await steers(instance)], [['hello', 'tools 1', 'now'], '']);
+  assert.ok((await said(instance, id, 'update')).every((e) => !(e.data.toolCallId === 'tool-1' && e.data.status === 'completed')), 'tool-1 never finished: the turn was stopped');
+  console.log('PASS CP11: the desktop chip matched the phone card, and Interrupt stopped the turn and sent the text');
+});
+
 // CP2, CP4, CP5: each check gathers what it saw into one object, so a failure shows every part that broke.
 const height = (l) => l.evaluate((n) => n.getBoundingClientRect().height);
 test('CP2: the box grows with its text to twice its height, then scrolls', { timeout: 90000 }, async (t) => {

@@ -682,7 +682,8 @@ function paint(root, ss, only) {
     // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
-    // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
+    // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
+    // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
     const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
@@ -694,7 +695,7 @@ function paint(root, ss, only) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(e.ctrlKey || e.metaKey); }
     };
     p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
-    p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
+    p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(b.dataset.when === 'now', b.dataset.when));
     p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
     p.querySelectorAll('[data-sprint-fold]').forEach(b => b.onclick = () => { SPRINT.folded.set(s.id, b.getAttribute('aria-expanded') === 'true'); renderChats(); });
     p.querySelectorAll('[data-sprint-files]').forEach(b => b.onclick = () => outer.openProject?.(s.project, s.id));
