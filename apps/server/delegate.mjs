@@ -830,6 +830,8 @@ export function createDelegate({ chat, allowed, usage }) {
       if (!chat.askable(args.chat)) return { error: 'not-askable', detail: 'The user has not opened that chat to questions (its tab menu, Open to questions). Work it out yourself or ask the user.' };
       const it = chat.info(args.chat); // no ask before waking a stopped or long-idle helper: the user opening it to questions is the yes
       if (stateOf(it) === 'failed') return { error: 'chat-not-askable', reason: it.state };
+      // S13: a paused sprint's worker takes no question (chat.mjs refuses it too); said now, not as an answer that never came.
+      if (chat.paused(it?.parent)) return { error: 'sprint-paused', detail: 'That chat\'s sprint is paused. Ask again once the user resumes it, or work it out yourself.' };
       const asked = chat.ask(args.chat, args.text, caller, () => beside()), mine = open = { chat: args.chat, waits: 0 };
       mine.dropped = new Promise((resolve) => { mine.drop = resolve; });
       // Sending can take as long as starting a stopped helper, so the call does not wait for it (timeoutMs: 0 returns at
