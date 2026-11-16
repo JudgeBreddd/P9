@@ -755,12 +755,23 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
     const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
     globalThis.presses = 0; globalThis.letGo = null;
     ipcMain.handle('p9:chat', async (e, action, ...rest) => {
+      if (action === 'sprintFile' && globalThis.saves) await new Promise((go) => globalThis.saves.push(go));
       if (action === 'startSprint' && ++globalThis.presses === 1) await new Promise((go) => { globalThis.letGo = go; });
       const r = await h(e, action, ...rest); if (action === 'startSprint') (globalThis.answers ||= []).push(JSON.stringify(r).slice(0, 600)); return r;
     });
   });
+  // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
+  await section.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await app.evaluate(() => { globalThis.saves = []; });
+  const box = section.locator('[data-sp-box]'); await box.fill((await box.inputValue()) + '\nApproved as edited.\n');
   await start.click();
+  await until(() => app.evaluate(() => globalThis.saves.length > 0), 'the draft\'s save held');
+  assert.equal(await start.isDisabled(), true, 'the button is on while its draft saves');
+  await start.click({ force: true }); await page.waitForTimeout(300);
+  assert.equal(await app.evaluate(() => globalThis.presses), 0, 'a press went out before its draft saved');
+  await app.evaluate(() => { const held = globalThis.saves; globalThis.saves = null; held.forEach((go) => go()); });
   await until(() => app.evaluate(() => !!globalThis.letGo), 'the press held');
+  assert.match(await readFile(path.join(folder, 'sprint.md'), 'utf8'), /Approved as edited\.\n$/, 'the press started before its draft was on disk');
   assert.equal(await start.isDisabled(), true, 'the button is on while its press is out');
   assert.equal((await start.textContent()).trim(), 'Starting…');
   await start.click({ force: true });

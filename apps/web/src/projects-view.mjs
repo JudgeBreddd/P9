@@ -271,8 +271,10 @@ export function installProjects(o, api) {
     if (k === 'spfile') { clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); } const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return fillBox(); }
     // An open file's draft is saved first: the press approves the plan as it is on disk. The page is read again after, in
     // place (the user may be elsewhere by then: nothing is opened for them).
-    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return; clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); }
-      starting.add(lead); pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
+    // The press is out from the click, its draft's save too: a second press while that save is held sends nothing.
+    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return; starting.add(lead); clearTimeout(saveT); renderPage(); fillBox(false);
+      if (!await saveSprint().catch(() => false)) { starting.delete(lead); renderPage(); return fillBox(); }
+      pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
       const r = await call('startSprint', { sprint: lead }, { quiet: true }).finally(() => starting.delete(lead));
       startSaid.set(lead, startText(r));
       const again = cur?.id === id && await call('project', { id }, { quiet: true });
