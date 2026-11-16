@@ -179,10 +179,12 @@ test('CP12: at the narrowest split pane, mid-turn, Steer, Queue, Interrupt and C
   const { app, instance, id, page, pane, type, send, agentSaid } = await setup(t, 'cp12', { files: ['slow-tools'] });
   const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await page.locator('#nav .row[data-chat="' + second + '"]').waitFor({ timeout: 10000 });
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(760, 600); });
-  await page.waitForFunction(() => innerWidth <= 800, null, { timeout: 5000 });
+  const where = await pane.evaluate((p) => ({ parent: p.parentElement?.id, split: !!p.querySelector('[data-tool=split]') }));
+  assert.deepEqual(where, { parent: 'chats', split: true }, 'the chat opened in Chat Focus with its Split tool');
   await pane.locator('[data-tool=split]').click({ timeout: 5000 });
   await page.locator('#chats[data-split="true"] .pane').nth(1).waitFor({ timeout: 10000 });
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(760, 600); });
+  await page.waitForFunction(() => innerWidth <= 800, null, { timeout: 5000 });
   await page.evaluate(() => document.querySelector('#chats').style.setProperty('--split-l', '280px'));
   await send('tools 1');
   await started(instance, id, 'tool-1');
