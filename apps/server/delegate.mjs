@@ -737,7 +737,7 @@ export function createDelegate({ chat, allowed }) {
   // O125 point 2: a worker whose end line says nothing for its parent updates its own status (sprint state endNote) and
   // sends nothing. Otherwise a note that waits is the newest one from that worker: a newer one replaces it by its ID.
   // ponytail: "nothing for you" is matched in the end line itself; a worker that words it otherwise still sends its note.
-  const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|your side)\b/i;
+  const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|the parent|your side)\b/i;
   const waitingNote = new Map(); // worker chat -> held ID of its note still waiting for its parent's turn to end
   chat.settled((id, ok) => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
