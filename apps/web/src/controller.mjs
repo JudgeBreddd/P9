@@ -1064,7 +1064,7 @@ function wizRender() {
       : row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found')) + (s.tmux ? '' : fail('tmux-not-found'));
   } else if (key === 'you') {
     title = 'You';
-    body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">Cards waiting on you say "needs" and this name. Empty: "needs you".</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
+    body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">Cards waiting on you put this name after "needs". Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
       // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
       + row('Pets', 'Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.', '', btn('pets', 'Open Settings → Pets'));
   } else {

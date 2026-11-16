@@ -57,7 +57,7 @@ export { FILE_PROTECTION_RISK }; // the warning's words, in protocol so the phon
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
 // Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
 const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
-// name: what cards waiting on the user call them ("needs <name>"; '' says "needs you").
+// name: what cards waiting on the user call them ("needs <name>"; '' leaves the name out).
 // xfer: Send files' limits (apps/desktop/xfer.mjs), each a whole number from 1 to its ceiling.
 const XFER_DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(XFER_LIMITS).map(([key, limit]) => [key, limit.default])));
 const checkXfer = x => exactly(x, 'fileMiB,files,sendGiB') && Object.entries(XFER_LIMITS).every(([key, limit]) => Number.isInteger(x[key]) && x[key] >= 1 && x[key] <= limit.max);
