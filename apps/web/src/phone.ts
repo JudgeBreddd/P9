@@ -658,12 +658,21 @@ function render() {
   const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
-  chips.hidden = !plan.length && !cards;
-  chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (cards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button>` : '');
-  chatBar(picked, digest().get(picked)?.run ?? 'idle');
+  // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
+  pinSig = cards ? JSON.stringify([...strip.cards!.values()]) : '';
+  const showCards = cards > 0 && pinSig !== localStorage.getItem('p9-pins-closed:' + picked);
+  chips.hidden = !plan.length && !showCards;
+  chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (showCards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button><button type="button" class="chip close" data-chip-close aria-label="Close the pinned cards until a new one comes">×</button>` : '');
+  const run = digest().get(picked)?.run ?? 'idle';
+  chatBar(picked, run);
+  // O109: while a turn runs, its latest step stays in view over the box, wherever the chat is scrolled.
+  const step = run === 'idle' ? undefined : blocks.findLast((block) => block.kind === 'tool'), nowStep = one<HTMLElement>('#nowStep');
+  nowStep.hidden = !step || !['pending', 'in_progress'].includes(String(step.status));
+  nowStep.textContent = step?.text ?? '';
   renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
 // The same empty-only swap as the desktop: the daemon refuses deletion if a message raced the picker.
+let pinSig = ''; // O109: the open chat's pinned cards as last drawn
 let pickChatAt = '', pickChatWhole = false, pickChatWorkspace = '';
 async function showChatFolders(at = '') {
   const id = openId, info = phoneFolders.get(id); if (!info) return;
@@ -734,7 +743,11 @@ new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).obs
 new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(one('#events'));
 one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
 one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-one<HTMLElement>('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
+one<HTMLElement>('#chips').onclick = (event) => {
+  const target = event.target as Element;
+  if (target.closest('[data-chip-close]')) { try { localStorage.setItem('p9-pins-closed:' + openId, pinSig); } catch {} render(); return; }
+  if (target.closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML);
+};
 one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
 // L3, P3: a turn that runs can be stopped from the top bar: a labelled Stop beside its working spinner (the composer's send button turns into Stop
 // only when the box is empty and nothing is queued). The route is the composer's and the desktop's: POST /chat/:id/cancel.
@@ -917,12 +930,18 @@ function label() {
   one<HTMLElement>('#midTurn').hidden = !busy || empty;
   one('#midTurnLabel').textContent = (provider(id) === 'codex' ? 'Codex' : 'Claude') + ' is working';
 }
+// O109: the waiting messages are one line, "N queued", that opens to the list with a Take back on each; 30 of them used
+// to be 30 full rows that pushed the box off the screen. Open or closed is kept across redraws (each event redraws).
+let queueOpen = false, queueSig = '';
 function renderQueue() {
-  const id = openId, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
-  box.hidden = !items.length && !held.length;
-  box.innerHTML = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
+  const id = openId, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued'), count = items.length + held.length;
+  box.hidden = !count;
+  const rows = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
     + items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
+  const html = `<details${queueOpen ? ' open' : ''}><summary>${count} queued ▸</summary><div class="list">${rows}</div></details>`;
+  if (html !== queueSig) { queueSig = html; box.innerHTML = html; } // unchanged, the open list keeps its scroll
 }
+one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
 let draining = false;
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
 async function drain() {

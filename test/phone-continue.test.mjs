@@ -132,13 +132,13 @@ for (const agent of ['claude', 'codex']) {
       if (prompts.length === 1) { await route.fetch({ url: route.request().url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...route.request().headers(), host: server.host } }); await route.abort(); } else await route.continue();
     });
     await page.fill('#prompt', 'typed offline'); await page.click('#composer button');
-    await page.waitForSelector('#queued:not([hidden]) :text("typed offline")');
+    await page.waitForSelector('#queued:not([hidden]) :text("typed offline")', { state: 'attached' });
     assert.equal(await page.inputValue('#prompt'), '');
     assert.deepEqual((await stored()).map((item) => item.text), ['typed offline']);
     assert.equal(prompts.length, 0, 'nothing is sent while offline');
     // The queue survives a reload.
     await page.reload();
-    await page.waitForSelector('#queued:not([hidden]) :text("typed offline")');
+    await page.waitForSelector('#queued:not([hidden]) :text("typed offline")', { state: 'attached' });
 
     // Back online: the first send is lost after the daemon took it; the retry carries the same operation ID, so it is not sent twice.
     await setOnline(page, true);
@@ -159,8 +159,9 @@ for (const agent of ['claude', 'codex']) {
     await page.waitForSelector('#events button[data-option="allow"]', { timeout: 10000 });
     assert.equal(await page.locator('#composer button').textContent(), 'Queue message');
     await page.fill('#prompt', 'after the approval'); await page.click('#composer button');
-    await page.waitForSelector('#queued:not([hidden]) :text("after the approval")');
+    await page.waitForSelector('#queued:not([hidden]) :text("after the approval")', { state: 'attached' });
     assert.equal(await page.locator('#events button[data-option="allow"]').count(), 1, 'the approval is still open');
+    await page.evaluate(() => { const strip = document.querySelector('#queued details'); if (!strip.open) strip.querySelector('summary').click(); }); // O109: the queue is one folded line until opened
     await page.locator('#queued').scrollIntoViewIfNeeded();
     await shot(page, `phone-queue-${agent}`);
     // Taking one back puts its text in the box.
@@ -168,7 +169,7 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(await page.inputValue('#prompt'), 'after the approval');
     assert.deepEqual(await stored(), []);
     await page.click('#composer button');
-    await page.waitForSelector('#queued:not([hidden]) :text("after the approval")');
+    await page.waitForSelector('#queued:not([hidden]) :text("after the approval")', { state: 'attached' });
     await page.click('#events button[data-option="allow"]');
     await page.waitForSelector('#events article:has-text("permission:allow")', { timeout: 10000 }); // allowed, not declined
     await page.waitForSelector('#events article:has-text("echo:after the approval")', { timeout: 15000 });
