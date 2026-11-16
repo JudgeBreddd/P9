@@ -124,6 +124,28 @@ test('O62: the message goes to the chat on screen, whatever the chat list says',
   console.log('PASS O62: sent to the open chat with the list select empty');
 });
 
+test('O21: a tap that sends nothing says why under the box', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  seed(server, A, 'Chat A', turn('hello a'));
+  const { page } = await phone(t, server);
+  const attempts = await prompts(page, ['hang']);
+  await open(page, server, A);
+  const why = () => page.evaluate(() => { const line = document.querySelector('#composerNote'); return line.hidden ? '' : line.textContent; });
+  await page.fill('#prompt', '   ');
+  await page.click('#send');
+  await page.waitForTimeout(300);
+  assert.equal(await why(), 'Nothing to send: the box is empty.', 'an empty send said nothing');
+  // The first send never answers (up to SEND_DEADLINE); a second tap meanwhile must say it is still sending.
+  await page.fill('#prompt', 'first');
+  await page.click('#send');
+  for (let i = 0; i < 100 && !attempts.length; i++) await page.waitForTimeout(100);
+  await page.click('#send');
+  await page.waitForTimeout(300);
+  assert.equal(await why(), 'Still sending your last message. Wait for it to finish.', 'a tap during a send said nothing');
+  assert.equal(attempts.length, 1, 'the second tap sent again');
+  console.log('PASS O21: empty send and a tap during a send each say why');
+});
+
 test('O64: an unsent pick survives the agent reporting its settings, and is sent', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server, A, 'Chat A', [settings(), ...turn('hello a')]);

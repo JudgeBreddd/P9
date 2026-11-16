@@ -1022,8 +1022,9 @@ async function submitFromBox(event: Event) {
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   const text = (art ?? input.value).trim();
-  if (!id || (!text && !images.length)) return false;
-  one<HTMLElement>('#slash').hidden = true;
+  // O21: no silent exit; a tap that sends nothing says why under the box.
+  if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
+  note(); one<HTMLElement>('#slash').hidden = true; // an earlier why is not about this send
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
@@ -1115,7 +1116,9 @@ document.addEventListener('change', (event) => {
 const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 let submitting = false;
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
-  if (submitting) { event.preventDefault(); return false; }
+  // O21: a tap while the last send is on its way did nothing and said nothing (a send can wait up to SEND_DEADLINE). A note
+  // already there ("Stopping this turn, then sending.") is kept; it says more.
+  if (submitting) { event.preventDefault(); if (one<HTMLElement>('#composerNote').hidden) note('Still sending your last message. Wait for it to finish.'); return false; }
   submitting = true;
   try { return await submitFromBox(event); }
   catch (error) {
