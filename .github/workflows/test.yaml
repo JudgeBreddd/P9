@@ -58,7 +58,7 @@ jobs:
       matrix:
         # files (dispatch) runs just those files, on one runner.
         shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6]') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       GITLEAKS: 8.30.1

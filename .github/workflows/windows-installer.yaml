@@ -959,7 +959,7 @@ jobs:
   # goes away when the app quits: AU4 copies it to ~/.local/share/p9/daemon first.
   appimage:
     if: inputs.only != 'rollback'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-appimage
       cancel-in-progress: false
@@ -1072,7 +1072,7 @@ jobs:
   feed:
     needs: [installer, appimage]
     if: inputs.tag != '' || github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
