@@ -4,6 +4,8 @@
 // file before it and named nothing for up to 29 minutes. A reporter runs in the parent runner, which is not blocked: a
 // file still running after P9_FILE_LIMIT_S seconds is named here, and on Linux its process tree is killed so the runner
 // fails it by name and the files after it report. 600 s: the longest whole Linux shard in CI ran 612 s, under the 30 min job.
+// A failed test is also written here the moment it fails (dogfood 3.5 red, 0.1.9 phase 4.5): spec prints a failure's
+// assertion only in its end-of-run summary, so a runner that ended early (CI 43790793989 shard 4) left a bare ✖ and no cause.
 // ponytail: a grandchild that left the tree (setsid then reparented) is not killed; --test-force-exit still ends the run.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +34,11 @@ function killTree(file) {
 export default async function* fileLimit(source) {
   const timers = new Map();
   for await (const event of source) {
+    if (event.type === 'test:fail' && event.data.details?.error?.failureType !== 'subtestsFailed') {
+      const { name, file: where, line, details } = event.data, error = details?.error?.cause ?? details?.error;
+      const why = String(error?.stack || error?.message || error).split('\n').slice(0, 8).join('\n  ');
+      process.stderr.write(`✖ failed now: ${name} (${where ? path.relative(process.cwd(), where) : '?'}:${line ?? '?'})\n  ${why}\n`);
+    }
     const file = fileOf(event.data);
     if (!file) continue;
     if (event.type === 'test:dequeue' && !timers.has(file)) {
