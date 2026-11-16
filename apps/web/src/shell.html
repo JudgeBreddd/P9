@@ -1,8 +1,8 @@
 
 <div class="fx-ambient"><div class="fx-horizon"></div></div>
-<div class="shell" data-focus="chat">
+<div class="shell" data-focus="chat" data-pending>
   <header class="topbar">
-    <button class="brand" id="brandBtn" title="Home: the landing page"><img class="p9mark" src="/p9-mark.png" alt="">Event Horizon</button>
+    <button class="brand" id="brandBtn" title="Chat Focus"><img class="p9mark" src="/p9-mark.png" alt="">Event Horizon</button>
     <span class="focus-title" id="focusTitle"></span>
     <button data-slot="button" data-variant="outline" data-size="sm" id="spaceBtn" data-in="mission" aria-haspopup="menu" aria-expanded="false" hidden></button>
     <div class="pop" id="spacePop" role="menu" aria-label="Spaces" hidden style="top:44px;min-width:200px"></div>
@@ -11,7 +11,7 @@
     <div class="spacer"></div>
     <button data-slot="button" data-variant="outline" data-size="sm" id="serverBadge" hidden></button>
     <div class="pop" id="serverPop" role="menu" aria-label="Machines" hidden style="top:44px;min-width:260px"></div>
-    <span class="agent-ind" id="agentInd" role="status" hidden><span class="glyph" id="indGlyph" aria-hidden="true"></span><span id="indText"></span><span id="indPets"></span></span>
+    <span class="agent-ind" id="agentInd" role="status" hidden><span class="glyph" id="indGlyph" aria-hidden="true"></span><span id="indText"></span></span>
     <button data-slot="button" data-variant="ghost" data-size="icon" id="setBtn" title="Settings"></button>
     <button data-slot="button" data-variant="ghost" id="amBtn" title="Anymouse: a note to P9's makers (an idea, a bug or a gripe)">Anymouse</button>
     <button data-slot="button" data-variant="ghost" data-size="icon" id="themeBtn" title="Look: the theme of every focus mode" aria-expanded="false"></button>
@@ -87,41 +87,6 @@
   <pre id="connLog" class="conn-log" hidden></pre>
   <button data-slot="button" data-variant="outline" data-size="sm" id="connLocal">Use this computer instead</button></dialog>
 
-<!-- Landing page (Builder, plan.md "Landing page"): the black hole intro, then a greeting, the focus modes and the pets. -->
-<dialog id="land" class="land" tabindex="-1" aria-labelledby="landHi" data-stage="intro" data-pending>
-  <canvas id="landSky" aria-hidden="true"></canvas>
-  <!-- Landing v5 (components/landing-v5): the rendered loop over its still poster. The controller sets the sources and
-       picks this or the canvas above (LAND_BG). -->
-  <div class="p9-cosmos" aria-hidden="true" hidden><div class="p9-cosmos__scene">
-    <img class="p9-cosmos__poster" width="1536" height="1024" alt="" decoding="async">
-    <video class="p9-cosmos__video" muted loop playsinline preload="metadata"></video></div></div>
-  <div class="land-brand" aria-hidden="true">
-    <svg class="land-mark" viewBox="0 0 320 150">
-      <defs>
-        <linearGradient id="landChrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbfdff"/><stop offset=".42" stop-color="#c4cfdd"/><stop offset=".5" stop-color="#6d7a8c"/><stop offset=".62" stop-color="#e8eef6"/><stop offset="1" stop-color="#9aa6b6"/></linearGradient>
-        <linearGradient id="landNine" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#bcd4ff"/><stop offset=".45" stop-color="#6f8dff"/><stop offset="1" stop-color="#8b4dff"/></linearGradient>
-        <linearGradient id="landOrbit" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8fb4ff" stop-opacity="0"/><stop offset=".3" stop-color="#9fc0ff"/><stop offset=".55" stop-color="#ffe2a8"/><stop offset=".8" stop-color="#a98bff"/><stop offset="1" stop-color="#a98bff" stop-opacity="0"/></linearGradient>
-      </defs>
-      <g transform="rotate(-9 160 80)"><path class="orbit back" pathLength="1" d="M14 80a146 30 0 0 1 292 0"/></g>
-      <text x="160" y="118" text-anchor="middle"><tspan fill="url(#landChrome)">P</tspan><tspan fill="url(#landNine)">9</tspan></text>
-      <g transform="rotate(-9 160 80)"><path class="orbit front" pathLength="1" d="M306 80a146 30 0 0 1-292 0"/></g>
-    </svg>
-    <div class="land-word">Event Horizon</div>
-    <p class="land-tag">One workspace. Every agent. Your focus.</p>
-  </div>
-  <div class="land-main">
-    <h1 id="landHi"></h1>
-    <p id="landSub" role="status"></p>
-    <nav class="land-bar" aria-label="Focus modes">
-      <button data-land="chat"><span class="ic"></span><span class="tx"><strong>Chat</strong><small>Talk to your agents</small></span><kbd>1</kbd></button>
-      <button data-land="dev"><span class="ic"></span><span class="tx"><strong>Dev</strong><small>Code with them</small></span><kbd>2</kbd></button>
-      <button data-land="mission"><span class="ic"></span><span class="tx"><strong>Mission Control</strong><small>Run your systems</small></span><kbd>3</kbd></button>
-    </nav>
-    <div class="land-pets" id="landPets"></div>
-  </div>
-  <p class="land-skip" aria-hidden="true">press <kbd><svg viewBox="0 0 24 12"><path d="M3 3v5h18V3"/></svg></kbd> to skip</p>
-  <button data-slot="button" data-variant="ghost" data-size="icon" class="land-set" id="landSet" title="Settings"></button>
-</dialog>
 <dialog id="folderDlg" aria-labelledby="folderT"><form method="dialog">
   <div class="dlg-head"><div><h2 id="folderT">Choose a folder on the server</h2></div></div>
   <div class="folder-bar"><button type="button" data-slot="button" data-variant="outline" data-size="sm" id="folderUp" title="Up one folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Up</button><input data-slot="input" id="folderPath" aria-label="Folder path: type or paste one, Enter goes there" spellcheck="false" autocomplete="off"></div>

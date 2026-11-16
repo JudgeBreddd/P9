@@ -14,10 +14,6 @@ import { tileHtml, tileLevel, linkHtml, tileAnswer, quickNotePath, quickNoteHtml
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
-import { mountLandingVideo } from './components/landing-v5/playback.mjs';
-import landPoster from './components/landing-v5/black-hole.webp?url';
-import landLoop from './components/landing-v5/rendered/horizon-loop.mp4?url';
-import './components/landing-v5/background.css';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
@@ -29,15 +25,15 @@ import { installPanel } from './panel.mjs';
 import { installSettings } from './settings-view.mjs';
 import { installCards } from './cards-modal.mjs';
 import { installFiles } from './files-view.mjs';
-import { installLanding } from './landing-move.mjs';
+import { installMove } from './move-fx.mjs';
 
 // The admin password window (shell-start.ts, row I2), for row 61 on a remote.
 let adminAsk = null;
 export function mountShell({ askAdmin } = {}) {
   // outer: mountShell's names that the modules split out of it (F9) read and set; getters and setters keep them live.
   const outer = { get $() { return $; }, get CTP() { return CTP; }, get FRAME() { return FRAME; }, get FX() { return FX; }, get IND() { return IND; },
-    get LAND() { return LAND; }, get LAND_BG() { return LAND_BG; }, get M() { return M; }, get PET_ROLES() { return PET_ROLES; }, get S() { return S; },
-    get SKY_MAIN() { return SKY_MAIN; }, get SP() { return SP; }, get WIZ_ERR() { return WIZ_ERR; }, get XFER_SETTINGS() { return XFER_SETTINGS; },
+    get M() { return M; }, get PET_ROLES() { return PET_ROLES; }, get S() { return S; },
+    get SP() { return SP; }, get WIZ_ERR() { return WIZ_ERR; }, get XFER_SETTINGS() { return XFER_SETTINGS; },
     get addHalos() { return addHalos; }, get agentLock() { return agentLock; }, set agentLock(v) { agentLock = v; }, get attrs() { return attrs; },
     get bottoms() { return bottoms; }, get busy() { return busy; }, get cardList() { return cardList; }, get chatImgs() { return chatImgs; },
     get chatOn() { return chatOn; }, get closeModal() { return closeModal; }, get closedChats() { return closedChats; },
@@ -47,7 +43,7 @@ export function mountShell({ askAdmin } = {}) {
     get focusNames() { return focusNames; }, get focusOn() { return focusOn; }, get fx() { return fx; },
     get fxFiles() { return fxFiles; }, set fxFiles(v) { fxFiles = v; }, get fxSky() { return fxSky; },
     get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
-    get land() { return land; }, get landOn() { return landOn; }, get landVideo() { return landVideo; },
+    
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
     get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
     get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get profiles() { return profiles; }, get loadProfiles() { return loadProfiles; }, get defaultEffort() { return defaultEffort; },
@@ -93,7 +89,7 @@ export function mountShell({ askAdmin } = {}) {
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
-  const { NO_SKY, lastFocus, landingStart, openLanding, landMain, leaveLanding, leave, onMove, moveReloaded, SERVER_STATE } = installLanding(outer);
+  const { leave, onMove, moveReloaded, SERVER_STATE } = installMove(outer);
   adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
@@ -288,12 +284,11 @@ function cardList(all) {
 }
 /* ---------- agent-working indicator and pets (phase 18; Builder's pet requests, 2026-10-17) ---------- */
 // The top bar says when agents work or wait on you, in every focus, with Claude Code's spinner. Where a focus shows pets
-// (Settings, one set per focus), each active agent's pet takes that text's place (see renderIndicator) and every chat on
-// screen holds its agent's pet (petRows). A chat's pet drags anywhere in it; the spot is kept per focus. A sheet is 8 x 9 frames of
+// (Settings, one set per focus), every chat on screen holds its agent's pet (petRows); pets left the top bar (O123). A chat's pet drags anywhere in it; the spot is kept per focus. A sheet is 8 x 9 frames of
 // 192 x 208: row 0 idle, 3 wave, 4 jump, 6 waiting, 7 running; each row's frame count is read from the sheet.
-const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, top: [], drag: null };
+const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, drag: null };
 const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> { box: [x, y] }, see petHome
-// The 125 ms tick runs only while something on screen moves: a top-bar pet or spinner, a chat's spinner or a chat's pet. With
+// The 125 ms tick runs only while something on screen moves: the top-bar spinner, a chat's spinner or a chat's pet. With
 // no pet installed and no agent working it stops (review 2026-11-03: it ran forever, three sweeps and two rects per pane, eight
 // times a second). Every path that puts a pet or spinner on screen ends in tickPets, which starts it again.
 let petTimer = 0;
@@ -670,14 +665,12 @@ $('#dHide').onclick = toggleTerm;
 // an older version saved are dropped; the look itself is saved on its own, so it still loads.
 try { localStorage.removeItem('p9-focus-looks'); } catch {}
 // All three focus panes stay in the DOM; switching only flips visibility, so nothing re-renders.
-// A pick (rail, keys, CLI, landing) leaves the landing page and is kept as the last focus; `stay` is the app's own switching.
 // U8: the slim Temporary P9 on a remote has no Mission Control (Always on installs the full P9, which has it).
 const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim);
-function setFocus(f, stay = false) {
+function setFocus(f) {
   if (!focusOn(f)) return; // turned off in Settings, or not on this remote
   S.focus = f;
   if (f === 'mission') { refreshMission(); missionLive(); } // F2: renderCards skips it while Mission is out of sight
-  if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
   document.querySelectorAll('[data-focus-btn]').forEach(b => b.setAttribute('aria-pressed', b.dataset.focusBtn === f));
@@ -853,7 +846,6 @@ $('#stopGo').onclick = () => { if (liveChat.on) { S.sessions.filter(s => s.live 
 // The guide pet is Chat's system pet at Settings' largest size, 128 px (Builder, 2026-10-19); without one the bubble is text only. A step whose
 // element is hidden or empty is shown in the middle of the window. Ends back in the focus it started from.
 function walkthrough(i = 0, from = S.focus) {
-  leaveLanding();
   document.querySelector('.walk-at')?.classList.remove('walk-at'); $('#walk')?.remove();
   const step = WALKTHROUGH[i];
   if (!step) return setFocus(from);
@@ -910,7 +902,7 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, termGreeting = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
+let settings = { name: '', zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, termGreeting = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 // ST1/ST2: Settings → Mission Control files, the daemon's settings.json (not this window's settings), so the paths stay
 // editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
@@ -940,65 +932,30 @@ addEventListener('keydown', e => {
   try { settings = window.p9?.getSettings ? await window.p9.getSettings() : JSON.parse(localStorage.getItem('p9-settings')) || settings; } catch {}
   if (!settings.pet?.chat) settings = { ...start, ...settings, pet: start.pet }; // a browser preview may hold an older shape
   applySettings();
-  landingStart();
+  firstStart();
 })();
-setTimeout(landingStart, 3000); // settings never answered: open anyway rather than leave the window dark
+setTimeout(firstStart, 3000); // settings never answered: run it anyway
+// The shell stays hidden until this code has wired it (shell.css, .shell[data-pending]): the page draws it before the
+// shell's code chunk loads, and a button clicked in that gap does nothing. The landing page's data-pending did this before.
+$('.shell').removeAttribute('data-pending');
 
-/* ---------- landing page (Builder, plan.md "Landing page" and _tyler/p9-landing-page.md) ---------- */
-// P9 opens on it: the black hole's intro (2.6 s; only Space skips), then a greeting, the focus modes and the installed pets
-// while the hole turns slowly behind. Any focus pick (a button, 1 2 3, Ctrl 1-3, the CLI) leaves it; Esc goes to the last
-// focus. Settings' "Start in my last focus mode" skips it, and so does a reload of the same window (hot reload).
-// The test runs turn it off (P9_LANDING=off, scripts/with-tmp.mjs): it covers the shell they click.
-const land = $('#land'), landOn = window.p9?.landing !== false, still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-// The one rollback switch (landing v5, approved 2026-10-29): 'video' plays the rendered loop over its poster; 'original'
-// brings back the WebGL sky below. P9_LANDING=original sets it for a run; the default is the video. Send-to-server keeps
-// its own createSky (#moveSky) either way. The phone has its own page and never loads this.
-const LAND_BG = window.p9?.landingBg === 'original' ? 'original' : 'video';
-let landVideo = null;
-if (LAND_BG === 'video') {
-  const cosmos = land.querySelector('.p9-cosmos');
-  cosmos.querySelector('img').src = landPoster;
-  Object.assign(cosmos.querySelector('video'), { poster: landPoster, src: landLoop });
-  cosmos.hidden = false; $('#landSky').hidden = true;
-  // The video is the whole landing: no P9 mark over the hole (Builder, 2026-10-29: "A. remove it", kept 2026-10-31).
-  land.querySelector('.land-mark').remove();
-  // Plays only while the landing is open (its dialog is shown) and the window is not hidden; reduced motion, a blocked
-  // play or a failed load leave the poster (playback.mjs).
-  landVideo = mountLandingVideo(cosmos);
-}
-const sky = LAND_BG === 'video' ? NO_SKY : createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
-const LAND = { started: false, raf: 0, v: { ...SKY_MAIN }, from: null, to: null, t0: 0, ms: 0, drawn: 0, spin: 0 };
-if (!landOn) land.removeAttribute('data-pending');
-land.addEventListener('close', () => {
-  try { sessionStorage.setItem('p9-landed', '1'); } catch {}
-  landVideo?.refresh();
-  land.classList.remove('leaving');
-  cancelAnimationFrame(LAND.raf); LAND.raf = 0;
-  clearTimeout(LAND.intro); clearTimeout(LAND.status);
-  $('#landPets').replaceChildren();
-  // The walkthrough runs once, the first time the landing page closes, starting in Chat and ending in the focus picked
-  // (Builder approved it in _tyler/p9-walkthrough-review.md: "A."; GitHub issue #4 item 2). Ctrl K brings it back.
+/* ---------- start (O122: P9 opens in Chat, or the first view still on if Chat is off; the landing page is gone) ---------- */
+// The walkthrough runs once, on the first start, in Chat and back to the focus it began in, after the setup wizard while a
+// check fails (Builder approved it in _tyler/p9-walkthrough-review.md: "A."; GitHub issue #4 item 2). Ctrl K brings it back.
+// It began when the landing page first closed; now it begins with the window. Test runs turn it off (P9_FIRST_RUN=off,
+// scripts/with-tmp.mjs): its dialogs would cover the shell they click.
+let started = false;
+function firstStart() {
+  if (started) return;
+  started = true;
+  if (window.p9?.firstRun === false) return;
   let walked = true; try { walked = !!localStorage.getItem('p9-walked'); localStorage.setItem('p9-walked', '1'); } catch {}
-  if (!walked) firstRun(); // the setup wizard first, while a check fails
-});
-// Esc on the main stage goes to the last focus; during the intro it does nothing (only Space skips).
-land.addEventListener('cancel', e => { e.preventDefault(); if (land.dataset.stage === 'main') setFocus(lastFocus()); });
-land.addEventListener('keydown', e => {
-  if (e.ctrlKey || e.altKey || e.metaKey) return; // Ctrl 1-3 is the global switch
-  if (land.dataset.stage === 'intro') { if (e.code === 'Space') { e.preventDefault(); landMain(); } return; }
-  const f = { Digit1: 'chat', Digit2: 'dev', Digit3: 'mission', Numpad1: 'chat', Numpad2: 'dev', Numpad3: 'mission' }[e.code];
-  if (f && focusOn(f)) { e.preventDefault(); setFocus(f); }
-});
-land.querySelectorAll('[data-land]').forEach(b => {
-  b.querySelector('.ic').innerHTML = svg[{ chat: 'chat', dev: 'code', mission: 'gauge' }[b.dataset.land]];
-  b.onclick = () => setFocus(b.dataset.land);
-});
-$('#landSet').innerHTML = svg.gear;
-$('#landSet').onclick = () => $('#setBtn').click();
-$('#brandBtn').onclick = () => openLanding(false);
+  if (!walked) firstRun();
+}
+$('#brandBtn').onclick = () => setFocus('chat');
 
 /* ---------- first-run setup wizard (v0.1.3 C1; threat model rows 17, 31, 32) ---------- */
-// Seven screens (Builder approved them, 2026-10-22). It opens itself once, after the landing intro and before the walkthrough.
+// Seven screens (Builder approved them, 2026-10-22). It opens itself once, on the first start, before the walkthrough.
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
@@ -1109,7 +1066,7 @@ function wizRender() {
       : row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found')) + (s.tmux ? '' : fail('tmux-not-found'));
   } else if (key === 'you') {
     title = 'You';
-    body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
+    body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">Cards waiting on you put this name after "needs". Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
       // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
       + row('Pets', 'Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.', '', btn('pets', 'Open Settings → Pets'));
   } else {
@@ -1288,6 +1245,7 @@ addEventListener('click', async e => {
 // Drawn from main's p9:move stream only; the ledger's moving, moved and move-failed events stay the record. The overlay sits
 // over the moving chat's pane, not in it (panes are morphed on every paint), and in its dialog when the pane is in one.
 // ponytail: one move drawn at a time; another chat's events while one is drawn are not drawn (its ledger events still show).
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches; // reduced motion: the move shows without its sky
 const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
 // The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
 // is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
@@ -1366,7 +1324,7 @@ async function renderServerMenu() {
   $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }
 if (chatOn()) side.open('dan-chat', danChat);
-renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
+renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat'); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
 // bell with test data (Builder, 2026-10-18); live notices are P9's own alerts.
@@ -1408,5 +1366,5 @@ const amSendNote = async (browser) => {
 $('#amForm').onsubmit = (e) => { e.preventDefault(); amSendNote(false); };
 amWeb.onclick = () => amSendNote(true);
 
-return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); landVideo?.destroy(); };
+return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };
 }

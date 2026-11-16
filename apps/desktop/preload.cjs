@@ -65,8 +65,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   terminalSend: (serial, frame) => ipcRenderer.send('p9:terminal-send', serial, frame),
   terminalClose: (serial) => ipcRenderer.send('p9:terminal-close', serial),
   onTerminal: (callback) => { ipcRenderer.on('p9:terminal', (_event, serial, message) => callback(serial, message)); },
-  landing: !process.argv.includes('--p9-landing=off'),
-  landingBg: process.argv.includes('--p9-landing=original') ? 'original' : 'video', // landing v5's rollback switch (controller.mjs LAND_BG)
+  firstRun: !process.argv.includes('--p9-first-run=off'), // the wizard and walkthrough on the first start (controller.mjs firstStart)
   version: (process.argv.find(arg => arg.startsWith('--p9-version=')) || '').slice('--p9-version='.length),
   source: process.argv.includes('--p9-source'), // a source checkout: Settings shows Rebuild + reload
   sample: ipcRenderer.sendSync('p9:sample'), // null unless an unpackaged test run set P9_SAMPLE_DATA=1

@@ -1,6 +1,5 @@
 // Pets load time (phase 4, window-4; open items O14 and O16). Measures only: it asserts that each step ran, never a number,
-// so the same file runs unchanged before and after a change. Two lines: "P9_PETS_LAND <json>" (12 pets on the landing page
-// at startup) and "P9_PETS_SETTINGS <json>" (Settings opened 3 times while connected to a remote over a tunnel with 25 ms
+// so the same file runs unchanged before and after a change. One line: "P9_PETS_SETTINGS <json>" (Settings opened 3 times while connected to a remote over a tunnel with 25 ms
 // each way, its 12 pet thumbnails drawn). Pets are copies of the bundled Skipper (a real 3.4 MB sheet).
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,22 +29,6 @@ const launch = async (t, state, profile, env) => {
 // Every canvas the selector finds has a drawn pixel at the sprite's middle.
 const drawn = ([selector, count]) => [...document.querySelectorAll(selector)].filter((cv) => cv.getContext("2d").getImageData(96, 104, 1, 1).data[3] > 0).length >= count;
 
-test('Pets load: 12 pets on the landing page at startup', { skip, timeout: 180000 }, async (t) => {
-  const instance = await daemon(t);
-  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-petsland-')), 'profile');
-  await withPets(profile);
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_LANDING;
-  const t0 = Date.now();
-  const { page } = await launch(t, instance.state, profile, env);
-  await page.waitForFunction(() => document.querySelector('#land')?.open, null, { timeout: 30000 });
-  const openMs = Date.now() - t0, openPage = await page.evaluate(() => performance.now());
-  await page.waitForFunction(drawn, ['#landPets canvas.pet', PETS], { timeout: 60000, polling: 20 });
-  const petsMs = Date.now() - t0, petsPage = await page.evaluate(() => performance.now());
-  assert.equal(await page.locator('#landPets canvas.pet').count(), PETS);
-  const result = { fromLaunchMs: petsMs, afterOpenMs: Math.round(petsPage - openPage), landOpenMs: openMs };
-  console.log('P9_PETS_LAND ' + JSON.stringify(result));
-});
-
 test('Pets load: Settings while connected to a remote, 12 pet thumbnails', { skip, timeout: 240000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-petsremote-'));
@@ -58,7 +41,7 @@ test('Pets load: Settings while connected to a remote, 12 pet thumbnails', { ski
   const profile = path.join(directory, 'profile'); await mkdir(profile);
   await withPets(profile);
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
-  const env = { ...process.env, P9_SSH: ssh, XDG_RUNTIME_DIR: runtime, P9_LANDING: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, P9_SSH: ssh, XDG_RUNTIME_DIR: runtime, P9_FIRST_RUN: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
   const { page } = await launch(t, local.state, profile, env);
   await page.locator('#serverBadge', { hasText: 'test-host' }).waitFor({ timeout: 30000 });
   await page.locator('#rChat').waitFor({ timeout: 30000 });

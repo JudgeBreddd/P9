@@ -219,7 +219,7 @@ model row 24). Since phases 18-19 also: p9.look(look), p9.getSettings() and p9.s
 p9.fileProtection(on?) (§ File protection), the pet calls p9.listPets(), p9.loadPet(name), p9.addPets(), p9.importPets(),
 p9.installPets(text) and p9.removePet(name) (threat model row 16), the terminal dock's p9.terminal(action, payload),
 p9.terminalOpen(id), p9.terminalSend(serial, frame), p9.terminalClose(serial) and p9.onTerminal(callback) (threat model
-row 13), and p9.landing, a boolean rather than a call. For each, the main process checks its own
+row 13), and p9.firstRun, a boolean rather than a call. For each, the main process checks its own
 webContents, main frame and exact page URL. getStatus takes no arguments and
 returns only ok/unavailable. mission and chat accept only actions from a fixed
 table with slug- or UUID-shaped IDs (chat may add an operation ID), and map each action to one fixed
@@ -326,6 +326,15 @@ enrollment mutation; a missing or different Origin is 403.
   control (one opened while it was starting, or a hard reload) asks it to take over with a `claim` message. Only a
   page of P9's own origin can send that, and taking over changes only where that page's `/_astro/` files come from,
   so a forged `claim` gains nothing.
+- **Phone errors in the server's log (threat model row O128).** The phone sends the shape of its own errors to the
+  server's log through `POST /phone-error`, behind the same sign-in, Origin and CSRF checks as the rest of the phone:
+  the error's type name, the page, build names, a failed file's path and up to 5 stack frames of P9's own origin as
+  path, line and column. Never the error message, which can carry chat or typed text; the phone drops it before it
+  stores or sends a report. The daemon refuses a body over 4 KB, keeps 10 lines a minute per device, writes only
+  fields that match their pattern (letters for the name, plain paths, `path:line:column` frames) and drops the rest,
+  and writes each report as one JSON line. A send that gets no answer is tried again by the phone with the same stored
+  report: after 2 s, doubling to once a minute, one at a time, while the phone is online. No answer leaves delivery
+  unknown, so when only the answer was lost the same line can appear twice in the journal.
 
 What an agent or a terminal can do with what it can see: P9 gives children no session
 cookie, CSRF token or desktop cookie (the allowlisted environment), and the remote port
@@ -1129,7 +1138,7 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
   icon must be a PNG, JPEG, WebP or ICO by its bytes, is cached in P9's state folder (7 days, a miss 1 day) and is
   shown as an image only. Your own pictures (the Picture button in Edit names and icons) are saved beside your
   registry only after you confirm, at most 256 KB, and agents cannot set them.
-- **Landing page name.** The landing greeting's name comes from Settings (or your account's
+- **Your name.** The name cards use ("needs <name>") comes from Settings (or your account's
   first name, once, if the file is new); it is shown as text on your own screen and never sent
   anywhere.
 

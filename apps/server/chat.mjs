@@ -65,7 +65,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // has `_session/steering` only on 1, and without it a message sent mid-turn waited for the turn's end instead of going
 // in at the next tool-call boundary (session.steering, hold() and toolStep() below). Tyler, 2026-11-15: "steer should
 // send to the agent betwen turns (tool calls) but not cancel a running tool call". Back to 2 once the adapter
-// advertises steering there: test/real-adapter-steering.test.mjs asks with this table and fails until it does.
+// advertises steering there: the ACP 2 case in test/real-adapter-steering.test.mjs goes red once it does.
 const ACP_ASK = { claude: 1, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
@@ -988,13 +988,27 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // when one completes or fails, so it lands between steps; with no tool call running it is steered in at once, as
   // before. Queue: sent when the turn ends. At the end, whatever still waits goes as the next prompt, held first; after
   // a cancel it goes back to the window's box instead. Each keeps its sender's authority (a revoked phone sends nothing).
+  // O125 point 1: a message may replace one still waiting, by its ID, when both come from the same sender. The old one
+  // leaves the queue as 'replaced' (unheld, never dropped); another sender's ID, or one no longer waiting, replaces nothing.
+  // A message that replaces one still waiting is held with it, whatever its path would have been (FIX1: a steer would
+  // send the correction now and leave the old wording to go later). A foreign sender's ID, or one no longer waiting, is not a replace.
+  const waitingReplace = (session, body) => body.replaces !== undefined && [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
   function hold(id, session, body, images, when) {
     if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     const item = { id: randomUUID(), body, images, allowed: captureAuthority() };
-    (when === 'queue' ? session.queued : session.held).push(item);
-    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when });
-    return { status: 202, held: item.id, when };
+    const old = waitingReplace(session, body);
+    // FIX2: a replacement takes the replaced message's place and delivery: queued stays queued (never steered in now).
+    const oldQueued = old !== undefined && session.queued.includes(old);
+    if (old) {
+      const list = oldQueued ? session.queued : session.held;
+      list.splice(list.indexOf(old), 1);
+      unheld(id, [old], 'replaced');
+    }
+    const mode = old ? (oldQueued ? 'queue' : 'steer') : when;
+    (mode === 'queue' ? session.queued : session.held).push(item);
+    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: mode, ...(old && { replaces: old.id }) });
+    return { status: 202, held: item.id, when: mode, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   const unheld = (id, items, why) => { for (const item of items) { emit(id, 'unheld', { id: item.id, text: item.body.text, why }); solos.get(item.body)?.end({ error: why }); } };
@@ -1190,6 +1204,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof body?.text !== 'string' || !imagesOk(images) || (!body.text.trim() && !images.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
       if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }
+      if (body.replaces !== undefined && (typeof body.replaces !== 'string' || body.replaces.length > 64)) { release(); return refused(400, 'request-refused'); }
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
@@ -1198,7 +1213,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try {
           // No steering: 409 as before, and the window keeps the message queued itself.
           // During a turn that answers another chat, everything waits for its end.
-          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo ? 'queue' : body.when ?? 'steer');
+          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo ? 'queue' : body.when ?? 'steer');
           if (solo) return refused(409, 'turn-running');
           return await steer(id, body, images);
         } finally { release(); }

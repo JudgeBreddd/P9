@@ -24,6 +24,11 @@ const launch = async (t, sample) => {
 };
 const shotAt = async (page, app, name) => { await page.waitForTimeout(500); const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png); };
 const sizeTo = async (app, w, h) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [w, h]);
+// The layout has settled at width w: the window is at w, the left panel is in the state w gives it (a window of 1000 px or less
+// folds it to the strip, panel.mjs), and no CSS transition is still running. The panel's width moves over .22 s (panel.css) and
+// the centred chat column moves with it: a fixed 500 ms after the resize was not enough on a slow runner (#199 linux 1, 1.8 px).
+const settle = (page, w) => page.waitForFunction(w => innerWidth === w && document.querySelector('#nav').hasAttribute('data-collapsed') === (w <= 1000)
+  && !document.getAnimations().some(a => a instanceof CSSTransition && a.playState === 'running'), w, { timeout: 10000 });
 // Where the first card sits against its pane and the needs-you cards, as the page lays it out.
 const geometry = (page) => page.evaluate(() => {
   const hit = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
@@ -61,7 +66,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   assert.equal(await page.locator('.sprint').getAttribute('data-folded'), 'true', 'the card covers the centered column at this width');
   // The narrowest window P9 allows (720 px): a chat nobody has opened the card on starts folded, the question form stays usable, and
   // opening the card keeps it inside the pane and apart from the needs-you cards.
-  await sizeTo(app, 720, 800); await page.waitForTimeout(500);
+  await sizeTo(app, 720, 800); await settle(page, 720);
   let g = await geometry(page);
   assert.equal(g.width, 720, 'the window is not the narrow size');
   assert.deepEqual(g.sprints.map(x => [x.id, x.folded, x.inside, x.apart]), [[lead, 'true', true, true]], 'fresh chat, narrow: folded, inside its pane, apart from the cards');
@@ -73,7 +78,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   g = await geometry(page);
   assert.deepEqual(g.sprints.map(x => [x.folded, x.inside, x.apart]), [['false', true, true]], 'opened at 720 px: inside the pane, apart from the cards');
   await shot('sprint-card-narrow-open');
-  await sizeTo(app, 1400, 900); await page.waitForTimeout(500);
+  await sizeTo(app, 1400, 900); await settle(page, 1400);
   // Opened here: it folds by default only in a narrow window.
   if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]');
   const colLeft = () => page.locator('.pane .hist .col').first().evaluate(e => e.getBoundingClientRect().left);
@@ -131,7 +136,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   await shot('sprint-card-split-open');
   // The narrowest Split (721 px: two panes of about 335 px, the cards stack over the right one): both cards start folded, and opened they
   // stay inside their pane and apart from the cards, the right one moving below the stack where there is no room beside it.
-  await sizeTo(app, 721, 800); await page.waitForTimeout(500);
+  await sizeTo(app, 721, 800); await settle(page, 721);
   g = await geometry(page);
   assert.equal(g.width, 721, 'the window is not the narrowest Split size');
   assert.equal(await page.locator('#chats .pane').count(), 2, 'not a Split at 721 px');
@@ -143,7 +148,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   await setFold('false'); g = await geometry(page);
   assert.deepEqual(g.sprints.map(x => [x.folded, x.inside, x.apart]), [['false', true, true], ['false', true, true]], '721 px Split, opened: inside the panes and apart from the cards');
   await shot('sprint-card-split-721-open');
-  await sizeTo(app, 1400, 900); await page.waitForTimeout(500);
+  await sizeTo(app, 1400, 900); await settle(page, 1400);
   await page.click('#chats .pane [data-tool="split"]');
   await page.locator('#navList .row[data-chat="' + lead + '"]').click();
   for (const look of ['redline', 'duskwood']) {

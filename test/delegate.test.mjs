@@ -924,11 +924,17 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   await a.done(made.chat);
   const passed = await reviewer.tool('verdict', { chat: made.chat, commit: head, result: 'pass', note: 'checked' });
   assert.equal(passed.verdict?.by, rev.chat, 'a sibling reviewer records a verdict after a ready that went through: ' + JSON.stringify(passed));
+  // The pass also sends the worker "[p9] D1 passed review ... Start your next item." (delegate.mjs verdict, not awaited there),
+  // which starts a turn of its own. Its turn ends before the stop below: one that lands after the stop took the place of the
+  // 'slow' turn that step steers into (CI: the steer met an idle chat, reason mode-failed, at the assertion below).
+  await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data?.text?.startsWith('[p9] D1 passed review'));
+  await a.done(made.chat);
   // Finding 4: an agent without steering (Claude's on ACP 2) cannot take a steer into its running turn; the refusal names queue.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
-  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
-  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
+  const before = (await call(instance, '/chat/events?after=0&only=' + made.chat)).body.cursor; // the first slow turn's 'working' is older
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'slow' })).sent, 'started a turn');
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working', before);
   for (const when of ['steer', 'auto']) {
     const got = await a.tool('send_chat', { chat: made.chat, text: 'hi', when });
     assert.equal(got.reason, 'turn-running', JSON.stringify(got));
@@ -1055,4 +1061,117 @@ test('O109: the user\'s message told along with an agent\'s note that waited is 
   assert.ok(last[0].startsWith('[P9: a note from another chat\'s agent') && last[0].includes('fyi'), JSON.stringify(last));
   assert.deepEqual(last.slice(-2), [USER + '\n\n', 'mine'], JSON.stringify(last));
   console.log('PASS O109 note: the user\'s message after an agent\'s note went under the user\'s own line');
+});
+
+// O125 #199 FIX1 (reviewer P2): a send_chat with replaces and the default auto goes into the queue with the message it
+// replaces, not into the running turn now. A foreign sender's ID and an ID no longer waiting replace nothing.
+test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued wording, not steer it now; a foreign or delivered ID replaces nothing', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  // No project: a project chat's folder is not where this fake reads its go file (the gate turn never ended).
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
+  const folder = path.resolve(instance.workspace, made.folder);
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
+  fs.writeFileSync(path.join(folder, 'log-prompts'), ''); // the fake agent logs every prompt from here on (without it, prompts.log stays empty)
+  const old = await a.tool('send_chat', { chat: made.chat, text: 'old wording', when: 'queue' });
+  assert.ok(old.held, JSON.stringify(old));
+  const fixed = await a.tool('send_chat', { chat: made.chat, text: 'corrected wording', replaces: old.held });
+  assert.equal(fixed.replaced, old.held, 'default auto did not replace: ' + JSON.stringify(fixed));
+  const gone = (await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === old.held);
+  assert.equal(gone.length, 1, 'the replaced wording is not marked');
+  assert.equal(gone[0].data.why, 'replaced');
+  assert.ok(!(await events(instance, made.chat)).some((e) => e.type === 'user' && e.data.text === 'corrected wording'), 'the correction went into the running turn now, not with the queue');
+  // FIX2: the correction keeps the replaced wording's delivery (queue), so it is not steered into the running turn.
+  const heldFix = (await events(instance, made.chat)).find((e) => e.type === 'held' && e.data.id === fixed.held);
+  assert.equal(heldFix?.data.when, 'queue', 'the correction for a queued wording is not queued: ' + JSON.stringify(heldFix));
+  // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either. The foreign sender is
+  // the user (a prompt to the chat, no agent sender), so the sender check alone refuses the replace.
+  const foreign = (await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'foreign', when: 'queue', replaces: fixed.held })).body;
+  assert.equal(foreign.replaced, null, 'a foreign sender replaced a waiting message: ' + JSON.stringify(foreign));
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === fixed.held).length, 0, 'a foreign sender removed a waiting message');
+  // The queue goes out as the next prompt after the gate turn (as the other queue tests read it): wait for that prompt.
+  const sentPrompts = () => (fs.existsSync(path.join(folder, 'prompts.log')) ? fs.readFileSync(path.join(folder, 'prompts.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.stringify(JSON.parse(line))) : []);
+  fs.writeFileSync(path.join(folder, 'go'), '');
+  for (let i = 0; !sentPrompts().some((line) => line.includes('corrected wording')) && i < 200; i += 1) await pause(100);
+  assert.ok(sentPrompts().some((line) => line.includes('corrected wording')), 'the corrected wording was not sent with the queue: prompts ' + JSON.stringify(sentPrompts()) + ' folder ' + folder + ' files ' + JSON.stringify(fs.readdirSync(folder)) + ' events ' + JSON.stringify((await events(instance, made.chat)).map((e) => [e.type, e.data?.text ?? e.data?.why ?? ''])));
+  assert.ok(!sentPrompts().some((line) => line.includes('old wording')), 'the replaced wording was sent: ' + JSON.stringify(sentPrompts()));
+  // Delivery (FIX2): the fake gate is a file-wait turn with no tool call, so no tool completion is exercised here. This
+  // checks only that the correction is never steered into the turn and reaches the next prompt at turn end.
+  const steered = (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.steered && String(e.data.text).includes('corrected wording'));
+  assert.equal(steered.length, 0, 'the correction was steered into the current turn at the tool boundary: ' + JSON.stringify(steered));
+  // The corrected wording is already delivered: its ID replaces nothing now.
+  const late = await a.tool('send_chat', { chat: made.chat, text: 'later', replaces: fixed.held });
+  assert.equal(late.replaced, null, 'a delivered ID replaced something: ' + JSON.stringify(late));
+});
+
+// O125 point 2: a worker's end line that says nothing for its parent sends no note (the worker's status keeps it).
+test('O125 point 2: a worker whose end line says nothing for its parent sends no note, and its status keeps the line', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'nothing for you', title: 'Kid' });
+  assert.equal((await a.done(made.chat)).last, 'echo:nothing for you');
+  await pause(500);
+  assert.deepEqual(await notices(instance, a.conversation), [], 'the parent got a note that said nothing for it');
+  const status = (await events(instance, made.chat)).filter((e) => e.type === 'sprint-state' && e.data.endNote);
+  assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for you', 'the worker status did not keep its end line');
+});
+
+// O125 point 2: "nothing for the parent" is the wording the PR body uses, so it must match too.
+test('O125 point 2: an end line that says nothing for the parent sends no note either', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'nothing for the parent', title: 'Kid' });
+  assert.equal((await a.done(made.chat)).last, 'echo:nothing for the parent');
+  await pause(500);
+  assert.deepEqual(await notices(instance, a.conversation), [], 'the parent got a note that said nothing for the parent');
+  const status = (await events(instance, made.chat)).filter((e) => e.type === 'sprint-state' && e.data.endNote);
+  assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for the parent', 'the worker status did not keep its end line');
+});
+
+// O125 point 2: only the newest note from a worker waits for its parent's turn; a newer one replaces the older by its ID.
+test('O125 point 2: two notes from one worker waiting for a parent in a turn: the second replaces the first, one goes as the next prompt', { timeout: 120000 }, async (t) => {
+  // No steering (as Claude on ACP 2 offers none): a note meant for a running parent is refused (409) and waits.
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
+  const a = await agent(t, instance);
+  assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'gate' })).status, 202);
+  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'gating');
+  // Not waited on with wait_chat: an open wait holds the parent's notes back, so the worker's turn ends are watched instead.
+  const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
+  const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
+  for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
+  const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
+  assert.ok(replaced.hit.data.text.includes('Kid ended its turn'), 'the replaced note is not marked replaced: ' + JSON.stringify(replaced.hit.data));
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  await pause(100);
+  for (let i = 0; i < 100 && (await notices(instance, a.conversation)).length < 1; i += 1) await pause(100);
+  const kid = await notices(instance, a.conversation);
+  assert.equal(kid.filter((text) => text.includes('Kid ended its turn')).length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
+});
+
+// O125 point 2 FIX1: a steerable parent running a tool holds the worker's first note (202), so the second must replace it too.
+test('O125 point 2: two notes from one worker while the steerable parent runs a tool: the second replaces the first, one goes', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  fs.writeFileSync(path.join(instance.workspace, 'slow-tools'), '');
+  const a = await agent(t, instance);
+  assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'tool-open' })).status, 202);
+  await until(instance, (event) => event.conversation === a.conversation && JSON.stringify(event).includes('Run tool 1'));
+  const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
+  const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
+  for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
+  const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
+  assert.ok(replaced.hit.data.text.includes('Kid ended its turn'), 'the replaced note is not the worker note: ' + JSON.stringify(replaced.hit.data));
+  for (let i = 0; i < 300 && (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn')).length < 1; i += 1) await pause(100);
+  await pause(1000);
+  const kid = (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
+  assert.equal(kid.length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
 });

@@ -61,6 +61,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. '
       + 'key (not with a note) gives a worker you started, reused for another role, that role\'s key first, so this message carries roles/<key>.rules.md; a worker in its own worktree keeps its key.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] },
+      replaces: { type: 'string', description: 'The held ID of your own earlier message still waiting for the turn to end (returned as held): this one replaces it, and it is marked replaced, not sent.' },
       key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again.',
@@ -535,11 +536,11 @@ export function createDelegate({ chat, allowed }) {
       chat.sprintFiles.ensureWorker(caller, args.key);
       told = `[P9: your role key is now ${args.key}: your rules come from roles/${args.key}.rules.md and your notes file is notes/${args.key}.md. Your notes so far are in notes/${target.key ?? args.chat}.md.]\n\n`;
     }
-    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
+    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller);
     // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
     if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };
-    return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn' };
+    return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn', ...(sent.held && { held: sent.held }), ...(args.replaces !== undefined && { replaced: sent.replaced ?? null }) };
   }
 
   async function waitChat(caller, args, signal) {
@@ -733,13 +734,23 @@ export function createDelegate({ chat, allowed }) {
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
   // § Delegate). Only a parent whose agent is running: an idle-since-start, stopped or archived chat is never started by this.
+  // O125 point 2: a worker whose end line says nothing for its parent updates its own status (sprint state endNote) and
+  // sends nothing. Otherwise a note that waits is the newest one from that worker: a newer one replaces it by its ID.
+  // ponytail: "nothing for you" is matched in the end line itself; a worker that words it otherwise still sends its note.
+  const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|the parent|your side)\b/i;
+  const waitingNote = new Map(); // worker chat -> held ID of its note still waiting for its parent's turn to end
   chat.settled((id, ok) => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
     if (chat.sprint(id).ready) return;
+    const last = ok ? lastLine(chat.reply(id)).slice(0, 400) : null;
+    if (parent && last !== null && NOTHING_FOR.test(last)) return void chat.setSprint(id, { endNote: { at: Date.now(), text: last } });
     if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
-    const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + lastLine(chat.reply(id)).slice(0, 400) : ' failed; read_chat shows why.');
-    chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }) }, undefined, 'p9')
-      .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});
+    const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + last : ' failed; read_chat shows why.');
+    // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
+    const replacing = waitingNote.has(id) ? { replaces: waitingNote.get(id) } : {};
+    chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }), ...replacing }, undefined, 'p9')
+      .then((sent) => (sent.status === 409 ? chat.prompt(parent.id, { text: line, when: 'queue', ...replacing }, undefined, 'p9') : sent))
+      .then((sent) => { if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {});
   });
 
   // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and

@@ -52,9 +52,19 @@ async function restartP9(button, repair) {
   outer.toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : outer.WIZ_ERR[r.error]?.join(' ') ?? 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
   if (r.restarted) loadMission();
 }
+// Overview reads overlap (the 20 s poll, a Mission click, a turn's end) and can answer out of order; an answer older than one
+// already taken is dropped, or it draws the window back to the file as it was (M5 CI, job 133105928886: a section's new text
+// replaced by the old one, with nothing to read it again for 20 s).
+let overviewAsked = 0, overviewTaken = 0;
+async function overview() {
+  const n = ++overviewAsked, r = await window.p9.mission('overview');
+  if (n < overviewTaken) return null;
+  overviewTaken = n; return r;
+}
 async function loadMission() {
   if (!window.p9?.mission) return;
-  const r = await window.p9.mission('overview');
+  const r = await overview();
+  if (!r) return; // a newer answer was already drawn
   if (r.status !== 200) {
     const why = r.body?.error || r.status;
     if (outer.sampleView) outer.live.note = 'Sample data: the P9 daemon did not answer (' + why + ')';
@@ -120,7 +130,7 @@ function applyOverview(o) {
 }
 async function refreshMission() {
   if (!outer.live.on || document.hidden || outer.S.focus !== 'mission' || outer.lifetime.signal.aborted) return;
-  const r = await window.p9.mission('overview').catch(() => null);
+  const r = await overview().catch(() => null);
   if (r?.status !== 200 || outer.lifetime.signal.aborted) return;
   loadArt(); // a site's icon can arrive or age out with no change to the overview
   const key = JSON.stringify(r.body); if (key === outer.lastOverview) return; outer.lastOverview = key;
@@ -129,7 +139,7 @@ async function refreshMission() {
   else if (['scripts', 'win', 'reviews', 'center'].includes(outer.S.modal?.kind)) outer.renderModal();
 }
 const pollMission = () => { refreshMission(); outer.setTimeout(pollMission, 20000); };
-const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (outer.live.on && r?.status === 200) { outer.lastOverview = JSON.stringify(r.body); applyOverview(r.body); outer.renderMission(); outer.renderTabs(); if (outer.S.modal?.kind === 'reviews' || outer.S.modal?.kind === 'center') outer.renderModal(); } }, 500); };
+const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(async () => { const r = window.p9?.mission ? await overview().catch(() => null) : null; if (outer.live.on && r?.status === 200) { outer.lastOverview = JSON.stringify(r.body); applyOverview(r.body); outer.renderMission(); outer.renderTabs(); if (outer.S.modal?.kind === 'reviews' || outer.S.modal?.kind === 'center') outer.renderModal(); } }, 500); };
 function applyQueue(o) {
   const drafts = Object.fromEntries(outer.S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = outer.S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
