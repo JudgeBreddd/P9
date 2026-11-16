@@ -9,7 +9,7 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, root, versionSeen } from './helpers.mjs';
 
-const MEDIA = /horizon-loop|black-hole/;
+const MEDIA = /horizon-loop[^/]*\.mp4|black-hole[^/]*\.webp/; // the landing's two media files (black-hole.css is the connecting screen's, not media)
 
 async function launch(t, instance, profile, env) {
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
