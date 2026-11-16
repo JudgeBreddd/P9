@@ -734,13 +734,21 @@ export function createDelegate({ chat, allowed }) {
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
   // § Delegate). Only a parent whose agent is running: an idle-since-start, stopped or archived chat is never started by this.
+  // O125 point 2: a worker whose end line says nothing for its parent updates its own status (sprint state endNote) and
+  // sends nothing. Otherwise a note that waits is the newest one from that worker: a newer one replaces it by its ID.
+  // ponytail: "nothing for you" is matched in the end line itself; a worker that words it otherwise still sends its note.
+  const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|your side)\b/i;
+  const waitingNote = new Map(); // worker chat -> held ID of its note still waiting for its parent's turn to end
   chat.settled((id, ok) => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
     if (chat.sprint(id).ready) return;
+    const last = ok ? lastLine(chat.reply(id)).slice(0, 400) : null;
+    if (parent && last !== null && NOTHING_FOR.test(last)) return void chat.setSprint(id, { endNote: { at: Date.now(), text: last } });
     if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
-    const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + lastLine(chat.reply(id)).slice(0, 400) : ' failed; read_chat shows why.');
+    const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + last : ' failed; read_chat shows why.');
     chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }) }, undefined, 'p9')
-      .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});
+      .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue', ...(waitingNote.has(id) && { replaces: waitingNote.get(id) }) }, undefined, 'p9')
+        .then((queued) => { if (queued.held) waitingNote.set(id, queued.held); })).catch(() => {});
   });
 
   // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and
