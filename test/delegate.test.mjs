@@ -1077,7 +1077,8 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   assert.ok(!(await events(instance, made.chat)).some((e) => e.type === 'user' && e.data.text === 'corrected wording'), 'the correction went into the running turn now, not with the queue');
   // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either.
   const b = await agent(t, instance, { project });
-  const foreign = await b.tool('send_chat', { chat: made.chat, text: 'foreign', replaces: fixed.held });
+  // Queued, not steered: a steered message in the gate turn kept the fake from taking the queue after its go file.
+  const foreign = await b.tool('send_chat', { chat: made.chat, text: 'foreign', when: 'queue', replaces: fixed.held });
   assert.equal(foreign.replaced, null, 'a foreign sender replaced a waiting message: ' + JSON.stringify(foreign));
   assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'unheld' && e.data.id === fixed.held).length, 0, 'a foreign sender removed a waiting message');
   // The queue goes out as the next prompt after the gate turn (as the other queue tests read it): wait for that prompt.
