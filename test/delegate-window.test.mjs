@@ -417,7 +417,7 @@ test('O109: a worker report closes into the chat and only a new one comes back; 
 // 712 (Tyler, 2026-11-14: "we cannot clear old workers out of the sprint box top right"): an archived worker leaves the card,
 // as it leaves the sidebar; a stopped worker can be cleared from the card itself (one, or all stopped at once), and stays
 // cleared after a reload. The card held every child chat whatever its archive (kin() in the card had no archived filter).
-test('712: old workers clear out of the sprint box: archived ones leave it, a stopped one clears from the card, all stopped clear at once', { timeout: 150000 }, async (t) => {
+test('712: old workers clear out of the sprint box: archived ones leave it, a stopped one clears from the card, all stopped clear at once, ready and passed ones too', { timeout: 240000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
   await call(instance, '/file-protection', 'POST', { on: false }); // as busyLead: a worker's task is written to the project
@@ -426,8 +426,30 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   const a = await tools(t, instance, parent);
   const kids = [];
   for (let i = 0; i < 5; i++) { const made = await a.tool('open_chat', { text: 'first', item: 'W' + i, done_means: 'x', checks: ['Tests pass'] }); assert.ok(made.chat, JSON.stringify(made)); await a.done(made.chat); kids.push(made.chat); console.log('O712 made ' + i); }
-  for (const id of kids.slice(0, 4)) { const r = await a.tool('stop_chat', { chat: id, close: true }); assert.equal(r.action, 'stopped', JSON.stringify(r)); } // the fifth stays: a live worker keeps its row and has no clear
-  console.log('O712 stopped 4');
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  // Reviewer FIX1: a stopped worker that reported ready (kids[5]) or passed review (kids[6]) shows Ready/Passed, not Stopped; it must still clear, by its x and in the count.
+  writeFileSync(path.join(instance.workspace, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', instance.workspace]);
+  execFileSync('git', ['-C', instance.workspace, 'add', '.']);
+  execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const rev = await a.tool('open_chat', { text: 'mcp', key: 'review' }); assert.ok(rev.chat, JSON.stringify(rev));
+  const reviewer = await tools(t, instance, rev.chat);
+  await a.done(rev.chat);
+  for (const n of [5, 6]) {
+    const made = await a.tool('open_chat', { text: 'first', item: 'W' + n, done_means: 'x', checks: ['Tests pass'] }); assert.ok(made.chat, JSON.stringify(made)); await a.done(made.chat); kids.push(made.chat);
+    await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+    const kid = await tools(t, instance, made.chat);
+    await a.done(made.chat);
+    await a.tool('send_chat', { chat: made.chat, text: 'late' }); // ready needs the worker mid-turn
+    const r = await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest: 'x' }); assert.ok(r.ready, JSON.stringify(r));
+    await a.done(made.chat);
+  }
+  const v = await reviewer.tool('verdict', { chat: kids[6], commit: head, result: 'pass', note: 'checked' }); assert.ok(!v.error, JSON.stringify(v));
+  const gone = [0, 1, 2, 3, 5, 6].map((n) => kids[n]);
+  for (const id of gone) { const r = await a.tool('stop_chat', { chat: id, close: true }); assert.equal(r.action, 'stopped', JSON.stringify(r)); } // kids[4] and the reviewer stay: a live worker keeps its row and has no clear
+  console.log('O712 stopped 6');
   // The way archive_chat clears one, before the window opens (Tyler's try on 2026-11-14).
   await call(instance, `/chat/${kids[0]}/archive`, 'POST', { archived: true });
   const { app, page, errors } = await launch(t, instance);
@@ -442,27 +464,34 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   await shot(page, 'o712-before');
   console.log('O712 card ' + await card.locator('.sp-sum').innerText());
   assert.equal(await row(kids[0]).count(), 0, 'an archived worker is still on the card');
-  assert.equal(await card.locator('.sp-sum').innerText(), '4 workers');
+  const sum0 = await card.locator('.sp-sum').innerText();
+  assert.ok(!(await row(kids[0]).count()) && /^\d+ workers$/.test(sum0), sum0);
+  assert.equal(await row(kids[5]).getAttribute('data-status'), 'ready', 'kids[5] shows its report');
+  assert.equal(await row(kids[6]).getAttribute('data-status'), 'passed', 'kids[6] shows its verdict');
+  for (const n of [5, 6]) assert.equal(await card.locator(`[data-sprint-clear="${kids[n]}"]`).count(), 1, 'a stopped ' + (n === 5 ? 'ready' : 'passed') + ' worker has no clear');
+  assert.equal(await card.locator(`[data-sprint-clear="${rev.chat}"]`).count(), 0, 'a live reviewer offers a clear');
   // One stopped worker cleared from its row; the live one has no clear.
   assert.equal(await card.locator(`[data-sprint-clear="${kids[4]}"]`).count(), 0, 'a live worker offers a clear');
   await card.locator(`[data-sprint-clear="${kids[1]}"]`).click({ timeout: 5000 });
   await until(async () => await row(kids[1]).count() === 0, 'the cleared worker left the card');
   await shot(page, 'o712-one-cleared');
   // The rest of the stopped ones at once; the live one stays.
-  await card.locator('[data-sprint-clear="*"]', { hasText: 'Clear 2 stopped' }).click({ timeout: 5000 });
-  await until(async () => await row(kids[2]).count() === 0 && await row(kids[3]).count() === 0, 'all stopped workers left the card');
-  assert.equal(await card.locator('.sp-sum').innerText(), '1 worker');
+  // Two ordinary stopped, one stopped ready, one stopped passed: the count names all four and Clear takes exactly those.
+  await card.locator('[data-sprint-clear="*"]', { hasText: 'Clear 4 stopped' }).click({ timeout: 5000 });
+  await until(async () => { for (const n of [2, 3, 5, 6]) if (await row(kids[n]).count()) return false; return true; }, 'all stopped workers left the card');
+  assert.equal(await row(kids[4]).count(), 1, 'the live worker left the card');
+  assert.equal(await card.locator('[data-sprint-clear="*"]').count(), 0, 'Clear all still shows with nothing stopped');
   const archived = (await call(instance, '/chat')).conversations.filter((c) => kids.includes(c.id) && c.archived).map((c) => c.id).sort();
-  assert.deepEqual(archived, kids.slice(0, 4).sort(), 'clearing archives the chat in the daemon');
+  assert.deepEqual(archived, [...gone].sort(), 'clearing archives exactly the stopped chats in the daemon');
   // A reload keeps them cleared, and the text box is still on screen with the card.
   await page.reload();
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
   await page.locator(`#navList .row[data-chat="${parent}"]`).click();
   await row(kids[4]).waitFor({ state: 'attached', timeout: 20000 });
-  for (const id of kids.slice(0, 4)) assert.equal(await row(id).count(), 0, 'a cleared worker came back after a reload');
+  for (const id of gone) assert.equal(await row(id).count(), 0, 'a cleared worker came back after a reload');
   const box = await pane.locator('.composer textarea').evaluate((el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }; });
   assert.ok(box.top >= 0 && box.bottom <= box.height && box.hit, 'the text box is on screen: ' + JSON.stringify(box));
   await shot(page, 'o712-reloaded');
   assert.deepEqual(errors, []);
-  console.log('PASS 712: archived worker off the card; one stopped cleared by its x, two by Clear 2 stopped; archived in the daemon; still gone after a reload; text box on screen');
+  console.log('PASS 712: archived worker off the card; one stopped cleared by its x; stopped ready and passed rows have an x; Clear 4 stopped took two plain, one ready, one passed; archived in the daemon; still gone after a reload; text box on screen');
 });
