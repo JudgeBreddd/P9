@@ -325,6 +325,19 @@ test('Delegate: a provider-profile chat\'s worker stays on that profile and its 
   assert.equal(await started({ model: 'kimi-k3:cloud' }), 'delegation-refused', 'a model no Settings row allows was started');
   assert.equal(typeof await started({ model: 'opus' }), 'string', 'a model the profile does not list was started');
   assert.equal((await rows(instance)).length, 3);
+  // list_providers: what an agent may name as provider. Of a profile its id, name and models, never its address or key.
+  const listed = await a.tool('list_providers');
+  assert.deepEqual(listed.providers.map((p) => p.provider), ['claude', 'codex', 'profile:' + profile.id], JSON.stringify(listed));
+  assert.deepEqual(listed.providers[2], { provider: 'profile:' + profile.id, name: 'Far Cloud', models: [{ value: 'glm-5.3', name: 'glm-5.3' }, { value: 'kimi-k3:cloud', name: 'kimi-k3:cloud' }], efforts: listed.providers[0].efforts });
+  assert.doesNotMatch(JSON.stringify(listed), /example\.test|sk-profile|baseUrl|secret/, 'list_providers told an agent a profile\'s address or key');
+  // The id it gave names the profile in open_chat: the row that starts on it opens; a profile no row starts, and a word that is no provider, do not.
+  assert.deepEqual(await started({ provider: 'profile:' + profile.id }), ['new', 'glm-5.3', 'https://models.example.test/api', hash, false], 'profile:<id> from list_providers did not open the row on that profile');
+  const none = await a.tool('open_chat', { text: 'hello', provider: 'profile:no-such-profile' });
+  assert.deepEqual([none.error, none.field], ['delegation-refused', 'provider'], JSON.stringify(none));
+  assert.match(none.detail, new RegExp('Allowed provider: profile:' + profile.id + '\\.'), none.detail);
+  assert.equal((await a.tool('open_chat', { text: 'hello', provider: 'profile:' })).error, 'request-refused');
+  assert.equal((await rows(instance)).length, 4);
+  console.log('PASS Delegate list_providers: claude, codex and the profile by id, name and models with no address or key; open_chat took profile:<id>, refused an unknown profile by field and made nothing');
   console.log('PASS Delegate profile: the worker got the profile\'s address, key and the parent\'s model, named or not; another listed model and one outside the profile were refused');
 });
 
@@ -674,7 +687,7 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   await a.tool('stop_chat', { chat: second.chat, close: true });
   picks = five(picks[0], { agent: 'profile:' + profile.id, model: 'kimi-k3:cloud', effort: '' }, ...picks.slice(2));
   await set({ start: 'agent', max: 5, workers: picks });
-  const far = await a.tool('open_chat', { text: 'hello', title: 'Far' });
+  const far = await a.tool('open_chat', { text: 'hello', title: 'Far', provider: 'profile:' + profile.id }); // named as list_providers gives it
   assert.equal(far.worker, 2, JSON.stringify(far));
   await a.done(far.chat);
   const line = seen().at(-1);
