@@ -12,6 +12,7 @@ import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { chromium, _electron } from '@playwright/test';
 import { daemon, http, authenticated, remoteDaemon, passkeyDevice, enrollDevice, root, versionSeen } from './helpers.mjs';
 
@@ -78,6 +79,22 @@ const call = async (instance, route, method = 'GET', body) => {
   const result = await http({ socketPath: instance.credentials.socketPath, route, method, timeout: 30000,
     headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: result.status, body: JSON.parse(result.text) };
+};
+// O129 instrumentation, not a fix. On CI, Playwright's protocol log (pw:protocol) is kept in memory while an M5 card click runs, and
+// its last 200 lines are printed when that click does not finish, so the next hang shows which wait it sits in. It uses
+// playwright-core's own `debug` (the one its logger writes through), switched on only for the click; DEBUG is put back so no child
+// process inherits it.
+const pwDebug = process.env.CI === 'true' ? createRequire(createRequire(createRequire(import.meta.url).resolve('@playwright/test')).resolve('playwright'))('playwright-core/lib/utilsBundle').debug : null;
+const pwLog = [], pwWas = {};
+const protocolLog = (on) => {
+  if (!pwDebug || !on === !pwWas.on) return;
+  const env = process.env.DEBUG;
+  if (on) {
+    pwLog.length = 0; Object.assign(pwWas, { on: true, log: pwDebug.log, names: pwDebug.disable() });
+    pwDebug.log = (...a) => { pwLog.push(a.join(' ').slice(0, 500)); if (pwLog.length > 1000) pwLog.splice(0, 500); };
+    pwDebug.enable([pwWas.names, 'pw:protocol'].filter(Boolean).join(','));
+  } else { pwDebug.enable(pwWas.names); pwDebug.log = pwWas.log; pwWas.on = false; }
+  if (env === undefined) delete process.env.DEBUG; else process.env.DEBUG = env;
 };
 const shot = (name, png) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -260,6 +277,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       // CI-only failure (M5 :212, :223, :257): a click in the logs card right after Back is sometimes lost. Record what moves in the
       // window and what reaches the card's frame around the click; on a miss print it, with a screenshot, instead of a bare timeout.
       const clickAfterBack = async (button, opened, name) => {
+        protocolLog(true);
         await page.evaluate(() => { const log = window.__m5 = [], at = s => log.push([Date.now(), s]), body = document.querySelector('#mdlBody');
           const of = f => f.closest('[data-card]')?.dataset.tile ?? '?', ro = new ResizeObserver(es => es.forEach(e => at(`size ${of(e.target)} ${Math.round(e.contentRect.height)}`)));
           body.querySelectorAll('iframe').forEach(f => ro.observe(f));
@@ -288,6 +306,8 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
           sleep(10000).then(() => { throw new Error('no frame drawn in 10 s'); })]).catch(moved('the card drew no frame'));
         const t = [[Date.now(), 'click ' + button + ' starts']];
         const record = async (what, e) => { // the timeline from the click, and whether the window and the card frame still answer
+          const tail = pwLog.slice(-200); protocolLog(false);
+          if (tail.length) console.log(`${name}: Playwright protocol, the last ${tail.length} lines before "${what}" (O129):\n` + tail.join('\n'));
           const answers = async (f) => Promise.race([f.evaluate(() => 'answers').catch((x) => 'gone: ' + x.message.split('\n')[0]), sleep(2000).then(() => 'no answer in 2 s')]);
           const win = await answers(page);
           t.push([Date.now(), `the window ${win}, the card frame ${await answers(frame)}; frames: ${page.frames().length}`]);
@@ -309,6 +329,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
         console.log(`${name}: click took ${t[1][0] - t[0][0]} ms`);
         await opened.waitFor({ timeout: 10000 }).catch((e) => record('lost click', e));
         page.off('console', hear);
+        protocolLog(false);
       };
       await card('logs').scrollIntoViewIfNeeded();
       await sleep(1000);
