@@ -311,13 +311,14 @@ function ask(s, own) {
 // but whether it is folded.
 // ponytail: folded per chat for this window only (a Set), and a chat opens folded where the card would cover the text (narrow window, Split).
 const SPRINT = { folded: new Map() };
-const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null, work: c.queue ?? null }); // the contract's optional fields: a chat without them looks as it does today. work: the daemon's work queue {done, total, items} (its queue; s.queue here is the composer's)
-const SP_LABEL = { working: 'Working', idle: 'Idle', asked: 'Asked', ready: 'Ready', passed: 'Passed', fix: 'Fix', stopped: 'Stopped' };
+const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null, work: c.queue ?? null, paused: !!c.paused }); // the contract's optional fields: a chat without them looks as it does today. work: the daemon's work queue {done, total, items} (its queue; s.queue here is the composer's)
+const SP_LABEL = { paused: 'Paused', working: 'Working', idle: 'Idle', asked: 'Asked', ready: 'Ready', passed: 'Passed', fix: 'Fix', stopped: 'Stopped' };
 // A verdict belongs to one exact commit (spec C): one for an older commit than the one reported ready is not a pass of this version.
 const verdictOf = k => k.verdict?.commit && k.ready?.commit && k.verdict.commit === k.ready.commit ? k.verdict : null; // no ready commit, or no commit on the verdict: nothing is verified
 function workerStatus(k) {
   const v = verdictOf(k);
   if (k.pending && k.state === 'running') return ['asked', null];
+  if (k.paused && k.state !== 'stopped') return ['paused', null]; // S13: a paused sprint's worker; a running turn still finishes
   if (v) return [v.result === 'pass' ? 'passed' : 'fix', v.at ?? null];
   if (k.ready) return ['ready', k.ready.at ?? null];
   if (k.state === 'stopped' || k.state === 'stopping') return ['stopped', null];

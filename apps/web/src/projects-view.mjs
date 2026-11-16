@@ -47,6 +47,9 @@ export function installProjects(o, api) {
         : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
         : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
   const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
+  // S13 (SECURITY.md § Pause sprint): Pause or Resume on a started sprint's row. ponytail: here until the Sprint View
+  // (Window's row) takes them.
+  const pauseBtn = sp => sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="${sp.paused ? 'spresume' : 'sppause'}" data-lead="${esc(sp.lead)}" title="${sp.paused ? 'Sends every message kept while it was paused, in order.' : 'Its workers start no new turn; what agents and P9 send them is kept until Resume. Turns already running finish.'}">${sp.paused ? 'Resume sprint' : 'Pause sprint'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
@@ -142,7 +145,7 @@ export function installProjects(o, api) {
     const roles = rolesOf(sp), files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
     const fixed = ['sprint.md', 'rules.md', 'roles.json', 'hooks.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : fixed.length;
     files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < fixed.length ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}${sp.paused ? '<span class="tag" data-sp-paused>Paused</span>' : ''}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${pauseBtn(sp)}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
       ${startedHtml(sp)}${scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
@@ -323,6 +326,11 @@ export function installProjects(o, api) {
       if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);
       o.loadProjects(); renderPage(); return fillBox(false); }
     if (k === 'spscripts') return openScripts(b.dataset.lead);
+    if (k === 'sppause' || k === 'spresume') { b.disabled = true; const id = cur.id, r = await call(k === 'sppause' ? 'pauseSprint' : 'resumeSprint', { sprint: b.dataset.lead }, { quiet: true });
+      if (r.status !== 200) failed(r);
+      const again = cur?.id === id && await call('project', { id }, { quiet: true });
+      if (again?.status === 200 && cur?.id === id) adopt(again.body.project, b.dataset.lead);
+      renderPage(); return fillBox(false); }
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
     if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }

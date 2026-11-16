@@ -1131,6 +1131,26 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   `after-close` are accepted in the file and approved like the rest, but P9 has no such action yet, so their scripts
   do not run.
 
+## Pause sprint
+
+Pause stops a sprint from starting new work; Resume lets it go on. Written before the code (0.1.9 phase 4.5, phone;
+migration spec S13).
+
+- **Who can press it.** You, with Pause and Resume on the project page's sprint row (a desktop-only route; the phone
+  has none), or the sprint's lead with `pause_sprint` and `resume_sprint`. A worker, a reviewer or a chat outside the
+  sprint is refused. Neither asks you first: Pause only holds work back, and Resume sends only what agents and P9 had
+  already sent.
+- **What Pause holds.** While a sprint is paused, every message an agent or P9 sends one of the lead's chats (the
+  lead's `send_chat`, a reviewer's wake, the messages that waited for a turn's end) is kept, in order, and starts no
+  turn. A running turn finishes; nothing is stopped. A note still arrives, since it starts nothing. Another chat's
+  question (`ask_chat`) is refused `sprint-paused`, so its asker is not left waiting. A message you type into a paused
+  worker yourself goes through. `open_chat` and `start_sprint` from the lead make no chat while it is paused.
+- **Where it is kept.** In P9's ledger, never in a file an agent can edit, so a P9 restart keeps the pause and every
+  message it holds. At most 100 messages are held per sprint; the next one is refused `sprint-paused-full`.
+- **Resume.** Every held message goes out in the order it was sent, each with the sender it had, so each still carries
+  its sender's rules and runs no wider than its sender's mode. Pause and Resume each send the lead one note.
+- **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's
