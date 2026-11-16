@@ -4,6 +4,7 @@
 // that copy runs. Each run gets the sprint's state as JSON on stdin (state() below is the contract, field by field) and
 // leaves one line in hooks.log.
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { childEnv } from './child-env.mjs';
 import { hashOf, planItems } from './sprint-files.mjs';
 
@@ -13,7 +14,7 @@ export const BLOCKING = ['before-start', 'before-new-worker', 'before-merge', 'b
 export const POINTS = [...BLOCKING, 'sprint-start', 'worker-folder-made', 'before-ready', 'ci-red', 'gate-passed', 'pause', 'resume', 'after-close'];
 // The points P9 has an action for today; the rest are accepted, approved and never run (SECURITY.md says so).
 export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'worker-folder-made', 'before-ready'];
-export const MAX_SCRIPTS = 12, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
+export const MAX_SCRIPTS = 12, MAX_LIBRARY = 100, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
 const TIMEOUT = { blocking: 60_000, notice: 300_000 }; // ponytail: fixed, no per-script setting; add one when a real script needs longer
 const KEEP = 64 * 1024;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
@@ -21,16 +22,16 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 export const clean = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029|\s]+/g, ' ').trim().slice(0, LINE);
 
 // hooks.json as text -> { scripts } (each { name, command, point, blocking }), or { error } naming the row and field.
-// No file, or an empty one, is no scripts.
-export function parse(text) {
+// No file, or an empty one, is no scripts. The library (S18) is the same list under another name and a larger limit.
+export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
   if (text === null || text === undefined || !String(text).trim()) return { scripts: [] };
-  let parsed; try { parsed = JSON.parse(text); } catch { return { error: 'hooks.json is not JSON.' }; }
+  let parsed; try { parsed = JSON.parse(text); } catch { return { error: `${what} is not JSON.` }; }
   const rows = parsed?.scripts;
-  const shape = `hooks.json: { "scripts": [ { "name", "command", "point", "blocking"? }, ... ] }, at most ${MAX_SCRIPTS}.`;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).some((k) => k !== 'scripts') || !Array.isArray(rows) || rows.length > MAX_SCRIPTS) return { error: shape };
+  const shape = `${what}: { "scripts": [ { "name", "command", "point", "blocking"? }, ... ] }, at most ${max}.`;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).some((k) => k !== 'scripts') || !Array.isArray(rows) || rows.length > max) return { error: shape };
   const scripts = [];
   for (const [i, r] of rows.entries()) {
-    const at = `hooks.json, script ${i + 1}`;
+    const at = `${what}, script ${i + 1}`;
     if (!r || typeof r !== 'object' || Array.isArray(r) || Object.keys(r).some((k) => !['name', 'command', 'point', 'blocking'].includes(k))) return { error: `${at}: only name, command, point and blocking.` };
     const ok = (v, max) => typeof v === 'string' && v.trim() === v && v.length > 0 && v.length <= max && !CONTROL.test(v) && v.isWellFormed();
     if (!ok(r.name, MAX_NAME) || r.name.includes('|')) return { error: `${at}, name: 1 to ${MAX_NAME} characters, one line, no |.` };
@@ -77,7 +78,7 @@ export function run(command, input, { cwd, timeout }) {
 }
 
 // chat: the chat service; usage: () => what GET /usage answers (or absent); stateOf, rolesOf: delegate's own.
-export function createHooks({ chat, usage, stateOf, rolesOf }) {
+export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   const approved = (sprint) => { const s = chat.projects.started(sprint)?.scripts; return Array.isArray(s) ? s : []; };
   const logLines = (sprint, n = 20) => (chat.sprintFiles.read(sprint, 'hooks.log') ?? '').split('\n').filter(Boolean).slice(-n);
   const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
@@ -149,22 +150,131 @@ export function createHooks({ chat, usage, stateOf, rolesOf }) {
   }
 
   // sprint_scripts: what is approved, what the file holds now, whether they differ, the last runs. Reads only.
-  function read(caller, named) {
+  // The sprint a tool call means: the one named (in the caller's project), else the caller's own.
+  function where(caller, named) {
     const me = chat.info(caller);
     if (!me) return { error: 'unknown-sprint' };
     const sprint = named ?? (chat.sprintFiles.exists(caller) ? caller : me.parent);
     if (!ID.test(sprint ?? '') || !chat.sprintFiles.exists(sprint)) return { error: 'unknown-sprint', detail: 'Name a sprint: an id from new_sprint, or call this from a sprint\'s lead or one of its workers.' };
     const project = chat.info(sprint)?.project ?? chat.projects.prepOf(sprint)?.project ?? null;
     if (sprint !== caller && sprint !== me.parent && (!project || project !== me.project)) return { error: 'unknown-sprint' };
+    return { sprint };
+  }
+  function read(caller, named) {
+    const { sprint, ...no } = where(caller, named);
+    if (no.error) return no;
     const text = chat.sprintFiles.read(sprint, 'hooks.json'), file = parse(text), start = chat.projects.started(sprint), ok = approved(sprint);
     return {
       sprint, points: POINTS, blocking: BLOCKING, fired: FIRED,
       approved: start ? { at: iso(start.at), by: start.by, scripts: ok } : null,
       file: file.error ? { error: file.error } : { scripts: file.scripts, ...(text !== null && { hash: hashOf(text) }) },
       pending: Boolean(file.error) || JSON.stringify(file.scripts) !== JSON.stringify(ok),
+      library: library(),
       log: logLines(sprint),
-      note: 'Only the approved scripts run. A change to hooks.json runs after the user starts the sprint again and approves it; no tool approves or runs a script.',
+      note: 'Only the approved scripts run. A change to hooks.json runs after the user starts the sprint again and approves it; no tool approves a script, and run_sprint_script runs only an approved one.',
     };
   }
-  return { fire, read, approved };
+
+  // The library and the tools (sprint spec S18; SECURITY.md § Sprint scripts, "The library"). The library is one list per
+  // user in P9's database, usable in any sprint of any project. It is only text: nothing in it runs. A script reaches a
+  // sprint as a copy in that sprint's hooks.json, and runs only after the owner's Start approves it, so a later change
+  // to the library changes no sprint.
+  const library = () => { const kept = parse(JSON.stringify({ scripts: chat.scriptLibrary() }), 'The library', MAX_LIBRARY); return kept.error ? [] : kept.scripts; };
+  const upsert = (rows, row) => (rows.some((r) => r.name === row.name) ? rows.map((r) => (r.name === row.name ? row : r)) : [...rows, row]);
+  const without = (rows, name) => (rows.some((r) => r.name === name) ? rows.filter((r) => r.name !== name) : { error: 'unknown-script', name });
+  function libraryWrite(change) {
+    const rows = change(library());
+    if (rows.error) return rows;
+    const next = parse(JSON.stringify({ scripts: rows }), 'The library', MAX_LIBRARY);
+    if (next.error) return { error: 'scripts-refused', detail: next.error };
+    chat.setScriptLibrary(next.scripts);
+    return { library: next.scripts };
+  }
+  // hooks.json through the guarded save: a file changed since it was read here is not replaced.
+  function fileWrite(sprint, change) {
+    const text = chat.sprintFiles.read(sprint, 'hooks.json'), file = parse(text);
+    if (file.error) return { error: 'scripts-refused', detail: file.error + ' Fix hooks.json first.' };
+    const rows = change(file.scripts);
+    if (rows.error) return rows;
+    const next = parse(JSON.stringify({ scripts: rows }));
+    if (next.error) return { error: 'scripts-refused', detail: next.error };
+    const body = JSON.stringify({ scripts: next.scripts }, null, 2) + '\n';
+    let saved; try { saved = chat.sprintFiles.write(sprint, 'hooks.json', body, text === null ? '' : hashOf(text)); } catch { saved = false; }
+    if (saved !== true) return saved === 'changed' ? { error: 'sprint-file-changed', detail: 'hooks.json changed meanwhile. Read sprint_scripts and try again.' } : { error: 'not-saved' };
+    return { sprint, file: { scripts: next.scripts, hash: hashOf(body) }, pending: JSON.stringify(next.scripts) !== JSON.stringify(approved(sprint)),
+      note: 'In hooks.json. It runs only after the user starts the sprint again and approves it.' };
+  }
+  const rowOf = (a) => ({ name: a.name, command: a.command, point: a.point, ...(a.blocking !== undefined && { blocking: a.blocking }) });
+  const locked = (caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : null);
+  // sprint_script_save: one script, made or replaced by name, in the sprint's hooks.json or (library: true) the library.
+  function save(caller, args) {
+    const no = locked(caller); if (no) return no;
+    if (args.library === true) return args.sprint === undefined ? libraryWrite((rows) => upsert(rows, rowOf(args))) : { error: 'request-refused', detail: 'library or sprint, not both.' };
+    const at = where(caller, args.sprint);
+    return at.error ? at : fileWrite(at.sprint, (rows) => upsert(rows, rowOf(args)));
+  }
+  function remove(caller, args) {
+    const no = locked(caller); if (no) return no;
+    if (args.library === true) return args.sprint === undefined ? libraryWrite((rows) => without(rows, args.name)) : { error: 'request-refused', detail: 'library or sprint, not both.' };
+    const at = where(caller, args.sprint);
+    return at.error ? at : fileWrite(at.sprint, (rows) => without(rows, args.name));
+  }
+  // sprint_script_add: a copy of one library script into the sprint's hooks.json (a script of that name there is replaced).
+  function add(caller, args) {
+    const no = locked(caller); if (no) return no;
+    const at = where(caller, args.sprint), row = library().find((r) => r.name === args.name);
+    if (at.error) return at;
+    if (!row) return { error: 'unknown-script', name: args.name, detail: 'No script of that name in the library (sprint_scripts lists it).' };
+    return fileWrite(at.sprint, (rows) => upsert(rows, row));
+  }
+
+  // Which script may be run on request: one the owner approved at Start, by name, and that copy. The one place that
+  // decides it (S20 puts the owner's "Allow additional scripts" switch here).
+  function runnable(sprint, name) {
+    const found = approved(sprint).find((s) => s.name === name);
+    if (found) return found;
+    const inFile = parse(chat.sprintFiles.read(sprint, 'hooks.json')).scripts?.some((s) => s.name === name), inLibrary = library().some((s) => s.name === name);
+    return { error: 'script-not-approved', name, detail: inFile ? `"${name}" is in hooks.json and the user has not approved it: it runs after the user starts the sprint again.`
+      : inLibrary ? `"${name}" is only in the library. Add it to the sprint (sprint_script_add); it runs after the user starts the sprint again.` : `This sprint has no approved script named "${name}".` };
+  }
+  // One approved script, now, waited for. Its input is the same state, with subject { manual: true, by } (by: 'owner' or
+  // the asking chat). It refuses nothing: its result is returned and logged.
+  async function runNow(sprint, script, by) {
+    let base; try { base = await state(sprint, script.point, { manual: true, by }); } catch { base = { contract: 1, point: script.point, error: 'state-unavailable' }; }
+    const r = await run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking });
+    record(sprint, { ...script, point: script.point + ' (run now)' }, r);
+    return { sprint, script: script.name, point: script.point, exit: r.exit, reason: r.reason, ms: r.ms, line: r.line };
+  }
+  // run_sprint_script: the user is asked first, shown the whole command; what runs is the copy that was shown.
+  async function runAsked(caller, args, signal) {
+    const no = locked(caller); if (no) return no;
+    const at = where(caller, args.sprint);
+    if (at.error) return at;
+    const script = runnable(at.sprint, args.name);
+    if (script.error) return script;
+    if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title: 'P9 sprint script: run now, as you, outside every agent\'s mode: ' + said(script), kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (signal?.aborted) return { error: 'cancelled' };
+    const late = locked(caller); if (late) return late;
+    const now = runnable(at.sprint, args.name);
+    if (now.error || JSON.stringify(now) !== JSON.stringify(script)) return { error: 'scripts-changed', detail: 'The approved scripts changed while the user was asked. Read sprint_scripts and ask again.' };
+    return runNow(at.sprint, script, caller);
+  }
+  // The owner's own (the project page, desktop only): the library, and a run of one approved script.
+  // sprint named: that sprint's hooks.json (checked and saved as the tools do); left out: the library.
+  const known = (sprint) => ID.test(sprint ?? '') && chat.sprintFiles.exists(sprint);
+  const owner = {
+    library: () => ({ library: library(), points: POINTS, blocking: BLOCKING }),
+    save: (row, sprint) => (sprint === undefined ? libraryWrite((rows) => upsert(rows, row)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => upsert(rows, row))),
+    remove: (name, sprint) => (sprint === undefined ? libraryWrite((rows) => without(rows, name)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => without(rows, name))),
+    add(name, sprint) {
+      const row = library().find((r) => r.name === name);
+      return !known(sprint) ? { error: 'unknown-sprint' } : !row ? { error: 'unknown-script', name } : fileWrite(sprint, (rows) => upsert(rows, row));
+    },
+    run(sprint, name) {
+      if (!known(sprint)) return { error: 'unknown-sprint' };
+      const script = runnable(sprint, name);
+      return script.error ? script : runNow(sprint, script, 'owner');
+    },
+  };
+  return { fire, read, approved, save, remove, add, run: runAsked, owner };
 }

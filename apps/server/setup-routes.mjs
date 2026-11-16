@@ -249,6 +249,25 @@ export function setupRoutes(outer) {
       : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off', 'scripts-refused', 'script-refused'].includes(result.error) ? 400 : 500;
     return c.json(result, status);
   });
+  // Desktop only (SECURITY.md § Sprint scripts, "The library"): the owner's script library and a run of one approved
+  // script. No phone route. An agent has the tools instead (sprint_script_save, _remove, _add, run_sprint_script).
+  const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);
+  outer.app.get('/sprint-scripts', (c) => c.json(outer.mcp.ownerScripts.library()));
+  outer.app.post('/sprint-scripts', async (c) => {
+    // One of save (a row), remove (a name) or add (a library name, into a sprint); sprint: that sprint's hooks.json instead of the library.
+    const body = await outer.json(c), { sprint, ...rest } = body && typeof body === 'object' && !Array.isArray(body) ? body : {}, keys = Object.keys(rest).join();
+    const result = sprint !== undefined && typeof sprint !== 'string' ? { error: 'request-refused' }
+      : keys === 'save' && rest.save && typeof rest.save === 'object' && !Array.isArray(rest.save) ? outer.mcp.ownerScripts.save(rest.save, sprint)
+      : keys === 'remove' && typeof rest.remove === 'string' ? outer.mcp.ownerScripts.remove(rest.remove, sprint)
+      : keys === 'add' && typeof rest.add === 'string' && sprint !== undefined ? outer.mcp.ownerScripts.add(rest.add, sprint) : { error: 'request-refused' };
+    return c.json(result, scriptStatus(result));
+  });
+  outer.app.post('/sprints/:id/run-script', async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join() !== 'name' || typeof body.name !== 'string') return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp.ownerScripts.run(c.req.param('id'), body.name);
+    return c.json(result, scriptStatus(result));
+  });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
   outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));

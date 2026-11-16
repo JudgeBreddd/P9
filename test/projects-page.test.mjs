@@ -841,3 +841,78 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   assert.deepEqual(errors, []);
   console.log('PASS window-10: Start sprint held shows Starting… and sends one press; halfway says what was made; Start again keeps the lead and makes w2; the record shows by you and the plan\'s sha256');
 });
+
+// S18 (SECURITY.md § Sprint scripts, "The library"): the Sprint scripts window writes the rows the agent's tools write.
+test('projects: Sprint scripts S18 window makes, removes, keeps in the library, adds to a sprint and runs an approved script', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'S1' });
+  assert.equal(prep.status, 201, JSON.stringify(prep));
+  const sprint = prep.sprint, folder = prep.folder;
+  await writeFile(path.join(folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  await writeFile(path.join(folder, 'roles', 'lead.work.md'), 'config');
+  const onDisk = async () => JSON.parse(await readFile(path.join(folder, 'hooks.json'), 'utf8')).scripts, library = async () => (await call(instance, '/sprint-scripts')).library;
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const section = page.locator(`[data-sprint="${sprint}"]`), dlg = page.locator('#pjScripts'), said = dlg.locator('[data-ss-said]');
+  const rows = (where) => dlg.locator(`[data-ss-row="${where}"]`).evaluateAll((all) => all.map((li) => li.querySelector('.mono').textContent));
+  const press = (k, where, name) => (where ? dlg.locator(`[data-ss-row="${where}"]`, { hasText: name }) : dlg).locator(`[data-ss="${k}"]`).click();
+  const says = (re) => until(async () => re.test(await said.textContent()), async () => 'the window said ' + re + '; it says ' + await said.textContent());
+  await section.locator('[data-pj="spscripts"]').click();
+  await dlg.locator('h2', { hasText: 'Sprint scripts: S1' }).waitFor({ timeout: 10000 });
+  assert.deepEqual([await rows('approved'), await rows('sprint'), await rows('library')], [[], [], []]);
+  // Blocking is offered only at the points that can refuse a step.
+  const blocking = dlg.locator('[name=blocking]');
+  assert.equal(await blocking.isDisabled(), false, 'before-start cannot be blocking');
+  await blocking.check(); await dlg.locator('[name=point]').selectOption('after-close');
+  assert.deepEqual([await blocking.isDisabled(), await blocking.isChecked()], [true, false], 'after-close kept Blocking');
+  // A row P9 refuses is said and saved nowhere.
+  await dlg.locator('[name=name]').fill('mark <b>it</b>');
+  await press('save'); await says(/^Not done: .*command: 1 to 200 characters/);
+  assert.equal(await said.evaluate((e) => e.classList.contains('err')), true);
+  assert.equal(existsSync(path.join(folder, 'hooks.json')), false, 'a refused row made hooks.json');
+  // Save to sprint: in hooks.json, listed here and on the page behind as waiting for Start. What was typed stays.
+  await dlg.locator('[name=command]').fill('/usr/bin/touch ran-now.txt');
+  await press('save'); await says(/^In this sprint: mark <b>it<\/b>\. Not run until you press Start sprint, which approves it\.$/);
+  const script = { name: 'mark <b>it</b>', command: '/usr/bin/touch ran-now.txt', point: 'after-close', blocking: false };
+  assert.deepEqual(await onDisk(), [script]);
+  assert.deepEqual(await rows('sprint'), ['mark <b>it</b> (after-close): /usr/bin/touch ran-now.txt']);
+  assert.equal(await dlg.locator('b').count(), 0, 'a script name was drawn as HTML');
+  assert.equal(await dlg.locator('[name=command]').inputValue(), '/usr/bin/touch ran-now.txt');
+  assert.match(await section.locator('[data-sp-scripts="pending"]').textContent(), /^Start sprint approves this script\..*touch ran-now\.txt$/);
+  assert.equal(await dlg.locator('[data-ss="run"]').count(), 0, 'Run now is offered before any Start');
+  // Its row's Save to library keeps it for other sprints; Remove takes it out of this one; Add to sprint brings it back.
+  await press('tolib', 'sprint', 'mark'); await says(/^In your library: mark/);
+  assert.deepEqual([await library(), await rows('library')], [[script], ['mark <b>it</b> (after-close): /usr/bin/touch ran-now.txt']]);
+  await press('rm', 'sprint', 'mark'); await says(/^Removed from this sprint: mark/);
+  assert.deepEqual([await onDisk(), await rows('sprint'), await section.locator('[data-sp-scripts]').count()], [[], [], 0]);
+  await press('add', 'library', 'mark'); await says(/^In this sprint: mark .* Not run until you press Start sprint/);
+  assert.deepEqual(await onDisk(), [script]);
+  // Edit fills the form from the row; Save to library changes the library's copy and no sprint's.
+  await dlg.locator('[name=command]').fill(''); await press('libedit', 'library', 'mark');
+  assert.deepEqual([await dlg.locator('[name=name]').inputValue(), await dlg.locator('[name=command]').inputValue(), await dlg.locator('[name=point]').inputValue()], [script.name, script.command, 'after-close']);
+  await dlg.locator('[name=command]').fill('/usr/bin/touch other.txt'); await press('savelib'); await says(/^In your library: mark/);
+  assert.deepEqual([(await library())[0].command, (await onDisk())[0].command], ['/usr/bin/touch other.txt', script.command], 'a library edit changed the sprint, or did not save');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-scripts ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // Start approves the sprint's copy: only then is Run now offered, and it runs that copy in the sprint's folder.
+  await press('close'); assert.equal(await dlg.evaluate((d) => d.open), false);
+  await section.locator('[data-pj="spstart"]').click();
+  await until(async () => /^Started: lead\.$/.test(await section.locator('[data-sp-start]').textContent().catch(() => '')), async () => 'Start answered; it says ' + await section.locator('[data-sp-start]').textContent().catch(() => 'nothing'), 90000);
+  await section.locator('[data-pj="spscripts"]').click();
+  await dlg.locator('[data-ss-row="approved"]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await rows('approved'), ['mark <b>it</b> (after-close): /usr/bin/touch ran-now.txt']);
+  assert.equal(existsSync(path.join(folder, 'ran-now.txt')), false, 'the script ran before it was asked to');
+  await press('run', 'approved', 'mark'); await says(/^Ran mark <b>it<\/b>: exit 0 in \d+ ms\. The run is in hooks\.log\.$/);
+  assert.equal(existsSync(path.join(folder, 'ran-now.txt')), true, 'Run now did not run the approved command in the sprint folder');
+  assert.equal(existsSync(path.join(folder, 'other.txt')), false, 'the library\'s copy ran');
+  assert.match(await readFile(path.join(folder, 'hooks.log'), 'utf8'), / \| after-close \(run now\) \| mark <b>it<\/b> \| exit 0 \| /);
+  assert.equal(await section.locator('[data-pj="spfile"]', { hasText: 'hooks.log' }).count(), 1, 'the page behind does not list the run\'s log');
+  // Out of the library: the sprint keeps its copy.
+  await press('librm', 'library', 'mark'); await says(/^Removed from your library: mark/);
+  assert.deepEqual([await library(), await rows('library'), (await onDisk()).length], [[], [], 1]);
+  assert.deepEqual(errors, []);
+  console.log('PASS S18 page: the Sprint scripts window saved a row to the sprint and the library, refused a bad one, removed and added it back, edited the library alone, and ran only the copy Start approved');
+});

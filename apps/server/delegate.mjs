@@ -10,7 +10,7 @@ import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
 import { hashOf, notesLine } from './sprint-files.mjs';
-import { POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
+import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -31,6 +31,8 @@ const PROFILE = /^profile:[\w-]{1,80}$/; // a provider profile, as a provider: S
 
 export const DELEGATE_TOOLS = (input) => {
   const chat = { type: 'string', description: 'A chat ID from open_chat or list_chats.' };
+  const sprintArg = { type: 'string', description: 'A sprint id in your project. Left out: your own sprint.' };
+  const scriptRow = { name: { type: 'string', description: '1 to 60 characters, one line, no |.' }, command: { type: 'string', description: '1 to 200 characters, one line.' }, point: { type: 'string', enum: POINTS }, blocking: { type: 'boolean' } };
   const notFor = {
     open_chat: 'Do not start workers for work you have not assigned.', set_rules: 'Do not use rules to override the user.',
     send_chat: 'Do not use a note to request work.', wait_chat: 'Do not treat an ended turn as task completion.',
@@ -38,6 +40,8 @@ export const DELEGATE_TOOLS = (input) => {
     list_chats: 'Do not infer completion from a preview.', list_providers: 'Do not take a listed provider as one the user allowed.', ask_chat: 'Do not ask a peer to do your task for you.',
     answer_chat: 'Do not approve actions outside the task.', new_sprint: 'Do not make a sprint the user did not ask for.',
     start_sprint: 'Do not start a sprint the user has not agreed to.', sprint_scripts: 'Do not take a listed script as one you may run or approve.',
+    sprint_script_save: 'Do not write a script the user did not ask for.', sprint_script_remove: 'Do not remove a script you did not add unless the user asked.',
+    sprint_script_add: 'Do not take adding a script as approving it.', run_sprint_script: 'Do not run a script to get around a refusal.',
   };
   return [
     ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours. Named, each must be what one of the user\'s free Settings > Delegation rows starts; anything else is refused (delegation-refused, naming the field and what the rows allow), never swapped. mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
@@ -99,8 +103,18 @@ export const DELEGATE_TOOLS = (input) => {
     input({ sprint: { type: 'string', description: 'The id new_sprint returned.' } }, ['sprint'])],
     ['sprint_scripts', 'Read a sprint\'s scripts: commands P9 runs as the user at fixed points of the sprint, each given the sprint\'s state as JSON on its input. Returns the points (' + POINTS.join(', ') + '), '
       + 'which may block, which P9 fires today, the scripts the user approved at Start (the only ones that run), what hooks.json in the sprint folder holds now (or why it is refused), whether the two differ (pending), and the last lines of hooks.log. '
-      + 'To add a script, write hooks.json: { "scripts": [ { "name", "command", "point", "blocking"? } ] }; it runs only after the user starts the sprint again and approves it. This tool changes nothing.',
-    input({ sprint: { type: 'string', description: 'A sprint id in your project. Left out: your own sprint.' } })],
+      + 'Also returns the library: the user\'s saved scripts, usable in any sprint of any project (only text; nothing in it runs). To add or change a script use sprint_script_save, or copy one from the library with sprint_script_add; it runs only after the user starts the sprint again and approves it. This tool changes nothing.',
+    input({ sprint: sprintArg })],
+    ['sprint_script_save', 'Make or replace one sprint script by name: in a sprint\'s hooks.json, or with library: true in the user\'s library (kept for other sprints, in any project). A script is a name, a command (split on spaces, run without a shell, as the user), a point (' + POINTS.join(', ') + ') and blocking (only at ' + BLOCKING.join(', ') + '). '
+      + 'Saving approves nothing: a sprint\'s script runs only after the user starts the sprint again and approves it, and a change to the library changes no sprint. Refused while the agent lock is on.',
+    input({ ...scriptRow, library: { type: 'boolean', description: 'true: save to the library instead of a sprint.' }, sprint: sprintArg }, ['name', 'command', 'point'])],
+    ['sprint_script_remove', 'Remove one script by name from a sprint\'s hooks.json, or with library: true from the library. A script the user approved at Start keeps running until the user starts the sprint again. Refused while the agent lock is on.',
+    input({ name: scriptRow.name, library: { type: 'boolean', description: 'true: remove from the library instead of a sprint.' }, sprint: sprintArg }, ['name'])],
+    ['sprint_script_add', 'Copy one library script, by name, into a sprint\'s hooks.json (a script of that name there is replaced). It is a copy: a later change to the library does not change it. It runs only after the user starts the sprint again and approves it. Refused while the agent lock is on.',
+    input({ name: scriptRow.name, sprint: sprintArg }, ['name'])],
+    ['run_sprint_script', 'Run one of a sprint\'s approved scripts now, by name, after the user allows it in this chat (shown the whole command). It gets the sprint\'s state on its input like any run, with subject { manual: true, by }. Waits up to 60 s and returns its exit, its last output line and the time; the run is a line in hooks.log. '
+      + 'Only a script the user approved at Start runs: one that is only in hooks.json or the library is refused (script-not-approved).',
+    input({ name: scriptRow.name, sprint: sprintArg }, ['name'])],
   ].map(([name, description, schema]) => [name, description + (notFor[name] ? ' ' + notFor[name] : ''), schema]);
 };
 
@@ -356,7 +370,7 @@ export function createDelegate({ chat, allowed, usage }) {
     return { folder: parsed.folder, lead: checked.find((r) => r.key === 'lead'), rest };
   }
   // The sprint's scripts (sprint-hooks.mjs). A notice never delays or refuses: fire starts it and comes back.
-  const hooks = createHooks({ chat, usage, stateOf, rolesOf });
+  const hooks = createHooks({ chat, usage, stateOf, rolesOf, allowed });
   const notice = (sprint, point, subject) => hooks.fire(sprint, point, subject).catch(() => null);
   const STAGGER_MS = 1500; // ponytail: a guess at "so we don't crash or conflict", not measured
   const pause = (ms, signal) => new Promise((resolve) => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true }); });
@@ -890,6 +904,12 @@ export function createDelegate({ chat, allowed, usage }) {
     new_sprint: (args, caller) => newSprint(caller, args),
     start_sprint: (args, caller, signal) => startSprint(args.sprint, caller, signal),
     sprint_scripts: (args, caller) => hooks.read(caller, args.sprint),
+    sprint_script_save: (args, caller) => hooks.save(caller, args),
+    sprint_script_remove: (args, caller) => hooks.remove(caller, args),
+    sprint_script_add: (args, caller) => hooks.add(caller, args),
+    run_sprint_script: (args, caller, signal) => hooks.run(caller, args, signal),
+    // Not tools: the owner's own library and run (setup-routes.mjs, desktop only).
+    ownerScripts: hooks.owner,
     // Not a tool: the desktop's Start button (setup-routes.mjs), the owner's press.
     ownerStart: (sprint, signal, hooksHash) => startSprint(sprint, null, signal, hooksHash),
   };

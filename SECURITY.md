@@ -1079,7 +1079,30 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
   reads back from it in `log` is only as trustworthy as that.
 - **What an agent can read.** `sprint_scripts` gives an agent in the sprint's project the points, the approved
   scripts, what `hooks.json` holds now (or why it is refused), whether the two differ, and the last log lines. It
-  changes nothing. No agent tool approves a script, and none runs one.
+  changes nothing. No agent tool approves a script.
+- **The library.** Scripts you want in more than one sprint are kept in a library: rows of the same four fields, at
+  most 100, held in P9's database (the `prefs` table, key `sprint-scripts`), not in a file, so no agent's file tools
+  reach it and one library serves every project. It is the same list the Macro card will read. The Sprint scripts
+  window on the project page lists three things for a sprint: the scripts approved at Start, the rows of its
+  `hooks.json`, and the library; it makes, edits and removes a row in either place, saves a sprint's row to the
+  library and adds a library row to the sprint. The agent's tools do the same, checked by the same code:
+  `sprint_script_save` and `sprint_script_remove` (the sprint's `hooks.json`, or the library with `library: true`)
+  and `sprint_script_add` (a copy of a library row into the sprint). They are refused while the agent lock is on and,
+  for a sprint's rows, outside the caller's project. A library row is data: nothing runs from the library. Adding a
+  row to a sprint copies it into that sprint's `hooks.json`, where it waits for your Start like any row there, and a
+  later change to the library changes no sprint and no approved copy. So an agent that writes a hostile row into
+  the library gains what it had by writing `hooks.json`: a line you see, whole, beside the Start button before it can
+  run. Read the command each time; the name is the agent's to choose.
+- **Run now.** One approved script can be run on request, outside its point: the Run now button in the window (your
+  own press, on the desktop only), or the agent's `run_sprint_script`, which asks you first with the whole command in
+  the question, except in Unrestricted mode (agent lock and File protection both off), where it runs without asking,
+  as `run_script` does. Either way only the copy approved at Start runs, found by name; a row that is only in
+  `hooks.json` or only in the library is refused, with the reason. If the approved copy changed while you were
+  asked, nothing runs. The run is not blocking, has the 60-second limit, gets the same state on its input with
+  `subject: { manual: true, by }`, and adds its line to `hooks.log` with the point marked "(run now)". A manual run
+  carries the limit of the approval above: it runs whatever the named program holds at that moment.
+- **Where the owner's routes are.** `GET` and `POST /sprint-scripts` and `POST /sprints/:id/run-script` exist on the
+  desktop's connection only: a phone session gets 404, as for Start.
 - **Points nothing fires yet.** `before-merge`, `before-close`, `ci-red`, `gate-passed`, `pause`, `resume` and
   `after-close` are accepted in the file and approved like the rest, but P9 has no such action yet, so their scripts
   do not run.

@@ -631,6 +631,11 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(files.body.settings && !files.text.includes('settings.json'), files.text);
   // The wizard's writes and sign-in stay desktop-only (threat model rows 17, 31).
   for (const route of ['/setup/starter', '/setup/login', '/setup/login/code', '/setup/login/stop', '/setup/agent-terminal']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
+  // S18: the owner's script library and Run now are the desktop's alone (SECURITY.md § Sprint scripts).
+  assert.deepEqual([(await server.desk('/sprint-scripts')).body.library, (await server.remote('/sprint-scripts', { session: auth })).status], [[], 404]);
+  assert.equal((await server.remote('/sprint-scripts', { method: 'POST', session: auth, body: { save: { name: 'p', command: '/usr/bin/true', point: 'after-close' } } })).status, 404);
+  assert.deepEqual((await server.desk('/sprint-scripts')).body.library, [], 'a phone session wrote the script library');
+  console.log('PASS S18 phone: the script library answers the desktop and is 404 for a signed-in phone, read and write');
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {
     const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });
