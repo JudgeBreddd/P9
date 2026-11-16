@@ -601,10 +601,18 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
   start with no shell, the short allow-list environment and a 10 s limit, reads the first
   line, and keeps the key in memory only for that start. The command is split on spaces
   into a program and its arguments; nothing in it is read by a shell.
-- **Who can set one.** The desktop window only. The phone has no route to a profile. The P9
-  MCP server and agents have none to add, change or remove one, or to read its base URL, its
-  key or its command. The command is run as you, by the
+- **Who can set one.** The desktop window only. The phone, the P9 MCP server and agents have
+  no route to add, change or remove a profile, or to read its base URL, its key or its
+  command. The command is run as you, by the
   daemon; the desktop window can already open a real terminal, so it gains nothing by it.
+- **On the phone (threat model row O48p).** A signed-in phone reads each profile's id, name
+  and model names (`GET /profiles/names`), so its New chat can offer them, and starts a chat
+  on one with the same request the desktop sends. That read never holds the base URL, the
+  key, the key command or whether one is set, and the desktop's `/profiles` routes answer a
+  phone 404. A chat started from the phone runs on the computer P9 runs on, with that
+  profile's key, exactly as one started at the desktop: everything under "Where the key
+  goes" and "What the service sees" holds for it. The phone has no notice beside the row;
+  the choice of service was made when the profile was typed on the desktop.
 - **What an agent can read.** `list_providers` (§ Delegate) gives a chat's agent each
   profile's id, name and model names, and nothing else of it: what it needs to name a profile
   in `open_chat` or in a sprint's roles.json, the same choice the desktop's pickers give you.

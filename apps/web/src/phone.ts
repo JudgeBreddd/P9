@@ -781,7 +781,15 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
   const button = (event.target as Element).closest('button'); if (!button) return;
   if (button.dataset.back !== undefined) back();
   else if (button.id === 'stopTurn') stopChat(openId);
-  else if (button.id === 'newChat') openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>`);
+  else if (button.id === 'newChat') {
+    openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>`);
+    // O48p: one row per model of each provider profile (id, name and model names are all the phone is given). A daemon
+    // without the route, or offline: the two agents alone.
+    if (navigator.onLine) request('/profiles/names').then((body) => {
+      if (!sheet.open || one('#sheetTitle').textContent !== 'New chat' || one('#sheetBody').querySelector('[data-profile]')) return;
+      one('#sheetBody').insertAdjacentHTML('beforeend', (Array.isArray(body.profiles) ? body.profiles : []).map((p: { id: string; name: string; models: string[] }) => p.models.map((m) => `<button type="button" class="opt" data-profile="${escape(p.id)}" data-profile-model="${escape(m)}">New ${escape(p.name)} chat · ${escape(m)}</button>`).join('')).join(''));
+    }).catch(() => {});
+  }
   else if (button.id === 'modelBtn') {
     const model = one<HTMLSelectElement>('#model'), options = [...model.options];
     openSheet('Model', options.length ? options.map((option) => `<button type="button" class="opt" data-model="${escape(option.value)}" aria-checked="${option.selected}">${escape(option.textContent)}</button>`).join('') : '<div class="empty">This agent lists no models.</div>');
@@ -790,15 +798,15 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
   }
 });
 one('#sheetBody').addEventListener('click', async (event) => {
-  const target = event.target as Element, pick = target.closest<HTMLElement>('[data-model]'), make = target.closest<HTMLElement>('[data-new]');
+  const target = event.target as Element, pick = target.closest<HTMLElement>('[data-model]'), make = target.closest<HTMLElement>('[data-new],[data-profile]'), agent = make?.dataset.new ?? 'claude'; // a profile chat runs on Claude
   if (pick) { const model = one<HTMLSelectElement>('#model'); model.value = pick.dataset.model!; model.dispatchEvent(new Event('change')); barSig = ''; sheet.close(); render(); }
   if (make) {
     if (!navigator.onLine) return;
     sheet.close();
-    const result = await mutate('/chat', { provider: make.dataset.new });
+    const result = await mutate('/chat', { provider: agent, ...(make.dataset.profile && { profile: make.dataset.profile, model: make.dataset.profileModel }) });
     if (result.status !== 201) return;
     // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
-    const last = localStorage.getItem('p9-mode:' + make.dataset.new);
+    const last = localStorage.getItem('p9-mode:' + agent);
     if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
     await loadChat(); openChat(String(result.body.conversation));
   }
