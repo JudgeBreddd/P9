@@ -311,7 +311,7 @@ function ask(s, own) {
 // but whether it is folded.
 // ponytail: folded per chat for this window only (a Set), and a chat opens folded where the card would cover the text (narrow window, Split).
 const SPRINT = { folded: new Map() };
-const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null }); // the contract's optional fields: a chat without them looks as it does today
+const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null, work: c.queue ?? null }); // the contract's optional fields: a chat without them looks as it does today. work: the daemon's work queue {done, total, items} (its queue; s.queue here is the composer's)
 const SP_LABEL = { working: 'Working', idle: 'Idle', asked: 'Asked', ready: 'Ready', passed: 'Passed', fix: 'Fix', stopped: 'Stopped' };
 // A verdict belongs to one exact commit (spec C): one for an older commit than the one reported ready is not a pass of this version.
 const verdictOf = k => k.verdict?.commit && k.ready?.commit && k.verdict.commit === k.ready.commit ? k.verdict : null; // no ready commit, or no commit on the verdict: nothing is verified
@@ -335,7 +335,7 @@ function sprintCard(s) {
   const workers = kin(s.id); if (!workers.length) return '';
   const project = projectOf(s, (outer.S.projects || []).filter(p => !p.archived));
   const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
-  const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.task?.item ? 1 : 0, passed = st === 'passed' ? 1 : 0;
+  const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.work?.total ?? (k.task?.item ? 1 : 0), passed = k.work ? k.work.done : st === 'passed' ? 1 : 0; // 709: a queue worker's ring is its plan items, done as P9's review record counts them (Tyler, 2026-11-15)
     return { k, st, at, html: `<li><button type="button" class="sp-row" data-status="${st}" data-sprint-open="${esc(k.id)}" title="Open ${esc(k.title)}">${ring(st, passed, items || 1)}<span class="sp-main"><span class="sp-name">${agentDot(k.agent)}<b class="truncate">${esc(k.title)}</b></span><span class="sp-item truncate">${esc(k.task?.item || 'No item set')}</span></span><span class="sp-st"><span class="sp-label">${SP_LABEL[st]}</span>${since(at)}</span></button></li>` }; });
   const asks = workers.filter(k => k.pending && k.state === 'running').map(askOf).filter(Boolean).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
   const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
@@ -371,11 +371,11 @@ function placeSprints() {
     sp.querySelector('[data-sprint-fold]')?.setAttribute('aria-expanded', String(open));
   }
 }
-// The live fields (task, ready, verdict, idleSince) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
+// The live fields (task, ready, verdict, idleSince, work) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
 // Until then a batch of events marks the list stale and it is read again, a field the list no longer has cleared.
-const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent]));
+const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent]));
   for (const c of conversations) { const s = outer.S.sessions.find(x => x.id === c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
-  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.parent])); };
+  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent])); };
 setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
 const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));

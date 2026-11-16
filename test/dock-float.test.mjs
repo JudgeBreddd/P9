@@ -60,7 +60,12 @@ test('Floating Shell dock: nothing light drawn over the terminal', { skip: proce
     await evidence(page, name);
     return layout();
   };
-  for (const n of [1, 2, 3]) { await type('echo LINE""' + n); await shows('LINE' + n); }
+  // O83: each line is longer than the floating terminal is wide and shorter than the docked one, so docking unwraps it
+  // (on CI a long host name did this by chance). Docking must not leave blank rows above it.
+  await shows('$');
+  const prompt = await page.evaluate(() => [...document.querySelectorAll('#termView .xterm-rows > div')].map((row) => row.textContent.trimEnd()).filter(Boolean).at(-1).length);
+  const pad = 'x'.repeat(Math.max(0, 90 - prompt - 'echo LINE""1 #'.length));
+  for (const n of [1, 2, 3]) { await type('echo LINE""' + n + ' #' + pad); await shows('LINE' + n); }
   const floated = await reopen('dock-float-reopen');
   await page.click('#dFloat'); await page.waitForTimeout(500);
   const docked = await reopen('dock-drawer-reopen');
