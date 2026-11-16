@@ -269,6 +269,43 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   console.log('PASS defaults: Default model and effort offered from the lists seen, applied to new chats here only, kept across a restart');
 });
 
+// #222 review (FIX1): a Default save names only its own field and the daemon merges it. Forced: the daemon is paused (SIGSTOP) so the
+// model save is still unanswered when the effort is picked; and a second window, opened before the first one's pick, changes
+// another field. Before the fix each save sent the whole object from the window's last answer and put back the older value.
+test('O133 FIX1: overlapping Default saves keep both fields: a held save, then a second pick; two windows editing different fields; the one-time move fills only empty fields', { timeout: 180000, skip: process.platform === 'win32' }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-fix1-'));
+  const one = await launch(t, instance, path.join(dir, 'one')), two = await launch(t, instance, path.join(dir, 'two'));
+  const settings = async (page) => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]');
+    for (const k of ['model', 'effort']) await page.locator(`[data-default-${k}="claude"] option[value="high"], [data-default-${k}="claude"] option[value="haiku"]`).first().waitFor({ state: 'attached', timeout: 15000 }); };
+  await settings(one.page); await settings(two.page);
+  // Held: both picks are made while the daemon answers nothing.
+  instance.child.kill('SIGSTOP');
+  try { await one.page.selectOption('[data-default-model="claude"]', 'haiku'); await one.page.selectOption('[data-default-effort="claude"]', 'high'); await new Promise((r) => setTimeout(r, 1000)); }
+  finally { instance.child.kill('SIGCONT'); }
+  await until(async () => JSON.stringify((await call(instance, '/start-defaults')).claude) === JSON.stringify({ model: 'haiku', effort: 'high' }), 'both held picks kept');
+  await new Promise((r) => setTimeout(r, 1000));
+  assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'haiku', effort: 'high' }, 'still both after every answer came back');
+  assert.deepEqual([await one.page.locator('[data-default-model="claude"]').inputValue(), await one.page.locator('[data-default-effort="claude"]').inputValue()], ['haiku', 'high']);
+  // Window two read the defaults before those picks; its own pick of Codex effort leaves Claude's as window one saved them.
+  await two.page.selectOption('[data-default-effort="codex"]', 'low');
+  await until(async () => (await call(instance, '/start-defaults')).codex.effort === 'low', 'window two saved');
+  const kept = await call(instance, '/start-defaults');
+  assert.deepEqual([kept.claude, kept.codex], [{ model: 'haiku', effort: 'high' }, { model: '', effort: 'low' }], 'window two did not put back its older Claude values');
+  // Window two changes Claude's model; window one's effort stays.
+  await two.page.selectOption('[data-default-model="claude"]', 'opus');
+  await until(async () => (await call(instance, '/start-defaults')).claude.model === 'opus', 'window two saved the model');
+  assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'opus', effort: 'high' });
+  // The one-time move of a window's own old value (onlyEmpty) fills an empty field and never replaces a set one.
+  await call(instance, '/start-defaults', 'POST', { set: { claude: { model: 'haiku', effort: 'low' }, codex: { model: 'opus' } }, onlyEmpty: true });
+  const moved = await call(instance, '/start-defaults');
+  assert.deepEqual([moved.claude, moved.codex], [{ model: 'opus', effort: 'high' }, { model: 'opus', effort: 'low' }]);
+  // A whole-object body (the old shape) is refused, as is an unknown field.
+  assert.equal((await call(instance, '/start-defaults', 'POST', { claude: { model: '', effort: '' }, codex: { model: '', effort: '' } })).status, 400);
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { claude: { mode: 'x' } } })).status, 400);
+  console.log('PASS O133 FIX1: overlapping and two-window Default saves keep every field');
+});
+
 // O32: a chat on Opus, High and Plan is still on them after the daemon restarts and the app restarts (an update does both):
 // the pills show the chat's own, and the next message runs on them. Since then another chat was last put in Manual, so a
 // new chat would start in Manual: this one does not.

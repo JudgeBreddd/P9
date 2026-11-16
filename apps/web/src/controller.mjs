@@ -184,13 +184,16 @@ let starts = null;
 const defaultModel = a => starts?.[a]?.model || '', defaultEffort = a => starts?.[a]?.effort || '';
 async function loadStarts() {
   const r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
-  const old = k => localStorage.getItem(k) || '', keys = a => ['p9-model-default:' + a, 'p9-effort-default:' + a];
-  const want = Object.fromEntries(Object.entries(r.body).map(([a, v]) => [a, { model: v.model || old(keys(a)[0]), effort: v.effort || old(keys(a)[1]) }]));
-  starts = r.body;
-  if (JSON.stringify(want) !== JSON.stringify(r.body)) { const w = await window.p9.chat('newChatDefaults', want).catch(() => null); if (w?.status === 200) starts = w.body; else return; }
-  for (const a of Object.keys(r.body)) keys(a).forEach(k => localStorage.removeItem(k));
+  const keys = a => ({ model: 'p9-model-default:' + a, effort: 'p9-effort-default:' + a });
+  const set = Object.fromEntries(Object.keys(r.body).map(a => [a, Object.fromEntries(Object.entries(keys(a)).filter(([k, key]) => !r.body[a][k] && localStorage.getItem(key)).map(([k, key]) => [k, localStorage.getItem(key)]))]).filter(([, f]) => Object.keys(f).length));
+  if (!starts) starts = r.body;
+  if (Object.keys(set).length) { const w = await window.p9.chat('newChatDefaults', { set, onlyEmpty: true }).catch(() => null); if (w?.status !== 200) return; starts = w.body; }
+  for (const a of Object.keys(r.body)) Object.values(keys(a)).forEach(k => localStorage.removeItem(k));
 }
-async function saveStarts(a, kind, v) { if (!starts) await loadStarts(); const want = { ...starts, [a]: { ...starts?.[a], [kind]: v } }; const r = await window.p9?.chat?.('newChatDefaults', want).catch(() => null); if (r?.status === 200) starts = r.body; return r?.status === 200; }
+// Sends only the field picked; the daemon merges it. Only the newest save's answer is kept, so an older one answering late never
+// shows a value the daemon has already replaced.
+let startsSeq = 0;
+async function saveStarts(a, kind, v) { const n = ++startsSeq; const r = await window.p9?.chat?.('newChatDefaults', { set: { [a]: { [kind]: v } } }).catch(() => null); if (r?.status === 200 && n === startsSeq) starts = r.body; return r?.status === 200; }
 const fresh = [];
 // O48 provider profiles (threat model "Provider profiles"): what the daemon lists, never a key: { id, name, baseUrl, models,
 // secret: 'key' | 'command' | 'none' }. Read at the first chat list and after each Settings change.

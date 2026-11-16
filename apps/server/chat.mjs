@@ -1467,7 +1467,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     newChatDefaults: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'start-defaults'").get()?.value ?? '{}'); } catch { v = {}; }
       const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : '');
       return Object.fromEntries(Object.keys(MODES).map((a) => [a, { model: str(v?.[a]?.model), effort: str(v?.[a]?.effort) }])); },
-    setNewChatDefaults(value) { db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(value)); return this.newChatDefaults(); },
+    // #222 review: a save names only the fields it changes ({ codex: { effort: 'high' } }) and is merged into what is kept, so two
+    // picks in flight, or two windows, never put back each other's older value. onlyEmpty (the one-time move of a value the window
+    // kept itself) fills a field only while it is still ''.
+    setNewChatDefaults(patch, onlyEmpty = false) { const v = this.newChatDefaults();
+      for (const [a, f] of Object.entries(patch)) for (const [k, x] of Object.entries(f)) if (!onlyEmpty || !v[a][k]) v[a][k] = x;
+      db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(v)); return this.newChatDefaults(); },
     // Which Settings row a worker started on (0 is the first); kept so a row frees only when its worker stops.
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
     setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },
