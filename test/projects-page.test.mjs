@@ -768,10 +768,31 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
       const r = await h(e, action, ...rest); if (action === 'startSprint') (globalThis.answers ||= []).push(JSON.stringify(r).slice(0, 600)); return r;
     });
   });
-  // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
+  // S19: hooks.json is changed by someone else while this press's draft saves (the save's reply carries every file).
+  // The press approved the scripts drawn with its button, so it is not sent: the new list shows and waits for a press.
+  const hooksFile = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json');
+  const putHooks = async (rows) => assert.equal((await call(instance, '/projects/' + p.id + '/sprint-file', 'POST', { lead: sprint, name: 'hooks.json', hash: (await hooksFile()).hash, text: JSON.stringify({ scripts: rows }) })).status, 200);
   await section.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
   await app.evaluate(() => { globalThis.saves = []; });
-  const box = section.locator('[data-sp-box]'); await box.fill((await box.inputValue()) + '\nApproved as edited.\n');
+  const box = section.locator('[data-sp-box]'); await box.fill((await box.inputValue()) + '\nFirst draft.\n');
+  await start.click();
+  await until(() => app.evaluate(() => globalThis.saves.length > 0), 'the first draft\'s save held');
+  await putHooks([script, { name: 'inject', command: '/usr/bin/false', point: 'before-start', blocking: true }]);
+  await app.evaluate(() => { const held = globalThis.saves; globalThis.saves = null; held.forEach((go) => go()); });
+  await said.waitFor({ timeout: 10000 });
+  assert.match(await said.textContent(), /^Not started: hooks\.json changed before your press went out\./);
+  assert.equal(await app.evaluate(() => globalThis.presses), 0, 'a press went out for scripts its owner never saw');
+  assert.match(await pendingScripts.textContent(), /inject \(before-start, blocking\): \/usr\/bin\/false$/);
+  assert.equal((await start.textContent()).trim(), 'Start sprint'); assert.equal(await start.isDisabled(), false);
+  assert.equal((await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).started, undefined);
+  await putHooks([script]);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads a project's files when it is opened
+  await until(async () => !/inject/.test(await pendingScripts.textContent()), 'the page shows the restored hooks.json');
+  console.log('PASS S19 page held save: a hooks.json that arrived while the draft saved is shown, not approved');
+  // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
+  const box0 = section.locator('[data-sp-box]'); if (!await box0.count()) await section.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await app.evaluate(() => { globalThis.saves = []; });
+  await box.fill((await box.inputValue()) + '\nApproved as edited.\n');
   await start.click();
   await until(() => app.evaluate(() => globalThis.saves.length > 0), 'the draft\'s save held');
   assert.equal(await start.isDisabled(), true, 'the button is on while its draft saves');

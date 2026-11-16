@@ -1040,8 +1040,9 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
 - **A script runs as you.** P9 runs the command as your user, outside every agent's mode and sandbox: no shell (the
   command is split on spaces into a program and its arguments), the short allow-list environment, the sprint folder
   as its working folder, the sprint's state as JSON on its input, a limit of 60 seconds for a blocking run and 300
-  for a notice, and at most 64 KiB of output kept. At the limit P9 ends the program it started; a program that one
-  started is not followed. This is the same trust as a setup command (§ Worker folders), so it gets the same rule:
+  for a notice, and at most 64 KiB of output kept. At the limit P9 ends the program it started and stops waiting; a program that one
+  started is not followed, and one that keeps the script's output open does not hold the action past the limit or
+  past the script's own end. This is the same trust as a setup command (§ Worker folders), so it gets the same rule:
   nothing runs that you did not approve.
 - **P9 runs the copy you approved, never the file.** The lead's agent and its workers can edit `hooks.json`, as they
   can every sprint file. So P9 does not run what the file says: at Start it reads the file, and your approval stores
@@ -1051,7 +1052,9 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
   nothing.
 - **You see every command before you approve it.** The project page lists each script (name, point, blocking, the
   whole command) beside the Start button, and the press sends the SHA-256 of the `hooks.json` the page showed; P9
-  refuses the press if the file is no longer that one, so a script slipped in after you looked is not approved. For an
+  refuses the press if the file is no longer that one, so a script slipped in after you looked is not approved. The hash is the one of
+  the list drawn with the button you pressed: if a newer `hooks.json` reaches the page before the press goes out (while
+  an open draft saves), the press is not sent, the page shows the new list and says to press again. For an
   agent's `start_sprint`, the question P9 asks you lists the same four things for every script, and after your yes P9
   reads the file again and refuses if it changed while you were asked.
 - **What the approval does not cover.** P9 approves the command line, not the bytes of the program it names. A
@@ -1061,7 +1064,8 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
 - **Blocking.** A blocking script that exits non-zero, runs past its limit or cannot be started refuses the action:
   Start makes nothing and records nothing, a worker is not started. The refusal carries the script's name, its exit
   and its last output line (at most 300 characters, control characters removed), to the page or to the agent's tool.
-  A script's exit 0 allows nothing by itself: every other check of the action still applies after it. A notice never
+  A script's exit 0 allows nothing by itself: every other check of the action still applies after it, and
+  Delegation off and the agent lock are read again when `before-start` ends, before anything is recorded or made. A notice never
   delays or refuses anything; its result is only logged.
 - **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
   sprint: its id, title and folder, the approval record, the project's id and name, the role rows, the plan's items

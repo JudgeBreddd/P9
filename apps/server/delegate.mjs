@@ -425,6 +425,9 @@ export function createDelegate({ chat, allowed, usage }) {
       const refused = await hooks.fire(sprint, 'before-start', null, file.scripts);
       if (refused) return refused;
       if (signal?.aborted) return { error: 'cancelled' };
+      // A script may have taken a minute: the switches are read again before anything is recorded or made.
+      if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
+      if (chat.delegation().start === 'off') return OFF;
       // The press is the approval record: the plan's hash, when and by whom.
       const started = { at: Date.now(), plan, by: caller ?? 'owner', scripts: file.scripts };
       chat.projects.recordStart(sprint, started);

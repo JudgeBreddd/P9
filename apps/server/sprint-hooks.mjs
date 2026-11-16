@@ -44,6 +44,7 @@ export function parse(text) {
   return { scripts };
 }
 // What the owner is shown before approving: one line per script, the whole command.
+const DRAIN = 250; // ms after the script ends for its last output to arrive
 export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : ''}): ${s.command}`;
 
 // One run: no shell, the allow-list environment, input on stdin, the last KEEP bytes of output kept. Never throws.
@@ -52,19 +53,23 @@ export function run(command, input, { cwd, timeout }) {
   const began = Date.now();
   return new Promise((resolve) => {
     const argv = command.split(/\s+/).filter(Boolean); // ponytail: split on spaces, no quoting; a path with a space needs a wrapper script
-    let child, out = Buffer.alloc(0), late = false, done = false;
+    let child, out = Buffer.alloc(0), late = false, done = false, drain;
     const end = (exit, reason) => {
-      if (done) return; done = true; clearTimeout(timer);
+      if (done) return; done = true; clearTimeout(timer); clearTimeout(drain);
+      // The pipes are let go here: a program the script started may hold them open long after it.
+      for (const pipe of [child?.stdin, child?.stdout, child?.stderr]) { try { pipe?.destroy(); } catch { /* closed */ } }
       const last = out.toString('utf8').split(/\r?\n/).map((l) => clean(l)).filter(Boolean).at(-1) ?? '';
       resolve({ exit, reason, ms: Date.now() - began, line: last });
     };
     // ponytail: the child alone is ended; a program it started is not followed (SECURITY.md § Sprint scripts).
-    const timer = setTimeout(() => { late = true; try { child?.kill('SIGKILL'); } catch { /* gone */ } }, timeout);
+    const timer = setTimeout(() => { late = true; try { child?.kill('SIGKILL'); } catch { /* gone */ } end(null, 'timeout'); }, timeout);
     try { child = spawn(argv[0], argv.slice(1), { cwd, env: childEnv(), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); }
     catch { end(null, 'not-started'); return; }
     const keep = (chunk) => { out = Buffer.concat([out, chunk]); if (out.length > KEEP) out = out.subarray(out.length - KEEP); };
     child.stdout.on('data', keep); child.stderr.on('data', keep);
     child.on('error', () => end(null, 'not-started'));
+    // The script's own end settles the run: 'close' alone would wait for every program holding its output.
+    child.on('exit', (code) => { drain = setTimeout(() => end(late ? null : code, late ? 'timeout' : code === null ? 'killed' : null), DRAIN); });
     child.on('close', (code) => end(late ? null : code, late ? 'timeout' : code === null ? 'killed' : null));
     child.stdin.on('error', () => {}); // a script that never reads its input
     child.stdin.end(input);

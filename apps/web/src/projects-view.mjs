@@ -46,7 +46,7 @@ export function installProjects(o, api) {
       + (file === null ? '<p class="hint" data-sp-scripts="unread" role="alert">hooks.json is not a scripts list: Start will refuse it and say why.</p>'
         : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
         : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
-  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
+  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
@@ -283,10 +283,13 @@ export function installProjects(o, api) {
     // An open file's draft is saved first: the press approves the plan as it is on disk. The page is read again after, in
     // place (the user may be elsewhere by then: nothing is opened for them).
     // The press is out from the click, its draft's save too: a second press while that save is held sends nothing.
-    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return; starting.add(lead); clearTimeout(saveT); renderPage(); fillBox(false);
+    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return;
+      // The scripts this press approves are the ones drawn with its button (SECURITY.md § Sprint scripts): a hooks.json that
+      // reached the page since (a save's reply carries every file) is shown, and waits for a press of its own.
+      const shown = b.dataset.hooks ?? '', hooksNow = () => cur?.sprints?.find(s => s.lead === lead)?.files.find(f => f.name === 'hooks.json')?.hash ?? ''; starting.add(lead); clearTimeout(saveT); renderPage(); fillBox(false);
       if (!await saveSprint().catch(() => false)) { starting.delete(lead); renderPage(); return fillBox(); }
+      if (hooksNow() !== shown) { starting.delete(lead); startSaid.set(lead, 'Not started: hooks.json changed before your press went out. Look at the scripts listed here, then press Start again.'); renderPage(); return fillBox(); }
       pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
-      const shown = cur?.sprints?.find(s => s.lead === lead)?.files.find(f => f.name === 'hooks.json')?.hash;
       const r = await call('startSprint', { sprint: lead, ...(shown && { hooks: shown }) }, { quiet: true }).finally(() => starting.delete(lead));
       startSaid.set(lead, startText(r));
       const again = cur?.id === id && await call('project', { id }, { quiet: true });

@@ -73,8 +73,19 @@ test('Sprint scripts: hooks.json is refused by row and field; a run gets its inp
   // No shell: the words after the program are its arguments, never a second command.
   const shell = await run(`${node} echo.mjs ; touch ${path.join(dir, 'made')}`, '{"n":0}', { cwd: dir, timeout: 20000 });
   assert.equal(shell.exit, 0); assert.equal(fs.existsSync(path.join(dir, 'made')), false);
+  // A program the script started keeps the script's output open: the run still ends, at the script's end or the limit.
+  fs.writeFileSync(path.join(dir, 'hold.mjs'), `import { spawn } from 'node:child_process'; import fs from 'node:fs';
+const kid = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'inherit', detached: true }); kid.unref();
+fs.writeFileSync('kid-' + (process.argv[2] ?? 'go'), String(kid.pid)); console.log('bye'); if (process.argv[2] === 'stay') setTimeout(() => {}, 60000);`);
+  const endKid = (name) => { try { process.kill(Number(fs.readFileSync(path.join(dir, 'kid-' + name), 'utf8')), 'SIGKILL'); } catch { /* gone */ } };
+  try {
+    const held = await run(`${node} hold.mjs stay`, '{}', { cwd: dir, timeout: 1500 });
+    assert.deepEqual([held.exit, held.reason, held.ms < 6000], [null, 'timeout', true], 'a held pipe kept a timed-out run open: ' + JSON.stringify(held));
+    const gone = await run(`${node} hold.mjs`, '{}', { cwd: dir, timeout: 15000 });
+    assert.deepEqual([gone.exit, gone.reason, gone.line, gone.ms < 6000], [0, null, 'bye', true], 'a held pipe kept a finished run open: ' + JSON.stringify(gone));
+  } finally { endKid('stay'); endKid('go'); }
   delete process.env.P9_TEST_SECRET;
-  console.log('PASS S19 unit: hooks.json refusals by row and field; run passes stdin, keeps the last line, times out, runs no shell');
+  console.log('PASS S19 unit: hooks.json refusals by row and field; run passes stdin, keeps the last line, times out, runs no shell; a program holding the output does not hold the run');
 });
 
 test('Sprint scripts: Start approves the scripts by the file\'s hash and P9 runs only that copy, each with the sprint\'s state on stdin; a blocking failure refuses by name; a file edited after Start runs nothing', { timeout: 300000 }, async (t) => {
@@ -95,8 +106,9 @@ test('Sprint scripts: Start approves the scripts by the file\'s hash and P9 runs
   // The hook: every run's stdin goes to hook-out.jsonl beside it; refuse-<point> beside it makes it fail with exit 3.
   const hook = path.join(ws, 'hook.mjs'), outFile = path.join(ws, 'hook-out.jsonl'), node = process.execPath;
   fs.writeFileSync(hook, `import fs from 'node:fs'; import path from 'node:path';
-let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { const j = JSON.parse(s), here = import.meta.dirname;
+let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => { const j = JSON.parse(s), here = import.meta.dirname;
   fs.appendFileSync(path.join(here, 'hook-out.jsonl'), JSON.stringify({ ...j, cwd: process.cwd() }) + '\\n');
+  while (fs.existsSync(path.join(here, 'hold-' + j.point))) await new Promise((r) => setTimeout(r, 50));
   if (fs.existsSync(path.join(here, 'refuse-' + j.point))) { console.log('first line'); console.log('no: ' + j.point); process.exit(3); } });`);
   fs.writeFileSync(path.join(ws, 'evil.mjs'), `import fs from 'node:fs'; import path from 'node:path'; fs.writeFileSync(path.join(import.meta.dirname, 'evil-ran'), '1'); process.exit(7);`);
   const cmd = `${node} ${hook}`; assert.ok(cmd.length <= 200, 'the test\'s own command is too long: ' + cmd.length);
@@ -107,7 +119,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { const
     { name: 'gate', command: cmd, point: 'before-new-worker', blocking: true }, { name: 'folder', command: cmd, point: 'worker-folder-made', blocking: false },
     { name: 'rdy', command: cmd, point: 'before-ready', blocking: false }, { name: 'later', command: cmd, point: 'before-merge', blocking: true },
   ];
-  const before = (await rows(instance)).length;
+  let before = (await rows(instance)).length;
   const press = (body = {}) => call(instance, `/sprints/${sprint}/start`, 'POST', body);
 
   // A file P9 cannot read as scripts: Start refuses and names the row and field.
@@ -131,6 +143,34 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { const
   assert.equal((await rows(instance)).length, before, 'a refused start made a chat');
   assert.match(fs.readFileSync(path.join(s.folder, 'hooks.log'), 'utf8'), /^\S+Z \| before-start \| check \| exit 3 \| \d+ ms \| no: before-start\n$/);
   fs.rmSync(path.join(ws, 'refuse-before-start')); fs.rmSync(outFile);
+  // A switch turned while before-start runs (it may take a minute) is obeyed: nothing is recorded or made.
+  const hold = path.join(ws, 'hold-before-start'), was = (await call(instance, '/delegation')).body;
+  fs.writeFileSync(hold, '');
+  let going = press({ hooks: shown.hash }); await ran('before-start');
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: was.max, workers: was.workers ?? [] })).status, 200);
+  fs.rmSync(hold); got = await going;
+  assert.equal(got.body.error, 'delegate-off', JSON.stringify(got.body));
+  assert.equal((await page()).started, undefined, 'a start refused after its script left an approval record');
+  assert.equal((await rows(instance)).length, before, 'a start refused after its script made a chat');
+  assert.equal((await call(instance, '/delegation', 'POST', { start: was.start, max: was.max, workers: was.workers ?? [] })).status, 200);
+  fs.rmSync(outFile);
+  // The same for an agent's start_sprint and the agent lock: the user's yes, then the lock while the script runs.
+  const asker = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+  await call(instance, `/chat/${asker}/prompt`, 'POST', { text: 'mcp' });
+  const A = await attach(t, instance, asker);
+  fs.writeFileSync(hold, '');
+  going = A.tool('start_sprint', { sprint });
+  const ask = await eventually(async () => (await events(instance, asker)).find((e) => e.type === 'approval'), 'the start question');
+  assert.match(ask.data.toolCall.title, /It also approves these 6 scripts/);
+  await call(instance, `/chat/${asker}/answer`, 'POST', { request: ask.data.request, answer: { optionId: 'allow' } });
+  await ran('before-start');
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).status, 200);
+  fs.rmSync(hold); got = await going;
+  assert.equal(got.error, 'agent-lock-on', JSON.stringify(got));
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: false })).status, 200);
+  assert.equal((await page()).started, undefined, 'a locked start left an approval record');
+  assert.equal((await rows(instance)).length, before + 1, 'a locked start made a chat');
+  fs.rmSync(outFile);
 
   // The press that approves: the record holds the scripts, and each run is told the sprint's state.
   got = await press({ hooks: shown.hash });
@@ -146,7 +186,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { const
   assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null }]);
   assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, review: null }]);
   assert.deepEqual([bs.workers, bs.verdicts], [[], []]);
-  assert.equal(bs.log.length, 1, 'the earlier refusal is in the state\'s log'); assert.match(bs.log[0], /check \| exit 3/);
+  assert.equal(bs.log.length, 3, 'the earlier refusal and the two held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
   assert.ok(!JSON.stringify(bs).includes(instance.credentials.token ?? '\u0000no-token'), 'the state carries the daemon\'s token');
   const ss = await ran('sprint-start');
   assert.deepEqual([ss.blocking, ss.script.name, ss.sprint.started.by, ss.sprint.started.plan], [false, 'started', 'owner', listed.started.plan]);
