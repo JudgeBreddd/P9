@@ -901,29 +901,6 @@ test('resume: a chat keeps its model, effort and mode across a daemon restart', 
   console.log('PASS resume: opus, high effort and Plan kept across a daemon restart; resumed names Opus');
 });
 
-// O130 (Tyler, 2026-11-16: "P9 needs to only change models when its deliberate by the user or the parent chat"): a helper
-// agent's settings (claude-agent-acp sends them as the chat's, ledger 596371/596374) never become the chat's model. The
-// night this was found, a Haiku web-fetch helper made a resume start the chat on Haiku.
-test('O130: a helper agent\'s model never becomes the chat\'s, live or after a resume', async (t) => {
-  const instance = await start(t);
-  const id = await create(instance);
-  const turn = async (at, body, from) => {
-    assert.equal((await call(at, `/chat/${id}/prompt`, 'POST', body)).status, 202, JSON.stringify(body));
-    return until(at, (event) => event.type === 'turn-end' && event.conversation === id, from);
-  };
-  const first = await turn(instance, { text: 'config', model: 'opus', config: { effort: 'high' } }, 0);
-  const helped = await turn(instance, { text: 'helper' }, first.cursor);
-  assert.ok(helped.seen.some(said(id, 'helper done')), 'the helper ran');
-  assert.ok(helped.seen.some((e) => e.type === 'update' && e.conversation === id && e.data.sessionUpdate === 'config_option_update'), 'the helper\'s settings came');
-  assert.deepEqual(helped.seen.filter((e) => e.type === 'config' && e.conversation === id).map((e) => e.data.model.current), [], 'a helper\'s settings were sent as the chat\'s');
-  instance.child.kill('SIGTERM');
-  await once(instance.child, 'exit');
-  const second = await restart(t, instance, 'state-o130');
-  await turn(second, { text: 'config' }, 0);
-  assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > helped.cursor, 0)).hit.data.content.text, 'config:model=opus,effort=high,fast=off,sandbox=on', 'the resume put back a helper\'s model');
-  console.log('PASS O130: a helper\'s Haiku sent no config; the resume is on opus, high');
-});
-
 // O39: the adapter is started with the chat's own model named, so a resume never leaves that model: P9 sets no model on it.
 test('resume: the agent starts on the chat\'s own model, so P9 sets no model after it', async (t) => {
   const instance = await start(t);

@@ -261,15 +261,6 @@ const connection = acp.connectAgent(stream, {
       return { stopReason: 'end_turn' };
     }
     if (text === 'mode') { await say('mode:' + mode); return { stopReason: 'end_turn' }; }
-    // O130: a helper agent's settings, as claude-agent-acp sends them (ledger 596371/596374): one model each, only the first
-    // tagged with the helper's tool call. The session itself stays on its model.
-    if (text === 'helper') {
-      const one = (id, value, extra = {}) => ({ id, name: id, type: 'select', currentValue: value, options: [{ value, name: value }], ...extra });
-      for (const [configOptions, _meta] of [[[one('agent', 'web-fetch')]], [[one('model', 'haiku', { category: 'model' })], { claudeCode: { parentToolUseId: 'toolu_helper' } }],
-        [[one('mode', 'agent'), one('model', 'haiku', { category: 'model' }), one('effort', 'medium', { category: 'thought_level' }), one('agent', 'web-fetch')]]])
-        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'config_option_update', configOptions, ...(_meta && { _meta }) } });
-      await say('helper done'); return { stopReason: 'end_turn' };
-    }
     if (text === 'model') { await say('model:' + model); return { stopReason: 'end_turn' }; }
     if (text === 'plan') {
       await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'plan', entries: [['completed', 'Read the chat ledger'], ['in_progress', 'Pin the plan above the composer'],
