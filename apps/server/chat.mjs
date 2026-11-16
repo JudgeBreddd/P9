@@ -65,7 +65,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // has `_session/steering` only on 1, and without it a message sent mid-turn waited for the turn's end instead of going
 // in at the next tool-call boundary (session.steering, hold() and toolStep() below). Tyler, 2026-11-15: "steer should
 // send to the agent betwen turns (tool calls) but not cancel a running tool call". Back to 2 once the adapter
-// advertises steering there: test/real-adapter-steering.test.mjs asks with this table and fails until it does.
+// advertises steering there: the ACP 2 case in test/real-adapter-steering.test.mjs goes red once it does.
 const ACP_ASK = { claude: 1, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
