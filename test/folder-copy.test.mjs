@@ -225,3 +225,38 @@ test('a write that lands and then throws is rolled back, not left behind', async
   assert.deepEqual(r.left, []);
   assert.equal(read(path.join(s.folder, 'a.txt')), 'a1\n', 'the landed write is restored from its backup');
 });
+
+test('the owner gets the committed bytes even if the copy is edited mid-apply; a later failure rolls back the landed write', async (t) => {
+  const s = await sprintOf(t);
+  changeCopy(s.copy, { edit: { 'a.txt': 'a2\n', 'sub/b.txt': 'sb2\n' } });
+  let landed = null;
+  const r = await applyCopy({ folder: s.folder, copy: s.copy, baseline: s.baseline, record: s.record, tag: 'T14',
+    between: (p) => {
+      if (p === 'a.txt') write(path.join(s.copy, 'a.txt'), 'a3 uncommitted\n'); // after the pin, before its write
+      if (p === 'sub/b.txt') linkSub(s.folder); // a later write fails
+    },
+    afterWrite: (p) => { if (p === 'a.txt') landed = read(path.join(s.folder, 'a.txt')); } });
+  assert.equal(landed, 'a2\n', 'the owner receives the committed bytes, not the uncommitted a3');
+  assert.deepEqual(r.rolledBack, ['a.txt']);
+  assert.equal(r.left.length, 1);
+  assert.equal(r.left[0].path, 'sub/b.txt');
+  assert.equal(read(path.join(s.folder, 'a.txt')), 'a1\n', 'the landed write is restored from its backup');
+  assert.equal(read(path.join(s.record, 'backup', 'T14', 'a.txt')), 'a1\n');
+});
+
+test('a link swapped in on the way to a tracked file, after the listing, is refused: outside bytes are not copied', async (t) => {
+  const s = await sprintOf(t);
+  const outside = path.join(s.dir, 'outside');
+  write(path.join(outside, 'b.txt'), 'OUTSIDE SECRET\n');
+  const dest = path.join(s.dir, 'copy-swap');
+  const made = await copyTracked(s.folder, dest, { beforeRead: (rel) => {
+    if (rel !== 'sub/b.txt') return;
+    fs.renameSync(path.join(s.folder, 'sub'), path.join(s.folder, 'sub-moved'));
+    fs.symlinkSync(outside, path.join(s.folder, 'sub'));
+  } });
+  assert.equal(fs.existsSync(path.join(dest, 'sub', 'b.txt')), false, 'nothing under the swapped link is copied');
+  assert.equal(JSON.stringify(made).includes('OUTSIDE SECRET'), false, 'no outside bytes in the result');
+  assert.deepEqual(made.left.filter((l) => l.path === 'sub/b.txt'), [{ path: 'sub/b.txt', reason: 'link-on-path' }]);
+  assert.equal(made.baseline.paths['sub/b.txt'], undefined);
+  assert.equal(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8'), 'a1\n', 'the rest of the tree still copies');
+});
