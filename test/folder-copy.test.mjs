@@ -62,7 +62,7 @@ test('copy takes tracked files (ignored or not) and names links and submodules w
   g(s.folder, 'update-index', '--add', '--cacheinfo', '160000,' + g(s.folder, 'rev-parse', 'HEAD') + ',vendored');
   g(s.folder, 'commit', '-qm', 'link and submodule');
   const again = await copyTracked(s.folder, path.join(s.dir, 'copy2'));
-  assert.deepEqual(again.left.map((l) => l.reason + ':' + l.path).sort(), ['link:link', 'submodule:vendored']);
+  assert.deepEqual(again.left.map((l) => l.reason + ':' + l.path).sort(), ['ignored-untracked:x.log', 'link:link', 'submodule:vendored', 'untracked:loose.txt']);
   assert.equal(fs.existsSync(path.join(s.dir, 'copy2', 'link')), false, 'a link is not followed or copied');
 });
 
@@ -172,4 +172,56 @@ test('a protected folder is refused before anything is read or written', async (
   const r = await applyCopy({ folder: s.folder, copy: s.copy, baseline: s.baseline, record: s.record, tag: 'T10' });
   assert.equal(r.refused, 'protected-folder');
   assert.equal(read(path.join(s.folder, 'a.txt')), 'a1\n');
+});
+
+test('a link on the way to a tracked file is not followed: outside bytes are not copied', async (t) => {
+  const s = await sprintOf(t);
+  const outside = path.join(s.dir, 'outside');
+  write(path.join(outside, 'b.txt'), 'OUTSIDE SECRET\n');
+  fs.rmSync(path.join(s.folder, 'sub'), { recursive: true });
+  fs.symlinkSync(outside, path.join(s.folder, 'sub'));
+  const dest = path.join(s.dir, 'copy-link');
+  const made = await copyTracked(s.folder, dest);
+  assert.equal(fs.existsSync(path.join(dest, 'sub', 'b.txt')), false, 'nothing under the link is copied');
+  assert.deepEqual(made.left.filter((l) => l.path === 'sub/b.txt'), [{ path: 'sub/b.txt', reason: 'link-on-path' }]);
+  assert.equal(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8'), 'a1\n', 'the rest of the tree still copies');
+});
+
+test('left names every excluded path with its reason: untracked, ignored-untracked, link, submodule', async (t) => {
+  const s = await sprintOf(t);
+  assert.deepEqual(s.left, [
+    { path: 'loose.txt', reason: 'untracked' },
+    { path: 'x.log', reason: 'ignored-untracked' },
+  ]);
+});
+
+test('a copy with an uncommitted edit after its commit is refused, not applied', async (t) => {
+  const s = await sprintOf(t);
+  changeCopy(s.copy, { edit: { 'a.txt': 'a2\n' } });
+  write(path.join(s.copy, 'a.txt'), 'a3 uncommitted\n');
+  const r = await applyCopy({ folder: s.folder, copy: s.copy, baseline: s.baseline, record: s.record, tag: 'T11' });
+  assert.equal(r.refused, 'copy-dirty');
+  assert.equal(read(path.join(s.folder, 'a.txt')), 'a1\n', 'the owner\'s file is untouched');
+});
+
+test('a rollback that cannot restore is reported with its error, and the P9 bytes stay listed', async (t) => {
+  const s = await sprintOf(t);
+  changeCopy(s.copy, { edit: { 'a.txt': 'a2\n', 'sub/b.txt': 'sb2\n' } });
+  const r = await applyCopy({ folder: s.folder, copy: s.copy, baseline: s.baseline, record: s.record, tag: 'T12',
+    afterWrite: (p) => { if (p === 'a.txt') fs.rmSync(path.join(s.record, 'backup', 'T12', 'a.txt')); },
+    between: (p) => { if (p === 'sub/b.txt') linkSub(s.folder); } });
+  assert.deepEqual(r.rolledBack, []);
+  const a = r.left.find((l) => l.path === 'a.txt');
+  assert.ok(a && a.reason.startsWith('rollback-failed'), JSON.stringify(r.left));
+  assert.equal(read(path.join(s.folder, 'a.txt')), 'a2\n', 'the P9 bytes are still in place, and the list says so');
+});
+
+test('a write that lands and then throws is rolled back, not left behind', async (t) => {
+  const s = await sprintOf(t);
+  changeCopy(s.copy, { edit: { 'a.txt': 'a2\n' } });
+  const r = await applyCopy({ folder: s.folder, copy: s.copy, baseline: s.baseline, record: s.record, tag: 'T13',
+    afterWrite: (p) => { if (p === 'a.txt') throw Object.assign(new Error('sync failed'), { code: 'EIO' }); } });
+  assert.deepEqual(r.rolledBack, ['a.txt']);
+  assert.deepEqual(r.left, []);
+  assert.equal(read(path.join(s.folder, 'a.txt')), 'a1\n', 'the landed write is restored from its backup');
 });
