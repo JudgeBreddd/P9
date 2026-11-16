@@ -53,7 +53,9 @@
 .ppage .crow .mk-needs{color:var(--warn)}
 .ppage .crow .mk-failed{color:var(--destructive)}
 .ppage .crow.arch [data-slot="button"]{height:26px;font-size:12px}
-.ppage p.hint{margin:0;font-size:13px;color:var(--muted-foreground);line-height:1.55}
+.ppage p.hint,.ppage div.hint{margin:0;font-size:13px;color:var(--muted-foreground);line-height:1.55}
+.ppage .sp-scripts{margin:2px 0 0;padding-left:18px}
+.ppage .sp-scripts li{overflow-wrap:anywhere;color:var(--foreground);font-size:12.5px}
 .ppage .ownfile{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:12.5px;color:var(--muted-foreground)}
 .ppage .instr{margin:0;font-size:13.5px;line-height:1.6;white-space:pre-wrap;max-width:68ch}
 .ppage .instr-all{margin-top:6px;padding:0;border:0;background:none;font:inherit;font-size:12.5px;color:var(--muted-foreground);cursor:pointer;border-radius:4px}

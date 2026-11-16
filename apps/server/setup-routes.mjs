@@ -242,10 +242,11 @@ export function setupRoutes(outer) {
   outer.app.post('/projects/:id/sprints', async (c) => outer.reply(c, await outer.chat.projects.newSprint(c.req.param('id'), await outer.json(c))));
   outer.app.post('/sprints/:id/start', async (c) => {
     const body = await outer.json(c);
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
-    const result = await outer.mcp.ownerStart(c.req.param('id'));
-    const status = !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : result.error === 'sprint-starting' ? 409
-      : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off'].includes(result.error) ? 400 : 500;
+    // hooks: the SHA-256 of the hooks.json the page showed (SECURITY.md § Sprint scripts); nothing else is taken.
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((k) => k !== 'hooks') || (body.hooks !== undefined && !/^[0-9a-f]{64}$/.test(body.hooks))) return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp.ownerStart(c.req.param('id'), undefined, body.hooks);
+    const status = !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : ['sprint-starting', 'scripts-changed'].includes(result.error) ? 409
+      : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off', 'scripts-refused', 'script-refused'].includes(result.error) ? 400 : 500;
     return c.json(result, status);
   });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the

@@ -153,7 +153,7 @@ const spaceWords = (subject, error) => (error === 'empty'
 // useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
 const ANSWERING = new Set(['describe_mission', 'status', 'validate_registry', 'validate_space', 'list_chats', 'list_providers', 'read_chat', 'wait_chat']);
 
-export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings }) {
+export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings, usage }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
 
   const need = () => { const settings = current(); if (!settings) throw new Error('settings-missing'); return settings; };
@@ -607,7 +607,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       : result.error ? result : { error: result.reason ?? 'save-failed', code: result.code };
   }
 
-  const { ownerStart, ...delegateCalls } = createDelegate({ chat, allowed });
+  const { ownerStart, ...delegateCalls } = createDelegate({ chat, allowed, usage });
   const calls = {
     ...delegateCalls,
     describe_mission: () => describeMission(),
