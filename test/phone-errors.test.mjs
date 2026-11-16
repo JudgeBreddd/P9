@@ -63,6 +63,17 @@ test('O128: the phone sends the structure of its uncaught errors, rejections and
   assert.equal(lines(device).length, 4, 'one line each');
   assert.doesNotMatch(journal, SECRET, 'no message text in the journal');
 
+  // 1b. The service worker's own failure, raised inside the worker through its tell(): the page reports it as kind sw,
+  // structure only.
+  const worker = phone.context.serviceWorkers()[0] ?? await phone.context.waitForEvent('serviceworker', { timeout: 20000 });
+  await phone.page.evaluate(() => navigator.serviceWorker.ready);
+  await worker.evaluate(() => { const e = new TypeError('o128 private draft words sw'); tell(e); });
+  await until(() => lines(device, (l) => l.kind === 'sw').length === 1, 'the service worker line');
+  const swLine = lines(device, (l) => l.kind === 'sw')[0];
+  assert.equal(swLine.name, 'TypeError', JSON.stringify(swLine));
+  assert.match(swLine.sw, /\.js$/, 'the worker build ' + JSON.stringify(swLine));
+  assert.doesNotMatch(journal, SECRET, 'no worker message text in the journal');
+
   // 2. Offline: the report waits on the phone as structure only, then goes once it is back online.
   await phone.setOffline(true);
   await phone.page.evaluate(() => { setTimeout(() => { const e = new Error('o128 private draft words offline'); e.name = 'OfflineCheck'; throw e; }); });
@@ -107,5 +118,5 @@ test('O128: the phone sends the structure of its uncaught errors, rejections and
   assert.equal(journal.split('\n').filter((line) => line.startsWith('P9_PHONE_ERRORS_DROPPED ') && line.includes(other.session.device)).length, 1, 'one dropped line');
   assert.ok(!/AnonCheck|ForgedCheck|BigCheck/.test(journal), 'refused reports wrote nothing');
   assert.doesNotMatch(journal, SECRET, 'no message text anywhere in the journal');
-  console.log('PASS O128 phone errors: 4 kinds as structure only, no text stored or sent, offline later, 401/403/413, patterns enforced, 10 a minute');
+  console.log('PASS O128 phone errors: 4 kinds plus a service worker failure as structure only, no text stored or sent, offline later, 401/403/413, patterns enforced, 10 a minute');
 });
