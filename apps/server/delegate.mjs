@@ -166,6 +166,23 @@ export function createDelegate({ chat, allowed }) {
     // Settings > Delegation has one row per worker. A new worker takes the first row no running worker of this chat holds.
     const taken = new Set([...kids.map((c) => chat.slot(c.id)), ...(holding.get(caller) ?? [])]);
     let at = 0; while (taken.has(at)) at += 1;
+    // A sprint's role (Tyler, 2026-11-16: "the role becomes the chat name so its easy to see which worker is which"): a key
+    // with a row in the caller's roles.json starts as that row, named for it, whatever Settings > Delegation says, exactly
+    // as Start sprint starts it. A provider, model or effort named that the row does not start is refused by field. A key
+    // with no row (a late worker the plan has no role for) still starts the Delegate way.
+    if (opts.profile === undefined && args.key !== undefined && chat.sprintFiles.exists(caller)) {
+      let parsed; try { parsed = JSON.parse(chat.sprintFiles.read(caller, 'roles.json') ?? 'null'); } catch { parsed = null; }
+      const row = Array.isArray(parsed?.roles) ? parsed.roles.find((r) => r && r.key === args.key) : undefined;
+      if (row) {
+        const role = roleOf(row, chat.profiles.list().profiles);
+        if (role.error) return role;
+        const has = { provider: role.provider, model: role.model, effort: role.effortId ? role.effort : undefined };
+        const off = ['provider', 'model', 'effort'].find((k) => args[k] !== undefined && args[k] !== has[k]);
+        if (off) return { error: 'role-refused', role: row.key, field: off, detail: `Role ${row.key}, ${off}: "${args[off]}" is not what its roles.json row starts (${has[off] ?? 'the agent\'s default'}). Leave provider, model and effort out: the role's row decides.` };
+        args = { ...args, ...has, title: row.key, ...(args.mode === undefined && role.mode && { mode: role.mode }) };
+        opts = { ...opts, profile: role.profile };
+      }
+    }
     // Delegate (not Start sprint, which passes its role rows as opts.profile): a worker is only what a Settings row starts
     // (SECURITY.md § Delegate). A named provider, model or effort picks the first free row that starts exactly that; none
     // is refused by field, never swapped for something near it.

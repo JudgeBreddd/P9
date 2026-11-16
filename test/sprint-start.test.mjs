@@ -282,3 +282,43 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   assert.equal((await out.tool('start_sprint', { sprint: s2.sprint })).error, 'unknown-sprint');
   console.log('PASS Start sprint: refusals by role and field with no chat, every chat on its row (lead, review, codex and claude workers), press again keeps all, halfway then rest, an undelivered first message sent on the next press, claude row never on a profile, record ' + plan.slice(0, 12) + ', start_sprint asked with its place held, Off and a lower limit after the ask, 3 levels');
 });
+
+test('Sprint roles: a worker the lead opens for a role starts on its roles.json row and is named for it, whatever Settings > Delegation says; a value the row does not start is refused by field', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  // P9 learns Claude's model and effort lists when it first runs.
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Roles' })).body;
+  const write = (name, body) => fs.writeFileSync(path.join(s.folder, name), body);
+  const lead = { key: 'lead', provider: 'claude', model: 'opus', effort: 'high' };
+  write('roles.json', JSON.stringify({ roles: [lead] })); write('roles/lead.work.md', 'mcp');
+  const press = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  const L = await attach(t, instance, s.sprint);
+  // Every Settings > Delegation row on opus/high; the plan's roles on haiku/low.
+  const opus = { agent: 'claude', model: 'opus', effort: 'high' };
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill(opus) })).status, 200);
+  write('roles.json', JSON.stringify({ roles: [lead, { key: 'phone', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'window', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const count = (await rows(instance)).length;
+  // A value the role's row does not start: refused by field, whatever Delegation allows; nothing made.
+  const wide = await L.tool('open_chat', { text: 'config', key: 'window', model: 'opus' });
+  assert.deepEqual([wide.error, wide.role, wide.field], ['role-refused', 'window', 'model'], JSON.stringify(wide));
+  const low = await L.tool('open_chat', { text: 'config', key: 'window', effort: 'high' });
+  assert.deepEqual([low.error, low.field], ['role-refused', 'effort'], JSON.stringify(low));
+  assert.equal((await rows(instance)).length, count, 'a refused role made a chat');
+  // The role's row decides and names the chat, even with another title given.
+  const made = await L.tool('open_chat', { text: 'config', key: 'phone', title: 'Something else' });
+  assert.equal(made.error, undefined, JSON.stringify(made));
+  assert.match(await config(instance, made.chat), /^config:model=haiku,effort=low,/, 'the role\'s worker did not start on its roles.json row');
+  assert.equal((await rows(instance)).find((r) => r.id === made.chat).title, 'phone', 'the role\'s worker is not named for its role');
+  // Its own values named are what the row starts: allowed.
+  const same = await L.tool('open_chat', { text: 'config', key: 'window', model: 'haiku', effort: 'low' });
+  assert.match(await config(instance, same.chat), /^config:model=haiku,effort=low,/);
+  // Stated limit: a key with no role row still starts the Delegate way (its Settings row, row 1's match).
+  const late = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.match(await config(instance, late.chat), /^config:model=opus,effort=high,/, 'a key with no role row did not start on its Delegation row');
+  console.log('PASS Sprint roles: phone and window started on their roles.json row (haiku/low) under Delegation rows of opus/high, named for the role; opus and high for window were refused by field with nothing made; a key with no role row took its Delegation row');
+});
