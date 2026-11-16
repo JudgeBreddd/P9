@@ -1,13 +1,16 @@
 // Sending while a turn runs (CP1; the 2026-10-24 decision: a chip with Steer / Queue / Cancel, as in the agents' own
-// terminals). Steer (Enter) goes into the turn when its current tool call ends; Queue (Tab) goes after the turn; Cancel
-// (Esc) ends the turn and the text stays in the box. The daemon holds both (chat.mjs hold), so they survive a window
-// restart; the window lists what it holds, each with an x that takes it back into the box.
+// terminals; O-702, Tyler 2026-11-15: desktop and phone show the same three, Steer / Queue / Interrupt, with the same
+// titles as the phone's card, phone.astro #midTurn). Steer (Enter) goes into the turn when its current tool call ends;
+// Queue (Tab) goes after the turn; Interrupt (Ctrl Enter) stops the turn and sends now; Cancel (Esc) ends the turn and the
+// text stays in the box. The daemon holds Steer and Queue (chat.mjs hold), so they survive a window restart; the window
+// lists what it holds, each with an x that takes it back into the box.
 import { esc, svg } from './helpers.mjs';
 
 const button = (attr, label, key, title) => `<button data-slot="button" data-variant="ghost" data-size="sm" ${attr} title="${title}">${label} <kbd>${key}</kbd></button>`;
 export const chip = () => `<span class="hint" role="group" aria-label="Send while the agent works">`
-  + button('data-when="steer"', 'Steer', 'Enter', 'Send into this turn when its current step ends. Ctrl Enter interrupts and sends now')
+  + button('data-when="steer"', 'Steer', 'Enter', 'Send into this turn when its current step ends')
   + button('data-when="queue"', 'Queue', 'Tab', 'Send when this turn ends')
+  + button('data-when="now"', 'Interrupt', 'Ctrl Enter', 'Stop this turn and send this now')
   + button('data-cancel', 'Cancel', 'Esc', 'Stop this turn; your text stays in the box') + '</span>';
 
 // The messages the daemon holds for this turn, above the local queue (which is only for an agent without steering).

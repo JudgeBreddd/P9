@@ -150,6 +150,67 @@ test('CP7: Esc on a turn the daemon has no handle on leaves the chat idle, with 
   console.log('PASS CP7: Esc with no daemon turn left the chat idle and showed no error');
 });
 
+// O-702 (Tyler, 2026-11-15: desktop said Steer and Queue, the phone Steer and Interrupt): the desktop chip shows the
+// phone card's three words in its order, each with the phone's title, and its Interrupt stops the turn and sends the text
+// as the next prompt, as Ctrl Enter does. The phone card is read from phone.astro, so a word changed on one screen fails here.
+test('CP11: the chip shows Steer, Queue, Interrupt as the phone does; Interrupt stops the turn and sends', { timeout: 120000 }, async (t) => {
+  const { instance, id, pane, type, agentSaid } = await setup(t, 'cp11', { files: ['slow-tools'] });
+  const card = (await readFile(path.join(root, 'apps/web/src/pages/phone.astro'), 'utf8')).match(/<div id="midTurn"[^]*?<\/div>/)[0];
+  const phone = [...card.matchAll(/<button [^>]*data-when="(\w+)" title="([^"]+)">(\w+)<\/button>/g)].map(([, when, title, word]) => [word, when, title]);
+  await pane.locator('.composer textarea').click(); await type('tools 1'); await pane.page().keyboard.press('Enter');
+  await started(instance, id, 'tool-1');
+  const chip = pane.locator('.hint [data-when]');
+  await chip.first().waitFor({ timeout: 5000 });
+  const desktop = await chip.evaluateAll((all) => all.map((b) => [b.firstChild.textContent.trim(), b.dataset.when, b.title]));
+  assert.equal(phone.length, 3, 'the phone card has three buttons');
+  assert.deepEqual(desktop, phone, 'same words, order and titles on both screens');
+  await type('now');
+  await pane.locator('.hint [data-when="now"]').click();
+  await until(() => agentSaid('echo:now'), 'Interrupt sent the text as the next prompt', 25000);
+  assert.deepEqual([await users(instance, id), await steers(instance)], [['hello', 'tools 1', 'now'], '']);
+  assert.ok((await said(instance, id, 'update')).every((e) => !(e.data.toolCallId === 'tool-1' && e.data.status === 'completed')), 'tool-1 never finished: the turn was stopped');
+  console.log('PASS CP11: the desktop chip matched the phone card, and Interrupt stopped the turn and sent the text');
+});
+
+// O-702 review: the chip used to shrink and clip, so in a narrow pane its right end (Interrupt, Cancel) was cut off. In the
+// narrowest pane P9 allows (two chats in a 760 px window, the split bar at its 280 px floor), mid-turn, every chip button
+// is whole inside the pane and is what a click at its middle hits; Interrupt there stops the turn and sends.
+test('CP12: at the narrowest split pane, mid-turn, Steer, Queue, Interrupt and Cancel all show whole and Interrupt works', { timeout: 150000 }, async (t) => {
+  const { app, instance, id, page, pane, type, send, agentSaid } = await setup(t, 'cp12', { files: ['slow-tools'] });
+  const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
+  await page.locator('#nav .row[data-chat="' + second + '"]').waitFor({ timeout: 10000 });
+  // A new chat takes Chat Focus, so the first one is opened again; Split then puts it first (left) and the new one beside it.
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
+  await pane.locator('[data-tool=split]').click({ timeout: 10000 });
+  await page.locator('#chats[data-split="true"] .pane').nth(1).waitFor({ timeout: 10000 });
+  const order = await page.locator('#chats > .pane[data-id]').evaluateAll((l) => l.map((x) => x.dataset.id));
+  assert.deepEqual(order, [id, second], 'Split shows the busy chat on the left');
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(760, 600); });
+  await page.waitForFunction(() => innerWidth <= 800, null, { timeout: 5000 });
+  await page.evaluate(() => document.querySelector('#chats').style.setProperty('--split-l', '280px'));
+  await send('tools 1');
+  await started(instance, id, 'tool-1');
+  await pane.locator('.hint [data-when="now"]').waitFor({ timeout: 5000 });
+  await page.waitForTimeout(300); // one frame for the layout after the chip appears
+  const fit = await pane.evaluate((p) => {
+    const pr = p.getBoundingClientRect(), inside = (r) => r.width > 0 && r.left >= pr.left - 0.5 && r.right <= pr.right + 0.5 && r.top >= pr.top - 0.5 && r.bottom <= pr.bottom + 0.5;
+    const hit = (b) => { const r = b.getBoundingClientRect(), at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!at && b.contains(at); };
+    const buttons = [...p.querySelectorAll('.composer .hint button')].map((b) => [b.firstChild.textContent.trim(), inside(b.getBoundingClientRect()), hit(b)]);
+    const send = p.querySelector('.composer .send').getBoundingClientRect();
+    return { width: Math.round(pr.width), buttons, sendIn: inside(send) };
+  });
+  const png = await page.screenshot({ type: 'png' });
+  if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'cp12-narrow-chip.png'), png); else console.log('P9_SHOT cp12-narrow-chip ' + png.toString('base64'));
+  assert.ok(fit.width <= 300, 'the pane is at the narrowest: ' + JSON.stringify(fit));
+  assert.deepEqual(fit.buttons, [['Steer', true, true], ['Queue', true, true], ['Interrupt', true, true], ['Cancel', true, true]], JSON.stringify(fit));
+  assert.equal(fit.sendIn, true, 'the send arrow stays in the pane');
+  await type('now');
+  await pane.locator('.hint [data-when="now"]').click();
+  await until(() => agentSaid('echo:now'), 'Interrupt in the narrow pane sent the text as the next prompt', 25000);
+  assert.deepEqual([await users(instance, id), await steers(instance)], [['hello', 'tools 1', 'now'], '']);
+  console.log('PASS CP12: at ' + fit.width + ' px all four chip buttons showed whole and Interrupt stopped the turn and sent');
+});
+
 // CP2, CP4, CP5: each check gathers what it saw into one object, so a failure shows every part that broke.
 const height = (l) => l.evaluate((n) => n.getBoundingClientRect().height);
 test('CP2: the box grows with its text to twice its height, then scrolls', { timeout: 90000 }, async (t) => {
