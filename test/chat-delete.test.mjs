@@ -151,7 +151,7 @@ test('empty-only replacement cannot delete a delegated child', async (t) => {
   const instance = await daemon(t);
   const parent = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
   const child = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
-  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   try { db.prepare('UPDATE conversations SET parent = ?, key = ? WHERE id = ?').run(parent, 'child', child); } finally { db.close(); }
   const result = await call(instance, `/chat/${child}/delete`, 'POST', { empty: true });
   assert.equal(result.status, 409);

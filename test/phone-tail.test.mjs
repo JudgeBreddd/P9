@@ -32,7 +32,7 @@ test('P20: the tail read counts a chunk run as one block and reaches back to the
 // A running chat as long as the longest real one: TURNS turns of a message, 40 streamed chunks, a tool call; a card,
 // a plan and a mode early on, which the chat screen still shows.
 function seedBig(server) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(BIG, 'claude', 'Long chat', 'idle', Date.now());
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)'), at = Date.now(), filler = 'x'.repeat(480) + ' ';
   db.exec('BEGIN');
@@ -90,7 +90,7 @@ test('P20: a long chat opens on its newest messages; Load earlier adds the next 
 
 test('phone displays a resume restore notice', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(BIG, 'claude', 'Resume', 'idle', Date.now());
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   event.run(BIG, 'user', JSON.stringify({ text: 'hello' }), Date.now());
