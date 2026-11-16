@@ -77,7 +77,8 @@ export function checkSettings(value) {
   const focus = value.focus, pet = { chat: checkPet(value.pet.chat), dev: checkPet(value.pet.dev), mission: checkPet(value.pet.mission) };
   if (![focus.chat, focus.dev, focus.mission].every(on => typeof on === 'boolean') || !(focus.chat || focus.dev || focus.mission)) return null;
   if (!pet.chat || !pet.dev || !pet.mission) return null;
-  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name,
+  // O122: P9 always opens in Chat, so Chat Focus is always on; a file saved with it off (0.1.8 let it go off) comes back with it on.
+  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: true, dev: focus.dev, mission: focus.mission }, pet, name: value.name,
     xfer: { fileMiB: value.xfer.fileMiB, files: value.xfer.files, sendGiB: value.xfer.sendGiB } };
 }
 // Older files: no pet, one pet name, or one pet per agent ({ claude, codex, system }) become every focus's pets, shown in Chat only.
