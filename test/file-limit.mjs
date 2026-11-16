@@ -6,6 +6,8 @@
 // fails it by name and the files after it report. 1200 s (O117): settings.test.mjs alone runs 548 to 600 s of its own
 // tests in green Linux runs (n = 5; slowest test 87 s), so 600 s killed it while it passed; 1200 s is twice that and
 // still names a hang well inside the 30 min job.
+// A failed test is also written here the moment it fails (dogfood 3.5 red, 0.1.9 phase 4.5): spec prints a failure's
+// assertion only in its end-of-run summary, so a runner that ended early (CI 43790793989 shard 4) left a bare ✖ and no cause.
 // ponytail: a grandchild that left the tree (setsid then reparented) is not killed; --test-force-exit still ends the run.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -34,6 +36,11 @@ function killTree(file) {
 export default async function* fileLimit(source) {
   const timers = new Map();
   for await (const event of source) {
+    if (event.type === 'test:fail' && event.data.details?.error?.failureType !== 'subtestsFailed') {
+      const { name, file: where, line, details } = event.data, error = details?.error?.cause ?? details?.error;
+      const why = String(error?.stack || error?.message || error).split('\n').slice(0, 8).join('\n  ');
+      process.stderr.write(`✖ failed now: ${name} (${where ? path.relative(process.cwd(), where) : '?'}:${line ?? '?'})\n  ${why}\n`);
+    }
     const file = fileOf(event.data);
     if (!file) continue;
     if (event.type === 'test:dequeue' && !timers.has(file)) {
