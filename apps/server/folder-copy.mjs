@@ -5,7 +5,8 @@
 // rollback, three lists. The bytes applied are the commit's blobs, staged in P9's record folder before the first write.
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { mkdir, open } from 'node:fs/promises';
+import { mkdir, open, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { hash, isGuarded, openSafe, protection, replaceFile, removeFile } from '../../packages/files/index.mjs';
 import { git } from './worker-folders.mjs';
@@ -97,6 +98,27 @@ async function changesOf(copy, base, head) {
     out.push({ path: tokens[i + 1], status, blob: status === 'D' ? null : blob });
   }
   return out;
+}
+
+// The sprint's copy, made once: sprint/copy/ (0700) from the folder as it is now, and its record (the baseline commit,
+// each path's hash, the names left out, and the folder it came from), in the sprint's folder (0600). Made in a part
+// folder and renamed in, so a copy that failed half way is never handed to a worker.
+export async function startCopy(sprintDir, source) {
+  const copy = path.join(sprintDir, 'copy'), part = path.join(sprintDir, 'copy.part-' + randomBytes(4).toString('hex'));
+  await mkdir(sprintDir, { recursive: true, mode: 0o700 });
+  const made = await copyTracked(source, part);
+  if (made.error) { await rm(part, { recursive: true, force: true }); return made; }
+  await rename(part, copy);
+  const record = { source: await realpath(source), baseline: made.baseline, left: made.left, made: new Date().toISOString() };
+  const recordPart = path.join(sprintDir, 'copy-record.json.part');
+  try {
+    await writeFile(recordPart, JSON.stringify(record, null, 1), { mode: 0o600 });
+    await rename(recordPart, path.join(sprintDir, 'copy-record.json'));
+  } catch (error) {
+    await rm(copy, { recursive: true, force: true }); await rm(recordPart, { force: true });
+    return { error: 'record-failed', detail: error.message };
+  }
+  return { copy, record };
 }
 
 const result = (written = [], rolledBack = [], left = [], cause = null) => ({ written, rolledBack, left, ...(cause && { cause }) });
