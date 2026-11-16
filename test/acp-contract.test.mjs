@@ -20,7 +20,11 @@ for (const provider of ['claude', 'codex']) {
     const installed = JSON.parse(await readFile(path.join(root, 'node_modules', fixture.package, 'package.json'), 'utf8')).version;
     assert.equal(installed, fixture.version, 'installed adapter differs from the fixture');
 
-    const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', replay] }));
+    // The replay answers with the recorded initialize reply whatever P9 asks, so P9 is asked for the version the turn was
+    // recorded on. claude.json is ACP 2, P9's default for Claude is 1 (phase 4.5): that path has no 0.106.0 recording
+    // until a re-record on 1 (contracts.md, Recorded fixtures).
+    const recordedAsk = String(fixture.lines.find((l) => l.msg.method === 'initialize').msg.params.protocolVersion);
+    const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', replay], env: { P9_ACP_VERSION: recordedAsk } }));
     const created = await call(instance, '/chat', 'POST', { provider });
     assert.equal(created.status, 201, created.text);
     const id = created.body.conversation;
