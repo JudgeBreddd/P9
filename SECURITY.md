@@ -949,6 +949,13 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
     failed write (disk full, permission, a file changed after its own check), P9 puts back the files it already wrote
     from those saved bytes, and reports which paths were restored. If a restore also fails, P9 says so, lists every path
     and its state, and keeps the saved bytes in the sprint's state. Only then is the apply partly done.
+  - **Preflight refusal and runtime rollback are different.** A conflict found at preflight is a refusal: nothing was
+    written, so nothing is rolled back. A change or failure after the first write is a runtime event. A concurrent
+    change to a path is seen only when that path is re-checked, so if it is seen after earlier writes, P9 rolls those
+    earlier writes back from the saved bytes and refuses the apply, naming the path.
+  - **What the owner sees.** The sprint's close view shows one result: applied (every path written), refused (each conflict
+    by path, nothing written), or rolled back (each path and its state, and whether the restore finished). The saved
+    bytes stay in the sprint's state, in an apply record beside the copy, until clean-up.
   - **What is not guaranteed.** The check and each write are separate steps. Another program that edits a file in the
     instant between P9's re-check and its rename can have that edit replaced; P9 cannot close that window on a shared
     filesystem. So the promise is: no apply writes over a change P9 has seen, a failed apply is rolled back, and the one
@@ -966,13 +973,17 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
   originals for an apply. The copy is the size of the tracked files at the time it was made.
 - **What remains.** The copy is a snapshot taken when the sprint starts: a change you make to a tracked file during the
   sprint is not seen by it, and the apply refuses that file as a conflict, not a merge. Its agents read and run the copied
-  files in their own modes, as they would in any folder you point a chat at.
+  files in their own modes, as they would in any folder you point a chat at. P9 limits no network access in that: a
+  copied script, a dependency installed by the setup command, or an agent can open connections in its mode exactly as
+  in your folder. The copy is a folder, not a sandbox, and nothing in this section makes it one.
 - **Required tests before any claim above is made.** Each must fail without its guard: a copy with an ignored tracked file
   (copied) and an ignored untracked file (not copied); a link and a submodule (listed, not followed); an apply with a
   changed file (nothing written); an apply whose third write is forced to fail (the first two restored, bytes equal to the
   saved ones); a link swapped in between preflight and a write (refused, nothing outside the folder written); an added
   path that appears in your folder before apply (conflict); a baseline-present path that is deleted (conflict); a
-  restore that fails (the list of states is shown, bytes kept).
+  restore that fails (the list of states is shown, bytes kept); a file changed after the first write and before the last
+  one, so that the earlier writes are rolled back and the close view names that path; a baseline-absent path that is
+  added by the change, applied when still absent and refused when present.
 
 ## Sprint files
 
