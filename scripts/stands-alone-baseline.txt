@@ -21,16 +21,14 @@ apps/server/telemetry.mjs plan.md  1
 apps/server/templates/icm.json icm workspace 1
 apps/web/src/checklist.mjs _private  1
 apps/web/src/controller.mjs needs you 9
-apps/web/src/controller.mjs plan.md  1
 apps/web/src/controller.mjs _private  1
-apps/web/src/controller.mjs _tyler  7
+apps/web/src/controller.mjs _tyler  6
 apps/web/src/controller.mjs workspace-hub  4
 apps/web/src/mission-files.mjs needs you 1
 apps/web/src/phone.ts needs you 1
 apps/web/src/phone.ts _private  1
 apps/web/src/security.mjs _private  2
 apps/web/src/shell.html needs you 1
-apps/web/src/shell.html plan.md  1
 apps/web/src/shell-start.ts needs you 3
 apps/web/src/styles/phone.css needs you 1
 apps/web/src/styles/shell.css needs you 1

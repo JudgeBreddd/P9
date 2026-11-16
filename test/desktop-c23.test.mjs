@@ -169,7 +169,7 @@ test('Attempt 2 items 5-7: Settings has five pages picked on the left, no All, e
   const { page, shot } = await launch(t);
   const pages = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
   // Controls that were in Settings before the move (the rest depend on the window: remotes, pets, mission files).
-  const before = ['#setDocs', '#setAm', '#setName', '#setStartLast', '#setCloseSend', '#setF-chat', '#setF-dev', '#setF-mission', '#setWarn', '[data-default-mode]'];
+  const before = ['#setDocs', '#setAm', '#setName', '#setCloseSend', '#setF-chat', '#setF-dev', '#setF-mission', '#setWarn', '[data-default-mode]'];
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
     await page.click('#setBtn'); await page.locator('#setDlg[open] .set-pages').waitFor({ timeout: 10000 }); await page.waitForTimeout(400);

@@ -194,7 +194,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // Case 4: the handler itself, called as the shell's own frame, refuses every other shape and writes nothing.
   const refused = await app.evaluate(async ({ ipcMain, BrowserWindow }, PETS) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, handler = ipcMain._invokeHandlers.get('p9:settings');
-    const event = { sender, senderFrame: sender.mainFrame }, good = { zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS, name: 'Sam', startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } };
+    const event = { sender, senderFrame: sender.mainFrame }, good = { zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS, name: 'Sam', xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } };
     const chat = (change) => ({ ...good, pet: { ...good.pet, chat: { ...good.pet.chat, ...change } } });
     const bad = [{ ...good, extra: 1 }, { ...good, zoom: '2' }, { ...good, zoom: 4 }, { ...good, zoom: 0.1 }, { ...good, zoom: NaN },
       { ...good, closeOnSend: 1 }, { ...good, focus: { chat: true, dev: true } }, { ...good, focus: { chat: false, dev: false, mission: false } },
@@ -202,7 +202,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
       { ...good, pet: null }, { ...good, pet: 'good-pet' }, { ...good, pet: { claude: null, codex: null, system: null } }, { ...good, pet: { ...good.pet, x: good.pet.chat } },
       { ...good, pet: { chat: good.pet.chat, dev: good.pet.dev } }, chat({ codex: '../x' }), chat({ x: null }), chat({ size: 23 }), chat({ size: 129 }), chat({ size: 48.5 }),
       chat({ on: 1 }), chat({ top: [0.5] }), chat({ top: [2, 0] }), chat({ pane: 'x' }), chat({ pane: [0.1, NaN] }), chat({ top: { 0: 0.1, 1: 0.1, length: 2 } }),
-      { ...good, name: 'x'.repeat(41) }, { ...good, name: 'Sam\u0007' }, { ...good, name: 'Sam\u200b' }, { ...good, name: 7 }, { ...good, startLast: 'yes' }, (({ name, ...rest }) => rest)(good),
+      { ...good, name: 'x'.repeat(41) }, { ...good, name: 'Sam\u0007' }, { ...good, name: 'Sam\u200b' }, { ...good, name: 7 }, { ...good, startLast: false }, (({ name, ...rest }) => rest)(good),
       // Send files' limits (item 23): whole numbers from 1 to each ceiling, all three.
       { ...good, xfer: { ...good.xfer, fileMiB: 0 } }, { ...good, xfer: { ...good.xfer, fileMiB: 65537 } }, { ...good, xfer: { ...good.xfer, files: 1.5 } },
       { ...good, xfer: { fileMiB: 512, files: 20000 } }, (({ xfer, ...rest }) => rest)(good)];
@@ -279,11 +279,11 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // The name is the account's (main.mjs accountName), so the test reads it back rather than guessing it.
   const kept = JSON.parse(await readFile(file, 'utf8'));
   assert.match(kept.name, /^[^\p{Cc}\p{Cf}]{0,40}$/u);
-  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } });
+  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } });
   assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [], 'a removed Skipper is not put back');
   // Phase 18 review: saves in flight together (Ctrl = held down) all succeed, and the file ends on the last one.
   const saves = await page.evaluate((pet) => Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
-    window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } }))), PETS);
+    window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } }))), PETS);
   assert.deepEqual(saves.map((s) => s.status), Array(20).fill('fulfilled'));
   assert.equal(JSON.parse(await readFile(file, 'utf8')).zoom, 1.2);
   assert.equal(await zoomOf(app), 1.2);
@@ -730,7 +730,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     return { why: result.refused[0]?.why, ms: performance.now() - started };
   });
   assert.equal(typo.why, 'command'); assert.ok(typo.ms < 500, typo.ms + ' ms');
-  // Walkthrough (Ctrl K; it also starts once on first login, see Landing page): each bubble fits the window, carries Chat's system pet and
+  // Walkthrough (Ctrl K; it also starts once on the first start, see start-chat.test.mjs): each bubble fits the window, carries Chat's system pet and
   // outlines its step's element (unless that element is hidden); Back goes back; Done and Escape end it in the focus it began in.
   const { WALKTHROUGH } = await import('../apps/web/src/walkthrough.mjs');
   await page.click('#setClose');
@@ -1774,6 +1774,9 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   const background = () => { window.__notes = []; document.hasFocus = () => false; window.Notification = class { constructor(title, o) { window.__notes.push([title, o.body]); } }; };
   await page.evaluate(background);
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  // The chat's row means the window is past its first read (the replay): a turn that ends inside the replay is old news
+  // and rightly makes no card, so prompting before it raced the window's start.
+  await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   const card = page.locator('#cards [data-key="done:' + id + '"]');
   await card.waitFor({ timeout: 15000 });
@@ -1902,132 +1905,6 @@ test('Terminal dock with no terminal backend: says so with the reason, badge una
   assert.deepEqual((await call(instance, '/terminals', 'POST', {})), { error: 'terminal-unavailable', reason: 'P9 has no terminal for macOS yet.' });
   if (process.env.P9_EVIDENCE) await page.locator('#dock').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'dock-unavailable.png') });
   console.log('PASS dock, no backend: ' + JSON.stringify(want));
-});
-
-test('Landing page: shows on open, only Space skips the intro, a focus pick leaves it, the mark reopens it, startLast and a reload skip it', { timeout: 120000 }, async (t) => {
-  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
-  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-land-')), profile = path.join(home, 'profile');
-  await mkdir(path.join(profile, 'pets', 'land-pet'), { recursive: true });
-  await writeFile(path.join(profile, 'pets', 'land-pet', 'pet.json'), JSON.stringify({ id: 'land-pet', displayName: 'Lander', description: 'x', spritesheetPath: 'spritesheet.png' }));
-  await writeFile(path.join(profile, 'pets', 'land-pet', 'spritesheet.png'), sheet({ 0: 2, 3: 4, 4: 5, 6: 3, 7: 5 }));
-  // A file from before the landing page: no name, no startLast. It must load (upgraded), not fall back to the defaults.
-  await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1.1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS }));
-  await versionSeen(profile);
-  // The intro runs with the WebGL sky only (the rollback switch); with the default video P9 opens on the main stage
-  // (landing-first-open.test.mjs).
-  const env = { ...process.env, P9_LANDING: 'original' }; delete env.ELECTRON_RUN_AS_NODE;
-  // Evidence: the window's own capture. page.screenshot crops a zoomed (1.1) window to its CSS size and cuts off the bottom right.
-  const ev = process.env.P9_EVIDENCE, shot = async (name) => ev && await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 300))))) === undefined && writeFile(path.join(ev, name), Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')), 'base64'));
-  if (ev) await mkdir(ev, { recursive: true });
-  const launch = async () => {
-    const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
-    const proc = app.process();
-    t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
-    return { app, page: await app.firstWindow() };
-  };
-  const state = (page) => page.evaluate(() => ({ open: document.querySelector('#land').open, stage: document.querySelector('#land').dataset.stage, focus: document.querySelector('.shell').dataset.focus }));
-
-  let { app, page } = await launch();
-  await page.waitForFunction(() => document.querySelector('#land').open);
-  const opened = Date.now();
-  const settings = await page.evaluate(() => window.p9.getSettings());
-  assert.equal(settings.zoom, 1.1, 'the old file loaded rather than the defaults');
-  assert.equal(settings.startLast, false);
-  assert.equal(typeof settings.name, 'string');
-  assert.equal((await state(page)).stage, 'intro');
-  await page.waitForTimeout(1200);
-  await shot('landing-intro.png');
-  // Clicks and other keys do not skip; Escape does not close it during the intro.
-  await page.mouse.click(400, 300); await page.keyboard.press('2'); await page.keyboard.press('Escape');
-  assert.deepEqual(await state(page), { open: true, stage: 'intro', focus: 'chat' });
-  await page.keyboard.press('Space');
-  assert.equal((await state(page)).stage, 'main');
-  assert.ok(Date.now() - opened < 2600, 'Space skipped before the intro would have ended');
-  await page.waitForFunction(() => document.querySelector('#landPets canvas.pet')?.getContext('2d').getImageData(96, 104, 1, 1).data[3] > 0);
-  assert.equal(await page.locator('#landPets canvas.pet').getAttribute('title'), 'Lander');
-  await page.waitForTimeout(1000); // the stage move ends (the greeting shows 0.25 s in)
-  assert.ok((await page.locator('#landHi').innerText()).length > 3);
-  assert.match(await page.locator('#landSub').innerText(), /^(\d+ needs? you|All quiet\. Where to\?)$/); // its own daemon: no chats running
-  await shot('landing-main.png');
-  // Behind the main page the sky draws at full resolution, not a fraction scaled up (Builder, 2026-10-19: "when it is in the
-  // background it looks low quality. as if it lost its quality somehow").
-  // Without WebGL (a display with no GPU, such as GitHub's Xvfb) the sky is off by design (landing-sky.mjs), so there is nothing to size.
-  // Landing v5 plays a video by default and leaves this canvas hidden; landing-video.test.mjs runs this check with P9_LANDING=original.
-  if (await page.evaluate(() => document.querySelector('#landSky').hidden)) t.diagnostic('landing video on: sky resolution check is in landing-video.test.mjs');
-  else if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl', { failIfMajorPerformanceCaveat: true }))) t.diagnostic('no WebGL on this display: sky resolution check not run');
-  else await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
-    .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
-  await page.keyboard.press('2');
-  await page.waitForFunction(() => !document.querySelector('#land').open);
-  // First login: the setup wizard opens itself while a check fails (no settings here), before the walkthrough (v0.1.3 C1).
-  await page.locator('#welDlg[open]').waitFor({ timeout: 5000 });
-  assert.equal(await page.locator('#welStep').textContent(), 'Step 1 of ' + ((await call(instance, '/setup')).tmux === null ? 7 : 8));
-  assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough waits for the wizard');
-  await shot('wizard-auto.png');
-  await page.click('#welFoot [data-act="skip"]');
-  // Then the walkthrough starts in Chat and ends in the focus picked (GitHub issue #4 item 2).
-  await page.locator('#walk').waitFor({ timeout: 5000 });
-  assert.match(await page.locator('#walk .eyebrow').innerText(), /^1 of \d+$/i); // innerText applies the eyebrow's uppercase
-  assert.equal((await state(page)).focus, 'chat');
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#walk'));
-  assert.deepEqual(await state(page), { open: false, stage: 'main', focus: 'dev' });
-
-  // The mark in the top bar opens it again on the main stage; the name goes in as text; Esc returns to the last focus.
-  await page.evaluate(() => window.p9.getSettings().then((s) => window.p9.setSettings({ ...s, name: '<b>Sam</b>' })));
-  await page.reload();
-  await page.locator('#brandBtn').waitFor();
-  assert.equal((await state(page)).open, false, 'a reload of the same window skips the landing');
-  assert.equal((await state(page)).focus, 'dev', 'and keeps the last focus');
-  // Hovering the mark keeps the name's painted text (Builder, 2026-10-19: "it goes all black"; the theme clips a background to the text).
-  await page.hover('#brandBtn');
-  assert.deepEqual(await page.locator('#brandBtn').evaluate((b) => { const c = getComputedStyle(b); return [c.backgroundClip, c.backgroundImage !== 'none', c.backgroundColor]; }), ['text', true, 'rgba(0, 0, 0, 0)']);
-  await page.click('#brandBtn');
-  assert.equal((await state(page)).stage, 'main');
-  await page.waitForFunction(() => document.querySelector('#landHi').textContent.length > 3);
-  for (let i = 0; i < 20 && !(await page.locator('#landHi em').count()); i++) await page.evaluate(() => { const l = document.querySelector('#land'); l.close(); document.querySelector('#brandBtn').click(); });
-  assert.equal(await page.locator('#landHi em').innerText(), '<b>Sam</b>');
-  assert.equal(await page.locator('#landHi b').count(), 0);
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#land').open);
-  assert.equal((await state(page)).focus, 'dev');
-  assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough runs once, not on every landing close');
-
-  // Settings: name and "Start in my last focus mode"; with it on, the next start goes straight to the last focus.
-  await page.click('#setBtn');
-  assert.equal(await page.locator('#setName').inputValue(), '<b>Sam</b>');
-  await page.locator('#setName').fill('Tess');
-  await page.locator('#setName').press('Tab');
-  await page.locator('#setStartLast').check();
-  await page.waitForFunction(() => window.p9.getSettings().then((s) => s.startLast && s.name === 'Tess'));
-  await page.locator('#setName').evaluate(el => el.scrollIntoView({ block: 'center' }));
-  await shot('landing-settings.png');
-  await app.close();
-  ({ app, page } = await launch());
-  await page.waitForFunction(() => !document.querySelector('#land').hasAttribute('data-pending'));
-  await page.waitForTimeout(500);
-  assert.deepEqual(await state(page), { open: false, stage: 'intro', focus: 'dev' });
-
-  // Off again: the landing shows with the new name; at the smallest window everything still fits.
-  await page.evaluate(() => window.p9.getSettings().then((s) => window.p9.setSettings({ ...s, startLast: false })));
-  await app.close();
-  ({ app, page } = await launch());
-  await page.waitForFunction(() => document.querySelector('#land').open);
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(720, 600); });
-  await page.waitForFunction(() => innerWidth < 700);
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(1500);
-  const fits = await page.evaluate(() => [...document.querySelectorAll('#landHi, .land-bar, #landPets canvas, .land-mark')].map((e) => { const r = e.getBoundingClientRect(); return [e.id || e.className.baseVal || e.className, r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth]; }));
-  assert.ok(fits.every(([, ok]) => ok), JSON.stringify(fits));
-  const vp = await page.evaluate(() => [innerWidth, innerHeight, devicePixelRatio]);
-  assert.ok(vp[0] * vp[2] <= 722 && vp[1] * vp[2] <= 640, 'the window is the smallest it can be (720 x 600 plus the frame): ' + vp);
-  const bar = await page.locator('.land-bar').boundingBox(), pets = await page.locator('#landPets canvas').boundingBox(), hi = await page.locator('#landHi').boundingBox();
-  assert.ok(hi.y + hi.height <= bar.y && bar.y + bar.height <= pets.y, 'greeting, bar and pets do not overlap');
-  await shot('landing-720x600.png');
-  await page.locator('.land-bar [data-land="chat"]').click();
-  await page.waitForFunction(() => !document.querySelector('#land').open);
-  assert.equal((await state(page)).focus, 'chat');
-  console.log('PASS landing: opens on start (old settings file upgraded), clicks/keys/Esc do not skip the intro, Space does, pets drawn, 2 enters Dev, reload skips it, the mark reopens it with the name as text, Esc to last focus, startLast skips it, fits 720x600');
 });
 
 test('Speed (E2): a reply in one chat rebuilds only its own pane; launch replays only the chats that are not stopped', { timeout: 300000 }, async (t) => {
