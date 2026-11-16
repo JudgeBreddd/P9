@@ -219,6 +219,8 @@ test('Sprint card: a new worker, its ready, its verdict and its next turn reach 
     assert.fail(why + ': wanted "' + want + '", the ring says "' + got + '"'); };
   await send([lead, w({ queue: q(0) })], [{ type: 'note', conversation: 'lead-1', data: { text: 'queue' } }]);
   await ringIs('0 of 3 items passed', 'a queue worker with nothing passed');
+  if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]'); // open, so the shots show the ring
+  assert.ok(await row('w-1').locator('.sp-ring').isVisible(), 'the ring is on screen');
   await shotAt(page, app, 'sprint-ring-0-of-3');
   await send([lead, w({ queue: q(1), ready: { commit: 'c3', at: Date.now() }, verdict: { by: 'rev', commit: 'c3', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'd1 passed' } }]);
   await ringIs('1 of 3 items passed', 'd1 passed review');
@@ -230,6 +232,7 @@ test('Sprint card: a new worker, its ready, its verdict and its next turn reach 
   await shotAt(page, app, 'sprint-ring-1-of-3-working');
   await send([lead, w({ queue: q(3) })], [{ type: 'note', conversation: 'lead-1', data: { text: 'all passed' } }]);
   await ringIs('3 of 3 items passed', 'every item passed');
+  await shotAt(page, app, 'sprint-ring-3-of-3');
   console.log('PASS 709 ring counts the plan items');
 });
 
