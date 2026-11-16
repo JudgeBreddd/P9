@@ -217,7 +217,31 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       // Where an element cannot move without reloading (no Element.moveBefore: phone Safari, older browsers), each draw makes
       // the frames again, and the last answer still reaches the new frame.
       await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
-      await redraw('Custom cards, no moveBefore.');
+      // M5 CI (job 133105928886): the wait below timed out with the section still on its old text. Overview reads overlap (the 20 s
+      // poll, a Mission click) and can answer out of order; the older answer, last, drew the window back. Here an overview asked
+      // before the write answers just after the one asked after it (Electron's handler map is internal: a missing one fails here).
+      const held = await app.evaluate(({ ipcMain }) => { const map = ipcMain._invokeHandlers, real = map?.get('p9:mission'), log = globalThis.__m5held = [];
+        if (!real) return 'not held: ' + (map ? 'no p9:mission handler' : 'no ipcMain._invokeHandlers'); let stale = null, release = null;
+        globalThis.__m5arm = () => { log.push(Date.now() + ' armed'); globalThis.__m5armed = true; };
+        map.set('p9:mission', (e, kind, ...a) => { const p = Promise.resolve(real(e, kind, ...a)); if (kind !== 'overview') return p;
+          if (!stale) { log.push(Date.now() + ' stale asked'); return (stale = p.then((r) => new Promise((res) => { log.push(Date.now() + ' stale read'); release = () => setTimeout(() => { log.push(Date.now() + ' stale answered'); res(r); }, 0); }))); }
+          if (!globalThis.__m5armed) { log.push(Date.now() + ' other read before the write'); return p; }
+          map.set('p9:mission', real); log.push(Date.now() + ' fresh asked');
+          return p.then((r) => { log.push(Date.now() + ' fresh answered'); release(); return r; }); });
+        return 'held'; });
+      assert.equal(held, 'held');
+      await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+      for (const end = Date.now() + 5000; Date.now() < end && !(await app.evaluate(() => globalThis.__m5held.some((s) => s.endsWith(' stale read')))); await sleep(50));
+      await page.evaluate(() => { const t = window.__m5text = []; new MutationObserver(() => t.push(Date.now() + ' ' + (document.querySelector('#mdlBody [data-space-text]')?.textContent ?? 'none'))).observe(document.querySelector('#mdlBody'), { childList: true, subtree: true, characterData: true }); });
+      await app.evaluate(() => globalThis.__m5arm());
+      const timeline = async () => (await app.evaluate(() => globalThis.__m5held)).join(', ') + ' | page: ' + (await page.evaluate(() => window.__m5text.filter((x, i, a) => x.slice(14) !== a[i - 1]?.slice(14)))).join(', ');
+      await redraw('Custom cards, no moveBefore.').catch(async (e) => { throw new Error('the new section text never showed: ' + await timeline(), { cause: e }); });
+      await sleep(1500);
+      console.log('P9M5HELD ' + await timeline()); // the forcing's order, shown on a pass too
+      // Any draw after the new text counts, not only the end state: another read can put the new text back before a check (run 003805).
+      const drawn = (await page.evaluate(() => window.__m5text)).map((x) => x.slice(14)), first = drawn.indexOf('Custom cards, no moveBefore.');
+      assert.deepEqual(drawn.slice(first).filter((x) => x !== 'Custom cards, no moveBefore.' && x !== 'none'), [], 'an older overview answering last does not draw the old text back: ' + await timeline());
+      assert.equal(await page.locator('#mdlBody [data-space-text]').innerText(), 'Custom cards, no moveBefore.', 'the window ends on the new text: ' + await timeline());
       assert.deepEqual(await frames(), Array(6).fill('new'), 'without moveBefore every card frame is made again');
       await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 15000 });
       await page.evaluate(() => { Element.prototype.moveBefore = window.__mb; });
