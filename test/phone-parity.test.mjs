@@ -355,8 +355,9 @@ test('P4: during a turn, text goes in with Steer or waits with Queue, and a queu
   await page.fill('#prompt', 'later');
   await sendLabel(page, 'Steer');
   await page.click('button[data-when="queue"]');
-  await page.waitForSelector('#queued:not([hidden]) article:has-text("later") >> text=Queued', { timeout: 15000 });
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("later") >> text=Queued', { state: 'attached', timeout: 15000 });
   assert.equal(await page.inputValue('#prompt'), '');
+  await page.evaluate(() => { const strip = document.querySelector('#queued details'); if (!strip.open) strip.querySelector('summary').click(); }); // O109: the queue is one folded line until opened
   await page.click('#queued [data-unhold]');
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'later' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
   await page.click('#composer button[type="submit"]');
@@ -402,7 +403,7 @@ test('P18: a message held for the turn comes back to the box when the turn is st
   await said(page, 'working');
   await page.fill('#prompt', 'keep me');
   await page.click('#midTurn [data-when="queue"]');
-  await page.waitForSelector('#queued:not([hidden]) article:has-text("keep me")', { timeout: 15000 });
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("keep me")', { state: 'attached', timeout: 15000 });
   assert.equal(await page.inputValue('#prompt'), '');
   await page.click('#composer button[type="submit"]'); // the empty box's Stop
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'keep me' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
@@ -494,7 +495,7 @@ test('O55: a send empties the box on every path; an empty Send posts nothing', {
   await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
   const beforeHeld = posts;
   await send(page, 'hold me');
-  await page.waitForSelector('#queued:not([hidden]) article:has-text("hold me")', { timeout: 10000 });
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("hold me")', { state: 'attached', timeout: 10000 });
   assert.equal(await box(), '', 'a held steer empties the box');
   await said('got:hold me');
   assert.equal(posts, beforeHeld + 1, 'the held steer is one prompt post');
@@ -520,7 +521,7 @@ test('O55: a mid-turn send the agent cannot steer waits for the turn to end, and
   await newChat(page, 'claude');
   await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
   await send(page, 'after the turn');
-  await page.waitForSelector('#queued:not([hidden]) article:has-text("after the turn")', { timeout: 10000 });
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("after the turn")', { state: 'attached', timeout: 10000 });
   assert.equal(await page.inputValue('#prompt'), '', 'the box empties');
   assert.equal(await page.evaluate(() => document.querySelector('#composerNote').hidden), true, 'no "Not sent" note');
   assert.match(await page.textContent('#queued'), /Queued/);
