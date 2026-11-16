@@ -709,7 +709,8 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await until(async () => (await box.getAttribute('data-name')) === 'roles/docs.work.md', 'the work file open again');
   await box.pressSequentially(' Then the FAQ.');
   await page.locator(`[data-sprint="${lead}"] [data-pj="spfile"]`, { hasText: /^sprint\.md/ }).click();
-  await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8')).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
+  // This save is guarded (the file exists now), so for the instant of its swap the file is absent: not yet, like polled.
+  await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; })).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
   await writeFile(file, JSON.stringify(written, null, 2) + '\n');
   await until(async () => (await seen(lead)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator(`[data-sprint="${lead}"] [data-sp-roles]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
   assert.equal(await seen(lead2), '', 'the second sprint, still torn, keeps its rows');

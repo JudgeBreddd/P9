@@ -700,7 +700,7 @@ test('operation IDs older than a week are refused after a restart, never run aga
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude' }, { 'x-p9-op': op })).status, 201);
   instance.child.kill('SIGTERM');
   await once(instance.child, 'exit');
-  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'));
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
   db.prepare('UPDATE operations SET at = ? WHERE id = ?').run(Date.now() - 8 * 24 * 3600 * 1000, op);
   db.close();
   const second = await restart(t, instance, 'state-2');
