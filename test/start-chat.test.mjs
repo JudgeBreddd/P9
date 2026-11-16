@@ -1,4 +1,4 @@
-// O122: P9 opens in Chat. No landing page, and its video and poster are never asked for at startup (the startup trace of
+// O122: P9 opens in Chat (or the first view still on, if Chat is off). No landing page, and its video and poster are never asked for at startup (the startup trace of
 // 2026-11-15 put the landing at 3.67 MiB of video plus a 193 KiB poster before the first useful paint). Old settings files
 // that still say startLast load with the name kept. With no flag, the first run opens the setup wizard by itself.
 import test from 'node:test';

@@ -939,7 +939,7 @@ setTimeout(firstStart, 3000); // settings never answered: run it anyway
 // shell's code chunk loads, and a button clicked in that gap does nothing. The landing page's data-pending did this before.
 $('.shell').removeAttribute('data-pending');
 
-/* ---------- start (O122: P9 opens in Chat; the landing page is gone) ---------- */
+/* ---------- start (O122: P9 opens in Chat, or the first view still on if Chat is off; the landing page is gone) ---------- */
 // The walkthrough runs once, on the first start, in Chat and back to the focus it began in, after the setup wizard while a
 // check fails (Builder approved it in _tyler/p9-walkthrough-review.md: "A."; GitHub issue #4 item 2). Ctrl K brings it back.
 // It began when the landing page first closed; now it begins with the window. Test runs turn it off (P9_FIRST_RUN=off,
