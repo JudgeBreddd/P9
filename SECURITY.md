@@ -957,6 +957,10 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
     the backup, or removed for an added path), and left or failed (with the reason: a conflict, a newer edit, a failed
     write or rename). The close view shows a partial result as partial. The backup stays in the apply record until the
     sprint closes, so every file P9 touched can be recovered by hand from it.
+  - **The route refuses without the yes.** `POST /sprints/:id/apply` (desktop socket only) accepts exactly `{yes, shown}` with
+    `yes: true`; any other body is refused by the route before the worker runs. `shown` is the digest of the change the owner
+    was shown, and apply refuses if the change now differs. The copy is kept after a partial or conflicted apply, so
+    clean-up cannot remove the only backup. Retry after a partial apply: not built.
   - **What is not guaranteed.** The check and each write are separate steps. Another program can write a file between
     P9's check and its rename, and between P9's hash proof and a rollback rename. P9 cannot close either window on a
     shared filesystem. That single window per file is the residual, and a file written in it can be overwritten.

@@ -292,5 +292,15 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     if (!home || !ID.test(sprint ?? '')) return { error: 'request-refused' };
     return (await closeOf(dirOf(sprint))) ?? { error: 'not-applied' };
   }
-  return { make, where, clean, preview, apply, close };
+  // The copies P9 made, for the desktop's review list: each sprint id, and whether its apply is recorded. Read-only.
+  async function copies() {
+    const out = [];
+    for (const id of home ? (await readdir(home).catch(() => [])).filter((n) => ID.test(n)).sort() : []) {
+      const dir = path.join(home, id);
+      if (!await lstat(path.join(dir, 'copy-record.json')).then(() => true, () => false)) continue;
+      out.push({ id, applied: await lstat(path.join(dir, 'apply-result.json')).then(() => true, () => false) });
+    }
+    return { copies: out };
+  }
+  return { make, where, clean, preview, apply, close, copies };
 }

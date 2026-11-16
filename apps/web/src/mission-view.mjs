@@ -869,7 +869,12 @@ function missionModal(m, body, row) {
     const d = outer.SP.data;
     outer.$('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
     body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
-      : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(outer.SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
+      : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(outer.SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}<div data-copies></div></div>`;
+    // Folder sprints: each copy P9 made opens its review (SECURITY.md "Applying to your folder is a yes").
+    window.p9.mission('sprintCopies').then(r => { const box = body.querySelector('[data-copies]'); if (!box || r.status !== 200) return;
+      box.innerHTML = r.body.copies.length ? `<h3>Folder sprints</h3>${r.body.copies.map(c => `<button data-slot="button" data-variant="outline" data-copy="${esc(c.id)}">${c.applied ? 'Applied' : 'Review change'}</button>`).join(' ')}` : '';
+      box.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => outer.openModal({ kind: 'sprintcopy', id: b.dataset.copy, back: m }));
+    }, () => {});
     const runs = sprintScripts(m.sec);
     outer.$('#mdlFoot').innerHTML = runs.map(([id, label, row]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${esc(id)}"${row ? '' : ` disabled title="Add a ${esc(id)} button to the registry"`}>${esc(label)}</button>`).join('')
       + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
@@ -879,6 +884,38 @@ function missionModal(m, body, row) {
       if (r.status === 201) { outer.closeModal(); outer.showTerminal(r.body.terminal); }
       else { m.hint = 'Open tmux: ' + (r.body?.error || r.status); outer.renderModal(); }
     };
+  } else if (m.kind === 'sprintcopy') {
+    // One folder sprint's review. Applied: the three lists, partial marked partial, a reason for each path. Not applied: the
+    // change to show, and the owner's yes for exactly that change; nothing is written without the press.
+    outer.$('#mdlT').textContent = 'Folder sprint';
+    outer.$('#mdlFoot').innerHTML = '';
+    body.innerHTML = '<div class="review" data-copy-body><p class="sm muted">Loading…</p></div>';
+    const paint = (html) => { const box = body.querySelector('[data-copy-body]'); if (box && outer.mdl.open && outer.S.modal === m) box.innerHTML = html; };
+    const list = (title, items) => `<h3>${esc(title)}</h3>${items.length ? `<ul>${items.map(i => `<li><code>${esc(i)}</code></li>`).join('')}</ul>` : '<p class="sm muted">None.</p>'}`;
+    const reasons = (title, items) => `<h3>${esc(title)}</h3>${items.length ? `<ul>${items.map(i => `<li><code>${esc(i.path)}</code>: ${esc(i.reason)}</li>`).join('')}</ul>` : '<p class="sm muted">None.</p>'}`;
+    const refusal = (b) => esc(b?.refused || b?.error || b?.cause || 'refused');
+    const show = async () => {
+      const [view, pre] = await Promise.all([window.p9.mission('sprintClose', { id: m.id }), window.p9.mission('sprintPreview', { id: m.id })]);
+      if (view.status === 200) {
+        const v = view.body;
+        paint(`${v.partial ? '<p class="sm" role="status"><b>Partial.</b> Some changes are in your folder and some are not. The backup stays in P9\'s apply record.</p>' : ''}${v.cause && !v.partial ? `<p class="sm" role="status">Not applied: ${esc(v.cause)}. Nothing was written.</p>` : ''}`
+          + `${list('Written', v.written)}${list('Rolled back', v.rolledBack)}${reasons('Left or failed', v.left)}`);
+        return;
+      }
+      if (pre.status !== 200) return paint(`<p class="sm" role="status">Cannot show this copy: ${refusal(pre.body)}.</p>`);
+      const p = pre.body, changes = p.changes.map(c => `${c.status} ${c.path}`);
+      paint(`${list('Changes to apply to your folder', changes)}${reasons('Not copied from your folder', p.left ?? [])}`
+        + `<p class="sm muted">Nothing is written until you press Apply. A file changed since this was shown is refused.</p>`
+        + `<p class="sm" data-copy-msg></p>`);
+      if (!changes.length) return;
+      outer.$('#mdlFoot').innerHTML = '<button data-slot="button" data-copy-apply>Apply these changes</button>';
+      outer.$('#mdlFoot [data-copy-apply]').onclick = async () => {
+        const r = await window.p9.mission('sprintApply', { id: m.id, shown: p.shown });
+        if (r.status === 200) { outer.$('#mdlFoot').innerHTML = ''; return show(); }
+        const msg = body.querySelector('[data-copy-msg]'); if (msg) msg.textContent = 'Not applied: ' + refusal(r.body);
+      };
+    };
+    show().catch(() => paint('<p class="sm" role="status">Cannot show this copy right now.</p>'));
   } else if (m.kind === 'idea') {
     // New idea (the old hub's box): the daemon names the file and refuses to replace one.
     outer.$('#mdlT').textContent = 'New idea';
