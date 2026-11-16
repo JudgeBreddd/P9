@@ -287,3 +287,91 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
   assert.deepEqual(order.slice(order.indexOf('lead') + 1, order.indexOf('lead') + 5).sort(), ['worker0', 'worker1', 'worker2', 'worker3']);
   assert.equal(order[order.indexOf('lead') + 5], 'toggle');
 });
+
+// O109 (Tyler, 2026-11-15: "I cant see what the lead is doing or find the composer"): a busy lead chat, with a worker (the
+// sprint card), the worker's report pinned and 30 messages waiting for its turn, keeps its text box on screen and usable
+// at his window's size. Then the turn ends: the waiting messages go, and every one leaves the strip.
+test('O109: 30 queued messages, a sprint card and a worker report leave the composer on screen; delivered ones leave the strip', { timeout: 150000 }, async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const made = await a.tool('open_chat', { text: 'first', item: 'B4', done_means: 'report is visible', checks: ['Tests pass'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await tools(t, instance, made.chat);
+  await a.done(made.chat);
+  writeFileSync(path.join(instance.workspace, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', instance.workspace]);
+  execFileSync('git', ['-C', instance.workspace, 'add', '.']);
+  execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const weakest = Array.from({ length: 12 }, (_, i) => 'Line ' + (i + 1) + ' of a long weakest part, as a real report has.').join('\n\n');
+  await a.tool('send_chat', { chat: made.chat, text: 'late' }); // ready needs the worker mid-turn
+  const ready = await kid.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest });
+  assert.ok(ready.ready, JSON.stringify(ready));
+  await a.done(made.chat);
+  // The lead works on (twenty tool steps of 3 s, about 66 s, then it ends by itself; long enough to launch the window and look), and 30 messages wait for its end, as the
+  // coordinator's and the workers' notes did.
+  const state = async () => (await call(instance, '/chat')).conversations.find((c) => c.id === parent).state;
+  await until(async () => await state() !== 'turn', 'the lead is idle');
+  // The "Ready report pinned" note rides in front of the lead's next prompt, in the same text; a first prompt takes it, so
+  // the fake reads the second one as it is.
+  const ends = async () => (await events(instance, parent)).filter((e) => e.type === 'turn-end').length, before = await ends();
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'cwd' });
+  await until(async () => await ends() > before && await state() !== 'turn', 'the note read');
+  const started = await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'tools 20' });
+  try { await until(async () => await state() === 'turn', 'the lead is working'); } catch (error) { // what the daemon did instead
+    const last = (await events(instance, parent)).slice(-20).map((e) => e.type + ':' + JSON.stringify(e.data).slice(0, 80));
+    assert.fail(error.message + ' | prompt answered ' + JSON.stringify(started) + ' | state ' + await state() + ' | last events ' + last.join(' || '));
+  }
+  for (let i = 1; i <= 30; i++) assert.equal((await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'Queued note ' + i + ': ' + 'x'.repeat(80), when: 'queue' })).when, 'queue');
+  const { app, page, errors } = await launch(t, instance);
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
+  await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  const pane = page.locator(`.pane[data-id="${parent}"]`);
+  await pane.locator(`.card-pin[data-card="ready-${made.chat}"]`).waitFor({ timeout: 20000 });
+  // ">= 30": a worker's late note may wait with them.
+  await until(async () => await pane.locator('[data-held]').count() >= 30, 'all 30 waiting messages drawn');
+  const waiting = await pane.locator('[data-held]').count();
+  await pane.locator('.sp-row').first().waitFor({ state: 'attached', timeout: 20000 }); // the sprint card: the lead has a worker (its rows fold away)
+  // The text box is on screen, uncovered and takes focus, measured once the layout has stopped moving.
+  const box = pane.locator('.composer textarea');
+  const onScreen = async (name) => {
+    const measure = () => box.evaluate((el) => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => { const r = el.getBoundingClientRect();
+      done({ top: Math.round(r.top), bottom: Math.round(r.bottom), height: innerHeight, hit: document.elementFromPoint(r.left + 20, r.top + r.height / 2) === el }); }))));
+    let seen = await measure();
+    for (let i = 0; i < 20; i++) { await page.waitForTimeout(250); const again = await measure(); if (JSON.stringify(again) === JSON.stringify(seen)) break; seen = again; }
+    await shot(page, 'o109-' + name);
+    console.log('O109 composer ' + name + ' ' + JSON.stringify(seen));
+    assert.ok(seen.bottom <= seen.height && seen.top >= 0 && seen.hit, name + ': the text box is on screen and nothing covers it: ' + JSON.stringify(seen));
+    await box.click({ timeout: 5000 });
+    assert.equal(await box.evaluate((el) => document.activeElement === el), true, name + ': the text box takes focus');
+  };
+  // Folded: the box first (what Tyler could not find), then the strip says how many wait.
+  await onScreen('folded');
+  assert.equal(await pane.locator('.queue > summary').innerText(), waiting + ' queued');
+  assert.equal(await pane.locator('.queue').evaluate((el) => el.open), false);
+  // Open: all of them listed, each with its Take back, and the box still on screen.
+  await pane.locator('.queue > summary').click();
+  assert.equal(await pane.locator('.queue').evaluate((el) => el.open), true);
+  assert.equal(await pane.locator('.queue [data-unhold]').count(), waiting);
+  await onScreen('open');
+  // After a reload, the same.
+  await page.reload();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await until(async () => await pane.locator('[data-held]').count() >= 30, 'the waiting messages drawn again after a reload');
+  await onScreen('reloaded');
+  // The turn ends by itself: the waiting messages go (one sender, so one prompt) and the strip empties.
+  // Regression only: main already drops a delivered row (chat-view applyChat 'user'); this keeps it so with the strip.
+  await until(async () => await pane.locator('[data-held]').count() === 0, 'no delivered message still reads Queued', 90000);
+  assert.equal(await pane.locator('.queue').count(), 0);
+  assert.deepEqual(errors, []);
+  console.log('PASS O109: composer on screen and focusable with 30 queued, a sprint card and a worker report at 1568x1348; all 30 left the strip when delivered');
+});

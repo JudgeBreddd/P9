@@ -32,7 +32,7 @@ export async function phone(t, server, { touchScreen = false, serviceWorkers = '
 // A chat the daemon never ran: a finished turn (Send goes straight out), or one with no end yet (the phone reads it as running).
 export const CHAT = '00000000-0000-4000-8000-0000000000c1';
 export function seedChat(server, { running = false } = {}) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(CHAT, 'claude', 'Draft chat', 'idle', Date.now());
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   event.run(CHAT, 'user', JSON.stringify({ text: 'hello' }), Date.now());
