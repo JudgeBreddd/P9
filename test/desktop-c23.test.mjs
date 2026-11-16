@@ -94,6 +94,15 @@ test('D14: the terminal is never under a panel: floating above a full side panel
   await page.waitForFunction(() => document.querySelector('.stage')?.dataset.sideMode === 'full', null, { timeout: 5000 });
   if (await page.locator('#dock[hidden]').count()) await page.keyboard.press('Control+Backquote');
   if (!(await page.locator('#dock.float').count())) await page.click('#dFloat');
+  // After the float click the dock settles (its left edge went 497 to 516 px over about 120 ms in a probe, and the side panel
+  // below it can still be drawn over it). Wait for that state itself, not for time: the float class on, the box the same on two
+  // animation frames in a row, and the point the check reads landing on the dock. The check below is unchanged.
+  await page.waitForFunction(() => {
+    const d = document.querySelector('#dock'), r = d?.classList.contains('float') && d.getBoundingClientRect();
+    const k = r && [r.x, r.y, r.width, r.height].join(), same = k && k === window.__d14Last;
+    window.__d14Last = k;
+    return !!same && !!document.elementFromPoint(r.x + 20, r.y + r.height / 2)?.closest('#dock');
+  }, null, { polling: 'raf', timeout: 5000 });
   const box = await page.locator('#dock').boundingBox();
   assert.equal(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('#dock'), [box.x + 20, box.y + box.height / 2]), true, 'the terminal is above the full side panel');
   await shot('c23-d14-chat-full');
