@@ -3,14 +3,16 @@
 // --test-timeout, which runs inside that file's own process, and spec reports files in order, so the job log stopped at the
 // file before it and named nothing for up to 29 minutes. A reporter runs in the parent runner, which is not blocked: a
 // file still running after P9_FILE_LIMIT_S seconds is named here, and on Linux its process tree is killed so the runner
-// fails it by name and the files after it report. 600 s: the longest whole Linux shard in CI ran 612 s, under the 30 min job.
+// fails it by name and the files after it report. 1200 s (O117): settings.test.mjs alone runs 548 to 600 s of its own
+// tests in green Linux runs (n = 5; slowest test 87 s), so 600 s killed it while it passed; 1200 s is twice that and
+// still names a hang well inside the 30 min job.
 // A failed test is also written here the moment it fails (dogfood 3.5 red, 0.1.9 phase 4.5): spec prints a failure's
 // assertion only in its end-of-run summary, so a runner that ended early (CI 43790793989 shard 4) left a bare ✖ and no cause.
 // ponytail: a grandchild that left the tree (setsid then reparented) is not killed; --test-force-exit still ends the run.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-const limit = Number(process.env.P9_FILE_LIMIT_S || 600);
+const limit = Number(process.env.P9_FILE_LIMIT_S || 1200);
 // The file's own test (the runner's per-file entry) is named by the file's path; tests inside it carry their own names.
 const fileOf = (data) => data?.file && data.nesting === 0 && path.resolve(String(data.name)) === path.resolve(data.file) ? path.resolve(data.file) : null;
 
