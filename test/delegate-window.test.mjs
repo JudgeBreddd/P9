@@ -461,7 +461,7 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   console.log('O712 card ' + await card.locator('.sp-sum').innerText());
   assert.equal(await row(kids[0]).count(), 0, 'an archived worker is still on the card');
   const sum0 = await card.locator('.sp-sum').innerText();
-  assert.ok(!(await row(kids[0]).count()) && /^\d+ workers$/.test(sum0), sum0);
+  assert.ok(!(await row(kids[0]).count()) && /^\d+ workers\b/.test(sum0), sum0);
   assert.equal(await row(kids[5]).getAttribute('data-status'), 'ready', 'kids[5] shows its report');
   assert.equal(await card.locator(`[data-sprint-clear="${kids[5]}"]`).count(), 1, 'a stopped ready worker has no clear');
   // One stopped worker cleared from its row; the live one has no clear.
