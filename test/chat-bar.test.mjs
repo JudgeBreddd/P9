@@ -123,7 +123,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   assert.equal(await winListeners(), base, 'closed: both removed');
   await pillOf(pane, 'Effort').click(); await menu.waitFor(); await pane.locator('.hist').click({ position: { x: 10, y: 10 } });
   assert.deepEqual([await menu.isHidden(), await winListeners()], [true, base], 'a click outside closes it and removes them too');
-  // While the agent works the Steer / Queue / Cancel chip shows beside the pills, which stay.
+  // While the agent works the Steer / Queue / Interrupt / Cancel chip shows beside the pills, which stay.
   await send('long work');
   await pane.locator('.bar [data-when="steer"]').waitFor({ timeout: 10000 });
   assert.equal(await pane.locator('.bar [data-pill]').count(), 4);
