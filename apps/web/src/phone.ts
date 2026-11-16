@@ -1,6 +1,6 @@
 import type { EditorView } from 'codemirror';
 import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
-import { pinned, applyCard, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
+import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
@@ -321,7 +321,7 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[] };
+type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
@@ -396,7 +396,11 @@ const build = perChat((events) => {
         }
       }
     }
-    else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
+    else if (kind === 'card' || kind === 'unpin') {
+      applyCard(strip, kind, data);
+      // O712: each worker report is also a row in the chat (the desktop's 'report' events), so a closed or older one stays readable.
+      if (kind === 'card' && isReport(String(data.id))) add('report', data.text, { id: String(data.id) });
+    }
     else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [], plan: artPlan((data.toolCall ?? {}) as Json) });
     else if (kind === 'answered') {
       const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
@@ -422,6 +426,7 @@ function blockHtml(block: Block) {
   if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
   if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
+  if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
   if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
   if (kind === 'tool') return toolRow(block);
   // P10: an open question is answered here, from the daemon's checked form.
@@ -439,7 +444,7 @@ function blockHtml(block: Block) {
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
 let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
 function itemsOf(blocks: Block[]) {
-  const key = sentCache.size + ':' + codeColoursVersion(); // F4 item 9: a poll that changed no block signs none again
+  const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size; // O712: a closed report shows its chat row // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
   const out: Entry[] = [];
   for (let i = 0; i < blocks.length; i++) {
@@ -614,7 +619,12 @@ function render() {
     history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
     return;
   }
-  const { blocks, strip } = build(picked), all = itemsOf(blocks), events = one<HTMLElement>('#events');
+  const { blocks, strip } = build(picked), events = one<HTMLElement>('#events');
+  // O712: the report pinned above the box is not drawn a second time in the chat; every other report row is.
+  strip.id = picked; // reportKey names the chat
+  const open = openReport(strip, SHUT.get()), lastReport = blocks.findLast((block) => block.kind === 'report');
+  for (const block of blocks) if (block.kind === 'report') block.pinned = block === lastReport && !!open && open.id === block.id && open.text === block.text;
+  const all = itemsOf(blocks);
   if (!stuck && seenItems) windowSize += Math.max(0, all.length - seenItems); // a reader part way up keeps their top; the window slides only at the bottom
   seenItems = all.length;
   const shown = all.slice(-windowSize);
@@ -658,7 +668,6 @@ function render() {
   const plan = (strip.events[0]?.entries ?? []) as string[][], chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   // O712: the desktop's rule: only the newest worker report not closed is pinned, with a × (the sheet's click handler below).
-  strip.id = picked; // reportKey names the chat
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get()); pinStrip = strip;
   const cards = one('#pinned').querySelectorAll('[data-card]').length;
   // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
