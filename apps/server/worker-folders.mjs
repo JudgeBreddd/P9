@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
 import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
-import { startCopy } from './folder-copy.mjs';
+import { applySprint, previewSprint, startCopy } from './folder-copy.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -276,5 +276,14 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     return { removed, kept };
   }
 
-  return { make, where, clean };
+  // The owner's consent (folder-copy.mjs): preview is read-only; apply runs in the sprint's queue, so it never races a clean.
+  async function preview(sprint) {
+    if (!home || !ID.test(sprint ?? '')) return { refused: 'request-refused' };
+    return previewSprint(dirOf(sprint));
+  }
+  async function apply(sprint, consent) {
+    if (!home || !ID.test(sprint ?? '')) return { refused: 'request-refused' };
+    return queued(sprint, () => applySprint(dirOf(sprint), consent));
+  }
+  return { make, where, clean, preview, apply };
 }

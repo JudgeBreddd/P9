@@ -5,7 +5,7 @@
 // rollback, three lists. The bytes applied are the commit's blobs, staged in P9's record folder before the first write.
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { mkdir, open, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { hash, isGuarded, openSafe, protection, replaceFile, removeFile } from '../../packages/files/index.mjs';
@@ -86,7 +86,7 @@ export async function copyTracked(folder, dest, { beforeRead } = {}) {
 
 // The change from the baseline commit to the pinned head: [{ path, status: 'A' | 'M' | 'D', blob }], blob the new blob id
 // (null for a delete). Read from git's raw diff, so the ids are the commit's own.
-async function changesOf(copy, base, head) {
+export async function changesOf(copy, base, head) {
   const r = await git(copy, ['diff', '--raw', '-z', '--no-renames', base, head]);
   if (r.code !== 0) return null;
   const tokens = r.out.split('\0'), out = [];
@@ -216,4 +216,44 @@ async function rollback(folder, record, tag, done, backups, expectOf, failedLeft
     else left.push({ path: d.path, reason: 'newer-than-p9-write' });
   }
   return result([], rolledBack, [...left, ...notTried.map((n) => ({ path: n.path, reason: 'not-applied' }))], cause);
+}
+
+// The owner's consent (SECURITY.md § Sprint from a folder with no remote): the change the owner is shown, and its digest.
+// The yes binds to that digest: if the copy's change differs from what was shown, nothing is written.
+const digestOf = (changes) => hash(Buffer.from(JSON.stringify(changes.map((c) => [c.path, c.status, c.blob]))));
+export async function previewSprint(sprintDir) {
+  const record = await readRecord(sprintDir);
+  if (!record) return { refused: 'no-copy' };
+  const changes = await changesOf(path.join(sprintDir, 'copy'), record.baseline.commit, await copyHead(path.join(sprintDir, 'copy')));
+  if (!changes) return { refused: 'copy-unreadable' };
+  return { source: record.source, changes: changes.map(({ path: p, status }) => ({ path: p, status })), left: record.left, shown: digestOf(changes) };
+}
+
+// Applies only on the owner's explicit yes, for the change shown (shown is the digest from previewSprint). One apply per
+// copy: its result is kept in apply-result.json (0600), written after the apply, and the copy is not removed without it.
+export async function applySprint(sprintDir, { yes, shown, tag, between, afterWrite } = {}) {
+  if (yes !== true) return { refused: 'no-owner-yes' };
+  if (await exists(path.join(sprintDir, 'apply-result.json'))) return { refused: 'already-applied' };
+  const record = await readRecord(sprintDir);
+  if (!record) return { refused: 'no-copy' };
+  const copy = path.join(sprintDir, 'copy');
+  const changes = await changesOf(copy, record.baseline.commit, await copyHead(copy));
+  if (!changes) return { refused: 'copy-unreadable' };
+  if (shown !== digestOf(changes)) return { refused: 'changed-since-shown' };
+  const done = await applyCopy({ folder: record.source, copy, baseline: record.baseline, record: path.join(sprintDir, 'apply-record'), tag, between, afterWrite });
+  if (done.refused) return done;
+  const part = path.join(sprintDir, 'apply-result.json.part');
+  await writeFile(part, JSON.stringify({ source: record.source, at: new Date().toISOString(), ...done }, null, 1), { mode: 0o600 });
+  await rename(part, path.join(sprintDir, 'apply-result.json'));
+  return done;
+}
+
+async function readRecord(sprintDir) {
+  return readFile(path.join(sprintDir, 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
+}
+async function copyHead(copy) {
+  return (await git(copy, ['rev-parse', '-q', '--verify', 'HEAD^{commit}'])).out.trim();
+}
+async function exists(file) {
+  return stat(file).then(() => true, () => false);
 }
