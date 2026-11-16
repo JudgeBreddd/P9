@@ -17,24 +17,18 @@ async function petLook(name) {
 }
 async function loadPetLook() {
   if (!window.p9?.loadPet) return;
-  for (const name of new Set(Object.values(outer.settings.pet).flatMap(f => [f.claude, f.codex, f.system]).filter(Boolean))) if (!outer.IND.looks.has(name)) outer.IND.looks.set(name, await petLook(name));
+  // O123: only the focus modes with pets on: a sheet for a focus with pets off was decoded at startup and never drawn.
+  for (const name of new Set(Object.values(outer.settings.pet).filter(f => f.on).flatMap(f => [f.claude, f.codex, f.system]).filter(Boolean))) if (!outer.IND.looks.has(name)) outer.IND.looks.set(name, await petLook(name));
   renderIndicator();
 }
-// The top-bar pet ignores the on switch (Builder, 2026-10-18: "No. Keep it on. I like it."); the switch is for chat pets.
-const petOf = (f, agent, always) => { const name = (always || f.on) && (f[agent] || f.system); return name && outer.IND.looks.get(name) ? name : null; };
+const petOf = (f, agent) => { const name = f.on && (f[agent] || f.system); return name && outer.IND.looks.get(name) ? name : null; };
+// The top bar shows the spinner and its words while an agent works or waits on you. Pets left the top bar (O123, Builder,
+// 2026-11-15: "Remove them all together from the top"); each chat's state shows on its row in the left panel (panel.mjs).
 function renderIndicator() {
   const active = outer.S.sessions.filter(s => s.state === 'running' && s.pending || outer.busy(s)), waiting = active.filter(s => s.pending).length, working = active.length - waiting;
-  const state = waiting ? 'waiting' : working ? 'working' : null, el = outer.$('#agentInd'), f = outer.settings.pet[outer.S.focus];
-  // One pet per active agent, in the top bar where the text was, always 52 px (Builder, 2026-10-17): waving and jumping while
-  // it waits on you, running while it works. With no pet the spinner and text show there; each chat's line sits above its box.
-  outer.IND.top = [...new Set(active.map(s => s.agent))].map(agent => ({ name: petOf(f, agent, true), rows: active.some(s => s.agent === agent && s.pending) ? '3,4' : '7' })).filter(p => p.name);
-  // With no agent active the system pet stands idle there: the top pet is always on (Builder, 2026-10-18: "Keep it on. I like it.").
-  if (!state) outer.IND.top = [{ name: petOf(f, 'system', true), rows: '0' }].filter(p => p.name);
-  el.hidden = !state && !outer.IND.top.length; el.dataset.state = state || '';
+  const state = waiting ? 'waiting' : working ? 'working' : null, el = outer.$('#agentInd');
+  el.hidden = !state; el.dataset.state = state || '';
   outer.$('#indText').textContent = state === 'waiting' ? (waiting > 1 ? waiting + ' agents wait on you' : 'An agent waits on you') : state ? (working > 1 ? working + ' agents working…' : 'Working…') : '';
-  outer.$('#indGlyph').hidden = !!outer.IND.top.length;
-  el.title = outer.IND.top.map(p => outer.IND.looks.get(p.name).displayName).join(', ');
-  el.toggleAttribute('data-pet', !!outer.IND.top.length);
   tickPets();
 }
 const petCanvas = (name, rows, size, drag = true) => `<canvas class="pet" data-pet-name="${esc(name)}" data-rows="${rows}" width="192" height="208" style="height:${size}px;width:${Math.round(size * 192 / 208)}px"${drag ? ' title="Drag to move"' : ''}></canvas>`;
@@ -48,10 +42,9 @@ function drawPet(cv) {
 }
 // ponytail: one 125 ms timer redraws every pet and re-finds the chat panes (they are re-rendered often); fine for a few pets.
 function tickPets() {
-  const f = outer.settings.pet[outer.S.focus], top = outer.$('#indPets'), key = outer.IND.top.map(p => p.name + ':' + p.rows).join(), glyph = outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length];
+  const f = outer.settings.pet[outer.S.focus], glyph = outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length];
   if (!outer.$('#agentInd').hidden) outer.$('#indGlyph').textContent = glyph;
   document.querySelectorAll('.working .glyph').forEach(g => { g.textContent = glyph; });
-  if (top.dataset.key !== key) { top.dataset.key = key; top.innerHTML = outer.IND.top.map(p => petCanvas(p.name, p.rows, 52, false)).join(''); }
   document.querySelectorAll('#chats .pane, #mdlBody .pane').forEach(p => {
     const s = outer.S.sessions.find(x => x.id === p.dataset.id), name = s && petOf(f, s.agent), rows = s ? petRows(s) : '';
     let cv = p.querySelector(':scope > canvas.pet');
@@ -67,7 +60,7 @@ function tickPets() {
   document.querySelectorAll('canvas.pet').forEach(drawPet);
   petTicker();
 }
-const petsMoving = () => !!(outer.IND.top.length || !outer.$('#agentInd').hidden || document.querySelector('canvas.pet, .working .glyph'));
+const petsMoving = () => !!(!outer.$('#agentInd').hidden || document.querySelector('canvas.pet, .working .glyph'));
 function petTicker() {
   if (outer.petTimer || !petsMoving()) return;
   outer.petTimer = window.setInterval(() => {

@@ -359,7 +359,9 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
 
   const ev = process.env.P9_EVIDENCE, shot = async (name) => { if (ev) await page.screenshot({ path: path.join(ev, name) }); else if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name.replace(/\.png$/, '') + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); } };
   const settingsNow = () => page.evaluate(() => window.p9.getSettings());
-  const topPets = () => page.evaluate(() => [...document.querySelectorAll('#indPets canvas')].map((c) => c.dataset.petName + ':' + c.dataset.rows).sort().join());
+  // O123 (Builder, 2026-11-15: "Remove them all together from the top"): no pet in the top bar, ever; the spinner and its words stay.
+  const topPets = () => page.evaluate(() => document.querySelectorAll('#agentInd canvas, #indPets').length);
+  const spinnerShows = async (text, what) => { assert.equal(await topPets(), 0, what + ': no top-bar pet'); assert.equal(await page.locator('#indGlyph').isVisible(), true, what + ': spinner'); assert.equal(await page.locator('#indText').innerText(), text, what); };
   const drawn = (sel) => page.waitForFunction((sel) => { const c = [...document.querySelectorAll(sel)]; return c.length && c.every((cv) => cv.getContext('2d').getImageData(96, 104, 1, 1).data[3] > 0); }, sel);
   const setPet = async (role, name) => { await page.click('#setBtn'); await page.selectOption('#setPet-' + role, name); await page.click('#setClose'); };
 
@@ -387,36 +389,26 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.equal(await page.locator('#setDlg img').count(), 0, 'the pet name stays text');
   await page.selectOption('#setPet-codex', 'other-pet');
   await page.click('#setClose');
-  // Claude waits with only a Codex pet: the spinner. Then with its own pet: that pet, waving and jumping.
+  // Claude waits with only a Codex pet, then with its own pet: the spinner either way.
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'permission' });
   await page.locator('#agentInd[data-state="waiting"]').waitFor({ timeout: 15000 });
-  assert.equal(await page.locator('#indGlyph').isVisible(), true, 'Claude waits with only a Codex pet: spinner');
-  assert.equal(await topPets(), '');
+  await spinnerShows('An agent waits on you', 'Claude waits, only a Codex pet');
   await setPet('claude', 'good-pet');
-  await page.waitForFunction(() => document.querySelectorAll('#indPets canvas').length === 1);
-  assert.equal(await topPets(), 'good-pet:3,4');
-  assert.equal(await page.locator('#indText').textContent(), 'An agent waits on you', 'the text stays for screen readers');
-  assert.equal(await page.locator('#indGlyph').isHidden(), true);
-  await drawn('#indPets canvas');
-  // The top pet takes the text's place in the top bar at 52 px, whatever the chat pet's size (Builder, 2026-10-17).
-  const bar = await page.locator("#agentInd").boundingBox(), petBox = await page.locator('#indPets canvas').boundingBox();
-  assert.ok(petBox.height === 52 && petBox.y < 10 && petBox.x >= bar.x && petBox.x + petBox.width <= bar.x + bar.width, JSON.stringify({ bar, petBox }));
-  // Codex works: its pet runs in the top bar beside Claude's.
+  await spinnerShows('An agent waits on you', 'Claude waits with its own pet');
+  // Codex works too: still the spinner, no pet runs in the top bar.
   const codex = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await call(instance, `/chat/${codex}/prompt`, 'POST', { text: 'slow' });
   // Busy shows as the working mark on its panel row or its in-chat pet running (chat open).
   const codexBusy = ([id, want]) => want === !!(document.querySelector(`#navList .row[data-chat="${id}"] [data-busy]`) || document.querySelector(`.pane[data-id="${id}"] canvas.pet[data-rows="7"]`));
   await page.waitForFunction(codexBusy, [codex, true], { timeout: 15000 });
-  assert.equal(await topPets(), 'good-pet:3,4,other-pet:7', 'a working agent runs in the top bar');
+  assert.equal(await topPets(), 0, 'a working agent shows no top-bar pet');
   await call(instance, `/chat/${codex}/cancel`, 'POST', {});
   await page.waitForFunction(codexBusy, [codex, false], { timeout: 15000 });
-  // Codex waits too: both pets.
+  // Codex waits too: the words count both.
   await call(instance, `/chat/${codex}/prompt`, 'POST', { text: 'permission' });
   await page.waitForFunction(() => document.querySelector('#indText').innerText === '2 agents wait on you', null, { timeout: 15000 });
-  assert.equal(await topPets(), 'good-pet:3,4,other-pet:3,4');
-  assert.equal(await page.locator('#indText').innerText(), '2 agents wait on you');
-  await drawn('#indPets canvas');
-  await shot('pets-top-two.png');
+  await spinnerShows('2 agents wait on you', 'two wait');
+  await shot('pets-top-none.png');
 
   // Each chat holds its own agent's pet (the waiting row).
   const inChat = {};
@@ -444,11 +436,6 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // D2: the spot is kept from the message box, in px, so it moves with the box.
   const dragged = (await petSpots())['mdlBody:' + codex];
   assert.ok(Array.isArray(dragged.box) && dragged.box.every(Number.isInteger) && dragged.box[1] < 0, JSON.stringify(dragged));
-  // The top pets do not drag (they keep their place in the top bar).
-  const top = await page.locator('#indPets canvas').first().boundingBox();
-  await page.mouse.move(top.x + top.width / 2, top.y + top.height / 2); await page.mouse.down();
-  await page.mouse.move(400, 400, { steps: 5 }); await page.mouse.up();
-  assert.deepEqual(await page.locator('#indPets canvas').first().boundingBox(), top);
   assert.equal((await settingsNow()).pet.chat.top, null);
 
   // An agent's reply shows as Markdown, and markup in it stays text: no script, image or frame (threat model row 18). Only
@@ -595,7 +582,8 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   ({ app, page } = await launch());
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-settings.json'), 'utf8')).pet.chat, look(true, { system: 'dotdot', claude: 'good-pet', codex: 'other-pet' }));
   assert.deepEqual(await petSpots(), { ['mdlBody:' + codex]: dragged });
-  await page.waitForFunction(() => document.querySelectorAll('#indPets canvas').length === 2, null, { timeout: 15000 });
+  await page.locator('#agentInd[data-state="waiting"]').waitFor({ timeout: 15000 });
+  assert.equal(await topPets(), 0, 'after the restart: no top-bar pet');
   const rows = () => page.evaluate(() => [...document.querySelectorAll('#navList .row[data-chat]')].map((t) => t.dataset.chat).sort());
   // A chat no message was sent in is not listed once stopped; the stopped chat that was sent is, and opens again.
   await page.locator(`#navList .row[data-chat="${md}"]`).waitFor({ timeout: 15000 });
@@ -628,25 +616,18 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.deepEqual(petsMoved[1].at, petsAt[1].at, 'the other chat pet stayed put');
   await shot('pets-split-dragged.png');
   await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
-  // Dev's pets here are refused names, so the spinner. Chat with pets turned off loses its chat pets but keeps the top-bar
-  // pets (Builder, 2026-10-18: "No. Keep it on. I like it.").
+  // Dev (pets off by default) and Chat with pets turned off: the spinner, no chat pets, and no top-bar pet in either.
   await page.keyboard.press('Control+2');
-  assert.equal(await page.locator('#indGlyph').isVisible(), true, 'Dev: pets off by default');
-  assert.equal(await topPets(), '');
+  await spinnerShows('2 agents wait on you', 'Dev');
   await page.keyboard.press('Control+1');
-  await page.waitForFunction(() => document.querySelectorAll('#indPets canvas').length === 2);
   await page.click('#setBtn'); await page.uncheck('#setPetOn'); await page.click('#setClose');
   await page.waitForFunction(() => !document.querySelector('#chats .pane canvas.pet'));
-  assert.equal(await topPets(), 'good-pet:3,4,other-pet:3,4', 'Chat with pets off keeps the top-bar pets');
-  assert.equal(await page.locator('#indGlyph').isHidden(), true);
-  // No agent active: the system pet stands idle in the top bar (Builder, 2026-10-18: "Keep it on. I like it.").
+  await spinnerShows('2 agents wait on you', 'Chat with pets off');
+  // No agent active: the top bar shows nothing (the idle top-bar system pet is gone with the rest).
   await setPet('system', 'other-pet');
   for (const chat of [id, codex]) await call(instance, `/chat/${chat}/cancel`, 'POST', {});
-  await page.waitForFunction(() => [...document.querySelectorAll('#indPets canvas')].map((c) => c.dataset.petName + ':' + c.dataset.rows).join() === 'other-pet:0', null, { timeout: 15000 });
-  assert.equal(await page.locator('#agentInd').isVisible(), true);
-  assert.equal(await page.locator('#indText').textContent(), '');
-  await drawn('#indPets canvas');
-  await shot('pet-top-idle.png');
+  await page.locator('#agentInd').waitFor({ state: 'hidden', timeout: 15000 });
+  assert.equal(await topPets(), 0, 'idle: no top-bar pet');
 
   // Add pets: the folder picker (stubbed here) offers five folders; only the good one is copied, and only its two files.
   await app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths }); },

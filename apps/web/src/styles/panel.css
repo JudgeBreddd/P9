@@ -107,11 +107,13 @@
 .lpanel .mk{flex:none;display:inline-grid;place-items:center;width:14px;height:14px}
 .lpanel .mk svg{width:13px;height:13px}
 /* Running is a ring, unread a filled dot: told apart by shape, not only colour. */
-.lpanel .mk-run::before{content:"";width:8px;height:8px;box-sizing:border-box;border-radius:50%;border:2px solid var(--ok);grid-area:1/1}
-.lpanel .mk-run[data-busy]::after{content:"";width:13px;height:13px;border-radius:50%;border:1px solid var(--ok);grid-area:1/1;animation:lp-pulse 1.8s var(--ease) infinite}
-@keyframes lp-pulse{from{opacity:.9;transform:scale(.5)}to{opacity:0;transform:scale(1.15)}}
+/* O123 (Builder, 2026-11-15): "a working chat with a spinning ring. Green circle is idle. Red hand is blocked." */
+.lpanel .mk-run::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ok);grid-area:1/1}
+.lpanel .mk-run[data-busy]::before{content:none}
+.lpanel .mk-run[data-busy]::after{content:"";width:11px;height:11px;box-sizing:border-box;border-radius:50%;border:2px solid var(--ok);border-right-color:transparent;grid-area:1/1;animation:lp-spin .9s linear infinite}
+@keyframes lp-spin{to{transform:rotate(1turn)}}
 .lpanel .mk-unread::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--foreground)}
-.lpanel .mk-needs{color:var(--warn)}
+.lpanel .mk-needs{color:var(--destructive)}
 .lpanel .mk-failed{color:var(--destructive)}
 .lpanel .mk-failed svg{stroke-width:3;width:12px;height:12px}
 
@@ -158,9 +160,9 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 .lpanel .bot .bm:empty::before{content:"";width:8px;height:8px;border-radius:50%}
 .lpanel .bot .bm svg{width:15px;height:15px}
 .lpanel .bot[data-s=""] .bm{display:none}
-.lpanel .bot[data-s="running"] .bm::before{width:9px;height:9px;box-sizing:border-box;border:2px solid var(--ok)}
+.lpanel .bot[data-s="running"] .bm::before{width:9px;height:9px;background:var(--ok)}
 .lpanel .bot[data-s="unread"] .bm::before{background:var(--foreground)}
-.lpanel .bot[data-s="needs"] .bm{color:var(--warn)}
+.lpanel .bot[data-s="needs"] .bm{color:var(--destructive)}
 .lpanel .bot[data-s="failed"] .bm{color:var(--destructive)}
 .lpanel .bot[data-s="failed"] .bm svg{stroke-width:3.5;width:13px;height:13px}
 .lp-tip{position:fixed;z-index:72;display:grid;gap:2px;max-width:260px;padding:6px 10px;translate:0 -50%;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:var(--popover);color:var(--popover-foreground,var(--foreground));
