@@ -29,6 +29,9 @@ export function installProjects(o, api) {
   // window-10, Start sprint (SECURITY.md § Start sprint): lead -> what the last press answered; starting: the presses still out,
   // so a redraw meanwhile keeps the button off. The press is the approval record; the page shows the one P9 kept.
   const startSaid = new Map(), starting = new Set();
+  // A lead chat takes its sprint's id, so the chat a press here makes is known before it exists; chat-view leaves it
+  // where it is listed instead of putting it on screen, so the press's answer (a failure halfway too) stays in view.
+  const pressed = new Set(); o.pressedStart = id => pressed.has(id);
   const startText = r => r.status === 200 ? 'Started: ' + r.body.chats.map(c => c.key + (c.existing ? ' (kept)' : '')).join(', ') + '.'
     : 'Not started: ' + (r.body?.detail || r.body?.error || r.status) + (r.body?.chats?.length ? ' Made so far: ' + r.body.chats.map(c => c.key).join(', ') + '.' : '');
   const startedHtml = sp => sp.started ? `<p class="hint" data-sp-started>Started ${esc(new Date(sp.started.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} by ${sp.started.by === 'owner' ? 'you' : esc(find(sp.started.by)?.title ?? 'a chat\'s agent, on your yes')}: your approval of its plan, sha256 <span class="mono" title="${esc(sp.started.plan)}">${esc(sp.started.plan.slice(0, 12))}</span>.</p>` : '';
@@ -269,7 +272,7 @@ export function installProjects(o, api) {
     // An open file's draft is saved first: the press approves the plan as it is on disk. The page is read again after, in
     // place (the user may be elsewhere by then: nothing is opened for them).
     if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return; clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); }
-      starting.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
+      starting.add(lead); pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
       const r = await call('startSprint', { sprint: lead }, { quiet: true }).finally(() => starting.delete(lead));
       startSaid.set(lead, startText(r));
       const again = cur?.id === id && await call('project', { id }, { quiet: true });

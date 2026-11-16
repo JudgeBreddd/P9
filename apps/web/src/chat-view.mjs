@@ -1012,7 +1012,8 @@ async function loadChat() {
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       // A7: a worker an agent started never takes the screen from the chat being read; it is listed under its parent.
-      if (created && !ev.data?.parent && !swapIn(ev.conversation)) show(ev.conversation);
+      // window-10: nor does the lead chat this window's Start sprint makes; the project page keeps the press's answer.
+      if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation);
       // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
       if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
       if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();

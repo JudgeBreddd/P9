@@ -756,7 +756,7 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
     globalThis.presses = 0; globalThis.letGo = null;
     ipcMain.handle('p9:chat', async (e, action, ...rest) => {
       if (action === 'startSprint' && ++globalThis.presses === 1) await new Promise((go) => { globalThis.letGo = go; });
-      return h(e, action, ...rest);
+      const r = await h(e, action, ...rest); if (action === 'startSprint') (globalThis.answers ||= []).push(JSON.stringify(r).slice(0, 600)); return r;
     });
   });
   await start.click();
@@ -767,7 +767,7 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   assert.equal(await app.evaluate(() => globalThis.presses), 1, 'a second press went out while the first was');
   await app.evaluate(() => globalThis.letGo());
   // Halfway: the lead is made, the worker's folder is refused. The page says so and what was made.
-  await said.waitFor({ timeout: 90000 });
+  await said.waitFor({ timeout: 90000 }).catch(async (err) => { throw new Error(`no result line. main got: ${await app.evaluate(() => JSON.stringify(globalThis.answers ?? null))}; errors: ${JSON.stringify(errors).slice(0, 800)}; section: ${(await section.innerHTML().catch(() => 'gone')).slice(0, 1500)}`, { cause: err }); });
   assert.match(await said.textContent(), /^Not started: .*Made so far: lead\.$/s);
   await until(async () => await section.locator('[data-sp-prep]').count() === 0, 'the section is no longer a prep');
   assert.equal((await start.textContent()).trim(), 'Start again');
