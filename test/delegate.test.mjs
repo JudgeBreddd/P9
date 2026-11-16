@@ -1104,3 +1104,40 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   const late = await a.tool('send_chat', { chat: made.chat, text: 'later', replaces: fixed.held });
   assert.equal(late.replaced, null, 'a delivered ID replaced something: ' + JSON.stringify(late));
 });
+
+// O125 point 2: a worker's end line that says nothing for its parent sends no note (the worker's status keeps it).
+test('O125 point 2: a worker whose end line says nothing for its parent sends no note, and its status keeps the line', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'nothing for you', title: 'Kid' });
+  assert.equal((await a.done(made.chat)).last, 'echo:nothing for you');
+  await pause(500);
+  assert.deepEqual(await notices(instance, a.conversation), [], 'the parent got a note that said nothing for it');
+  const status = (await events(instance, made.chat)).filter((e) => e.type === 'sprint-state' && e.data.endNote);
+  assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for you', 'the worker status did not keep its end line');
+});
+
+// O125 point 2: only the newest note from a worker waits for its parent's turn; a newer one replaces the older by its ID.
+test('O125 point 2: two notes from one worker waiting for a parent in a turn: the second replaces the first, one goes as the next prompt', { timeout: 120000 }, async (t) => {
+  // No steering (as Claude on ACP 2 offers none): a note meant for a running parent is refused (409) and waits.
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
+  const a = await agent(t, instance);
+  assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'gate' })).status, 202);
+  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'gating');
+  // Not waited on with wait_chat: an open wait holds the parent's notes back, so the worker's turn ends are watched instead.
+  const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
+  const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
+  for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
+  const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
+  assert.ok(replaced.hit.data.text.includes('Kid ended its turn'), 'the replaced note is not marked replaced: ' + JSON.stringify(replaced.hit.data));
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  await pause(100);
+  for (let i = 0; i < 100 && (await notices(instance, a.conversation)).length < 1; i += 1) await pause(100);
+  const kid = await notices(instance, a.conversation);
+  assert.equal(kid.filter((text) => text.includes('Kid ended its turn')).length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
+});
