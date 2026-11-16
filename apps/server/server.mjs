@@ -28,6 +28,7 @@ import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
+import { createPhoneErrors } from './phone-errors.mjs';
 import { createIcons } from './icons.mjs';
 import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
 import { AGENTS, adminCommand, wizardDependencies, found as onPath, placeAgents } from './deps.mjs';
@@ -858,6 +859,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   return server;
 
   function remoteListener() {
+    const phoneErrors = createPhoneErrors();
     // Every open socket of each device (requests in flight, long polls, terminal sockets): revoke, lock, reset and a
     // new login of that device destroy them at once, so nothing keeps working on an old session.
     const open = new Map();
@@ -925,6 +927,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     remoteApp.use('*', async (c, next) => {
       if (!['GET', 'HEAD'].includes(c.req.method)) { await c.req.text(); stillAuthorized(); }
       await next();
+    });
+    // O128 (threat model row O128): the phone's own errors, one journal line each. Before the operations ledger: a report
+    // is not an operation, so it takes no ledger row and spends none of the device's quota (it has its own, 10 a minute).
+    remoteApp.post('/phone-error', async (c) => {
+      const result = phoneErrors(c.get('device'), await c.req.text());
+      return result.status === 204 ? c.body(null, 204) : c.json(result.body, result.status);
     });
     // Operation IDs bind to the device, so one device can never replay or read another device's stored reply.
     remoteApp.use('*', operations(ledger, (c) => 'device:' + c.get('device')));
