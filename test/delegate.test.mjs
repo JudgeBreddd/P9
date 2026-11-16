@@ -303,7 +303,7 @@ test('Delegate: chats in one project read and message each other but stop only t
   console.log('PASS Delegate scope: project chats read and sent, stop and answer kept to the starter, a chat outside saw nothing');
 });
 
-test('Delegate: a provider-profile chat\'s worker stays on that profile, on its parent\'s model or another the profile lists', { timeout: 120000 }, async (t) => {
+test('Delegate: a provider-profile chat\'s worker stays on that profile and its parent\'s model; another model is refused unless a Settings row allows it', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const KEY = 'sk-profile-test-0f3a9c71d2e84b56'; // the made-up key profiles.test.mjs uses; no service knows it
@@ -320,10 +320,12 @@ test('Delegate: a provider-profile chat\'s worker stays on that profile, on its 
     return [line.what, line.model, line.baseUrl, line.keyHash, line.keyOutside];
   };
   assert.deepEqual(await started({}), ['new', 'glm-5.3', 'https://models.example.test/api', hash, false]);
-  assert.deepEqual(await started({ model: 'kimi-k3:cloud' }), ['new', 'kimi-k3:cloud', 'https://models.example.test/api', hash, false]);
+  assert.deepEqual(await started({ model: 'glm-5.3' }), ['new', 'glm-5.3', 'https://models.example.test/api', hash, false], 'the model its row allows (the parent\'s) did not open');
+  // Every row is left on "the parent's": another model the profile lists is still not one the user allowed.
+  assert.equal(await started({ model: 'kimi-k3:cloud' }), 'delegation-refused', 'a model no Settings row allows was started');
   assert.equal(typeof await started({ model: 'opus' }), 'string', 'a model the profile does not list was started');
   assert.equal((await rows(instance)).length, 3);
-  console.log('PASS Delegate profile: the worker got the profile\'s address, key and model; a model outside the profile was refused');
+  console.log('PASS Delegate profile: the worker got the profile\'s address, key and the parent\'s model, named or not; another listed model and one outside the profile were refused');
 });
 
 test('Delegate notes: a note reaches a wider working chat and a worker\'s parent, starts no turn, and is read with the next message', { timeout: 180000 }, async (t) => {
@@ -574,7 +576,7 @@ test('Delegate: after a restart the top chat of a sprint that was cut mid-turn g
   console.log('PASS Delegate restart wake: one line to the working sprint\'s top chat after a SIGTERM restart, no chat of the idle sprint started, none on the third start');
 });
 
-test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first worker even in Unrestricted; Off refuses; each worker starts on its own Settings row unless open_chat names its own; no more workers than Workers per chat', { timeout: 180000 }, async (t) => {
+test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first worker even in Unrestricted; Off refuses; each worker starts on its own Settings row; a provider, model or effort open_chat names that no free row starts is refused by field; no more workers than Workers per chat', { timeout: 180000 }, async (t) => {
   const instance = await boot(t);
   const set = (body) => call(instance, '/delegation', 'POST', body);
   assert.deepEqual((await call(instance, '/delegation')).body, { start: 'ask', max: 5, workers: five() }, 'a new install does not start on Ask me first, 5 workers, every row the parent\'s');
@@ -632,8 +634,23 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   const third = await a.tool('open_chat', { text: 'config', title: 'Third' });
   assert.equal(third.worker, 3, JSON.stringify(third));
   assert.match((await a.done(third.chat)).last, /config:model=opus,effort=high,/, 'Worker 3 did not start on its row');
-  const own = await a.tool('open_chat', { text: 'config', title: 'Fourth', model: 'haiku', effort: 'low' });
-  assert.match((await a.done(own.chat)).last, /config:model=haiku,effort=low,/, 'what open_chat passed did not win over the worker\'s row');
+  // Settings > Delegation decides what a worker is (Tyler, 2026-11-16: "the parent cannot create an unapproved worker"): a
+  // provider, model or effort no free row starts is refused by field, and nothing is made.
+  const count = (await rows(instance)).length;
+  const haiku = await a.tool('open_chat', { text: 'config', title: 'Fourth', model: 'haiku', effort: 'low' });
+  assert.deepEqual([haiku.error, haiku.field], ['delegation-refused', 'model'], 'a model no row allows was not refused: ' + JSON.stringify(haiku));
+  assert.match(haiku.detail, /^model "haiku" is not one the user allows: no free Settings > Delegation row starts it\. Allowed model: .*opus/, haiku.detail);
+  const low = await a.tool('open_chat', { text: 'config', title: 'Fourth', model: 'opus', effort: 'low' });
+  assert.deepEqual([low.error, low.field], ['delegation-refused', 'effort'], 'an effort no row allows was not refused: ' + JSON.stringify(low));
+  assert.match(low.detail, /^effort "low" is not one the user allows: no free Settings > Delegation row starts it with model "opus"\. Allowed effort: high\./, low.detail);
+  const codex = await a.tool('open_chat', { text: 'config', title: 'Fourth', provider: 'codex' });
+  assert.deepEqual([codex.error, codex.field], ['delegation-refused', 'provider'], JSON.stringify(codex));
+  assert.match(codex.detail, /Allowed provider: claude\./, codex.detail);
+  assert.equal((await rows(instance)).length, count, 'a refused worker made a chat');
+  // What a free row starts opens, on that row.
+  const own = await a.tool('open_chat', { text: 'config', title: 'Fourth', model: 'opus', effort: 'high' });
+  assert.equal(own.worker, 4, JSON.stringify(own));
+  assert.match((await a.done(own.chat)).last, /config:model=opus,effort=high,/, 'an allowed model and effort did not reach the worker');
   // A pick the agent no longer lists is passed over (the parent's own is next in line); one the call names is still refused.
   const gone = await a.tool('open_chat', { text: 'config', title: 'Fifth' });
   assert.equal(gone.error, undefined, JSON.stringify(gone));
@@ -677,7 +694,7 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   await a.tool('stop_chat', { chat: gone.chat, close: true });
   assert.equal((await a.tool('send_chat', { chat: first.chat, text: 'config' })).sent, 'started a turn');
   await a.done(first.chat);
-  console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, Worker 3 ran on its row (opus/high), haiku/low from the call won, an unlisted pick was passed over, a sixth worker was refused at 5, a stopped worker freed its row for a Codex worker, a profile row gave its worker the profile');
+  console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, Worker 3 ran on its row (opus/high), haiku, opus/low and codex from the call were refused by field with nothing made, opus/high from the call opened on Worker 4, an unlisted pick was passed over, a sixth worker was refused at 5, a stopped worker freed its row for a Codex worker, a profile row gave its worker the profile');
 });
 
 test('Delegate peer help: ask_chat asks a chat the user opened to questions; its turn is alone, read-only and its own; the helper\'s mode comes back; no chains, no parent or worker', { timeout: 180000 }, async (t) => {

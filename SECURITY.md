@@ -674,6 +674,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   still reaches it and starts nothing, and you can still open and message it yourself from
   the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
   mode. No tool deletes a chat.
+- **A worker is only what Settings > Delegation allows.** You set each worker's agent, model and
+  effort in Settings > Delegation, one row per worker (a row left on "the parent's" allows the
+  parent's own). `open_chat` left without them starts the next free row as you set it. A provider,
+  model or effort the agent names must be what one of your free rows starts, and that row is used;
+  anything else is refused (`delegation-refused`, naming the field and the values your rows allow),
+  never swapped for something near it, and nothing starts. Start sprint is not bound by these rows:
+  a sprint's chats come from its own roles.
 - **A worker is never wider than its parent.** It starts in the parent's mode unless a narrower
   one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. A message from
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
