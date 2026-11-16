@@ -312,8 +312,7 @@ function renderSettings() {
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
   outer.$('#setBody').innerHTML = `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}<span class="spacer"></span>${info('The P9 guide (opens on GitHub), Anymouse (a note to P9\'s makers: an idea, a bug or a gripe) and Setup (the first-start window again).', 'settings')}</div>`
     + (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(outer.settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button>${info('Makes everything in this window bigger or smaller, in every focus mode.', 'settings')}</div>` : '')
-    + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
-    + box('setStartLast', 'Start in my last focus mode', outer.settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
+    + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">Cards waiting on you put this name after "needs". Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('Cards that wait on you put this name after "needs". Empty: no name.', 'settings')}</label>`
     + box('setCloseSend', 'Close the chat window on send', outer.settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
     // The daemon keeps this one (it starts the shells, the phone's too); null: it did not answer, so the box is disabled.
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
@@ -332,7 +331,6 @@ function renderSettings() {
   if (outer.$('#zIn')) { outer.$('#zIn').onclick = () => zoom(outer.settings.zoom + 0.1); outer.$('#zOut').onclick = () => zoom(outer.settings.zoom - 0.1); outer.$('#zReset').onclick = () => zoom(1); }
   outer.$('#setName').value = outer.settings.name || '';
   outer.$('#setName').onchange = e => saveSettings({ ...outer.settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) });
-  outer.$('#setStartLast').onchange = e => saveSettings({ ...outer.settings, startLast: e.target.checked });
   outer.$('#setBody').querySelectorAll('[data-xfer-limit]').forEach(el => { el.onchange = () => { const k = el.dataset.xferLimit, n = Math.round(Number(el.value));
     if (!Number.isFinite(n)) { el.value = outer.settings.xfer[k]; return; }
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
@@ -420,8 +418,8 @@ async function checkSetup() {
   outer.renderCards();
 }
 function skipWelcome() { try { localStorage.setItem('p9-welcome-skipped', '1'); } catch {} outer.renderCards(); }
-function tour() { const from = outer.S.focus; outer.setFocus('chat', true); outer.walkthrough(0, from); }
-// First run (the landing page closed for the first time): the wizard while a check fails, then the walkthrough.
+function tour() { const from = outer.S.focus; outer.setFocus('chat'); outer.walkthrough(0, from); }
+// First run (the first start, controller.mjs firstStart): the wizard while a check fails, then the walkthrough.
 async function firstRun() {
   const s = await loadSetup();
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();

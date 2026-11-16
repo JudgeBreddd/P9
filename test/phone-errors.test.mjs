@@ -83,11 +83,17 @@ test('O128: the phone sends the structure of its uncaught errors, rejections and
   const stored = await phone.page.evaluate(() => localStorage.getItem('p9-phone-errors') ?? '');
   assert.match(stored, /OfflineCheck/, 'kept on the phone');
   assert.doesNotMatch(stored, SECRET, 'the stored report has no message text');
+  // The first send after reconnecting gets no answer (the network is not back yet at that instant: here the context is
+  // online one step before the CDP conditions are): the phone keeps the report and tries again by itself.
+  let refused = 0;
+  await phone.context.route('**/phone-error', (route) => (refused++ ? route.fallback() : route.abort('internetdisconnected')));
   await phone.setOffline(false);
   await until(() => lines(device, offlineOf).length === 1, 'the offline report after reconnecting');
+  assert.ok(refused >= 2, 'the first send after reconnecting failed, a later one went: ' + refused);
   await phone.page.waitForTimeout(500);
   assert.equal(lines(device, offlineOf).length, 1, 'sent once');
   assert.doesNotMatch(await phone.page.evaluate(() => localStorage.getItem('p9-phone-errors') ?? ''), /OfflineCheck/, 'cleared once sent');
+  await phone.context.unroute('**/phone-error');
 
   // 3. The route itself (a second device, so its minute starts clean).
   const other = await signedInPage(browser, server, 'o128-other');

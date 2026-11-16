@@ -1,6 +1,6 @@
 const { app, protocol } = require('electron');
 // allowServiceWorkers: Dev Focus extension pages (p9://webview) get their files through VS Code's service worker; without it an
-// image preview stays blank (share-ready item 2, A/B). stream: the landing's <video> (landing v5) plays from p9://app.
+// image preview stays blank (share-ready item 2, A/B). stream: media served from p9:// plays and seeks.
 protocol.registerSchemesAsPrivileged([{ scheme: 'p9', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, allowServiceWorkers: true, stream: true } }]);
 const path = require('node:path');
 const index = process.argv.indexOf('--state');
