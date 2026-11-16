@@ -1793,6 +1793,9 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   const background = () => { window.__notes = []; document.hasFocus = () => false; window.Notification = class { constructor(title, o) { window.__notes.push([title, o.body]); } }; };
   await page.evaluate(background);
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  // The chat's row means the window is past its first read (the replay): a turn that ends inside the replay is old news
+  // and rightly makes no card, so prompting before it raced the window's start.
+  await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   const card = page.locator('#cards [data-key="done:' + id + '"]');
   await card.waitFor({ timeout: 15000 });
