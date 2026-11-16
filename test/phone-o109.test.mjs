@@ -90,8 +90,40 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   assert.doesNotMatch(await page.textContent('#chips'), /pinned/, 'an unchanged card sent again reopened the closed chip');
   more('card', { id: 'ready-0d4c1e2f-1a4c-4559-a431-f0e2d3c4b5a6', kind: 'note', text: 'Worker report: PR #177' });
   await page.reload();
-  await page.waitForFunction(() => /3 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
+  // O712: only the newest worker report is pinned (the desktop's rule), so the sprint card and the new report: 2.
+  await page.waitForFunction(() => /2 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
   await shot(page, 'o109-phone-card-back');
   const back = await composerOnScreen(page);
   assert.ok(back.inside && back.hit, 'the composer is on screen when the pinned card comes back: ' + JSON.stringify(back));
+
+  // (5) O712: the worker report itself closes on the phone, as on the desktop: the sheet shows the newest report with a ×;
+  // closing it leaves the sprint card, stays closed after a reload, and the same worker's next report comes back.
+  const sheetCards = () => page.evaluate(() => ({ text: document.querySelector('#sheetBody')?.textContent ?? '', close: document.querySelectorAll('#sheetBody [data-card-close]').length, cards: document.querySelectorAll('#sheetBody [data-card]').length }));
+  await page.click('#chips [data-chip]');
+  let seenSheet = await sheetCards();
+  assert.equal(seenSheet.close, 1, 'the newest worker report has its own close: ' + JSON.stringify(seenSheet));
+  assert.match(seenSheet.text, /PR #177/); assert.doesNotMatch(seenSheet.text, /PRs #103/, 'an older report is not pinned');
+  await page.evaluate(() => Promise.all(document.querySelector('#sheet').getAnimations({ subtree: true }).filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished))); // the sheet has slid in
+  await shot(page, 'o712-phone-report-close');
+  await page.click('#sheetBody [data-card-close]');
+  await page.waitForFunction(() => !/Worker report/.test(document.querySelector('#sheetBody')?.textContent ?? ''), null, { timeout: 5000 });
+  seenSheet = await sheetCards();
+  assert.match(seenSheet.text, /SPRINT: 7 workers/, 'the other card stays: ' + JSON.stringify(seenSheet));
+  assert.match(await page.textContent('#chips'), /1 pinned/);
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.waitForSelector('#queued:not([hidden])', { timeout: 30000 });
+  await page.waitForFunction(() => /1 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
+  const shutAfter = await composerOnScreen(page);
+  assert.ok(shutAfter.inside && shutAfter.hit, 'the composer is on screen with the report closed: ' + JSON.stringify(shutAfter));
+  more('card', { id: 'ready-0d4c1e2f-1a4c-4559-a431-f0e2d3c4b5a6', kind: 'note', text: 'Worker report: PR #177 merged' });
+  await page.reload();
+  await page.waitForFunction(() => /2 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
+  await page.click('#chips [data-chip]');
+  seenSheet = await sheetCards();
+  assert.match(seenSheet.text, /PR #177 merged/, 'the worker\'s next report is pinned again: ' + JSON.stringify(seenSheet));
+  assert.equal(seenSheet.close, 1);
+  await page.keyboard.press('Escape');
+  const reopened = await composerOnScreen(page);
+  assert.ok(reopened.inside && reopened.hit, 'the composer is on screen after the next report: ' + JSON.stringify(reopened));
 });

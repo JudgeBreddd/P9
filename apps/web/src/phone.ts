@@ -1,6 +1,6 @@
 import type { EditorView } from 'codemirror';
 import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
-import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
+import { pinned, applyCard, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
@@ -352,7 +352,7 @@ function questionAnswer(form: HTMLFormElement, fields: Json[]) {
   return content;
 }
 type Entry = { key: string; sig: string; html: () => string };
-type Strip = { events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> };
+type Strip = { id?: string; events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> };
 const DETAIL_CAP = 2000; // a tool call's expandable detail: the ledger's status and text content, escaped, capped (threat model row 18)
 const toolText = (data: Json) => (Array.isArray(data.content) ? data.content as Json[] : []).map((item) => String(((item.content ?? item) as Json | undefined)?.text ?? '')).filter(Boolean).join('\n');
 const build = perChat((events) => {
@@ -655,9 +655,12 @@ function render() {
     const node = [...events.children as HTMLCollectionOf<HTMLElement>].find((item) => item.dataset.key === hold!.key);
     if (node) body.scrollTop += node.getBoundingClientRect().top - hold.top;
   }
-  const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
+  const plan = (strip.events[0]?.entries ?? []) as string[][], chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
-  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
+  // O712: the desktop's rule: only the newest worker report not closed is pinned, with a × (the sheet's click handler below).
+  strip.id = picked; // reportKey names the chat
+  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get()); pinStrip = strip;
+  const cards = one('#pinned').querySelectorAll('[data-card]').length;
   // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
   pinSig = cards ? JSON.stringify([...strip.cards!.values()]) : '';
   const showCards = cards > 0 && pinSig !== localStorage.getItem('p9-pins-closed:' + picked);
@@ -673,6 +676,13 @@ function render() {
 }
 // The same empty-only swap as the desktop: the daemon refuses deletion if a message raced the picker.
 let pinSig = ''; // O109: the open chat's pinned cards as last drawn
+let pinStrip: Strip = { events: [] }; // O712: the strip last drawn, for the report close
+one('#sheetBody').addEventListener('click', (event) => {
+  const card = pinStrip.cards?.get((event.target as Element).closest<HTMLElement>('[data-card-close]')?.dataset.cardClose ?? '');
+  if (!card) return;
+  SHUT.add(reportKey(pinStrip, card)); render();
+  if (one('#pinned').innerHTML) one('#sheetBody').innerHTML = one('#pinned').innerHTML; else sheet.close();
+});
 let pickChatAt = '', pickChatWhole = false, pickChatWorkspace = '';
 async function showChatFolders(at = '') {
   const id = openId, info = phoneFolders.get(id); if (!info) return;
