@@ -1076,7 +1076,7 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   assert.equal(gone.length, 1, 'the replaced wording is not marked');
   assert.equal(gone[0].data.why, 'replaced');
   assert.ok(!(await events(instance, made.chat)).some((e) => e.type === 'user' && e.data.text === 'corrected wording'), 'the correction went into the running turn now, not with the queue');
-  // FIX2: the correction keeps the replaced wording's delivery (queue), so no tool step can steer it into the running turn.
+  // FIX2: the correction keeps the replaced wording's delivery (queue), so it is not steered into the running turn.
   const heldFix = (await events(instance, made.chat)).find((e) => e.type === 'held' && e.data.id === fixed.held);
   assert.equal(heldFix?.data.when, 'queue', 'the correction for a queued wording is not queued: ' + JSON.stringify(heldFix));
   // A foreign sender's ID replaces nothing, and a delivered or unknown ID replaces nothing either. The foreign sender is
@@ -1090,8 +1090,8 @@ test('O125 #199 FIX1: send_chat default auto with replaces replaces the queued w
   for (let i = 0; !sentPrompts().some((line) => line.includes('corrected wording')) && i < 200; i += 1) await pause(100);
   assert.ok(sentPrompts().some((line) => line.includes('corrected wording')), 'the corrected wording was not sent with the queue: prompts ' + JSON.stringify(sentPrompts()) + ' folder ' + folder + ' files ' + JSON.stringify(fs.readdirSync(folder)) + ' events ' + JSON.stringify((await events(instance, made.chat)).map((e) => [e.type, e.data?.text ?? e.data?.why ?? ''])));
   assert.ok(!sentPrompts().some((line) => line.includes('old wording')), 'the replaced wording was sent: ' + JSON.stringify(sentPrompts()));
-  // Step boundary (FIX2): the replacement was sent while the gate tool was running; finishing that tool (the go file)
-  // must not steer the correction into the current turn. Only the queue (the next prompt) carries it.
+  // Delivery (FIX2): the fake gate is a file-wait turn with no tool call, so no tool completion is exercised here. This
+  // checks only that the correction is never steered into the turn and reaches the next prompt at turn end.
   const steered = (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.steered && String(e.data.text).includes('corrected wording'));
   assert.equal(steered.length, 0, 'the correction was steered into the current turn at the tool boundary: ' + JSON.stringify(steered));
   // The corrected wording is already delivered: its ID replaces nothing now.
