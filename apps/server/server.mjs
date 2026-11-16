@@ -497,6 +497,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   // ?lists=fresh (O47): a window or phone asks, and the first ask of a daemon run reads each agent's lists fresh.
   api.get('/chat', (c) => c.json({ conversations: chat.list(), lists: chat.lists(c.req.query('lists') === 'fresh') }));
+  // O48p (threat model row O48p): the phone's New chat names each provider profile. Id, name and model names only; the
+  // rest of a profile is the desktop's (/profiles below).
+  api.get('/profiles/names', (c) => reply(c, chat.profiles.names()));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c), c.req.header('x-p9-op'))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until'), tail = c.req.query('tail');
     return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail))); });
@@ -596,7 +599,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     app.post('/devices/:id/revoke', (c) => reply(c, auth.revoke(c.req.param('id'))));
   }
   // Send to server (D14, threat model row 51, move.mjs): the desktop moves a chat; the phone never sees these routes.
-  // O48 provider profiles: desktop only; the phone has no route. The reply never holds a key.
+  // O48 provider profiles: desktop only; the phone has /profiles/names above and nothing here. The reply never holds a key.
   app.get('/profiles', (c) => reply(c, chat.profiles.list()));
   app.post('/profiles', async (c) => reply(c, chat.profiles.save(await json(c))));
   app.delete('/profiles/:id', (c) => reply(c, chat.profiles.remove(c.req.param('id'))));

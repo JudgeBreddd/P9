@@ -1514,6 +1514,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     })(),
     // O48, desktop only (server.mjs): what Settings and New chat show (never a key), save and remove.
     profiles: { list: () => ({ status: 200, profiles: profiles.list() }),
+      // O48p: what a phone may read. Built field by field, never the shown row (it has the base URL and the key's kind).
+      names: () => ({ status: 200, profiles: profiles.list().map((p) => ({ id: p.id, name: p.name, models: p.models })) }),
       save: (body) => { const saved = body && typeof body === 'object' ? profiles.save(body) : null; return saved ? { status: 200, profile: saved } : refused(400, 'request-refused'); },
       // A chat running on the removed profile is stopped: its agent still holds the key and would go on answering.
       async remove(id) {

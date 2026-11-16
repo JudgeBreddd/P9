@@ -617,7 +617,8 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
-  // O48: provider profiles (their names, addresses and the key's writes) are the desktop's only.
+  // O48: provider profiles (their addresses and the key's writes) are the desktop's only. The phone's own read is
+  // /profiles/names (row O48p, test/phone-parity.test.mjs).
   assert.equal((await server.desk('/profiles')).status, 200);
   assert.equal((await server.remote('/profiles', { session: auth })).status, 404);
   assert.equal((await server.remote('/profiles', { method: 'POST', session: auth, body: { name: 'x', baseUrl: 'https://x.example.test', models: ['m'], key: 'k' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
