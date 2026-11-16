@@ -757,6 +757,7 @@ export async function createDesktop({ state, open } = {}) {
     // Settings > Delegation: {} reads it, anything else saves it (the daemon checks the shape).
     delegation: body => !Object.keys(body).length ? ['GET', '/delegation'] : ['POST', '/delegation', body],
   };
+  const SPRINT_START_MS = 10 * 60_000; // ponytail: room for the lead's minute and about 20 workers' starts, not measured
   ipcMain.handle('p9:chat', async (event, ...args) => {
     const [action, payload = {}] = args;
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -767,7 +768,9 @@ export async function createDesktop({ state, open } = {}) {
     // host: which P9 did not answer, so the page can say so in words (chatFailed in helpers.mjs).
     const where = serverHost ? { host: serverHost } : {};
     if (!state) return { status: 503, body: { error: 'daemon-unavailable', ...where } };
-    try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
+    // window-10: Start sprint waits for the lead's agent (up to a minute) and then each chat under it, staggered. The daemon
+    // goes on if this gives up first (its route takes no signal); a press meanwhile is refused as sprint-starting.
+    try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : action === 'startSprint' ? SPRINT_START_MS : undefined); }
     catch (error) { const reply = failedReply(error); return { ...reply, body: { ...reply.body, ...where } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same

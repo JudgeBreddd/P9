@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -723,4 +723,82 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await until(async () => (await polled())?.some((r) => r.key === 'docs') === false, 'the worker removed from roles.json');
   await page.locator('[data-role-row="docs"]').waitFor({ state: 'detached', timeout: 5000 });
   assert.deepEqual(errors, []);
+});
+
+// window-10 (row "Start sprint", the button): the prep's Start sprint press calls the daemon's start; a press while one is
+// out does nothing; a failure halfway says what was made and leaves Start again, which keeps it and makes the rest; the
+// press shows as the approval record P9 kept (when, by you, the plan's sha256).
+test('projects: Start sprint on the sprint section starts the prep, says a failure halfway, Start again makes the rest, and shows the approval record', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
+  await mkdir(path.join(ws, 'repo')); g(path.join(ws, 'repo'), 'init', '-q', '-b', 'main'); await writeFile(path.join(ws, 'repo', 'a.txt'), 'a\n'); g(path.join(ws, 'repo'), 'add', 'a.txt'); g(path.join(ws, 'repo'), 'commit', '-qm', 'a');
+  await mkdir(path.join(ws, 'plain')); // not a repository: the worker's folder fails, after the lead is made
+  const p = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).project;
+  // P9 learns claude's model and effort lists when it first runs.
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'S1' });
+  assert.equal(prep.status, 201, JSON.stringify(prep));
+  const sprint = prep.sprint, folder = prep.folder;
+  const roles = (dir) => JSON.stringify({ folder: dir, roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w2', provider: 'claude', model: 'default', effort: 'low' }] });
+  await writeFile(path.join(folder, 'roles.json'), roles('plain'));
+  await writeFile(path.join(folder, 'roles', 'lead.work.md'), 'config'); await writeFile(path.join(folder, 'roles', 'w2.work.md'), 'config');
+  const planOf = async () => createHash('sha256').update(await readFile(path.join(folder, 'sprint.md'), 'utf8') + '\0' + await readFile(path.join(folder, 'roles.json'), 'utf8')).digest('hex');
+  const { app, page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const section = page.locator(`[data-sprint="${sprint}"]`), start = section.locator('[data-pj="spstart"]'), said = section.locator('[data-sp-start]'), record = section.locator('[data-sp-started]');
+  await section.locator('[data-sp-prep]').waitFor({ timeout: 10000 });
+  assert.equal((await start.textContent()).trim(), 'Start sprint');
+  assert.equal(await record.count(), 0, 'a prep shows a start record');
+  // The press is held in the main process: the button says so and is off, and a second press sends nothing.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    globalThis.presses = 0; globalThis.letGo = null;
+    ipcMain.handle('p9:chat', async (e, action, ...rest) => {
+      if (action === 'sprintFile' && globalThis.saves) await new Promise((go) => globalThis.saves.push(go));
+      if (action === 'startSprint' && ++globalThis.presses === 1) await new Promise((go) => { globalThis.letGo = go; });
+      const r = await h(e, action, ...rest); if (action === 'startSprint') (globalThis.answers ||= []).push(JSON.stringify(r).slice(0, 600)); return r;
+    });
+  });
+  // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
+  await section.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  await app.evaluate(() => { globalThis.saves = []; });
+  const box = section.locator('[data-sp-box]'); await box.fill((await box.inputValue()) + '\nApproved as edited.\n');
+  await start.click();
+  await until(() => app.evaluate(() => globalThis.saves.length > 0), 'the draft\'s save held');
+  assert.equal(await start.isDisabled(), true, 'the button is on while its draft saves');
+  await start.click({ force: true }); await page.waitForTimeout(300);
+  assert.equal(await app.evaluate(() => globalThis.presses), 0, 'a press went out before its draft saved');
+  await app.evaluate(() => { const held = globalThis.saves; globalThis.saves = null; held.forEach((go) => go()); });
+  await until(() => app.evaluate(() => !!globalThis.letGo), 'the press held');
+  assert.match(await readFile(path.join(folder, 'sprint.md'), 'utf8'), /Approved as edited\.\n$/, 'the press started before its draft was on disk');
+  assert.equal(await start.isDisabled(), true, 'the button is on while its press is out');
+  assert.equal((await start.textContent()).trim(), 'Starting…');
+  await start.click({ force: true });
+  assert.equal(await app.evaluate(() => globalThis.presses), 1, 'a second press went out while the first was');
+  await app.evaluate(() => globalThis.letGo());
+  // Halfway: the lead is made, the worker's folder is refused. The page says so and what was made.
+  await said.waitFor({ timeout: 90000 }).catch(async (err) => { throw new Error(`no result line. main got: ${await app.evaluate(() => JSON.stringify(globalThis.answers ?? null))}; errors: ${JSON.stringify(errors).slice(0, 800)}; section: ${(await section.innerHTML().catch(() => 'gone')).slice(0, 1500)}`, { cause: err }); });
+  assert.match(await said.textContent(), /^Not started: .*Made so far: lead\.$/s);
+  await until(async () => await section.locator('[data-sp-prep]').count() === 0, 'the section is no longer a prep');
+  assert.equal((await start.textContent()).trim(), 'Start again');
+  assert.match(await record.textContent(), new RegExp('^Started .+ by you: your approval of its plan, sha256 ' + (await planOf()).slice(0, 12) + '\\.$'));
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT start-halfway ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  const made = (await call(instance, '/chat')).conversations.filter((c) => c.id === sprint || c.parent === sprint);
+  assert.deepEqual(made.map((c) => c.id), [sprint], 'halfway made more than the lead');
+  // Fixed, Start again keeps the lead and makes the worker; the record is the new press, of the plan as it is now.
+  await writeFile(path.join(folder, 'roles.json'), roles('repo'));
+  await start.click();
+  await until(async () => /^Started: /.test(await said.textContent()), async () => 'the second press answered; said ' + await said.textContent(), 90000);
+  assert.equal(await said.textContent(), 'Started: lead (kept), w2.');
+  const all = (await call(instance, '/chat')).conversations.filter((c) => c.id === sprint || c.parent === sprint);
+  assert.deepEqual(all.map((c) => c.title).sort(), ['S1', 'w2'], 'the lead was made twice or the worker not at all');
+  assert.match(await record.textContent(), new RegExp('sha256 ' + (await planOf()).slice(0, 12) + '\\.$'));
+  assert.equal(await app.evaluate(() => globalThis.presses), 2);
+  assert.equal(await start.isDisabled(), false);
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT start-again ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  assert.deepEqual(errors, []);
+  console.log('PASS window-10: Start sprint held shows Starting… and sends one press; halfway says what was made; Start again keeps the lead and makes w2; the record shows by you and the plan\'s sha256');
 });
