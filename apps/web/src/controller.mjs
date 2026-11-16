@@ -935,6 +935,9 @@ addEventListener('keydown', e => {
   firstStart();
 })();
 setTimeout(firstStart, 3000); // settings never answered: run it anyway
+// The shell stays hidden until this code has wired it (shell.css, .shell[data-pending]): the page draws it before the
+// shell's code chunk loads, and a button clicked in that gap does nothing. The landing page's data-pending did this before.
+$('.shell').removeAttribute('data-pending');
 
 /* ---------- start (O122: P9 opens in Chat; the landing page is gone) ---------- */
 // The walkthrough runs once, on the first start, in Chat and back to the focus it began in, after the setup wizard while a

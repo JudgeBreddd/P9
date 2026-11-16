@@ -1,6 +1,7 @@
 
 /* Layer 3: this page. The real app's shell (42px topbar · the left panel (panel.css) · files · chat grid · dock · 24px status) kept, every surface refined. */
 .shell{display:grid;grid-template-rows:44px 1fr 24px;grid-template-columns:minmax(0,1fr);height:100vh}
+body:has(.shell[data-pending]) :is(.shell,.fx-ambient){visibility:hidden} /* until controller.mjs has wired the shell */
 .topbar{position:relative;z-index:50;display:flex;align-items:center;gap:6px;padding:0 10px 0 12px;border-bottom:1px solid var(--border);background:color-mix(in oklch,var(--card) 70%,transparent);backdrop-filter:blur(10px)}
 /* O25: on the desktop (Windows, Linux) the top row is the window's title bar: drag it to move, double-click to maximise; the
    window buttons sit over its right end (titlebar-area-* from the window-controls overlay; nothing reserved in a browser). */
