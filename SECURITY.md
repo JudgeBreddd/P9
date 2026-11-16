@@ -945,10 +945,18 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
   - **Preflight, then writes.** P9 checks every path against its baseline first. If any path conflicts, it writes nothing
     and lists each conflict by path. Each write goes to a temporary file in the target's folder and then renames it over
     the target; the target is re-checked against its baseline just before its rename, and a write never follows a link.
-  - **If a write fails partway.** P9 saved each original file's bytes to the sprint's state before the first write. On a
-    failed write (disk full, permission, a file changed after its own check), P9 puts back the files it already wrote
-    from those saved bytes, and reports which paths were restored. If a restore also fails, P9 says so, lists every path
-    and its state, and keeps the saved bytes in the sprint's state. Only then is the apply partly done.
+  - **If a write fails partway.** P9 saved each original file's bytes to the apply record before the first write. P9 also
+    keeps, for each path it writes, the hash of the content it wrote. On a failed write (disk full, permission, a file
+    changed after its own check), P9 rolls back only the paths still proven to hold the version P9 wrote: it re-reads
+    each written path, and restores its saved bytes (or removes it, for a path the change added) only if the content is
+    that hash. A path whose content differs is not touched: it is someone else's newer edit. Its saved bytes stay in the
+    apply record, and the path is reported as a conflict, not restored. Every other path is reported with its state
+    (restored, removed, kept as newer, or not written). So a rollback never overwrites a newer edit. Only when every
+    written path is restored or removed is the apply fully rolled back; otherwise it is partial, and the close view says
+    which.
+  - **Rollback race, stated.** Between the re-read that proves a path's hash and the rename that restores it, another
+    program can still write that path. P9 cannot close that window on a shared filesystem. That single window per path
+    is the residual, the same kind as the write window above.
   - **Preflight refusal and runtime rollback are different.** A conflict found at preflight is a refusal: nothing was
     written, so nothing is rolled back. A change or failure after the first write is a runtime event. A concurrent
     change to a path is seen only when that path is re-checked, so if it is seen after earlier writes, P9 rolls those
@@ -964,8 +972,9 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
   - A file that is not in the change is never written or deleted. Applied files go through `packages/files`, the one module
     that mutates workspace files, under the same File protection and folder check as a save. P9 does not stage, commit or
     change the branch of the original repository; the change lands as working files, for you to review and commit.
-- **Your folder is read at copy time only.** The copy is made from the folder as it is when the sprint starts, and P9
-  reads it as a folder the lead chat may use (the same check as a worker folder). A folder inside the sprint's own state,
+- **Your folder is snapshotted at copy time, not refreshed.** The copy is made from the folder as it is when the sprint
+  starts; that snapshot is not updated during the sprint. The apply, at close, rereads your folder against the baseline,
+  so it sees the folder as it is then. P9 reads it as a folder the lead chat may use (the same check as a worker folder). A folder inside the sprint's own state,
   or one that holds the workspace, P9's state or the home folder, is refused before anything is copied.
 - **A sprint's copy is kept until clean-up.** Like a clone, it is removed only by clean-up, from the desktop, with the rule
   for worker folders: nothing unsaved in it, and its work applied. Clean-up never deletes your original folder.
@@ -981,7 +990,9 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
   changed file (nothing written); an apply whose third write is forced to fail (the first two restored, bytes equal to the
   saved ones); a link swapped in between preflight and a write (refused, nothing outside the folder written); an added
   path that appears in your folder before apply (conflict); a baseline-present path that is deleted (conflict); a
-  restore that fails (the list of states is shown, bytes kept); a file changed after the first write and before the last
+  restore that fails (the list of states is shown, bytes kept); a path A written, then edited externally, then a later path
+  B forced to fail: A's newer edit survives, A is reported as a conflict, and A's saved bytes are recoverable from the apply
+  record; the same for an added path A, which is kept with its newer content and not removed; a file changed after the first write and before the last
   one, so that the earlier writes are rolled back and the close view names that path; a baseline-absent path that is
   added by the change, applied when still absent and refused when present.
 
