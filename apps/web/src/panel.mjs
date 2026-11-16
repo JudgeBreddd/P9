@@ -114,13 +114,16 @@ export function installPanel(o, { focus, stopChat, busy }) {
       if (!existing) continue;
       const target = existing.querySelector('.kids') ?? existing;
       const source = zone.querySelector('.kids') ?? zone;
-      const wanted = [...source.querySelectorAll(':scope > .rowwrap')].filter(x => x.querySelector('.row[data-chat]'));
-      const old = new Map([...target.querySelectorAll(':scope > .rowwrap')].filter(x => x.querySelector('.row[data-chat]')).map(x => [x.querySelector('.row[data-chat]').dataset.chat, x]));
-      const ids = new Set(wanted.map(x => x.querySelector('.row[data-chat]').dataset.chat));
+      // A7: a fold row ("Show 4 workers") is keyed too. Left out, it stayed in front of the rows moved here, so morph (by
+      // position) turned each kept row into the next chat's: a click or keyboard focus on a row went to another chat.
+      const keyOf = x => x.matches('.row.subs') ? 'subs:' + x.dataset.subs : x.querySelector('.row[data-chat]')?.dataset.chat;
+      const rowsOf = el => [...el.querySelectorAll(':scope > .rowwrap, :scope > .row.subs')].filter(keyOf);
+      const wanted = rowsOf(source), old = new Map(rowsOf(target).map(x => [keyOf(x), x]));
+      const ids = new Set(wanted.map(keyOf));
       for (const [id, row] of old) if (!ids.has(id)) row.remove();
       let anchor = target.querySelector(':scope > .showmore, :scope > .none');
       for (const wantedRow of wanted.reverse()) {
-        const id = wantedRow.querySelector('.row[data-chat]').dataset.chat, row = old.get(id) ?? wantedRow.cloneNode(true);
+        const id = keyOf(wantedRow), row = old.get(id) ?? wantedRow.cloneNode(true);
         if (row.nextSibling !== anchor || row.parentNode !== target) target.insertBefore(row, anchor);
         anchor = row;
       }

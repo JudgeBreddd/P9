@@ -260,6 +260,28 @@ for (const agent of ['claude', 'codex']) {
 }
 
 // O37 (threat model row 18): the phone colours a reply's complete code blocks too, and leaves an unknown language plain.
+// phone-2 (Tyler, 2026-11-13: "I never got to see the actual plan. Only ... the approval buttons"): Claude's plan call arrives
+// empty and its plan comes after it, in the update and in the approval. The phone shows the plan before any choice is tapped.
+test('phone-2: the plan approval shows the plan above its choices, and the tool row opens it after', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await page.fill('#prompt', 'plan approve'); await page.click('#composer button');
+  const ask = page.locator('#events article[data-kind=approval]');
+  await ask.locator('button[data-option="exit-plan-default"]').waitFor({ timeout: 10000 });
+  assert.equal(await ask.locator('.ask-plan h1').textContent(), 'Ship the phone plan');
+  assert.equal(await ask.locator('.ask-plan li').count(), 2);
+  assert.ok(await ask.locator('.ask-plan').isVisible());
+  await ask.locator('.ask-plan').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  await shot(page, 'phone-plan-approval');
+  await ask.locator('button[data-option="exit-plan-default"]').click();
+  await page.waitForSelector('#events article:has-text("plan:exit-plan-default")', { timeout: 10000 });
+  // Answered: the plan stays one tap away on the tool row (its update carried it), not drawn again in full.
+  assert.equal(await ask.locator('.ask-plan').count(), 0);
+  await page.locator('#events article[data-kind=tool] .open-plan, #events article[data-kind=group] .open-plan').first().click();
+  await page.waitForSelector('#sheet:has-text("Plan")', { timeout: 10000 });
+});
+
 test('Code colours on the phone: a ts, python, json and shell reply coloured in Azure; an unknown language stays plain', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');

@@ -225,8 +225,10 @@ export function leased(ws) {
 }
 
 // Files is a tool in a chat pane's header (N1: the rail that had it is gone). With no chat shown, a new Claude chat
-// gives the window a pane to open it from.
+// gives the window a pane to open it from. It waits for the daemon first: a chat made before "Chat live" is the window's
+// own, and the window drops it when the daemon's chats arrive (chat-view.mjs, liveChat.on), so its Files is never there.
 export async function openFiles(page, timeout = 20000) {
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout });
   if (!(await page.locator('#chats > .pane').count())) {
     await page.click('#newBtn', { timeout });
   }

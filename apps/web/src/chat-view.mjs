@@ -2,7 +2,7 @@
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
-import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
+import { strip, chip, turnKey, lineDiff } from './composer.mjs';
 import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
@@ -483,12 +483,22 @@ function closePill(back = true) {
 }
 // Review minor (2026-11-05): an open menu follows its chat while it re-renders (a queued mode applied, the agent's new model or
 // effort list): morph keeps the items by position, so the focused one keeps its focus. A chat no longer shown closes it.
+const itemKey = el => [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => a.name + '=' + a.value).join(' ');
 function refreshPill() {
   if (!PM.sid) return;
   const s = outer.S.sessions.find(x => x.id === PM.sid), btn = s && pillBtn();
   if (!btn) return closePill(false);
   PM.btn = btn;
-  const html = pillMenuHtml(s, PM.kind); if (html !== PM.html) { const retainFocus = document.activeElement === btn || pmRoot().contains(document.activeElement); PM.html = html; outer.morph(pmRoot(), html); if (retainFocus && !pmRoot().contains(document.activeElement)) (pmRoot().querySelector('[aria-checked="true"]') || pmItems()[0])?.focus(); }
+  const html = pillMenuHtml(s, PM.kind); if (html === PM.html) return;
+  // O74: morph keeps rows by position, so a row coming or going above the focused one moved focus onto another value (a list
+  // read ending under an open Model menu drops its "Reading…" note; Enter then picked the row below). Focus follows the
+  // value: the row with the same data-* attributes, or, when that value is gone, the row now at its position (the nearest).
+  const items = pmItems(), at = items.indexOf(document.activeElement), key = at >= 0 && itemKey(items[at]);
+  const retainFocus = document.activeElement === btn || pmRoot().contains(document.activeElement);
+  PM.html = html; outer.morph(pmRoot(), html);
+  const now = pmItems();
+  if (key) (now.find(i => itemKey(i) === key) || now[Math.min(at, now.length - 1)])?.focus();
+  else if (retainFocus && !pmRoot().contains(document.activeElement)) (pmRoot().querySelector('[aria-checked="true"]') || now[0])?.focus();
 }
 // note 7: a mode picked mid-turn shows at once (queued) but applies when the turn ends (turnEnd). The loosened modes ask first
 // (looseOk, red); the last pick is kept per agent for new chats (startMode), Codex's Plan is not a sandbox mode so it is not.
@@ -597,7 +607,7 @@ function pane(s, i, bare) {
       ${bare ? '' : tools()}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
-      ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
+      ${s.queue.length || s.held?.length ? strip(s, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
@@ -701,6 +711,8 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
     p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
+    // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
+    p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
     p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
     // The Mode, Model and Effort pills each open their menu (#pillMenu, outside the panes; the pill menu code above pane).
@@ -927,8 +939,11 @@ function applyChat(ev, into) {
         return { ...shape, key: f.key, label: f.label, hint: f.hint, required: f.required, type: f.kind };
       };
       s.events.push({ t: 'question', at: ev.at, request: d.request, title: d.message, unsupported: !d.form, fields: d.form ? d.form.fields.map(field) : [] }); s.pending = 'question'; break; }
-    case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
-      notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
+    case 'answered': {
+      // phone-3: the button's own words, not its internal id (the id only when the approval is not in this replay).
+      const id = d.answer.outcome?.optionId, option = s.events.find(e => e.request === d.request)?.options?.find(o => o[0] === id);
+      s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
+      notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + (option?.[1] || id) : 'Approval cancelled') : 'Question: ' + d.answer.action); break; }
     case 'lock-rejected': notice((d.ask ? 'Answering another chat (read-only): rejected ' : 'Agent lock: rejected ') + (d.toolCall?.title || 'a tool call')); break;
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;

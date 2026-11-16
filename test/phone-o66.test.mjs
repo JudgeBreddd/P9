@@ -9,7 +9,7 @@ import { phone } from './phone-c16-helpers.mjs';
 const A = '00000000-0000-4000-8000-0000000000a1', B = '00000000-0000-4000-8000-0000000000b2', C = '00000000-0000-4000-8000-0000000000c3', D = '00000000-0000-4000-8000-0000000000d4';
 const shots = process.env.P9_SCREENSHOTS || '/tmp';
 const shot = async (page, name) => { const png = await page.screenshot({ type: 'png', path: shots + '/' + name + '.png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
-const db = (server) => new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+const db = (server) => new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
 function append(ledger, id, events) {
   const event = ledger.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   ledger.exec('BEGIN'); for (const [type, data] of events) event.run(id, type, JSON.stringify(data), Date.now()); ledger.exec('COMMIT');

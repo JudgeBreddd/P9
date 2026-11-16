@@ -26,9 +26,10 @@ const VERSION = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8
 const bump = (v) => v.replace(/^(\d+)\.(\d+)\.(\d+).*$/, (_, a, b, c) => a + '.' + b + '.' + (Number(c) + 1));
 const NEXT = bump(VERSION);
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
-const until = async (check, what, ms = 20000) => {
+// more: what the test can see at the timeout, said with it (O95: W1's saved CI log had only the test's name).
+const until = async (check, what, ms = 20000, more) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 100))) { const v = await check(); if (v) return v; }
-  assert.fail('timed out: ' + what);
+  assert.fail('timed out: ' + what + (more ? '; ' + await more().catch((error) => 'more failed: ' + error.message) : ''));
 };
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -338,12 +339,25 @@ test('W1 in the window: the app raises the two-versions box on connect; Not now 
   let page = await app.firstWindow();
   await page.locator('#rChat').waitFor();
   await app.evaluate(({ dialog }) => { globalThis.asked = []; dialog.showMessageBox = async (...args) => { globalThis.asked.push(args.at(-1)); return { response: 0 }; }; });
+  // A switch is the IPC reaching the app. A call that fails may never have left the window (one still loading); swallowed,
+  // the wait below passed on the connection already up and the update status never came (O95). So a failed call is made
+  // again until the app has run ssh for the new connection; an extra switch is harmless here.
+  const calls = () => lines(path.join(directory, 'ssh.log')).then((l) => l.length);
+  // What the window and the app held, for a wait that times out: the status and connection the window sees, the update
+  // event it was told, the boxes asked, the server's status answers seen, each ssh call, and the forward folder.
+  const held = async () => JSON.stringify({
+    status: await page.evaluate(() => window.p9.getStatus()).catch((error) => error.message),
+    server: await page.evaluate(() => window.p9.server()).catch((error) => error.message),
+    asked: await app.evaluate(() => globalThis.asked).catch((error) => error.message), statusAnswers,
+    ssh: (await lines(path.join(directory, 'ssh.log'))).map((l) => { const { argv } = JSON.parse(l); return argv.includes('-L') ? 'tunnel' : 'read'; }),
+    forward: await readdir(path.join(here, 'p9-server', 'test-host')).catch((error) => error.code) });
   const connect = async () => {
-    await page.evaluate(() => window.p9.server('test-host')).catch(() => {});
-    await until(() => page.evaluate(() => window.p9.server().then((s) => s.connected && s.host === 'test-host')).catch(() => false), 'connected to the server');
+    const before = await calls();
+    await until(() => page.evaluate(() => window.p9.server('test-host')).then((r) => r?.ok, async () => await calls() > before), 'the switch to test-host reached the app', undefined, held);
+    await until(() => page.evaluate(() => window.p9.server().then((s) => s.connected && s.host === 'test-host')).catch(() => false), 'connected to the server', undefined, held);
   };
   await connect();
-  const asked = await until(() => app.evaluate(() => globalThis.asked.length && globalThis.asked), 'the box');
+  const asked = await until(() => app.evaluate(() => globalThis.asked.length && globalThis.asked), 'the box', undefined, held);
   assert.deepEqual(asked, [{ type: 'question', title: 'Update P9 on test-host?', message: 'P9 on test-host is ' + OLD + '. This app is ' + VERSION + '.',
     detail: 'Update the server to ' + VERSION + '? It waits for running turns to finish, then restarts. Not now leaves it on ' + OLD + '.',
     buttons: ['Not now', 'Update to ' + VERSION], defaultId: 1, cancelId: 0, noLink: true }]);
@@ -356,11 +370,52 @@ test('W1 in the window: the app raises the two-versions box on connect; Not now 
   for (const which of ['second', 'third']) {
     const before = statusAnswers;
     await connect();
-    await until(() => statusAnswers > before, 'the ' + which + ' connect had the update status');
+    await until(() => statusAnswers > before, 'the ' + which + ' connect had the update status', undefined, held);
     await new Promise((resolve) => setTimeout(resolve, 3000));
     assert.equal((await app.evaluate(() => globalThis.asked)).length, 1, 'asked again after Not now, ' + which + ' connect');
   }
   assert.deepEqual([(await call(remote, '/update/status')).job ?? null, await lines(remote.log.pnpm), await leftovers(remote)], [null, [], []]);
+});
+
+// O95: W1's connect (#149) makes the switch again when a call's answer does not come back, so a second switch to the
+// same host can come while the first connection is still being made. Both use the one forward folder; the first,
+// finishing after the second was up and finding itself replaced, closed and removed that folder, the second's socket in
+// it: the window still said ok (its checks ride a kept-alive socket), but each new request, the update status's among
+// them, found no socket, and no box came. Forced: the first connection is held at its first ssh call (reading the
+// server's credentials) until the second is connected.
+test('O95: a second switch to the same host while the first still connects leaves the second connection working', { skip, timeout: 60000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-o95-'));
+  const runtime = path.join(directory, 'server'), here = path.join(directory, 'local'), profile = path.join(directory, 'profile');
+  await mkdir(runtime); await mkdir(here, { mode: 0o700 }); await mkdir(profile);
+  await symlink(remote.state, path.join(runtime, 'p9-foundation'));
+  // The stand-in ssh: the first call takes the hold file and waits for go (its pid in held.pid), then leaves released.
+  const at = (name) => path.join(directory, name), ssh = at('ssh');
+  await sh(ssh, `if mv '${at('hold')}' '${at('held')}' 2>/dev/null; then echo $$ > '${at('held.pid')}'; while [ ! -e '${at('go')}' ]; do sleep 0.05; done; touch '${at('released')}'; fi\n`
+    + `FAKE_RUNTIME='${runtime}' FAKE_SSH_LOG='${at('ssh.log')}' exec '${process.execPath}' '${path.join(root, 'test/fake-ssh.mjs')}' "$@"\n`);
+  await writeFile(at('hold'), '');
+  const env = { ...process.env, P9_SSH: ssh, XDG_RUNTIME_DIR: here }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await writeFile(at('go'), ''); await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const gone = (pid) => { try { process.kill(pid, 0); return false; } catch { return true; } };
+  await page.evaluate(() => window.p9.server('test-host')).catch(() => {});
+  const first = await until(() => readFile(at('held.pid'), 'utf8').then(Number, () => 0), 'the first connection held at its first ssh call');
+  await until(() => page.evaluate(() => window.p9.server('test-host')).then((r) => r?.ok, () => false), 'the second switch reached the app');
+  await until(() => page.evaluate(() => window.p9.server().then((s) => s.connected && s.host === 'test-host')).catch(() => false), 'connected to the server');
+  // The first connection goes on now. It is over once its held call is gone, and, if that call went on (released), once the
+  // close() of the replaced connection has removed the forward folder (where it ends on main; with the fix it never goes on).
+  const forward = path.join(here, 'p9-server', 'test-host', 'desktop.json');
+  const credentials = JSON.parse(await readFile(forward, 'utf8'));
+  await writeFile(at('go'), '');
+  await until(() => gone(first) && (!existsSync(at('released')) || !existsSync(forward)), 'the first connection over');
+  // A new request through the second connection's socket, as updateServer makes them.
+  const fresh = await http({ socketPath: credentials.socketPath, route: '/health', headers: authenticated(credentials) }).then((r) => r.status, (error) => error.code);
+  assert.equal(fresh, 200, 'a new request through the second connection answers after the first one is over');
+  // Closed here: the hooks stop the daemons first, and one still serving this live forward waits out its 10 s to SIGKILL.
+  await app.close();
 });
 
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when

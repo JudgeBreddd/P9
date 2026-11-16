@@ -344,7 +344,7 @@ test('Temporary or Always on in the window: the question, the status line, the a
 // Show earlier reads the blocks before them, in order, until the first message.
 test('Remote mode: a long chat loads its newest blocks over the ssh link; Show earlier reads the rest in order', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote), id = randomUUID();
-  const db = new DatabaseSync(path.join(remote.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(remote.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(id, 'claude', 'Long chat', 'idle', Date.now());
   const add = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   add.run(id, 'created', JSON.stringify({ provider: 'claude', title: 'Long chat', folder: '' }), Date.now());

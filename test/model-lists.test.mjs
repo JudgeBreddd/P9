@@ -185,3 +185,38 @@ test('window: lists that arrive while the Model menu is open fill its rows', { t
   assert.ok(await page.evaluate(() => document.activeElement?.closest('#pillMenu')), 'the keyboard stays in the menu');
   assert.deepEqual(errors, []);
 });
+
+// O74: the fresh read ends while the Model menu is open with the keyboard on a row. The "Reading…" note above the rows goes
+// and the list changes (Nova comes in above Opus, Haiku goes), so every row below moves. The menu is redrawn by position
+// (chat-view.mjs refreshPill), which used to leave focus on the same node, now showing another value, for Enter to pick.
+const readEndsUnderFocus = async (t, row) => {
+  const instance = await start(t, { 'models.json': JSON.stringify(MODELS) });
+  await read(instance);
+  setModels(instance, [MODELS[0], { value: 'nova', name: 'Nova' }, MODELS[1]]);
+  fs.writeFileSync(path.join(instance.workspace, 'slow-lists'), '9000');
+  await stop(instance);
+  const second = await restart(t, instance, 'state-2');
+  const { page, errors } = await launch(t, second, path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-lists-')), 'profile'));
+  await page.click('#newBtn'); const pane = page.locator('.pane:visible').first(); await pane.locator('[data-pill="Model"]').waitFor();
+  await pane.locator('[data-pill="Model"]').click();
+  await page.locator('#pillMenu [data-list-note]').waitFor({ timeout: 8000 }); // the kept list, still being read
+  await page.locator(`#pillMenu [data-model][data-val="${row}"]`).focus();
+  await until(async () => await page.locator('#pillMenu [data-list-note]').count() === 0 && await page.locator('#pillMenu [data-val="nova"]').count() === 1, 'the read ended under the open menu');
+  const focused = await page.evaluate(() => document.activeElement?.closest('#pillMenu') && document.activeElement.dataset.val);
+  return { page, pane, errors, focused };
+};
+test('window: O74 a list read ending under an open Model menu keeps the keyboard on the same model, and Enter picks it', { timeout: 120000 }, async (t) => {
+  const { page, pane, errors, focused } = await readEndsUnderFocus(t, 'opus');
+  assert.equal(focused, 'opus', 'focus stays on Opus, not on the row that took its place');
+  console.log('P9_SHOT o74-menu-redrawn ' + (await page.screenshot()).toString('base64')); // the menu still open after the redraw, Opus focused
+  await page.keyboard.press('Enter');
+  assert.equal(await pillValue(pane, 'Model'), 'Opus');
+  assert.deepEqual(errors, []);
+  console.log('PASS window: O74 focus follows the value across a redraw');
+});
+test('window: O74 a focused model the read drops leaves the keyboard on the row now in its place', { timeout: 120000 }, async (t) => {
+  const { errors, focused } = await readEndsUnderFocus(t, 'haiku');
+  assert.equal(focused, 'opus', 'Haiku is gone: the nearest row is the one now at its position (Opus, third)');
+  assert.deepEqual(errors, []);
+  console.log('PASS window: O74 a dropped value leaves focus on the nearest row');
+});

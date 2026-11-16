@@ -56,7 +56,8 @@ const SPRINT = '[P9: sprint rules';
 const FROM = '[P9: from another chat';
 const NOTE = '[P9: a note from another chat'; // a note's sender line; a note that waited is one block, line and text // the sender label, to from.log the same way
 const sprintRules = (prompt) => { for (const block of prompt) if (block.type === 'text') { if (block.text.startsWith(SPRINT)) appendFileSync('rules.log', JSON.stringify(block.text) + '\n'); if (block.text.startsWith(FROM)) appendFileSync('from.log', JSON.stringify(block.text) + '\n'); } };
-const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
+const LINES = ['[P9: from the user, in this chat.]\n\n', '[P9: a line from P9 itself, not from the user.]\n\n']; // a sender line as its own block (O109)
+const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.
 const png = (w, h) => {
   const chunk = (type, data) => { const head = Buffer.alloc(4), tail = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
@@ -195,6 +196,8 @@ const connection = acp.connectAgent(stream, {
   async turn(params) {
     const { sessionId } = params;
     sprintRules(params.prompt);
+    // Every prompt's text blocks, only for a test that put log-prompts in the folder (a chat folder's listing stays its own).
+    if (existsSync('log-prompts')) appendFileSync('prompts.log', JSON.stringify(params.prompt.filter((block) => block.type === 'text').map((block) => block.text)) + '\n');
     const text = textOf(params.prompt);
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     for (const block of params.prompt) if (block.type === 'text' && block.text.startsWith(NOTE) && block.text.includes(']\n\n')) await say('note:' + block.text.slice(block.text.indexOf(']\n\n') + 3).trim());
@@ -367,6 +370,8 @@ const connection = acp.connectAgent(stream, {
       return { stopReason: 'end_turn' };
     }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
+    // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
+    if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {
       cancelled.delete(sessionId);
       await say('working');
@@ -400,6 +405,25 @@ const connection = acp.connectAgent(stream, {
         toolCall: { toolCallId: 'call-1', title: 'Write marker', kind: 'edit', status: 'pending' },
         options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
       await say('permission:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
+      return { stopReason: 'end_turn' };
+    }
+    // plan decline: Claude's plan approval in its real shape (ledger, adapter 0.106.0), then the failure it gave after "No, keep
+    // planning" in phone-1 (2026-11-15). It fails whatever the answer, so a test can show only the decline is turned into a cancel.
+    if (text === 'plan decline') {
+      await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'plan-1', kind: 'switch_mode', title: 'Approve Plan', status: 'pending' },
+        options: [{ optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' }, { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_always' },
+          { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' }] });
+      throw acp.RequestError.internalError(undefined, '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use');
+    }
+    // plan approve: Claude's plan approval as adapter 0.106.0 sends it (ledger, phone-2, 2026-11-13): an empty "Approve Plan"
+    // call, the plan in its update, then the approval carrying the plan again.
+    if (text === 'plan approve') {
+      const plan = [{ type: 'content', content: { type: 'text', text: '# Ship the phone plan\n\n## Steps\n\n1. Show the plan on the approval\n2. Keep the choices below it' } }];
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'plan-2', title: 'Approve Plan', kind: 'switch_mode', status: 'pending', content: [] } });
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'plan-2', content: plan } });
+      const result = await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'plan-2', kind: 'switch_mode', title: 'Approve Plan', status: 'pending', content: plan },
+        options: [{ optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' }, { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' }] });
+      await say('plan:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
       return { stopReason: 'end_turn' };
     }
     // perm-json <toolCall>: a permission request in claude-agent-acp's real shape (0.88.0 and 0.104.1 alike) (its options as recorded in

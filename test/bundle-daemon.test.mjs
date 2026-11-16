@@ -1,9 +1,12 @@
-import test, { after } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { root, daemon } from './helpers.mjs';
 import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 
@@ -13,43 +16,23 @@ import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 // bounded, so a stuck step fails with this test's name: the test, each child run, and the adapters (killed outright).
 // A synchronous run blocks every timer until its child exits, so each one is killed with SIGKILL (SIGTERM can be ignored)
 // and must exit 0: output printed before a timeout is not a pass.
-// The hang row: 4 CI runs between 2026-11-12 and 2026-11-14 (about 139 ran) stopped in this file and none said at which
-// step. Each step prints its name and time; one still running at 150 s prints what the process holds and its children,
-// before the 180 s limit fails the test. The last line of the file's output says what was still held when it ended.
-let at = 'start';
-const began = Date.now();
-const step = (name) => { at = name; console.error(`B10 step ${name} +${Date.now() - began} ms`); };
-function held() {
-  let text = `B10 held at "${at}" +${Date.now() - began} ms: ${process.getActiveResourcesInfo().join(',')}`;
-  if (process.platform !== 'linux') return text;
-  const ps = spawnSync('ps', ['-eo', 'pid,ppid,etimes,stat,args', '--forest'], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
-  return text + '\n' + (ps.stdout ?? '').split('\n').filter((line) => /node|codex|claude|tmux/.test(line)).slice(0, 40).map((line) => line.slice(0, 200)).join('\n');
-}
-after(() => console.error(`bundle-daemon ended +${Date.now() - began} ms holding: ${process.getActiveResourcesInfo().join(',')}`));
-
 test('B10: the bundled daemon is a few dozen files, starts, and its agents answer from the bundled layout', { timeout: 180000 }, async (t) => {
   // Outside the repo, so nothing resolves from the workspace's node_modules. ponytail: about 670 MB of agent binaries;
   // the test sandbox's /tmp is 1 GB, so move this to a disk folder with no node_modules above it if that fills.
-  const watch = setTimeout(() => console.error(held()), 150000).unref();
-  t.after(() => clearTimeout(watch));
   const out = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-'));
   t.after(() => rm(out, { recursive: true, force: true }));
-  step('bundle');
   const notices = await bundleDaemon(root, out, `${process.platform}-${process.arch}`);
   const files = (await readdir(out, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile());
   // 0.1.3 shipped 26,028 files in daemon/node_modules; codex's binary package alone is about 46 of these.
   assert.ok(files.length < 100, files.length + ' files in the bundled daemon');
 
-  step('daemon start');
   const instance = await daemon(t, path.join(out, 'apps', 'server', 'main.mjs'));
   assert.ok(files.some((entry) => entry.name === 'mcp-relay.mjs'), 'the MCP relay is beside main.mjs');
   // The installed daemon folder also holds package.json, scripts/teh.mjs (package-windows.mjs, package-linux.mjs) and
   // packages/ (package.json extraResources); teh doctor run from there must load and reach the bundled daemon.
-  step('copy');
   await cp(path.join(root, 'package.json'), path.join(out, 'package.json'));
   await cp(path.join(root, 'scripts', 'teh.mjs'), path.join(out, 'scripts', 'teh.mjs'));
   await cp(path.join(root, 'packages'), path.join(out, 'packages'), { recursive: true });
-  step('doctor');
   const doctor = spawnSync(process.execPath, [path.join(out, 'scripts', 'teh.mjs'), 'doctor', '--state', instance.state], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
   assert.equal(doctor.status, 0, 'teh doctor from the daemon folder: ' + doctor.stderr.slice(-1000));
   assert.equal(JSON.parse(doctor.stdout).daemon.status, 'ok');
@@ -58,11 +41,33 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
 
   const modules = path.join(out, 'node_modules');
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-bundle-home-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  // CI #159 linux (0): removing home failed with ENOTEMPTY on .codex/.tmp. node:test runs after hooks in the order they
+  // were added and stops at the first that throws, so the rm ran before the adapters' kill (which nothing waited for), and
+  // when it threw the kill never ran and the adapters held the run open. codex-acp also starts `codex app-server` as its own
+  // child, which a kill of the adapter leaves running with this HOME. So each adapter gets its own process group, and one
+  // hook kills every group and waits until none of its processes is left (a zombie writes nothing) before home is removed.
+  // Elsewhere (no /proc; B10 runs only on the Linux CI shards) the hook kills each adapter and waits for its exit first.
+  // ponytail: off Linux an adapter's own children are not waited for.
+  const linux = process.platform === 'linux', groups = [], children = [];
+  const left = (group) => readdirSync('/proc').filter((pid) => /^\d+$/.test(pid)).filter((pid) => {
+    try { const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'), [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' '); return state !== 'Z' && Number(pgrp) === group; } catch { return false; }
+  });
+  t.after(async () => {
+    for (const child of linux ? [] : children) if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
+    for (const group of groups) try { process.kill(-group, 'SIGKILL'); } catch {}
+    for (let i = 0; groups.some((group) => left(group).length); i++) {
+      if (i === 100) throw new Error('adapter processes still running 10 s after SIGKILL: ' + groups.flatMap(left).join(' ') + '; home left at ' + home);
+      await sleep(100);
+    }
+    await rm(home, { recursive: true, force: true });
+  });
   for (const adapter of ['claude-agent-acp', 'codex-acp']) {
-    step(adapter);
-    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home } });
-    t.after(() => child.kill('SIGKILL'));
+    const child = spawn(process.execPath, [path.join(modules, '@agentclientprotocol', adapter, 'dist', 'index.js')], { env: { PATH: process.env.PATH, HOME: home }, detached: linux });
+    if (linux) groups.push(child.pid); else children.push(child);
     let output = '', errors = '';
     child.stderr.on('data', (chunk) => { errors += chunk; });
     await new Promise((resolve) => {
@@ -79,7 +84,6 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   assert.match(await readFile(path.join(claudeDist, 'index.js'), 'utf8'), /createRequire\(import\.meta\.resolve\("@anthropic-ai\/claude-agent-sdk"\)\)/);
   await writeFile(path.join(claudeDist, 'probe.mjs'), "import { createRequire } from 'node:module';\n"
     + "console.log(createRequire(import.meta.resolve('@anthropic-ai/claude-agent-sdk')).resolve(process.argv[2]));\n");
-  step('probe');
   const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
   assert.ok(!probe.error && probe.status === 0, 'probe: ' + (probe.error?.message ?? 'exit ' + probe.status + ' ' + probe.signal) + ' ' + probe.stderr.slice(-500));
   assert.equal(probe.stdout.trim(), path.join(modules, '@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude'), probe.stderr);
@@ -88,11 +92,9 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   await writeFile(path.join(claudeDist, 'probe-sdk.mjs'), "import { createRequire } from 'node:module';\n"
     + "const sdk = await import(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));\n"
     + "console.log(typeof sdk.query);\n");
-  step('probe-sdk');
   const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
   assert.ok(!sdkProbe.error && sdkProbe.status === 0, 'probe-sdk: ' + (sdkProbe.error?.message ?? 'exit ' + sdkProbe.status + ' ' + sdkProbe.signal) + ' ' + sdkProbe.stderr.slice(-500));
   assert.equal(sdkProbe.stdout.trim(), 'function', sdkProbe.stderr);
-  step('after hooks');
 });
 
 // Item 15 (Windows): CI run 40611561200 found rg.exe importing vcruntime140.dll on Windows arm64 with no copy beside it.

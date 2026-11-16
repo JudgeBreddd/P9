@@ -42,7 +42,7 @@ async function seedLimits(home) {
   await writeFile(path.join(day, 'rollout-limits.jsonl'), '{"type":"session_meta"}\n' + JSON.stringify(event) + '\n');
 }
 function seedUsage(server) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   const rows = JSON.parse(requireFixture);
   const conversation = db.prepare('INSERT OR IGNORE INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)');
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
@@ -427,7 +427,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.notEqual(fresh, used401);
   await page.unroute('**/files');
 
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  // The daemon may be writing p9.db (WAL) right now: wait for its lock instead of throwing "database is locked" (CI job 133005596319).
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   const cursor = Number(db.prepare('SELECT MAX(cursor) AS cursor FROM events').get().cursor);
   db.prepare('INSERT INTO events (cursor, conversation, type, data, at) VALUES (?, ?, ?, ?, ?)')
     .run(cursor + 2, 'fixture-claude', 'turn-end', JSON.stringify({ stopReason: 'end_turn' }), Date.now());
@@ -488,7 +489,11 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   assert.equal(await page.locator('#screen img').count(), 0);
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'clipboard-before');
   // An OSC 8 link, hovered and tapped, opens nothing (xterm's core would confirm and then window.open).
-  await type("clear; printf '\\x1b]8;;https://attacker.example/\\x07TAPLINK\\x1b]8;;\\x07 %s\\n' LINK-OK");
+  // The marker is joined only in the output: the typed line holds '%s-OK' and 'LINK' apart, so the wait cannot return on
+  // the typed line before clear and printf run (O80: nightly 9's run 43680592539 read a null TAPLINK box that way).
+  const tapLink = "clear; printf '\\x1b]8;;https://attacker.example/\\x07TAPLINK\\x1b]8;;\\x07 %s-OK\\n' LINK";
+  assert.ok(!tapLink.includes('LINK-OK'), 'the typed line must not hold the marker the wait looks for');
+  await type(tapLink);
   await shows('LINK-OK');
   const link = await page.locator('#screen .xterm-rows span', { hasText: 'TAPLINK' }).first().boundingBox();
   await page.mouse.move(link.x + 5, link.y + link.height / 2);
@@ -593,13 +598,13 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   const server = await remoteDaemon(t, { setup });
   const authBrowser = await chromium.launch(); t.after(() => authBrowser.close());
   const auth = await enrollDevice(server, await passkeyDevice(authBrowser, server, 'usage-state'));
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run('bad', 'update', '{bad', Date.now());
   db.close();
   const unavailable = await server.remote('/usage', { session: auth });
   assert.equal(unavailable.status, 200); assert.equal(unavailable.body.state, 'unavailable'); assert.equal(unavailable.body.discarded, 1);
   assert.equal((await server.remote('/health', { session: auth })).status, 200);
-  const old = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const old = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   old.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run('old', 'update', JSON.stringify({ sessionUpdate: 'usage_update', used: 1, size: 2, cost: { amount: 0.01, currency: 'USD' } }), Date.now() - 16 * 60 * 1000);
   old.close();
   assert.equal((await server.remote('/usage', { session: auth })).body.state, 'stale');

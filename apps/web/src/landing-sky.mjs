@@ -69,7 +69,9 @@ void main(){
 }`;
 
 export function createSky(canvas) {
-  const gl = canvas.getContext('webgl', { antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: 'low-power' });
+  // No GPU, no sky (O91): Electron 44.11 gives WebGL through SwiftShader on a machine without one, and this shader on the CPU
+  // drew 5 frames in 3 s and froze the window; failIfMajorPerformanceCaveat refuses that software context.
+  const gl = canvas.getContext('webgl', { antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: 'low-power', failIfMajorPerformanceCaveat: true });
   if (!gl) return { ok: false, set() {}, frame() {}, size() {} };
   const shader = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
   const prog = gl.createProgram();
