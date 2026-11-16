@@ -67,3 +67,33 @@ test('a failed test prints its assertion when it fails, even if the runner then 
   assert.match(out, /✖ failed now: fails first \(\S*a-fail\.test\.mjs:3\)/, 'the failed test named with its file and line:\n' + out);
   assert.match(out, /marker-fail-now/, 'its assertion message is in the log:\n' + out);
 });
+
+// The hang row, second part (CI 43790793989 shard 4: the log stopped after 24 of 27 files, no summary, nothing said which 3
+// were left). When the runner ends, every file that never reported is named with how it ended, and a file whose process
+// exited before reporting says its exit code when it fails.
+test('a runner that ends early names each file that never reported and how it ended', { timeout: 60000, skip: process.platform !== 'linux' && 'the reporter is on the Linux CI Tests line' }, async (t) => {
+  const flags = await ciFlags();
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-unreported-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, 'a-ok.test.mjs'), "import test from 'node:test';\ntest('ok a', () => {});\n");
+  await writeFile(path.join(dir, 'b-exit.test.mjs'), 'process.exit(3);\n');
+  await writeFile(path.join(dir, 'c-hang.test.mjs'), "import test from 'node:test';\n"
+    + "test('ends the runner', () => new Promise(() => setTimeout(() => process.kill(process.ppid, 'SIGTERM'), 1500)));\n");
+  await writeFile(path.join(dir, 'd-later.test.mjs'), "import test from 'node:test';\ntest('ok d', () => {});\n");
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  // One file at a time, so d is still waiting when c ends the runner.
+  const child = spawn(process.execPath, ['--test', ...flags, '--test-concurrency=1', ...['a-ok', 'b-exit', 'c-hang', 'd-later'].map((name) => path.join(dir, `${name}.test.mjs`))], { cwd: root, env });
+  let out = '';
+  child.stdout.on('data', (chunk) => { out += chunk; });
+  child.stderr.on('data', (chunk) => { out += chunk; });
+  const code = await new Promise((resolve) => {
+    const stop = setTimeout(() => { child.kill('SIGKILL'); resolve('still running at 30 s'); }, 30000);
+    child.on('close', (status, signal) => { clearTimeout(stop); resolve(status ?? signal); });
+  });
+  assert.notEqual(code, 'still running at 30 s', out);
+  assert.match(out, /✖ failed now: \S*b-exit\.test\.mjs .*exited with code 3/, 'the file that exited says its code:\n' + out);
+  assert.match(out, /✖ \S*c-hang\.test\.mjs never reported: still running when the runner ended/, 'the running file named:\n' + out);
+  assert.match(out, /✖ \S*d-later\.test\.mjs never reported: never started/, 'the waiting file named:\n' + out);
+  assert.doesNotMatch(out, /a-ok\.test\.mjs never reported/, 'a file that reported is not listed:\n' + out);
+});

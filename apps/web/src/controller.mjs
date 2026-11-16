@@ -288,12 +288,11 @@ function cardList(all) {
 }
 /* ---------- agent-working indicator and pets (phase 18; Builder's pet requests, 2026-10-17) ---------- */
 // The top bar says when agents work or wait on you, in every focus, with Claude Code's spinner. Where a focus shows pets
-// (Settings, one set per focus), each active agent's pet takes that text's place (see renderIndicator) and every chat on
-// screen holds its agent's pet (petRows). A chat's pet drags anywhere in it; the spot is kept per focus. A sheet is 8 x 9 frames of
+// (Settings, one set per focus), every chat on screen holds its agent's pet (petRows); pets left the top bar (O123). A chat's pet drags anywhere in it; the spot is kept per focus. A sheet is 8 x 9 frames of
 // 192 x 208: row 0 idle, 3 wave, 4 jump, 6 waiting, 7 running; each row's frame count is read from the sheet.
-const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, top: [], drag: null };
+const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, drag: null };
 const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> { box: [x, y] }, see petHome
-// The 125 ms tick runs only while something on screen moves: a top-bar pet or spinner, a chat's spinner or a chat's pet. With
+// The 125 ms tick runs only while something on screen moves: the top-bar spinner, a chat's spinner or a chat's pet. With
 // no pet installed and no agent working it stops (review 2026-11-03: it ran forever, three sweeps and two rects per pane, eight
 // times a second). Every path that puts a pet or spinner on screen ends in tickPets, which starts it again.
 let petTimer = 0;

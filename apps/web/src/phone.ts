@@ -1,3 +1,4 @@
+import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
 import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';

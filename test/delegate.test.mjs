@@ -924,11 +924,17 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   await a.done(made.chat);
   const passed = await reviewer.tool('verdict', { chat: made.chat, commit: head, result: 'pass', note: 'checked' });
   assert.equal(passed.verdict?.by, rev.chat, 'a sibling reviewer records a verdict after a ready that went through: ' + JSON.stringify(passed));
+  // The pass also sends the worker "[p9] D1 passed review ... Start your next item." (delegate.mjs verdict, not awaited there),
+  // which starts a turn of its own. Its turn ends before the stop below: one that lands after the stop took the place of the
+  // 'slow' turn that step steers into (CI: the steer met an idle chat, reason mode-failed, at the assertion below).
+  await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data?.text?.startsWith('[p9] D1 passed review'));
+  await a.done(made.chat);
   // Finding 4: an agent without steering (Claude's today) cannot take a steer into its running turn; the refusal names queue.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
-  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
-  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
+  const before = (await call(instance, '/chat/events?after=0&only=' + made.chat)).body.cursor; // the first slow turn's 'working' is older
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'slow' })).sent, 'started a turn');
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working', before);
   for (const when of ['steer', 'auto']) {
     const got = await a.tool('send_chat', { chat: made.chat, text: 'hi', when });
     assert.equal(got.reason, 'turn-running', JSON.stringify(got));

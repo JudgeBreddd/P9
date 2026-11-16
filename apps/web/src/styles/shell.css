@@ -426,14 +426,17 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 .composer .bar{display:flex;align-items:center;gap:6px;padding:4px 8px 8px 14px;font-size:11px;color:var(--muted-foreground)}
 .composer .bar .spacer{flex:1}
 .composer .send{background:var(--primary);color:var(--primary-foreground)}
-/* 0.1.8: Mode, Model and Effort pills in the bar. The row never wraps: pills and the working chip shrink (ellipsis) before
+/* 0.1.8: Mode, Model and Effort pills in the bar. The idle row never wraps: the pills shrink (ellipsis) before
    the paperclip and the send arrow do; at the narrowest pane (two chats in a small window) the pills keep a few letters. */
 .composer .bar .pills{display:flex;align-items:center;gap:4px;min-width:0;flex:0 1 auto}
 .composer .bar .pill{display:inline-flex;align-items:center;gap:4px;min-width:0;flex:0 1 auto;height:22px;padding:0 8px;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--muted-foreground);font:inherit;font-size:11px;line-height:1;white-space:nowrap;cursor:pointer}
 .composer .bar .pill:hover,.composer .bar .pill[aria-expanded="true"]{background:var(--accent);color:var(--foreground)}
 .composer .bar .pill:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
 .composer .bar .pill .truncate{min-width:1.6em}
-.composer .bar .hint{display:inline-flex;align-items:center;gap:2px;min-width:0;flex:0 1 auto;overflow:hidden;white-space:nowrap}
+/* O-702: the working chip (Steer / Queue / Interrupt / Cancel) never clips, as each is an action: while it shows, a row too
+   narrow for it wraps, and the chip's own buttons wrap at the narrowest pane. The idle row still never wraps. */
+.composer .bar:has(.hint){flex-wrap:wrap;row-gap:4px}
+.composer .bar .hint{display:inline-flex;flex-wrap:wrap;align-items:center;gap:2px;flex:none;max-width:100%;white-space:nowrap}
 .composer .bar [data-attach],.composer .bar .send{flex:none}
 .composer{container-type:inline-size}
 @container (max-width:440px){.composer .bar .pill{padding:0 6px}.composer .bar .pill .truncate{max-width:5ch}.composer .bar .hint kbd,.composer .bar .pill .mode-q{display:none}}
@@ -551,9 +554,6 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 .agent-ind[hidden]{display:none}
 .agent-ind .glyph{color:var(--primary);width:1em;text-align:center;font-size:14px}
 .agent-ind[data-state=waiting] .glyph{color:var(--warning,#f5a524)}
-#indPets{display:flex;gap:2px}#indPets canvas.pet{cursor:default}
-.agent-ind[data-pet]{align-self:flex-start;margin-bottom:-8px}  /* the 52 px pet hangs 8 px below the 44 px bar */
-.agent-ind[data-pet] #indText{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-events:auto}
 .pane{position:relative}
 .pane>canvas.pet{position:absolute;z-index:5;transform:translate(-50%,-50%)}
