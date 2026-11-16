@@ -229,9 +229,11 @@ export function createDelegate({ chat, allowed }) {
     // Start sprint (named is set, null for a built-in agent): the row's provider is final, never a Settings or parent profile.
     const profile = named !== undefined ? (named ? { profile: named, model: args.model } : null) : mine && rowProfile ? { profile: rowProfile.id, model: args.model ?? dflt.model }
       : !mine && provider === me.provider && me.profile && !me.profile.gone ? { profile: me.profile.id, model: args.model ?? me.profile.model } : null;
-    const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider && listed(known?.model?.options, me.model)) || undefined);
+    // O133: what the user set in Settings > New chats start in comes next, before the agent's own default.
+    const user = chat.newChatDefaults()[provider] ?? {}, efforts = known?.pickers?.find((o) => o.category === 'thought_level')?.options;
+    const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider && listed(known?.model?.options, me.model)) || (known && listed(known.model?.options, user.model)) || undefined);
     const effortId = (provider === me.provider && me.effort?.id) || chat.lists()[provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
-    const effort = args.effort ?? ((effortId && dflt.effort) || (provider === me.provider ? me.effort?.value : undefined));
+    const effort = args.effort ?? ((effortId && dflt.effort) || (provider === me.provider ? me.effort?.value : undefined) || (effortId && efforts && listed(efforts, user.effort)) || undefined);
     return { provider, known, rowProfile, mine, profile, model, effortId, effort };
   }
   // The provider, model and effort a pick sends, as a parent would name them.

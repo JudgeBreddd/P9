@@ -200,8 +200,9 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   await page.click('#newBtn'); await page.locator('.pane:visible [data-pill="Agent"]').first().waitFor({ timeout: 20000 });
   await until(async () => JSON.stringify(await newRows(page)) === JSON.stringify(CLAUDE), 'Claude\'s own models are listed, and no profile row yet');
   // The user's default Claude model: not a profile's model, so a profile chat must not send it.
-  await page.evaluate(() => localStorage.setItem('p9-model-default:claude', 'opus'));
   await profilesPage(page);
+  await page.selectOption('[data-default-model="claude"]', 'opus');
+  await until(async () => JSON.parse((await call(instance, '/start-defaults')).text).claude.model === 'opus', 'the default saved (O133)');
   await page.click('#profileAdd');
   await page.fill('#profileName', 'Far Cloud');
   await page.fill('#profileUrl', 'http://models.example.test');

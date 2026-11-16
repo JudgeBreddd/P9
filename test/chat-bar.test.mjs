@@ -22,6 +22,17 @@ const until = async (check, what, ms = 15000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 200))) if (await check()) return;
   assert.fail('timed out: ' + what);
 };
+// O133: Settings > New chats start in, picked as the user does (saved in the daemon, read back by the window).
+const pickDefaults = async (page, instance, agent, want) => {
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]');
+  for (const [kind, v] of Object.entries(want)) { await page.locator(`[data-default-${kind}="${agent}"] option[value="${v}"]`).waitFor({ state: 'attached', timeout: 15000 }); await page.selectOption(`[data-default-${kind}="${agent}"]`, v); }
+  for (const end = Date.now() + 10000; ; await new Promise((resolve) => setTimeout(resolve, 200))) {
+    const kept = (await call(instance, '/start-defaults'))[agent];
+    if (Object.entries(want).every(([k, v]) => kept[k] === v)) break;
+    assert.ok(Date.now() < end, 'the defaults were saved');
+  }
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+};
 // The pills (chat-view.mjs pillMenu): a pill's value is in its aria-label; its menu is #pillMenu (no submenus, Builder, 2026-11-05).
 const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
 const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
@@ -235,7 +246,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   // A pick inside the chat changes only that chat.
   await choose(page, pane, 'Effort', 'Low');
   await pane.locator('[data-pill="Effort"][aria-label="Effort: Low"]').waitFor();
-  assert.deepEqual(await page.evaluate(() => [localStorage.getItem('p9-model-default:claude'), localStorage.getItem('p9-effort-default:claude')]), ['haiku', 'high']);
+  assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'haiku', effort: 'high' });
   // A chat made elsewhere (the phone, a card) keeps the agent's own: only chats started here get the defaults.
   const other = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + other + '/prompt', 'POST', { text: 'hello' });
@@ -343,9 +354,10 @@ test('New chat (+) opens on the agent used last here: + then Enter after a Codex
 // O29: the Agent pill, first in the bar. In an empty chat, picking the other agent makes the chat that agent's, with its saved
 // defaults (mode, Default model, Default effort). A chat with messages keeps its agent: the other row is disabled and says why.
 test('Agent pill: an empty chat switches agent and takes that agent\'s defaults; a chat with messages keeps its agent', { timeout: 150000 }, async (t) => {
-  const { id, page, pane, errors } = await setup(t, 'agent-pill', 'claude');
+  const { id, page, pane, errors, instance } = await setup(t, 'agent-pill', 'claude');
   // Claude's lists are known (the chat's config came), so its Settings defaults can apply.
-  await page.evaluate(() => { localStorage.setItem('p9-model-default:claude', 'haiku'); localStorage.setItem('p9-effort-default:claude', 'high'); localStorage.setItem('p9-mode:claude', 'Plan'); });
+  await pickDefaults(page, instance, 'claude', { model: 'haiku', effort: 'high' });
+  await page.evaluate(() => { localStorage.setItem('p9-mode:claude', 'Plan'); });
   assert.deepEqual(await pane.locator('.bar [data-pill]').evaluateAll((l) => l.map((b) => b.dataset.pill)), ['Agent', 'Mode', 'Model', 'Effort']);
   // A chat with messages: Codex is shown but disabled, with the reason; picking it changes nothing.
   assert.deepEqual(await pillItems(page, pane, 'Agent'), ['Claude ✓', 'Codex']);
@@ -466,8 +478,8 @@ test('New menu: two overlapping creates for one agent each get their own row\'s 
 
 // O44 review: only New menu rows name a model. The palette's New Claude session starts on Settings' Default model.
 test('New menu, palette: New Claude session starts on the saved Default model', { timeout: 150000 }, async (t) => {
-  const { page, errors } = await setup(t, 'new-palette', 'claude');
-  await page.evaluate(() => localStorage.setItem('p9-model-default:claude', 'opus'));
+  const { page, errors, instance } = await setup(t, 'new-palette', 'claude');
+  await pickDefaults(page, instance, 'claude', { model: 'opus' });
   const had = await rows(page);
   await page.keyboard.press('Control+k'); await page.fill('#palIn', 'New Claude session');
   await page.locator('#palList li[data-i]', { hasText: 'New Claude session' }).first().waitFor({ timeout: 5000 }); await page.keyboard.press('Enter');

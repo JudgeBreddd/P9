@@ -215,6 +215,14 @@ export function setupRoutes(outer) {
         || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setDelegation(body));
   });
+  // Desktop only, Settings > New chats start in (O133): each agent's Default model and Default effort.
+  outer.app.get('/start-defaults', (c) => c.json(outer.chat.newChatDefaults()));
+  outer.app.post('/start-defaults', async (c) => {
+    const body = await outer.json(c), agents = Object.keys(outer.chat.newChatDefaults()), str = (x) => typeof x === 'string' && x.length <= 200;
+    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== [...agents].sort().join()
+        || !agents.every((a) => body[a] && typeof body[a] === 'object' && Object.keys(body[a]).sort().join() === 'effort,model' && str(body[a].model) && str(body[a].effort))) return c.json({ error: 'request-refused' }, 400);
+    return c.json(outer.chat.setNewChatDefaults(body));
+  });
   // Desktop only (SECURITY.md § Worker folders, "Who cleans up"): one sprint's worker folders, by the store's own rules
   // (worker-folders.mjs clean). Refused while a worker the lead started is not stopped, and while the lead is in a turn or
   // has a message waiting: it may be making a worker folder, which has nothing of its own yet and would read as merged.

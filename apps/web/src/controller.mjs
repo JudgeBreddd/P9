@@ -46,7 +46,7 @@ export function mountShell({ askAdmin } = {}) {
     
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
     get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
-    get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get profiles() { return profiles; }, get loadProfiles() { return loadProfiles; }, get defaultEffort() { return defaultEffort; },
+    get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get profiles() { return profiles; }, get loadProfiles() { return loadProfiles; }, get loadStarts() { return loadStarts; }, get saveStarts() { return saveStarts; }, get defaultEffort() { return defaultEffort; },
     get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
@@ -178,7 +178,19 @@ const pickerKind = p => p.category === 'thought_level' || !p.category && /effort
 // before it answers the create, so claimFresh runs from whichever comes first and applies the pick once; a pick made in the chat
 // after that is never overwritten. Only op or id match: another window's chat, or this window's creates out of order, never take
 // it (O44 review). A daemon without op in 'created' leaves it to the reply.
-const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
+// O133: the daemon keeps them (so a chat an agent opens starts on them too); read with the chat list. A value this window kept
+// itself before is moved there once, where the daemon has none, then dropped here.
+let starts = null;
+const defaultModel = a => starts?.[a]?.model || '', defaultEffort = a => starts?.[a]?.effort || '';
+async function loadStarts() {
+  const r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
+  const old = k => localStorage.getItem(k) || '', keys = a => ['p9-model-default:' + a, 'p9-effort-default:' + a];
+  const want = Object.fromEntries(Object.entries(r.body).map(([a, v]) => [a, { model: v.model || old(keys(a)[0]), effort: v.effort || old(keys(a)[1]) }]));
+  starts = r.body;
+  if (JSON.stringify(want) !== JSON.stringify(r.body)) { const w = await window.p9.chat('newChatDefaults', want).catch(() => null); if (w?.status === 200) starts = w.body; else return; }
+  for (const a of Object.keys(r.body)) keys(a).forEach(k => localStorage.removeItem(k));
+}
+async function saveStarts(a, kind, v) { if (!starts) await loadStarts(); const want = { ...starts, [a]: { ...starts?.[a], [kind]: v } }; const r = await window.p9?.chat?.('newChatDefaults', want).catch(() => null); if (r?.status === 200) starts = r.body; return r?.status === 200; }
 const fresh = [];
 // O48 provider profiles (threat model "Provider profiles"): what the daemon lists, never a key: { id, name, baseUrl, models,
 // secret: 'key' | 'command' | 'none' }. Read at the first chat list and after each Settings change.
