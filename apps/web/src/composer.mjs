@@ -13,6 +13,12 @@ export const chip = () => `<span class="hint" role="group" aria-label="Send whil
 // The messages the daemon holds for this turn, above the local queue (which is only for an agent without steering).
 export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="${esc(h.id)}"><span>${h.when === 'queue' ? 'Queued' : 'After this step'}: ${esc(h.text)}</span><button title="Take it back into the box" data-unhold="${esc(h.id)}">${svg.x}</button></div>`).join('');
 
+// O109: everything waiting (held, then the local queue) is one strip, "N queued", so 30 waiting messages cannot push the box
+// off the screen. Open while it is short (up to 3), shut past that; the user's own open or shut (s.queueOpen) wins.
+// ponytail: an open strip's list scrolls inside 30vh (shell.css).
+export const strip = (s, local) => { const n = (s.held?.length ?? 0) + s.queue.length;
+  return `<details class="queue" data-queue${s.queueOpen ?? n <= 3 ? ' open' : ''}><summary>${n} queued</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
+
 // What a key in the box does while a turn runs: 'steer', 'queue', 'cancel', or null (the box keeps the key).
 export const turnKey = e => e.shiftKey || e.altKey || e.ctrlKey || e.metaKey ? null : { Enter: 'steer', Tab: 'queue', Escape: 'cancel' }[e.key] ?? null;
 

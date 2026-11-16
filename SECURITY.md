@@ -739,6 +739,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   receiving agent with one line in front, added by P9: it says the message is from another chat's
   agent and not from you, and names that chat. Your own messages carry no such line. It is a
   label, not a control: P9 does not stop the receiving agent from acting on the message.
+  Messages that waited for a turn's end go in as one prompt even when they come from different
+  senders (O109). Then every message in it carries its own line: each agent's message keeps the
+  line it would carry alone, and each of yours gets a line saying it is yours. A note told along
+  with a message of yours puts the same "yours" line in front of your message. Inside another
+  agent's text in such a prompt, P9 changes `[P9:` to `[P9 (quoted):`, so that text cannot pass
+  as one of P9's lines. A different mode and another chat's question still each get a turn of
+  their own.
 - **After a restart.** P9 resends nothing a restart cut off. When P9 starts and finds that a
   restart stopped a chat of a sprint in the middle of a turn, it sends one line to the chat at the
   top of that sprint, `[p9] P9 restarted. Interrupted mid-turn: <titles>. Not resent.`, which
@@ -751,7 +758,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   like `run_script`. The same key from the same parent returns the chat it already made and asks
   nothing. A chat has at most as many running workers as "Workers per chat" in Settings >
   Delegation says (5 until changed, never more than 20), 3 levels deep.
-- **The Delegation setting.** Settings > Delegation, "Who starts a sprint", has three values, kept
+- **The Delegation setting.** Settings > Delegation, "Who may start workers", has three values, kept
   in the daemon and read on every `open_chat`. **Off**: every new worker is refused
   (`delegate-off`); chats already started keep running and can still be read, sent to and stopped.
   **Ask me first** (the default): P9 asks you in the parent chat before that chat's first
@@ -903,11 +910,17 @@ id>/` (the same folder as its worker folders, 0700). The lead's agent, its worke
 Written before the code (sprint spec D1, D3, D4).
 
 - **Only these names.** `sprint.md`, `rules.md`, `roles.json`, `roles/<key>.instructions.md`, `roles/<key>.rules.md`,
-  `roles/<key>.work.md` and `notes/<key>.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
+  `roles/<key>.work.md`, `notes/<key>.md` and `review-trail.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
   ID; `open_chat` refuses a key shaped like a chat ID, so two workers never share notes). P9 reads or writes no other
   name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
   (a temp file, then a rename).
+- **The review trail has one writer.** `review-trail.md` is P9's copy of its own review record: one row per item a
+  worker reported with `ready` (item, worker, commit, state, fix count, larger model), rewritten whole at each `ready`
+  and `verdict`. The project page and `set_rules` cannot write it, and an edit to it is replaced at the next write. A
+  worker's work queue (its role's item lines in `sprint.md`) and its done count come from P9's record, never from a
+  tick in the plan. `ready` and `verdict` send their messages as `queue` messages, in the sender's name `p9`: to the
+  worker's sibling with key `review` (ready), to the worker (verdict), and to the lead at an item's third fix.
 - **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker, and a notes outline for every
   worker. For a worker with a key it also makes empty role files. It never writes over a file that is already there.
 - **What reaches an agent.** `rules.md` is the sprint rules (`set_rules` writes it; a value kept from before this

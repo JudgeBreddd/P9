@@ -545,6 +545,25 @@ function renderList() {
   if (seeded) keepRead();
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
+// O107, O108: the bar is patched by position instead of rewritten, so the back, model and Stop buttons stay the same nodes and
+// a keyboard user's focus stays on them. ponytail: the desktop's controller.mjs sync without its form handling (the bar has no
+// form controls); importing that module would pull the desktop into the phone bundle.
+function patchBar(old: Node, next: Node) {
+  const olds = [...old.childNodes], news = [...next.childNodes];
+  news.forEach((n, i) => {
+    const o = olds[i];
+    if (!o) old.appendChild(n);
+    else if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) old.replaceChild(n, o);
+    else if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; }
+    else if (!o.isEqualNode(n)) {
+      const e = o as Element, f = n as Element;
+      for (const { name } of [...e.attributes]) if (!f.hasAttribute(name)) e.removeAttribute(name);
+      for (const { name, value } of [...f.attributes]) if (e.getAttribute(name) !== value) e.setAttribute(name, value);
+      patchBar(o, n);
+    }
+  });
+  olds.slice(news.length).forEach((n) => (n as ChildNode).remove());
+}
 // The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
 let barSig = '';
 let agentLists: Record<string, unknown> = {}; // O47: each agent's lists as the daemon keeps them (GET /chat)
@@ -553,7 +572,9 @@ function chatBar(id: string, run: string) {
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
   const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
-  barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
+  barSig = html; const next = document.createElement('template'); next.innerHTML = html;
+  patchBar(one('[data-bar="chat"]'), next.content); // O107, O108: a later draw (the folder answer, the model's name, the run state) keeps a focused button
+  online();
 }
 // Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
 // so the browser's own back, the iOS edge swipe included, returns to the list.
@@ -637,12 +658,21 @@ function render() {
   const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
-  chips.hidden = !plan.length && !cards;
-  chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (cards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button>` : '');
-  chatBar(picked, digest().get(picked)?.run ?? 'idle');
+  // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
+  pinSig = cards ? JSON.stringify([...strip.cards!.values()]) : '';
+  const showCards = cards > 0 && pinSig !== localStorage.getItem('p9-pins-closed:' + picked);
+  chips.hidden = !plan.length && !showCards;
+  chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (showCards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button><button type="button" class="chip close" data-chip-close aria-label="Close the pinned cards until a new one comes">×</button>` : '');
+  const run = digest().get(picked)?.run ?? 'idle';
+  chatBar(picked, run);
+  // O109: while a turn runs, its latest step stays in view over the box, wherever the chat is scrolled.
+  const step = run === 'idle' ? undefined : blocks.findLast((block) => block.kind === 'tool'), nowStep = one<HTMLElement>('#nowStep');
+  nowStep.hidden = !step || !['pending', 'in_progress'].includes(String(step.status));
+  nowStep.textContent = step?.text ?? '';
   renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
 // The same empty-only swap as the desktop: the daemon refuses deletion if a message raced the picker.
+let pinSig = ''; // O109: the open chat's pinned cards as last drawn
 let pickChatAt = '', pickChatWhole = false, pickChatWorkspace = '';
 async function showChatFolders(at = '') {
   const id = openId, info = phoneFolders.get(id); if (!info) return;
@@ -713,7 +743,11 @@ new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).obs
 new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(one('#events'));
 one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
 one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-one<HTMLElement>('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
+one<HTMLElement>('#chips').onclick = (event) => {
+  const target = event.target as Element;
+  if (target.closest('[data-chip-close]')) { try { localStorage.setItem('p9-pins-closed:' + openId, pinSig); } catch {} render(); return; }
+  if (target.closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML);
+};
 one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
 // L3, P3: a turn that runs can be stopped from the top bar: a labelled Stop beside its working spinner (the composer's send button turns into Stop
 // only when the box is empty and nothing is queued). The route is the composer's and the desktop's: POST /chat/:id/cancel.
@@ -896,12 +930,18 @@ function label() {
   one<HTMLElement>('#midTurn').hidden = !busy || empty;
   one('#midTurnLabel').textContent = (provider(id) === 'codex' ? 'Codex' : 'Claude') + ' is working';
 }
+// O109: the waiting messages are one line, "N queued", that opens to the list with a Take back on each; 30 of them used
+// to be 30 full rows that pushed the box off the screen. Open or closed is kept across redraws (each event redraws).
+let queueOpen = false, queueSig = '';
 function renderQueue() {
-  const id = openId, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
-  box.hidden = !items.length && !held.length;
-  box.innerHTML = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
+  const id = openId, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued'), count = items.length + held.length;
+  box.hidden = !count;
+  const rows = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
     + items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
+  const html = `<details${queueOpen ? ' open' : ''}><summary>${count} queued ▸</summary><div class="list">${rows}</div></details>`;
+  if (html !== queueSig) { queueSig = html; box.innerHTML = html; } // unchanged, the open list keeps its scroll
 }
+one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
 let draining = false;
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
 async function drain() {
@@ -1863,15 +1903,19 @@ async function refreshing(button: HTMLButtonElement, load: () => Promise<unknown
 // daemon hands over only a vendor's sign-in URL and Codex's code; the link is set as a property and opens only on a tap.
 type SignIn = { signedIn: boolean; running: boolean; url: string | null; code: string | null; unsupported: boolean; exit: number | null };
 const SIGN_IN: [agent: 'claude' | 'codex', name: string, page: string][] = [['claude', 'Claude', 'Claude'], ['codex', 'Codex', 'OpenAI']];
-let signInShown = '', signInTimer = 0, signInData: Record<string, SignIn> | null = null;
+let signInShown = '', signInTimer = 0, signInAsked = 0, signInData: Record<string, SignIn> | null = null;
 const signInNote: Record<string, string> = {};
 async function loadSignIn() {
   clearTimeout(signInTimer);
-  const box = one('#signIn');
+  const box = one('#signIn'), asked = ++signInAsked;
   // Unreachable after a first answer: the cards stay as last seen (a code typed in the box with them) and say so.
-  let stale = false;
-  try { signInData = await request('/phone/sign-in'); }
+  let stale = false, answer: Record<string, SignIn> | undefined;
+  try { answer = await request('/phone/sign-in'); }
   catch { stale = true; }
+  // O68 c: answers can come back out of order (the page's first-load ask can land after a later one), and an older
+  // answer drew over a newer one. Only the newest ask is drawn; it also sets the next poll.
+  if (asked !== signInAsked) return;
+  if (answer) signInData = answer;
   const data = signInData;
   if (!data) { box.innerHTML = '<article class="card warn"><h2>Sign-in unavailable</h2><p>The daemon did not answer.</p></article>'; signInShown = ''; return; }
   const key = JSON.stringify([data, signInNote, stale]);

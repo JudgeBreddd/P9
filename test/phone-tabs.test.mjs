@@ -54,7 +54,7 @@ async function seedLimits(home) {
   await writeFile(path.join(day, 'rollout-limits.jsonl'), '{"type":"session_meta"}\n' + JSON.stringify(event) + '\n');
 }
 async function seedUsage(server) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   const conversation = db.prepare('INSERT OR IGNORE INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)');
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   for (const row of JSON.parse(await readFile(path.join(root, 'test/fixtures/usage.json'), 'utf8'))) {
@@ -110,6 +110,9 @@ test('T7: a tap on Mission draws the last answer at once and refreshes behind', 
   await page.click('[data-nav="mission"]');
   // Drawn from the cache while GET /mission has not answered (this is what fails without the cache).
   await page.waitForSelector('#mission .tile', { timeout: 3000 });
+  // The tap starts GET /mission in the same step that draws the cached tiles, but the handler that counts it runs in this
+  // process, and its notice can arrive after the tile check has answered. The gate still holds the answer, so wait for the count.
+  for (let i = 0; i < 50 && !held; i++) await page.waitForTimeout(100);
   assert.ok(held >= 1, 'GET /mission was in flight while the tiles showed');
   assert.equal(await page.locator('#mission .tile:has(span:text-is("Waiting on you")) b').innerText(), '1', 'the cached answer, not yet the fresh one');
   // Another tap on Mission leaves what is drawn alone: the tiles do not vanish while the route waits.

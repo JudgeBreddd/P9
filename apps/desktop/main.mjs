@@ -200,6 +200,9 @@ export async function createDesktop({ state, open } = {}) {
   const saved = await savedSoon.then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
   // Aborted on quit: ends a forward connectServer is still waiting on (a quit mid-connect left its ssh running).
   const leaving = new AbortController();
+  // O95: a switch ends the attempt it replaces (tries) and waits for it (connecting) before its own starts: both use this
+  // host's one forward folder, and the old one, finishing after the new one was up, took the socket and removed the folder.
+  let tries = new AbortController(), connecting = Promise.resolve();
   // 0.1.8 Settings > Open P9 on (openOn): null, where it was last (host, as before); '', this computer; a host, that remote,
   // which connects like Connect does and shows the connecting screen while it cannot be reached.
   let openOn = saved?.openOn === '' ? '' : named(saved?.openOn);
@@ -271,8 +274,10 @@ export async function createDesktop({ state, open } = {}) {
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
-      const s = await connectServer({ host: serverHost, ssh: sshCommand, signal: leaving.signal, onDrop: () => { if (attempt === serverTry && !leaving.signal.aborted) { server = null; serverError = 'server-dropped'; dropped = true; dropNote(attempt); connect(attempt); } } });
-      if (attempt !== serverTry) return void s.close();
+      const pending = connectServer({ host: serverHost, ssh: sshCommand, signal: AbortSignal.any([leaving.signal, tries.signal]), onDrop: () => { if (attempt === serverTry && !leaving.signal.aborted) { server = null; serverError = 'server-dropped'; dropped = true; dropNote(attempt); connect(attempt); } } });
+      connecting = pending.then(s => attempt === serverTry ? null : s.close(), () => {}).catch(() => {});
+      const s = await pending;
+      if (attempt !== serverTry) return; // closed by connecting
       server = s; serverError = null; dropped = false;
       if (/^(starting|done)$/.test(remoteInstall?.phase)) remoteInstall = null; // U6: a later no-P9 sets up again
       keeper.connected(serverHost, !!s.background);
@@ -289,8 +294,8 @@ export async function createDesktop({ state, open } = {}) {
           ask: askUpdate, tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
+      if (attempt !== serverTry) return; // an attempt replaced (O95: ended by its abort) says nothing over the new one
       serverError = error.message; knownHosts = error.knownHosts ?? null;
-      if (attempt !== serverTry) return;
       // Row 78: a changed host key, or a remote that needs a key from this Windows computer, stops here until the person's
       // Try again: no password window, no timed retry.
       if (serverError === 'ssh-host-key-changed' || serverError === 'ssh-key-needed' || serverError === 'ssh-missing') return;
@@ -320,12 +325,14 @@ export async function createDesktop({ state, open } = {}) {
   const dropNote = attempt => { const host = serverHost; setTimeout(() => { if (attempt === serverTry && !server && !leaving.signal.aborted) tellUpdate({ phase: 'dropped', host }); }, 30000); };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
+    tries.abort(); tries = new AbortController();
     // A finished install stays for its own remote while it reconnects, so the window says installed, not Install again.
     serverUpdate = null; if (remoteInstall?.phase !== 'running' && !(/^(done|starting)$/.test(remoteInstall?.phase) && host === serverHost)) remoteInstall = null;
     sshAsk?.resolve(null); sshAsk = null; dropped = false; if (keyOffer?.host !== host) keyOffer = null;
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
     await old?.close().catch(() => {});
+    await connecting;
     await keepServer();
     connect(attempt);
   };
@@ -1556,7 +1563,9 @@ export async function createDesktop({ state, open } = {}) {
       timer = setTimeout(() => appSite().then(site => { sites.app = site; window.webContents.reload(); }, () => {}), 800);
     });
   }
-  await window.loadURL(APP_URL);
+  // A reload that starts before this first load finishes (Ctrl+R, the hot reload above, a test) aborts it: the newer load
+  // took over, the window is fine. Before, the rejection ended createDesktop and start.cjs quit the app (CI agent-setup :359).
+  await window.loadURL(APP_URL).catch((error) => { if (error.code !== 'ERR_ABORTED') throw error; });
   if (open) request(open);
   return window;
 }

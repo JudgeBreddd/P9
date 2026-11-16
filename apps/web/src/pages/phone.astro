@@ -52,6 +52,8 @@ import '../styles/code-colours.css';
         </div>
         <!-- COMPOSER SLOT (c2 builds the composer here): sits below the chat scroller, never scrolls away, rides the keyboard. Keep it one flex child; the queued list and the form are today's composer. -->
         <div id="composerSlot" hidden>
+          <!-- O109: the running turn's latest step, one line, so a long turn reads without scrolling the chat. -->
+          <div id="nowStep" role="status" hidden></div>
           <div id="queued" class="stack" aria-live="polite" hidden></div>
           <!-- P18: sending while the agent works, as the desktop's Steer / Queue chip and its Ctrl Enter interrupt. -->
           <div id="midTurn" role="group" aria-label="Send while the agent works" hidden><span id="midTurnLabel">Claude is working</span><button type="submit" form="composer" data-when="steer" title="Send into this turn when its current step ends">Steer</button><button type="submit" form="composer" class="quiet" data-when="queue" title="Send when this turn ends">Queue</button><button type="submit" form="composer" class="quiet" data-when="now" title="Stop this turn and send this now">Interrupt</button></div>

@@ -81,6 +81,24 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   assert.ok(next.hit);
 });
 
+// phone-1 (2026-11-15): "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
+// desktop. The decline ends the turn as cancelled; an approve followed by the same failure still shows it.
+test('declining the plan ends the turn as cancelled, not as an error', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  let after = 0;
+  for (const optionId of ['reject', 'exit-plan-bypass']) {
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'plan decline' });
+    const { hit: approval, cursor } = await until(instance, (event) => event.conversation === id && event.type === 'approval', after);
+    assert.equal(approval.data.toolCall.kind, 'switch_mode');
+    assert.equal((await call(instance, `/chat/${id}/answer`, 'POST', { request: approval.data.request, answer: { optionId } })).status, 200);
+    const end = await until(instance, (event) => event.conversation === id && (event.type === 'turn-end' || event.type === 'error'), cursor);
+    if (optionId === 'reject') assert.deepEqual([end.hit.type, end.hit.data.stopReason], ['turn-end', 'cancelled'], JSON.stringify(end.hit));
+    else assert.match(end.hit.type === 'error' ? end.hit.data.message : JSON.stringify(end.hit), /^Internal error: \[ede_diagnostic\]/);
+    after = end.cursor;
+  }
+});
+
 test('approvals and questions are answered only with options and fields the agent offered', async (t) => {
   const instance = await start(t);
   const id = await create(instance);
@@ -682,7 +700,7 @@ test('operation IDs older than a week are refused after a restart, never run aga
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude' }, { 'x-p9-op': op })).status, 201);
   instance.child.kill('SIGTERM');
   await once(instance.child, 'exit');
-  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'));
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
   db.prepare('UPDATE operations SET at = ? WHERE id = ?').run(Date.now() - 8 * 24 * 3600 * 1000, op);
   db.close();
   const second = await restart(t, instance, 'state-2');

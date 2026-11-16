@@ -927,8 +927,10 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
   assert.ok(await page.locator('[data-roll]').isHidden());
   await page.click('[data-theme-pick="custom"]');
   const first = await html('--primary');
-  await page.click('[data-roll]');
-  const rolled = await html('--primary');
+  // --primary is oklch(0.78 0.16 <hue>) with a random whole-degree hue, so one roll in about 360 repeats the hue.
+  // A repeat is a fair roll, not a broken button: roll up to 5 times (all 5 repeating is about 1 in 6e12).
+  let rolled = first;
+  for (let i = 0; i < 5 && rolled === first; i++) { await page.click('[data-roll]'); rolled = await html('--primary'); }
   assert.notEqual(rolled, first, 'Roll again changes the palette');
   assert.equal(await page.locator('[data-theme-pick="custom"]').evaluate((c) => getComputedStyle(c).getPropertyValue('--primary').trim()), rolled, 'the dice card shows the rolled palette');
   await page.click('[data-theme-pick="event-horizon-prime"]');
@@ -1971,7 +1973,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   // Without WebGL (a display with no GPU, such as GitHub's Xvfb) the sky is off by design (landing-sky.mjs), so there is nothing to size.
   // Landing v5 plays a video by default and leaves this canvas hidden; landing-video.test.mjs runs this check with P9_LANDING=original.
   if (await page.evaluate(() => document.querySelector('#landSky').hidden)) t.diagnostic('landing video on: sky resolution check is in landing-video.test.mjs');
-  else if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
+  else if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl', { failIfMajorPerformanceCaveat: true }))) t.diagnostic('no WebGL on this display: sky resolution check not run');
   else await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');
@@ -2126,7 +2128,7 @@ test('Speed (E2): a listed chat the bridge will not narrow to still goes live, b
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const real = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare("INSERT INTO conversations (id, provider, title, state, created) VALUES ('fixture-claude', 'claude', 'claude', 'idle', ?)").run(Date.now());
   db.close();
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-fallback-')), 'profile');

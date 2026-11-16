@@ -17,7 +17,7 @@ const id = (c) => '00000000-0000-4000-8000-0000000007' + String(c).padStart(2, '
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
 
 function insert(server, turns, tag) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   const text = 'A long answer line that a real agent writes, with some detail in it. '.repeat(4);
   db.exec('BEGIN');
@@ -31,7 +31,7 @@ function insert(server, turns, tag) {
 
 test('F4 phone cost: load, live events, typing, opening a chat (numbers in the log)', { timeout: 600000 }, async (t) => {
   const server = await remoteDaemon(t, {});
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   const chat = db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)');
   for (let c = 0; c < CHATS; c++) chat.run(id(c), 'claude', 'Chat ' + c, 'idle', Date.now() - c);
   db.close();
@@ -63,7 +63,7 @@ test('F4 phone cost: load, live events, typing, opening a chat (numbers in the l
   const ticks = [];
   for (let k = 0; k < 5; k++) {
     await page.waitForTimeout(500); t0 = await task();
-    const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+    const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
     db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id(0), 'user', JSON.stringify({ text: 'tick message ' + k }), Date.now()); db.close();
     await shown('tick message ' + k, 30000);
     ticks.push(Math.round(await task() - t0));

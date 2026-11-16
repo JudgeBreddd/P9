@@ -676,15 +676,30 @@ function sectionBody(m, body, g, o) {
     if (!part[k] && (box !== 'mlist' || rows || boxes.some(b => b.box === 'mlist'))) continue;
     if (box && last?.box === box) last.html += part[k]; else boxes.push({ box, html: part[k] });
   }
+  // O94 (window, 2026-11-15): the window draws whole (on the page, a changed section does too), and that made every card's frame
+  // again on each draw (a tile's answer, a checklist press); a click landing in a card at that moment went to a frame already gone.
+  // Where an element can move without reloading (Element.moveBefore: the desktop app's Chromium; not phone Safari or older
+  // browsers), a card whose HTML and theme are unchanged keeps its live frame: it waits beside the body while the markup is
+  // written and goes into the card's new box. Only a frame still in this body is kept, so after a window opened from here and
+  // closed with Back (which wrote the body) the frames are made fresh, as before. Without moveBefore every draw makes them again.
+  const look = c => m.cardHtml[c.id]?.html + document.documentElement.classList.contains('dark');
+  const keep = typeof body.moveBefore !== 'function' ? [] : (sp?.cards || []).filter(c => body.contains(m.frames[c.id]) && m.made?.[c.id] === look(c))
+    .map(c => { const f = m.frames[c.id], old = f.closest('[data-card]'); body.parentNode.moveBefore(f, body); return [c, f, old.dataset.rendered]; });
   const fresh = o.write(body, boxes.map(b => !b.box ? b.html : `<${b.box === 'mlist' ? 'ul' : 'div'} class="${b.box}">${b.html}</${b.box === 'mlist' ? 'ul' : 'div'}>`).join(''));
-  // ponytail: the window draws whole, so there a card's frame is made again on each draw (a tile's answer, a checklist press)
-  // and gets the last JSON again; a card keeps no state of its own across draws. On the page the frame stays while the markup
-  // is unchanged, and a newer answer is posted into it.
+  for (const [{ id, title }, f, was] of keep) { // with the card's state: rendered or not, and the error it stopped with
+    const box = body.querySelector(`[data-card][data-tile="${CSS.escape(id)}"]`);
+    if (!box) { f.remove(); continue; }
+    box.querySelector('.card-frame').moveBefore(f, null); f.title = title; // a renamed card keeps its frame; the frame's name follows
+    if (was !== undefined) box.dataset.rendered = was;
+    // A card that throws while it draws says error and then rendered, so the error is kept on m, not read off the state.
+    if (m.cardErr?.[id]) box.querySelector('.card-note').textContent = m.cardErr[id];
+  }
+  // A frame in the box (unchanged markup, or a kept frame) gets a newer answer posted into it; an empty box gets a new frame.
   for (const c of sp?.cards || []) {
     const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html, at = box.querySelector('.card-frame');
     if (typeof html !== 'string') continue;
     const json = m.tiles[c.id]?.json;
-    if (!fresh && at.firstChild) { if (box.dataset.rendered === 'rendered' && json !== undefined && m.sent[c.id] !== json) { m.sent[c.id] = json; m.frames[c.id]?.contentWindow?.postMessage({ p9: 'data', json }, '*'); } continue; }
+    if (at.firstChild) { if (box.dataset.rendered === 'rendered' && json !== undefined && m.sent[c.id] !== json) { m.sent[c.id] = json; m.frames[c.id]?.contentWindow?.postMessage({ p9: 'data', json }, '*'); } continue; }
     // Wall 15: p9open(path) from the card opens one of its folder's files, only right after a click in this card (the click
     // activates this window too and focuses the frame; a click elsewhere, such as the one that opened the section, does not
     // count), so a card cannot pop windows on its own. The daemon opens only files the folder lists. The frame is another
@@ -692,11 +707,13 @@ function sectionBody(m, body, g, o) {
     const onOpen = (p, since = performance.now()) => navigator.userActivation?.isActive && document.activeElement === m.frames[c.id]
       ? outer.openModal({ kind: 'hubtext', title: p.split('/').pop(), req: { id: c.id, path: p }, call: 'folderFile', back: o.back })
       : performance.now() - since < 1000 && outer.setTimeout(() => onOpen(p, since), 25);
+    (m.made ||= {})[c.id] = look(c); delete m.cardErr?.[c.id];
     const frame = m.frames[c.id] = mountCard(at, c.title, html, { ...outer.FRAME, onOpen, onState: (kind, text) => {
-      box.dataset.rendered = kind;
+      const box = frame.closest('[data-card]'); // the card's box now: a kept frame has moved into a newer one
+      if (box) box.dataset.rendered = kind;
       const now = m.tiles[c.id]?.json;
       if (kind === 'rendered' && now !== undefined) { m.sent[c.id] = now; frame.contentWindow?.postMessage({ p9: 'data', json: now }, '*'); }
-      if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
+      if (kind === 'error') { (m.cardErr ||= {})[c.id] = 'The card stopped with an error: ' + text; if (box) box.querySelector('.card-note').textContent = m.cardErr[c.id]; }
     } });
   }
   body.querySelectorAll('[data-cbtn]').forEach(b => b.onclick = () => outer.openModal({ kind: 'script', s: scriptById(b.dataset.cbtn), back: o.back }));

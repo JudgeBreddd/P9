@@ -4,10 +4,13 @@ import { chromium } from '@playwright/test';
 import { enrollDevice } from './helpers.mjs';
 
 // A phone-sized browser on the phone page, signed in.
-export async function phone(t, server, { touchScreen = false } = {}) {
+// Service workers are blocked unless a test asks for them: Playwright's page.route never sees a request that goes through a
+// service worker, and the phone's worker takes the page over at a time of its own (clients.claim), so a stubbed route
+// would sometimes be skipped and the request would reach the real daemon (O62, L1b).
+export async function phone(t, server, { touchScreen = false, serviceWorkers = 'block' } = {}) {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ hasTouch: touchScreen, viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ serviceWorkers, hasTouch: touchScreen, viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send('WebAuthn.enable');
@@ -29,7 +32,7 @@ export async function phone(t, server, { touchScreen = false } = {}) {
 // A chat the daemon never ran: a finished turn (Send goes straight out), or one with no end yet (the phone reads it as running).
 export const CHAT = '00000000-0000-4000-8000-0000000000c1';
 export function seedChat(server, { running = false } = {}) {
-  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
   db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(CHAT, 'claude', 'Draft chat', 'idle', Date.now());
   const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   event.run(CHAT, 'user', JSON.stringify({ text: 'hello' }), Date.now());
