@@ -295,9 +295,10 @@ function bindDefaults() {
     if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(a, m)) { el.value = outer.defaultMode(a); return; }
     m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
   }; });
-  outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = () => {
-    const k = el.dataset.defaultModel ? `p9-model-default:${el.dataset.defaultModel}` : `p9-effort-default:${el.dataset.defaultEffort}`;
-    el.value ? localStorage.setItem(k, el.value) : localStorage.removeItem(k);
+  // O133: saved in the daemon; one it did not take shows what is kept again.
+  outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = async () => {
+    const a = el.dataset.defaultModel || el.dataset.defaultEffort, kind = el.dataset.defaultModel ? 'model' : 'effort';
+    if (!await outer.saveStarts(a, kind, el.value)) el.value = kind === 'model' ? outer.defaultModel(a) : outer.defaultEffort(a);
   }; });
 }
 // O47: the agents' lists arrived while Settings is open. Only the defaults rows are drawn again, never the page: a full

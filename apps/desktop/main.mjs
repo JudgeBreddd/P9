@@ -756,6 +756,8 @@ export async function createDesktop({ state, open } = {}) {
     stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
     // Settings > Delegation: {} reads it, anything else saves it (the daemon checks the shape).
     delegation: body => !Object.keys(body).length ? ['GET', '/delegation'] : ['POST', '/delegation', body],
+    // Settings > New chats start in (O133): {} reads them, anything else saves them (the daemon checks the shape).
+    newChatDefaults: body => !Object.keys(body).length ? ['GET', '/start-defaults'] : ['POST', '/start-defaults', body],
   };
   const SPRINT_START_MS = 10 * 60_000; // ponytail: room for the lead's minute and about 20 workers' starts, not measured
   ipcMain.handle('p9:chat', async (event, ...args) => {

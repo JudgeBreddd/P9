@@ -992,7 +992,7 @@ async function loadChat() {
     // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
   };
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); return l.body?.conversations || []; };
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
   let sprintStale = false, sprintAt = 0;
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }

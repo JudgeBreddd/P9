@@ -22,6 +22,17 @@ const until = async (check, what, ms = 15000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 200))) if (await check()) return;
   assert.fail('timed out: ' + what);
 };
+// O133: Settings > New chats start in, picked as the user does (saved in the daemon, read back by the window).
+const pickDefaults = async (page, instance, agent, want) => {
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]');
+  for (const [kind, v] of Object.entries(want)) { await page.locator(`[data-default-${kind}="${agent}"] option[value="${v}"]`).waitFor({ state: 'attached', timeout: 15000 }); await page.selectOption(`[data-default-${kind}="${agent}"]`, v); }
+  for (const end = Date.now() + 10000; ; await new Promise((resolve) => setTimeout(resolve, 200))) {
+    const kept = (await call(instance, '/start-defaults'))[agent];
+    if (Object.entries(want).every(([k, v]) => kept[k] === v)) break;
+    assert.ok(Date.now() < end, 'the defaults were saved');
+  }
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+};
 // The pills (chat-view.mjs pillMenu): a pill's value is in its aria-label; its menu is #pillMenu (no submenus, Builder, 2026-11-05).
 const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
 const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
@@ -235,7 +246,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   // A pick inside the chat changes only that chat.
   await choose(page, pane, 'Effort', 'Low');
   await pane.locator('[data-pill="Effort"][aria-label="Effort: Low"]').waitFor();
-  assert.deepEqual(await page.evaluate(() => [localStorage.getItem('p9-model-default:claude'), localStorage.getItem('p9-effort-default:claude')]), ['haiku', 'high']);
+  assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'haiku', effort: 'high' });
   // A chat made elsewhere (the phone, a card) keeps the agent's own: only chats started here get the defaults.
   const other = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + other + '/prompt', 'POST', { text: 'hello' });
@@ -256,6 +267,43 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 5000 });
   assert.equal(await pillValue(pane, 'Effort'), 'High');
   console.log('PASS defaults: Default model and effort offered from the lists seen, applied to new chats here only, kept across a restart');
+});
+
+// #222 review (FIX1): a Default save names only its own field and the daemon merges it. Forced: the daemon is paused (SIGSTOP) so the
+// model save is still unanswered when the effort is picked; and a second window, opened before the first one's pick, changes
+// another field. Before the fix each save sent the whole object from the window's last answer and put back the older value.
+test('O133 FIX1: overlapping Default saves keep both fields: a held save, then a second pick; two windows editing different fields; the one-time move fills only empty fields', { timeout: 180000, skip: process.platform === 'win32' }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-fix1-'));
+  const one = await launch(t, instance, path.join(dir, 'one')), two = await launch(t, instance, path.join(dir, 'two'));
+  const settings = async (page) => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]');
+    for (const k of ['model', 'effort']) await page.locator(`[data-default-${k}="claude"] option[value="high"], [data-default-${k}="claude"] option[value="haiku"]`).first().waitFor({ state: 'attached', timeout: 15000 }); };
+  await settings(one.page); await settings(two.page);
+  // Held: both picks are made while the daemon answers nothing.
+  instance.child.kill('SIGSTOP');
+  try { await one.page.selectOption('[data-default-model="claude"]', 'haiku'); await one.page.selectOption('[data-default-effort="claude"]', 'high'); await new Promise((r) => setTimeout(r, 1000)); }
+  finally { instance.child.kill('SIGCONT'); }
+  await until(async () => JSON.stringify((await call(instance, '/start-defaults')).claude) === JSON.stringify({ model: 'haiku', effort: 'high' }), 'both held picks kept');
+  await new Promise((r) => setTimeout(r, 1000));
+  assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'haiku', effort: 'high' }, 'still both after every answer came back');
+  assert.deepEqual([await one.page.locator('[data-default-model="claude"]').inputValue(), await one.page.locator('[data-default-effort="claude"]').inputValue()], ['haiku', 'high']);
+  // Window two read the defaults before those picks; its own pick of Codex effort leaves Claude's as window one saved them.
+  await two.page.selectOption('[data-default-effort="codex"]', 'low');
+  await until(async () => (await call(instance, '/start-defaults')).codex.effort === 'low', 'window two saved');
+  const kept = await call(instance, '/start-defaults');
+  assert.deepEqual([kept.claude, kept.codex], [{ model: 'haiku', effort: 'high' }, { model: '', effort: 'low' }], 'window two did not put back its older Claude values');
+  // Window two changes Claude's model; window one's effort stays.
+  await two.page.selectOption('[data-default-model="claude"]', 'opus');
+  await until(async () => (await call(instance, '/start-defaults')).claude.model === 'opus', 'window two saved the model');
+  assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'opus', effort: 'high' });
+  // The one-time move of a window's own old value (onlyEmpty) fills an empty field and never replaces a set one.
+  await call(instance, '/start-defaults', 'POST', { set: { claude: { model: 'haiku', effort: 'low' }, codex: { model: 'opus' } }, onlyEmpty: true });
+  const moved = await call(instance, '/start-defaults');
+  assert.deepEqual([moved.claude, moved.codex], [{ model: 'opus', effort: 'high' }, { model: 'opus', effort: 'low' }]);
+  // A whole-object body (the old shape) is refused, as is an unknown field.
+  assert.equal((await call(instance, '/start-defaults', 'POST', { claude: { model: '', effort: '' }, codex: { model: '', effort: '' } })).status, 400);
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { claude: { mode: 'x' } } })).status, 400);
+  console.log('PASS O133 FIX1: overlapping and two-window Default saves keep every field');
 });
 
 // O32: a chat on Opus, High and Plan is still on them after the daemon restarts and the app restarts (an update does both):
@@ -343,9 +391,10 @@ test('New chat (+) opens on the agent used last here: + then Enter after a Codex
 // O29: the Agent pill, first in the bar. In an empty chat, picking the other agent makes the chat that agent's, with its saved
 // defaults (mode, Default model, Default effort). A chat with messages keeps its agent: the other row is disabled and says why.
 test('Agent pill: an empty chat switches agent and takes that agent\'s defaults; a chat with messages keeps its agent', { timeout: 150000 }, async (t) => {
-  const { id, page, pane, errors } = await setup(t, 'agent-pill', 'claude');
+  const { id, page, pane, errors, instance } = await setup(t, 'agent-pill', 'claude');
   // Claude's lists are known (the chat's config came), so its Settings defaults can apply.
-  await page.evaluate(() => { localStorage.setItem('p9-model-default:claude', 'haiku'); localStorage.setItem('p9-effort-default:claude', 'high'); localStorage.setItem('p9-mode:claude', 'Plan'); });
+  await pickDefaults(page, instance, 'claude', { model: 'haiku', effort: 'high' });
+  await page.evaluate(() => { localStorage.setItem('p9-mode:claude', 'Plan'); });
   assert.deepEqual(await pane.locator('.bar [data-pill]').evaluateAll((l) => l.map((b) => b.dataset.pill)), ['Agent', 'Mode', 'Model', 'Effort']);
   // A chat with messages: Codex is shown but disabled, with the reason; picking it changes nothing.
   assert.deepEqual(await pillItems(page, pane, 'Agent'), ['Claude ✓', 'Codex']);
@@ -466,8 +515,8 @@ test('New menu: two overlapping creates for one agent each get their own row\'s 
 
 // O44 review: only New menu rows name a model. The palette's New Claude session starts on Settings' Default model.
 test('New menu, palette: New Claude session starts on the saved Default model', { timeout: 150000 }, async (t) => {
-  const { page, errors } = await setup(t, 'new-palette', 'claude');
-  await page.evaluate(() => localStorage.setItem('p9-model-default:claude', 'opus'));
+  const { page, errors, instance } = await setup(t, 'new-palette', 'claude');
+  await pickDefaults(page, instance, 'claude', { model: 'opus' });
   const had = await rows(page);
   await page.keyboard.press('Control+k'); await page.fill('#palIn', 'New Claude session');
   await page.locator('#palList li[data-i]', { hasText: 'New Claude session' }).first().waitFor({ timeout: 5000 }); await page.keyboard.press('Enter');

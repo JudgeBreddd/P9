@@ -10,7 +10,8 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { once } from 'node:events';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -552,4 +553,50 @@ test('window-3: an archived worker\'s report leaves the box above the message bo
   await shot(page, 'w3-after-lead-turn');
   assert.deepEqual(errors, []);
   console.log('PASS window-3: a stopped worker\'s report stays pinned; archived by archive_chat it leaves the box and the card and scrolls with the chat; still gone after a reload and after the lead\'s next turn');
+});
+
+// O133 (Tyler, 2026-11-16: Settings set to "sol medium", "it keeps changing back to agent default"): Settings > New chats
+// start in was kept only in the window, so a chat an agent opens never got it. A Codex default effort picked in Settings
+// survives a P9 restart, and a Codex worker a Claude chat opens with no effort runs on it, not Codex's own (medium here).
+test('O133: a Settings default effort applies to a worker an agent opens, after a restart, and Settings still shows it', { timeout: 150000 }, async (t) => {
+  let instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // One Delegation row: a Codex worker, its model and effort left to the agent (so nothing names them).
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: [{ agent: 'codex', model: '', effort: '' }] })).status, 200);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const seen = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Seen' })).conversation;
+  await call(instance, `/chat/${seen}/prompt`, 'POST', { text: 'hi' });
+  await until(async () => (await events(instance, seen)).some((e) => e.type === 'config'), 'Codex\'s lists');
+  let { app, page, errors } = await launch(t, instance);
+  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
+  const pick = '[data-default-effort="codex"]';
+  await settings();
+  await page.locator(pick + ' option[value="high"]').waitFor({ state: 'attached', timeout: 15000 });
+  await page.selectOption(pick, 'high');
+  await page.waitForTimeout(1500); // the save is a request; give it time either way, so the old build fails below, not here
+  await shot(page, 'o133-picked');
+  assert.deepEqual(errors, []);
+  await app.close();
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  instance = await restart(t, instance, 'state-2');
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const made = await a.tool('open_chat', { text: 'config', provider: 'codex', title: 'Review2' });
+  assert.ok(made.chat, JSON.stringify(made));
+  await a.done(made.chat);
+  const said = (await events(instance, made.chat)).find((e) => e.data?.content?.text?.startsWith('config:'))?.data.content.text;
+  assert.match(said ?? '', /effort=high/, 'the worker ran on the Settings default, not Codex\'s own');
+  ({ app, page, errors } = await launch(t, instance));
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  const row = page.locator(`#navList .row[data-chat="${made.chat}"]`);
+  await row.waitFor({ timeout: 20000 }); await row.click();
+  const effort = page.locator(`.pane[data-id="${made.chat}"] [data-pill="Effort"]`);
+  await effort.waitFor({ timeout: 20000 });
+  assert.equal(await effort.getAttribute('aria-label'), 'Effort: High', 'the worker\'s pill');
+  await shot(page, 'o133-worker');
+  await settings();
+  await until(async () => await page.locator(pick).inputValue() === 'high', 'Settings still shows High after the restart', 10000);
+  await shot(page, 'o133-settings');
+  assert.deepEqual(errors, []);
+  console.log('PASS O133: a Codex default effort set in Settings survives a restart and a Codex worker opened by a Claude chat runs on it');
 });
