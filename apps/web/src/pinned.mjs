@@ -12,15 +12,14 @@ export const SHUT = { keys: null, get() { if (!this.keys) try { this.keys = new 
   add(k) { this.get().add(k); try { localStorage.setItem('p9-reports-closed', JSON.stringify([...this.keys])); } catch {} } };
 // shut: the closed report keys (SHUT.get()). Given, only the newest worker report not closed is pinned, with a close button; the
 // others scroll with the chat (chat-view's 'report' events). Not given (phone), every card is pinned as before.
-// The worker report pinned now: the newest one, unless it was closed or its worker was archived (gone(card id), window-3: archived
-// is the daemon's word, so archive_chat, the sidebar or another window takes it down too; the phone does not pass it yet).
-export function openReport(s, shut, gone) {
+// The worker report pinned now: the newest one, unless it was closed.
+export function openReport(s, shut) {
   const top = [...(s.cards?.values() ?? [])].filter(c => isReport(c.id)).sort((a, b) => s.cardAt.get(b.id) - s.cardAt.get(a.id))[0];
-  return top && !shut.has(reportKey(s, top)) && !gone?.(top.id) ? top : null;
+  return top && !shut.has(reportKey(s, top)) ? top : null;
 }
-export function pinned(s, mdOf, shut, gone) {
+export function pinned(s, mdOf, shut) {
   const plan = s.events.find(e => e.t === 'plan'), all = [...(s.cards?.values() ?? [])];
-  const open = shut && openReport(s, shut, gone);
+  const open = shut && openReport(s, shut);
   const cards = shut ? all.filter(c => !isReport(c.id) || c === open) : all;
   if (!plan?.entries.length && !cards.length) return '';
   return `<div class="pinned" aria-label="Pinned">${plan?.entries.length ? `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan <button type="button" class="open-plan" data-open-plan="entries" title="Open the plan to comment on it">Open</button></div><ul style="margin:0;padding:0">${plan.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${mark(st)}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>` : ''}`
