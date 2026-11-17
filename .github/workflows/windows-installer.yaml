@@ -650,8 +650,8 @@ jobs:
             while ((Get-Date) -lt $end -and -not ($log -and (Select-String -LiteralPath $log.FullName "state ready $next" -SimpleMatch -Quiet)))
             if ($log) { Get-Content $log.FullName | ForEach-Object { 'p9-update.log: ' + $_ } }
             if (-not ($log -and (Select-String -LiteralPath $log.FullName "state ready $next" -SimpleMatch -Quiet))) { throw "the app did not download $next in 10 min" }
-            # O24: the downloaded update asks. Later leaves it for the next open: closing the app then installs nothing (0.1.8
-            # installed on quit, behind any window opened meanwhile, and never opened P9 again).
+            # O24b: the downloaded update asks. Later installs nothing, and closing the app then installs nothing either (0.1.8
+            # installed on quit, behind any window opened meanwhile, and never opened P9 again). The next open asks again.
             $has = { param($text) Select-String -LiteralPath $log.FullName $text -SimpleMatch -Quiet }
             Press-Button 'P9 is ready to update' 'Later' 3 'update-ready-popup.png'
             Wait-For "the popup did not log Later" 1 { & $has "popup ${next}: later" }
@@ -660,11 +660,13 @@ jobs:
             Start-Sleep 30
             $installed = Join-Path $app 'resources\daemon\package.json'
             if ((Get-Content $installed -Raw | ConvertFrom-Json).version -ne $version -or (Get-Process | Where-Object { $_.Path -like '*p9-event-horizon*' })) { throw "closing the app after Later installed $next" }
+            # O153: O24b dropped the install-at-the-next-open mark; each start deletes the old file.
             $waiting = Join-Path $log.Directory.FullName 'update-pending.json'
-            if ((Get-Content $waiting -Raw | ConvertFrom-Json).version -ne $next) { throw "update-pending.json does not hold $next" }
-            # The next open installs it at once, says so, and P9 opens again by itself on the new version.
+            if (Test-Path $waiting) { throw "update-pending.json exists after Later" }
+            # The next open asks again; Update now installs it and P9 opens again by itself on the new version.
             Start-Process (Join-Path $app 'P9 Event Horizon.exe')
-            Wait-For "the next open did not start installing $next" 3 { & $has "installing ${next}: it was left for this open" }
+            Press-Button 'P9 is ready to update' 'Update now' 5 'update-ready-again.png'
+            Wait-For "the popup did not log Update now" 1 { & $has "popup ${next}: now" }
             Start-Sleep 2
             Shot 'update-installing.png'
             # The installer rewrites these files while this polls: a missing or half-written one reads as not yet.
@@ -680,7 +682,7 @@ jobs:
             Shot 'update-reopened.png'
             Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
             Wait-For "$next did not quit" 2 { -not (Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue) }
-            if ((Get-Content $waiting -Raw | ConvertFrom-Json).version) { throw "update-pending.json still holds a version once $next runs" }
+            if (Test-Path $waiting) { throw "update-pending.json exists once $next runs" }
           } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
           Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object { 'hook: ' + $_ }
           $now = (Get-Content $installed -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).version
