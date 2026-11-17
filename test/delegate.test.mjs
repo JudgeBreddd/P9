@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { once } from 'node:events';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
-import { DELEGATE_TOOLS } from '../apps/server/delegate.mjs';
+import { DELEGATE_TOOLS, createDelegate } from '../apps/server/delegate.mjs';
 // The real MCP SDK client, as in mcp.test.mjs: the tools are called the way an agent's adapter calls them.
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -866,6 +866,32 @@ test('Delegate O132: a close archives, a plain stop does not, a close under the 
   await call(instance, '/agent-lock', 'POST', { on: false });
   assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === locked)?.state, 'stopped', 'a close under the lock archived the chat');
   console.log('PASS Delegate O132 close archives: plain stop kept, close archived and refused send/ask/compact until unarchived, lock close stopped without archiving');
+});
+
+// #255 FIX1: a close archives under archive_chat's rule at the moment of archiving. A child stopped first that starts again
+// while its parent's stop is still awaited is kept, not hidden while it works.
+test('Delegate O132 FIX1: a close does not archive a child that started again while a later stop was awaited; the answer lists it as kept', async () => {
+  const lead = '00000000-0000-0000-0000-0000000000a1', parent = '00000000-0000-0000-0000-0000000000a2', child = '00000000-0000-0000-0000-0000000000a3';
+  const family = [{ id: lead }, { id: parent, parent: lead, title: 'P' }, { id: child, parent, title: 'C' }];
+  const state = new Map([[lead, 'turn'], [parent, 'idle'], [child, 'idle']]), archivedIds = [];
+  let release, holding;
+  const held = new Promise((resolve) => { release = resolve; }), reached = new Promise((resolve) => { holding = resolve; });
+  const chat = { lock: () => ({ on: false }), family: () => family, list: () => family.map((c) => ({ ...c, archived: archivedIds.includes(c.id) })),
+    info: (id) => ({ ...family.find((c) => c.id === id), state: state.get(id), asks: [] }),
+    // The parent's stop is held (the later one: children stop first); the child's is not.
+    stop: async (id) => { if (id === parent) { holding(); await held; } state.set(id, 'stopped'); return { status: 200 }; },
+    projects: { chats: { archive: (id) => { archivedIds.push(id); return { status: 200 }; } } },
+    gauge: () => ({}), note: async () => {}, pin: () => {}, turnEnded: () => {}, settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
+  const tools = createDelegate({ chat });
+  const closing = tools.stop_chat({ chat: parent, close: true }, lead);
+  await reached;
+  assert.equal(state.get(child), 'stopped', 'the child was not stopped first');
+  state.set(child, 'turn'); // the owner (or another chat) starts the child again while the parent's stop is awaited
+  release();
+  const done = await closing;
+  assert.deepEqual(done, { chat: parent, action: 'stopped', chats: [child, parent], archived: [parent], kept: [{ chat: child, error: 'chat-working', state: 'turn' }] }, JSON.stringify(done));
+  assert.deepEqual(archivedIds, [parent], 'a working child was archived');
+  console.log('PASS Delegate O132 FIX1 race: ' + JSON.stringify({ archived: done.archived, kept: done.kept }));
 });
 
 test('Delegate daemon-7: two messages sent at once to two stopped workers with one place free start one; the other is too-many-chats', { timeout: 180000 }, async (t) => {

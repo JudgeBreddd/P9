@@ -157,8 +157,6 @@ export function createDelegate({ chat, allowed, usage }) {
   const tierOf = (provider, mode) => TIER[provider]?.[mode];
   // The widest mode of provider at or under tier.
   const under = (provider, tier) => Object.entries(TIER[provider]).filter(([, t]) => t <= tier).sort((a, b) => b[1] - a[1])[0]?.[0];
-  // Archives each chat the way archive_chat does (no state check: the caller has just stopped them); the ids it archived.
-  const shelve = (ids) => ids.filter((id) => chat.projects.chats.archive(id, { archived: true }).status === 200);
   // The chats a caller started, directly or through one of them.
   const below = (family, id) => {
     const found = [];
@@ -848,6 +846,26 @@ export function createDelegate({ chat, allowed, usage }) {
     return { guidance: CROSS_CHAT, chat: args.chat, messages: messages.filter((m) => m.role !== 'break'), next, more: more || page.events.length >= 500 };
   }
 
+  // archive_chat's state rule: a chat that is working, waiting on an answer, still stopping or moving, or whose stop P9
+  // could not confirm may yet run, so it stays where the user sees it. null when it may be archived.
+  const unsettled = (info) => {
+    if (stateOf(info) === 'working' || info.asks?.length) return { error: 'chat-working', detail: 'Stop it first (stop_chat), or wait for its turn to end.' };
+    if (['stopping', 'moving'].includes(info.state) || stateOf(info) === 'failed') return { error: 'chat-not-settled', state: info.state, detail: 'Only an idle or stopped chat is archived.' };
+    return null;
+  };
+  // #255 FIX1: a close archives each chat it stopped under archive_chat's rule, read again at the moment of archiving (the
+  // read and the archive are synchronous, nothing runs between them): one stopped early may have started again while a
+  // later stop was awaited, and stays. The chats archived, and the ones kept with the reason.
+  const shelve = (ids) => {
+    const archived = [], kept = [];
+    for (const id of ids) {
+      const info = chat.info(id), no = info ? unsettled(info) : { error: 'chat-not-found' };
+      const result = no ? null : chat.projects.chats.archive(id, { archived: true });
+      if (result?.status === 200) archived.push(id);
+      else kept.push({ chat: id, error: no?.error ?? result.error, ...(info?.state && { state: info.state }) });
+    }
+    return { archived, ...(kept.length && { kept }) };
+  };
   async function stopChat(caller, args) {
     const found = reach(caller, args.chat, true);
     if (!found) return { error: reach(caller, args.chat) ? 'not-a-descendant' : 'chat-not-found' };
@@ -863,7 +881,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // O132 / row 721: a close also archives what it stopped, so it leaves the card, the sidebar and the pinned report and
     // stays gone after a reload. archive_chat with archived: false brings one back. A locked agent may still stop, not archive.
     if (chat.lock(caller).on) return { chat: args.chat, action: 'stopped', chats: stopped, archived: [], note: 'The agent lock is on: stopped, not archived.' };
-    return { chat: args.chat, action: 'stopped', chats: stopped, archived: shelve(stopped) };
+    return { chat: args.chat, action: 'stopped', chats: stopped, ...shelve(stopped) };
   }
 
   // F2 (SECURITY.md § Delegate, "Archiving"): the sidebar's Archive for a chat the caller started. Never a delete.
@@ -871,10 +889,8 @@ export function createDelegate({ chat, allowed, usage }) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!reach(caller, args.chat, true)) return { error: reach(caller, args.chat) ? 'not-a-descendant' : 'chat-not-found' };
     if (args.archived !== undefined && typeof args.archived !== 'boolean') return { error: 'request-refused' };
-    const archived = args.archived ?? true, info = chat.info(args.chat);
-    if (archived && (stateOf(info) === 'working' || info.asks.length)) return { error: 'chat-working', detail: 'Stop it first (stop_chat), or wait for its turn to end.' };
-    // Still stopping or moving, or a stop P9 could not confirm: it may yet run, so it stays where the user sees it.
-    if (archived && (['stopping', 'moving'].includes(info.state) || stateOf(info) === 'failed')) return { error: 'chat-not-settled', state: info.state, detail: 'Only an idle or stopped chat is archived.' };
+    const archived = args.archived ?? true, no = archived && unsettled(chat.info(args.chat));
+    if (no) return no;
     const result = chat.projects.chats.archive(args.chat, { archived });
     return result.status === 200 ? { chat: args.chat, action: archived ? 'archived' : 'unarchived' } : { error: result.error };
   }
