@@ -83,6 +83,11 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     const ta = page.locator('#chats .pane textarea').first(), hist = page.locator('#chats .hist').first();
     const focus = mode => page.click('#r' + ({ chat: 'Chat', dev: 'Dev', mission: 'Mission' })[mode]);
     const card = prefix => page.locator(`#cards .card[data-key^="${prefix}"]`);
+    // 733: asks and items that need you are bell rows, not top-right cards; these steps open them there.
+    const asks = /(agents need|[A-Z]\w* needs) you/, items = /items? needs? you/;
+    const bellRow = text => page.locator('#mdlBody .mlist [data-i]', { hasText: text });
+    const fromBell = async text => { await page.click('#rBell'); await bellRow(text).click(); };
+    const askCount = async () => { await page.locator('#rBell').evaluate(b => b.click()); const n = Number(await bellRow(asks).locator('.n').textContent()); await page.keyboard.press('Escape'); return n; };
     const caret = element => element.evaluate(t => [document.activeElement === t, t.value, t.selectionStart, t.selectionEnd]);
     await ta.fill('acceptance draft in chat'); await ta.evaluate(t => t.setSelectionRange(3, 9));
     await hist.evaluate(h => h.scrollTo({ top: 40, behavior: 'instant' })); const chatTop = await hist.evaluate(h => h.scrollTop);
@@ -110,34 +115,35 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     console.log('PASS phase4 must-pass: Chat draft/caret/scroll, Dev tab/draft/caret and Mission scroll survive focus cycle without reload');
 
     await focus('dev'); await editor.evaluate(t => { t.focus(); t.setSelectionRange(20, 25); });
-    const asks = Number(await card('asks:').locator('.n').textContent());
+    const asked = await askCount();
     await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Simulate an agent question' }).click();
-    assert.equal(Number(await card('asks:').locator('.n').textContent()), asks + 1); assert.equal(await card('run:s-codex-1').count(), 0); assert.match(await card('asks:').getAttribute('class'), /fx-halo/);
-    await card('asks:').locator('.open').evaluate(b => b.click()); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
+    assert.equal(await askCount(), asked + 1); assert.equal(await card('run:s-codex-1').count(), 0); assert.equal(await card('asks:').count(), 0, 'an ask makes no top-right card');
+    // Opened without a mouse, as the card was: devEd keeps focus.
+    await page.locator('#rBell').evaluate(b => b.click()); await bellRow(asks).evaluate(b => b.click()); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
     await page.check('#mdlBody [data-question] input[value="vitest"]'); await page.click('#mdlBody [data-question] [type="submit"]');
     assert.equal(await page.locator('#mdl').evaluate(el => el.open), false);
     // The dialog's close event restores the caret as a separate task; a fixed 100 ms wait lost that race on a loaded CI runner.
     // Wait for the caret itself: with the page's cards hidden the card is clicked without a mouse, devEd keeps focus, and the dialog's own focus restore (caret 0,0) comes first.
     await page.waitForFunction(() => { const t = document.getElementById('devEd'); return document.activeElement === t && t.selectionStart === 20 && t.selectionEnd === 25; }, null, { timeout: 5000 }).catch(() => {});
     assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
-    await focus('mission'); await card('reviews:').locator('.open').click(); await page.keyboard.press('Escape');
+    await focus('mission'); await fromBell(items); await page.keyboard.press('Escape');
     await openWin(panelID); assert.equal(await body.evaluate(p => p.scrollTop), missionTop); await closeWin();
     console.log('PASS phase4 D10-1: asking session moves cards, modal answer handles it, close restores editor caret and Mission scroll');
 
     await focus('chat'); await ta.click(); await ta.evaluate(t => t.setSelectionRange(3, 9));
-    await card('reviews:').locator('.open').click(); await page.locator('#mdlBody .mlist button').first().click();
+    await fromBell(items); await page.locator('#mdlBody .mlist button').first().click();
     assert.ok(await page.locator('#mdlBody .fileview p').count() >= 3); assert.equal(await page.locator('#mdlBody [data-openfile]').count(), 0);
     await page.locator('#mdlBody textarea').fill('ok by me'); await page.keyboard.press('Escape');
     await ta.evaluate(t => new Promise(r => { const end = Date.now() + 2000; (function poll() { document.activeElement === t || Date.now() > end ? r() : requestAnimationFrame(poll); })(); })); // focus returns after the dialog's close; a fixed 100 ms wait failed 1 in 4 gate runs
     assert.deepEqual(await caret(ta), [true, 'acceptance draft in chat', 3, 9]); assert.equal(await hist.evaluate(h => h.scrollTop), chatTop);
     console.log('PASS phase4 D10-2: inline review file, close restores chat draft/caret/scroll');
-    await card('reviews:').locator('.open').click();
+    await fromBell(items);
     while (!await page.locator('#mdlBody .mlist').count()) await page.click('#mdlBack');
     assert.equal(await page.locator('#mdlBody .mlist li').count(), 5);
     await page.locator('#mdlBody .mlist button').first().click(); await page.locator('#mdlBody textarea').fill('skipped with a note');
     await page.click('#mdlFoot [data-skip]'); await page.locator('#mdlBody textarea').fill('handled'); await page.click('#mdlFoot [data-save]');
     await page.locator('#mdlBody textarea').fill('half an answer'); await page.locator('#mdlBody textarea').evaluate(t => { t.setSelectionRange(4, 4); t.dispatchEvent(new Event('keyup')); });
-    const title = await page.locator('#mdlT').innerText(); await page.keyboard.press('Escape'); await card('reviews:').locator('.open').click();
+    const title = await page.locator('#mdlT').innerText(); await page.keyboard.press('Escape'); await fromBell(items);
     assert.equal(await page.locator('#mdlT').innerText(), title); assert.deepEqual(await page.locator('#mdlBody textarea').evaluate(t => [t.value, t.selectionStart]), ['half an answer', 4]);
     await page.click('#mdlBack'); assert.equal(await page.locator('#mdlBody .mlist li').count(), 4);
     await page.locator('#mdlBody .mlist button').first().click(); assert.equal(await page.locator('#mdlBody textarea').inputValue(), 'skipped with a note'); await page.keyboard.press('Escape');
@@ -162,6 +168,8 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await page.keyboard.press('Control+Shift+N'); assert.equal(await page.locator('#mdlBody .mlist li', { hasText: 'nightly-backup' }).count(), 1);
     await page.keyboard.press('Escape'); console.log('PASS phase4 D10-5: faded toast remains in Notification Center');
     await page.setViewportSize({ width: 1280, height: 720 });
+    // 733: asks and items that need you are bell rows now; the welcome card is the one card left on the stack, so it is the card placed here.
+    await page.evaluate(() => window.__setup({ writable: false }));
     for (const mode of ['chat', 'dev', 'mission']) {
       await focus(mode);
       assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight && document.documentElement.scrollWidth <= innerWidth));

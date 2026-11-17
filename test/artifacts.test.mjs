@@ -311,6 +311,8 @@ test('artifacts: with an artifact panel open the notification cards sit below it
     return [n, b.contains(e) ? '' : (e?.outerHTML ?? 'nothing').slice(0, 160)];
   })), names);
   await reply(`${F}html artifact Panel one\n<h1>Panel</h1>\n${F}`);
+  // 733: asks and items that need you are bell rows now; the welcome card is the one card left on the stack, so it is the card placed here.
+  await page.evaluate(() => window.__setup({ writable: false }));
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
     await page.waitForTimeout(300);

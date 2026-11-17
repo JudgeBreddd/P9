@@ -222,7 +222,7 @@ const looseOk = (agent, m) => new Promise(done => {
 });
 const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startMode(s.agent), queue: [] })), open: sampleView ? ['s-claude-1','s-codex-1'] : [], split: false, files: false,
   focus: 'chat', termOpen: { chat: false, dev: false, mission: false }, termMode: { chat: 'float', dev: 'drawer', mission: 'float' },
-  snoozed: new Set(), quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
+  quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
   docs: {}, dev: { tabs: [], active: null } };
 // Send to server's drawing (items 24, 25; below with the black hole): pull is the pane pulled into it.
 const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
@@ -287,15 +287,16 @@ function renderTabs() {
 function cardList(all) {
   const asks = S.sessions.filter(s => s.pending);
   const cards = [];
-  if (asks.length) cards.push({ key: 'asks:' + asks.map(s => s.id + s.pending).join(), halo: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
+  if (asks.length) cards.push({ key: 'asks:' + asks.map(s => s.id + s.pending).join(), quiet: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
   // Only _tyler/ items that arrive while the app is open get a card (Builder, 2026-10-17); the ones already there, and the ones
   // he skips, wait quietly in the Notification Center. Running chats are robot heads in the panel (panel.mjs).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
-  if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
+  if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), quiet: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
-  for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, halo: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
+  for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, quiet: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
   if (S.setup) { const d = setupDone(S.setup), rows = Object.keys(d).filter(k => k !== 'pick' && k !== 'mission' && (k !== 'terminal' || S.setup.tmux !== null)), left = rows.filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${rows.length - left.length} of ${rows.length} done`, sub: [...left.map(k => STEP_NAMES[k]), ...(d.mission ? [] : ['Mission Control'])].join(' · ') }); }
-  return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
+  // 733: only the welcome card can stay on the stack, and its x skips setup, so there is no snooze any more.
+  return all ? cards : cards.filter(c => !c.quiet);
 }
 /* ---------- agent-working indicator and pets (phase 18; Builder's pet requests, 2026-10-17) ---------- */
 // The top bar says when agents work or wait on you, in every focus, with Claude Code's spinner. Where a focus shows pets
@@ -386,11 +387,11 @@ function renderModal() {
     $('#mdlFoot [data-skip]').onclick = () => { S.quiet.add(r.file); renderCards(); if (i + 1 < S.reviews.length) { m.i = i + 1; renderModal(); } else closeModal(); };
     $('#mdlFoot [data-save]').onclick = () => r.live ? answerLive(r) : (() => { S.reviews.splice(i, 1); toast({ kind: 'saved', txt: 'Answer saved to ' + r.file, level: 'ok' }, true); renderTabs(); if (S.reviews.length) { m.i = i % S.reviews.length; renderModal(); } else closeModal(); })();
   } else if (m.kind === 'center') {
-    const snoozed = cardList(true).filter(c => c.quiet || S.snoozed.has(c.key));
+    const bell = cardList(true).filter(c => c.quiet);
     $('#mdlT').textContent = 'Notification Center';
-    body.innerHTML = !snoozed.length && !S.alerts.length ? '<p class="empty">Nothing waiting on you.</p>'
-      : `<ul class="mlist">${snoozed.map((c, i) => row('c' + i, c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}"></span>`, esc(c.title), (c.quiet ? '' : 'snoozed · ') + esc(c.sub))).join('')}${S.alerts.map((a, i) => row('a' + i, `<span class="lvl" data-l="${esc(a.level)}"></span>`, esc(a.txt), esc(a.kind))).join('')}</ul>`;
-    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
+    body.innerHTML = !bell.length && !S.alerts.length ? '<p class="empty">Nothing waiting on you.</p>'
+      : `<ul class="mlist">${bell.map((c, i) => row('c' + i, c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}"></span>`, esc(c.title), esc(c.sub))).join('')}${S.alerts.map((a, i) => row('a' + i, `<span class="lvl" data-l="${esc(a.level)}"></span>`, esc(a.txt), esc(a.kind))).join('')}</ul>`;
+    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = bell[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { cardAct({ ...c, open: { ...c.open, back: m } }, 'open'); } /* 733: as its card did, it reopens where you left it (D10-6) */ else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
   } else if (m.kind === 'whats-new') {
     // D13: after an update. The list ships with the app; the full list is the release commit's message.
     const w = m.w, changes = WHATS_NEW.version === w.version ? WHATS_NEW.changes : [];
@@ -432,7 +433,9 @@ addEventListener('click', e => { const b = e.target.closest('#mdlFoot [data-slot
 // D7: a modal sits in the top layer over any z-index and makes the page outside it inert, so the toast list (a popover) lives
 // in the topmost open modal, or the page when none is open, and is put back on top after each toast and each modal opened or
 // closed anywhere (Settings, the connecting screen, a confirm): above it and clickable.
-if (sampleView) window.__toast = toast; // ponytail: the UI test's door, as window.__side
+// 733: __setup shows the welcome card, the one card left on the stack, so the layout tests have a card to place. It holds
+// against the start's checkSetup, which ends seconds later with no daemon in the sample.
+if (sampleView) window.__toast = toast, window.__setup = s => { Object.defineProperty(S, 'setup', { get: () => s, set() {} }); renderCards(); }; // ponytail: the UI test's door, as window.__side
 const showModal = HTMLDialogElement.prototype.showModal, modals = []; // in the order opened: the top layer's, not the page's
 HTMLDialogElement.prototype.showModal = function () { showModal.call(this); modals.splice(modals.indexOf(this) >>> 0, 1); modals.push(this); raiseToasts(); };
 lifetime.signal.addEventListener('abort', () => { HTMLDialogElement.prototype.showModal = showModal; }); // F7: the next view patches its own

@@ -182,6 +182,8 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
 
   await t.test('7. cards float over the Dev view in their own overlay view and never resize a pane', async () => {
     await reset(); await goDev();
+    // 733: asks and items that need you are bell rows now; the welcome card is the one card left on the stack, so it is the card placed here.
+    await page.evaluate(() => window.__setup({ writable: false }));
     await page.waitForFunction(() => document.querySelector('#cards .card'));
     await page.waitForFunction(() => true);
     const views = async () => { for (let i = 0; i < 40; i++) { const v = await native(); if (v.length === 2 && v[1].visible && v[1].height > 20) return v; await new Promise(r => setTimeout(r, 150)); } return native(); };
@@ -194,12 +196,13 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     near(dev.x + dev.width, side.x - 8, 'the editor view is as wide as without cards');
     assert.ok(await page.locator('#cards').evaluate(c => getComputedStyle(c).visibility === 'hidden'), 'the page keeps its own stack hidden, so nothing is drawn twice');
     await shot('cards-over-dev', true);
-    // A click in the overlay reaches the shell: the x snoozes the card.
+    // A click in the overlay reaches the shell: the x skips the welcome card, so it leaves the stack.
     const n = await page.locator('#cards .card').count();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[1].webContents.executeJavaScript("document.querySelector('.x').click()"));
     await page.waitForFunction(count => document.querySelectorAll('#cards .card').length === count - 1, n);
-    const drawn = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[1].webContents.executeJavaScript("document.querySelectorAll('.card').length"));
-    assert.equal(drawn, n - 1, 'the overlay drew the shorter list');
+    // An empty list hides the overlay (cards-ipc) instead of redrawing it, so with the one welcome card the check is that it hides.
+    if (n > 1) assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[1].webContents.executeJavaScript("document.querySelectorAll('.card').length")), n - 1, 'the overlay drew the shorter list');
+    else { for (let i = 0; i < 40 && (await native())[1]?.visible; i++) await new Promise(r => setTimeout(r, 150)); assert.equal((await native())[1]?.visible ?? false, false, 'the emptied overlay hides'); }
     // Other focuses: the overlay hides, the page's own cards show again.
     await page.click('#rChat'); await page.waitForFunction(() => document.querySelector('#cards').checkVisibility({ visibilityProperty: true }));
     assert.equal((await native())[1]?.visible ?? false, false);
@@ -273,7 +276,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     for (let i = 0; i < 5 && await page.locator('#cards .card').count(); i++) { await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[1]?.webContents.executeJavaScript("document.querySelector('.x')?.click()")); await new Promise(r => setTimeout(r, 400)); }
     await new Promise(r => setTimeout(r, 2500));
     const before = await metrics(), pids = new Set(before.map(m => m.pid));
-    await page.reload(); await page.click('#rDev'); // the cards come back with the page, so the overlay is made
+    await page.reload(); await shellReady(page); await page.evaluate(() => window.__setup({ writable: false })); await page.click('#rDev'); // a card on the stack again, so the overlay is made
     for (let i = 0; i < 40 && (await native()).length < 2; i++) await new Promise(r => setTimeout(r, 150));
     await new Promise(r => setTimeout(r, 2500));
     const after = await metrics(), added = after.filter(m => !pids.has(m.pid));

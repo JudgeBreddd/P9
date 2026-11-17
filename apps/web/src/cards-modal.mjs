@@ -2,7 +2,7 @@
 import { esc, svg } from './helpers.mjs';
 
 export function installCards(outer) {
-const centerCount = () => outer.cardList(true).filter(c => c.quiet || outer.S.snoozed.has(c.key)).length + outer.S.alerts.length;
+const centerCount = () => outer.cardList(true).filter(c => c.quiet).length + outer.S.alerts.length;
 const PET_ROLES = ['system', 'claude', 'codex'];
 const DEFAULT_PET ={ on: true, size: 48, claude: null, codex: null, system: null, top: null, pane: null };
 async function petLook(name) {
@@ -86,7 +86,6 @@ const petBox = p => p.querySelector('.composer')?.getBoundingClientRect();
 function cardAct(c, what) {
   if (!c) return;
   if (c.key === 'welcome') return what === 'x' ? outer.skipWelcome() : outer.welcome();
-  if (what === 'x') { outer.S.snoozed.add(c.key); renderCards(); return; }
   // D10-6: a card reopens where you left it, unless that item is already handled
   const k = c.key.split(':')[0] + (c.id || ''), r = outer.S.resume[k]; openModal(r && !(k === 'asks' && !outer.S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k);
 }
@@ -100,10 +99,14 @@ function cardsOverlay() {
   if (json === outer.lastCards) return; // renderCards runs on every event; main hears only a change
   outer.lastCards = json; window.p9.cards(next).catch(() => { outer.lastCards = ''; });
 }
+let notice, began;
 function renderCards() {
   renderIndicator();
   const cards = outer.cardList();
-  outer.morph(outer.$('#cards'), cards.map(c => `<article class="card${c.halo ? ' fx-halo' : ''}" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
+  // 733: asks, waiting items and finished agents go quietly to the bell (controller.mjs cardList); one new
+  // since the chats loaded also shows once as a notice (bell-notice.mjs, loaded with the first such item).
+  if (outer.S.loaded) { const b = began, all = outer.cardList(true); began = 1; if (notice || all.some(c => c.key.includes(':'))) (notice ||= import('./bell-notice.mjs')).then(m => m.notice(all, b, toast, cardAct, outer)); }
+  outer.morph(outer.$('#cards'), cards.map(c => `<article class="card" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
   outer.$('#cards').querySelectorAll('.card').forEach((el, i) => {
     el.querySelector('.x').onclick = () => cardAct(cards[i], 'x');
     el.querySelector('.open').onclick = () => cardAct(cards[i], 'open');

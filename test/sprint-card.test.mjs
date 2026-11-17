@@ -21,6 +21,8 @@ const launch = async (t, sample) => {
   const page = await app.firstWindow({ timeout: 15000 });
   page.on('pageerror', e => console.log('PAGEERROR ' + e.message));
   await shellReady(page, { timeout: 15000 });
+  // 733: asks and items that need you are bell rows now; the welcome card is the one card left on the stack, so it is the card placed here.
+  await page.evaluate(() => window.__setup({ writable: false }));
   return { app, page };
 };
 const shotAt = async (page, app, name) => { await page.waitForTimeout(500); const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png); };
