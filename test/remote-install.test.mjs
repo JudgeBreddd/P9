@@ -155,7 +155,7 @@ test('U8: a Temporary remote gets the slim P9 in ~/.local/share/p9/remote, no ~/
   assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(first), version: '0.1.6-rc.1', slim: true })).error, 'newer-there');
 });
 
-// The owner, 2026-11-02: a full remote install gets the app, not the build notes. This checkout's .gitattributes export-ignore
+// A full remote install gets the app, not the build notes. This checkout's .gitattributes export-ignore
 // lines keep tests, docs, contracts and agent folders out of git archive (a checkout's send and GitHub's tag archives) and out
 // of a synced copy's send; what install.sh and the build read stays.
 test('full install source: this checkout sends no tests, docs, contracts or agent folders, as a git checkout or as a synced copy', { skip, timeout: 60000 }, async () => {
@@ -201,7 +201,7 @@ test('U8: slimArchive sends only the named files, never the bundled node, this c
   await new Promise((resolve) => list.once('close', resolve));
   assert.deepEqual(out.split('\n').filter((f) => f && !f.endsWith('/')).sort(), ['agents.json', 'apps/server/main.mjs', 'package.json', 'scripts/install.sh']);
   assert.throws(() => slimArchive(dir), /slim-bundle-incomplete/);
-  // Inside a named folder only what runs (the owner, 2026-11-02): a package's README, changelog, notes, types and maps stay
+  // Inside a named folder only what runs: a package's README, changelog, notes, types and maps stay
   // here; its licence and notice files go.
   const docs = await slimFolder(dir, 'docs', { 'node_modules/@openai/codex/README.md': 'r\n', 'node_modules/@openai/codex/CHANGELOG': 'c\n',
     'node_modules/@openai/codex/bin/codex.js': 'js\n', 'node_modules/@openai/codex/LICENSE.md': 'l\n', 'node_modules/@openai/codex/index.d.ts': 't\n',

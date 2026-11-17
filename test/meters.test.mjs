@@ -89,7 +89,7 @@ for (const provider of ['claude', 'codex']) {
   });
 }
 
-// P5 (owner, 2026-10-31: the meter read 12% while /context said 116.5k / 200k): claude-agent-acp's usage_update carries
+// P5 (the meter read 12% while /context said 116.5k / 200k): claude-agent-acp's usage_update carries
 // the model's whole window as size; Claude Code's /context divides by its auto-compact window. The fake agent reports
 // used 200 of size 1000; with a 500 window the desktop meter must read 40%, not 20%.
 test('P5 claude: the chat meter divides by the auto-compact window from settings.json, as /context does', { timeout: 120000 }, async (t) => {
@@ -123,7 +123,7 @@ test('MR2: the cache clock moves on every 15 s without rebuilding the pane', { t
 });
 
 // An agent working unattended inside one long prompted turn re-warms the cache with every step: the clock follows its
-// output, not the turn end before the prompt (owner, 2026-10-28: the clock never reset for an agent posting 30 min apart).
+// output, not the turn end before the prompt (the clock never reset for an agent posting 30 min apart).
 test('cache clock claude: a long prompted turn that works on its own starts the clock again from its output', { timeout: 90000 }, async (t) => {
   const before = async (instance, id) => {
     await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'long work' });

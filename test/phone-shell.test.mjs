@@ -127,7 +127,7 @@ const checks = {
     await page.mouse.click(195, 20);
     await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 3000 });
   },
-  // N1 (Builder 2026-10-27, 17:04): with the keyboard open the composer sits on it with no gap. Chromium has no safe-area inset, so
+  // N1: with the keyboard open the composer sits on it with no gap. Chromium has no safe-area inset, so
   // the page is served with env(safe-area-inset-bottom) as 34px (an iPhone's home indicator): the old rule then leaves 42 px under the box.
   async kbdGap(page, side) {
     await page.waitForSelector('h1:text("Chats")');
@@ -143,7 +143,7 @@ const checks = {
     assert.ok(open <= 12, 'keyboard open: the composer box is ' + open + ' px above the keyboard');
     assert.ok(closed <= 12, 'keyboard closed: ' + closed + ' px');
   },
-  // N2 (Builder 2026-10-27, 17:47): the focus ring of the top-left back button was cut off at the top. It must still show for a
+  // N2: the focus ring of the top-left back button was cut off at the top. It must still show for a
   // keyboard user, and lie inside the scrolling screen.
   async backFocus(page, side) {
     await page.waitForSelector('h1:text("Chats")');

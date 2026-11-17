@@ -315,7 +315,7 @@ test('Move progress: a refusal ends in failed and move-failed; Cancel deletes th
   assert.equal((await listed(server, other.id)).state, 'stopped');
 });
 
-// Item 23 (Builder, 2026-10-27): outside a Syncthing folder the move sends the chat's folder over its own tunnel first, so the
+// Item 23: outside a Syncthing folder the move sends the chat's folder over its own tunnel first, so the
 // server never waits for a sync; its bytes are in the move's total (specs/move-progress-events.md). The page's prompt and the
 // Syncthing check are main's and the window's (remote.test.mjs).
 test('Send to server with the chat folder: the edited file goes over P9\'s tunnel first, no Syncthing wait, its bytes counted', { skip, timeout: 60000 }, async (t) => {
@@ -349,7 +349,7 @@ test('Send to server with the chat folder: the edited file goes over P9\'s tunne
   assert.equal((await listed(server, id)).state, 'stopped');
 });
 
-// U4 (Builder, 2026-11-02: "1. y"): a chat started outside the workspace (Unrestricted mode) can Send to remote. The same full
+// U4: a chat started outside the workspace (Unrestricted mode) can Send to remote. The same full
 // path on the remote when it is there and usable, else the window's remote picker gives one (planFolder's pick-folder); its
 // folder's files go by the same rules as a workspace chat's, relative to the two folders. The window's half is remote.test.mjs.
 const unrestricted = (...instances) => Promise.all(instances.map((d) => call(d, '/file-protection', 'POST', { on: false })));

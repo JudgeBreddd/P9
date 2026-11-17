@@ -48,7 +48,7 @@ const call = async (instance, route, method = 'GET', body) => {
 const read = (instance, root, file) => call(instance, '/mission/notes/file?' + new URLSearchParams({ root, path: file }));
 const vaultOf = (instance) => path.join(instance.directory, 'vault');
 
-// P11 (owner, 2026-11-02: "don't restrict access to people's machine or files"): with File protection on, a notes root's
+// P11 (access to the machine and its files is not restricted): with File protection on, a notes root's
 // _private notes are listed and read, also in a folder outside the workspace such as an Obsidian vault; key names stay hidden.
 test('notes: the list is the root\'s .md files, newest first, with _private notes but without dot folders or key names', async (t) => {
   const instance = await start(t);

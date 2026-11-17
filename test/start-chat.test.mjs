@@ -77,7 +77,7 @@ test('Start in Chat: the first view is Chat, no landing media is asked for, and 
   console.log('PASS start in Chat: ' + JSON.stringify(seen.at(-1)));
 });
 
-// Chat Focus can still be turned off (Builder, 2026-11-16: "b"): P9 opens in Chat only while Chat is on. A file with Chat
+// Chat Focus can still be turned off (option b): P9 opens in Chat only while Chat is on. A file with Chat
 // off (here Dev off too) opens on the first view still on, keeps Chat off and keeps the rest of its settings.
 test('Start in Chat: with Chat Focus off, P9 opens on the first view still on and keeps the settings', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t);

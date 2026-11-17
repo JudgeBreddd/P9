@@ -220,7 +220,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
   assert.equal(await dev.locator('#status').textContent(), '');
   stage('const config = await dev.evalu'); // The view sits exactly over the shell's Dev pane (Playwright screenshots one WebContents, so this is the overlay's proof).
-  // It draws above the shell, so it leaves the cards' column free and hides while a dialog is open (Builder, 2026-10-17: "the chat toast isnt there in dev mode").
+  // It draws above the shell, so it leaves the cards' column free and hides while a dialog is open (the chat toast was missing in Dev).
   const pane = await shell.evaluate(() => { const r = document.querySelector('#fDev').getBoundingClientRect(), c = document.querySelector('#cards').getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), height: Math.round(r.height), cardsLeft: c.height > 0 ? Math.round(c.left) : null, right: Math.round(r.right) }; });
   const devBounds = () => app.evaluate(({ BrowserWindow }) => { const child = BrowserWindow.getAllWindows()[0].contentView.children[0]; return { bounds: child.getBounds(), visible: child.getVisible() }; });
@@ -293,10 +293,10 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
     await editor.document.save();
   });
   assert.equal(await readFile(path.join(instance.workspace, 'plain.txt'), 'utf8'), 'after\n');
-  // Long lines wrap at the window edge (Builder, 2026-10-19: "everything continues forever to the right").
+  // Long lines wrap at the window edge (lines ran on forever to the right).
   assert.equal(await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('editor').get('wordWrap')), 'on');
   if (evidence) { await writeFile(path.join(instance.workspace, 'long.txt'), 'word '.repeat(120) + '\n'); await dev.evaluate(() => window.devFocus.open('long.txt')); await dev.screenshot({ path: path.join(evidence, 'dev-wrap.png') }); }
-  stage('// an image file'); // An image file shows as a picture (Builder, 2026-10-19: "photos ... blocked").
+  stage('// an image file'); // An image file shows as a picture (images were blocked).
   // It runs on p9://webview, walled off from the editor page and window.p9dev (threat model row 5).
   await writeFile(path.join(instance.workspace, 'pic.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==', 'base64'));
   await dev.evaluate(() => { const { v, root } = window.devFocus; return v.commands.executeCommand('vscode.open', v.Uri.joinPath(v.Uri.parse(root.toString()), 'pic.png')); });
@@ -493,7 +493,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
     catch (error) { if (tries === 4) throw error; }
   }
   await dev.waitForTimeout(2000);
-  stage('// File tree'); // Builder, 2026-10-17: "i cant see my file tree in dev mode" (the Explorer service was never loaded).
+  stage('// File tree'); // The file tree was missing in Dev (the Explorer service was never loaded).
   await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.view.explorer'));
   await dev.waitForFunction(() => [...document.querySelectorAll('.explorer-folders-view .monaco-list-row')].some(row => row.textContent.includes('sample.ts')), null, { timeout: 15000 });
   if (evidence) {
@@ -529,14 +529,14 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   await dev.locator('.extension-list-item .name', { hasText: 'YAML' }).first().waitFor({ timeout: 45000 });
   await dev.waitForFunction(() => [...document.querySelectorAll('.extension-list-item img.icon')].some(img => img.complete && img.naturalWidth > 0), null, { timeout: 30000 });
   if (evidence) await dev.screenshot({ path: path.join(evidence, 'dev-extension-gallery.png') });
-  // Its page shows the README text in the webview box (Builder, 2026-10-18: "my extensions dont show text inside the box").
+  // Its page shows the README text in the webview box (the box was empty).
   await dev.locator('.extension-list-item .name', { hasText: 'YAML' }).first().click();
   let readme = '';
   for (let i = 0; i < 60 && readme.length < 200; i++, await new Promise(resolve => setTimeout(resolve, 500)))
     for (const frame of dev.frames().filter(frame => frame.url().includes('/assets/fake-')))
       readme = await frame.evaluate(() => document.body?.innerText ?? '').catch(() => readme);
   assert.ok(readme.length >= 200 && /YAML/.test(readme), 'the extension page shows its README: ' + JSON.stringify(readme.slice(0, 200)));
-  // Its README images show too (Builder, 2026-10-18: "extensions in dev dont show the images that come with them"): badges and a
+  // Its README images show too (they were missing): badges and a
   // raw.githubusercontent.com demo, each loaded with a real size.
   let pics = [];
   for (let i = 0; i < 60 && !(pics.length && pics.every(([, w]) => w > 0)); i++, await new Promise(resolve => setTimeout(resolve, 500)))

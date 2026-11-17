@@ -123,7 +123,7 @@ test('c18: the Chats bar has New chat, Theme and Settings; a theme survives a re
   console.log('PASS c18: three buttons; theme ' + other + ' kept over a reload; ' + fonts.length + ' fonts under the CSP; Rebuild + reload built once and reloaded');
 });
 
-// c18 part 2 (threat model row 66; Builder, 2026-10-27, A. 2): the phone changes what the desktop's Settings changes, through the
+// c18 part 2 (threat model row 66): the phone changes what the desktop's Settings changes, through the
 // desktop's own routes, behind its session, CSRF and op ID. settings.json is in the test home (main.mjs's default place).
 const SETTINGS = { primary: 'AGENTS.md', registry: 'registry.json', waiting: 'needs-you' };
 const settingsFile = (paths) => path.join(paths.directory, '.config', 'p9', 'settings.json');

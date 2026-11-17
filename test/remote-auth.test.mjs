@@ -65,7 +65,7 @@ test('Phase 10: auth state machine and threat model surface 12 with real passkey
   assert.equal((await server.remote('/auth/enroll', { method: 'POST', body: { name: 'evil' }, headers: { origin: 'https://evil.example' } })).status, 403);
   assert.equal((await server.remote('/health', { headers: { 'tailscale-user-login': 'builder@example.invalid', 'x-forwarded-for': '100.64.0.1' } })).status, 401);
   assert.equal((await server.remote('/health', { headers: { host: '127.0.0.1:' + server.port } })).status, 403);
-  // Phase 11 phone check (Builder, 2026-10-16: the installed app showed {"error":"login-required"}): a real browser opening
+  // Phase 11 phone check (the installed app showed {"error":"login-required"}): a real browser opening
   // /phone/ with no session lands on the login page; the same GET as a fetch still gets the JSON 401.
   const fresh = await c.context.newPage();
   await fresh.goto(server.origin + '/phone/');

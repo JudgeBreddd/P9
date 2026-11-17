@@ -80,7 +80,7 @@ test('Code colours: ts, python, json and shell blocks coloured in Azure and the 
   console.log('PASS code colours: 4 coloured blocks plus an unknown language, open block and markup as text; contrast ' + Object.entries(looks).map(([l, k]) => l + ' min ' + Math.min(...Object.values(k).map((v) => v.ratio))).join(', '));
 });
 
-// O31 (Builder, nightly 1, a dark gold look): Settings > Default effort opened as a white list with near-white words. Every
+// O31 (nightly 1, a dark gold look): Settings > Default effort opened as a white list with near-white words. Every
 // dropdown's open list, in every look plus AMOLED: each option's words against the list it is drawn on, at least 4.5:1.
 test('Dropdowns: every option of every select is readable in its open list, in every look and AMOLED', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t);
@@ -158,7 +158,7 @@ const DOCS_URL = 'https://github.com/' + REPO + '#readme'; // main.mjs loads onl
 const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 const PETDEX_URL = 'https://petdex.dev';
 // 0.1.8: Mode, Model and Effort are pills in the message bar (controller.mjs pillMenu); each opens a menu of menuitemradio choices.
-// pillValue reads a pill's value from its aria-label; pillItems lists a menu (the checked ones marked); choose picks (no submenus, Builder, 2026-11-05).
+// pillValue reads a pill's value from its aria-label; pillItems lists a menu (the checked ones marked); choose picks (no submenus).
 const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
 const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
 const menuItem = (page, label) => page.locator('#pillMenu .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
@@ -187,7 +187,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   const zoomOf = (app) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor());
 
   let { app, page } = await launch();
-  // A new profile starts with the bundled Skipper as its System pet (the owner, 2026-10-20); removed, it stays removed (below).
+  // A new profile starts with the bundled Skipper as its System pet; removed, it stays removed (below).
   assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [{ name: 'skipper', displayName: 'Skipper' }]);
   assert.deepEqual((await page.evaluate(() => window.p9.getSettings())).pet, DEFAULT_PETS);
   await page.evaluate(() => window.p9.removePet('skipper'));
@@ -247,7 +247,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   await page.click('#mtUpdOpen');
   for (let i = 0; i < 50 && url.trim() !== RELEASES_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== RELEASES_URL) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), RELEASES_URL);
-  // Settings → Pets: petdex.dev is a link and opens only that page (the owner, 2026-10-20).
+  // Settings → Pets: petdex.dev is a link and opens only that page.
   await page.click('#petdexLink');
   for (let i = 0; i < 50 && url.trim() !== PETDEX_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== PETDEX_URL) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), PETDEX_URL);
@@ -359,7 +359,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
 
   const ev = process.env.P9_EVIDENCE, shot = async (name) => { if (ev) await page.screenshot({ path: path.join(ev, name) }); else if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name.replace(/\.png$/, '') + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); } };
   const settingsNow = () => page.evaluate(() => window.p9.getSettings());
-  // O123 (Builder, 2026-11-15: "Remove them all together from the top"): no pet in the top bar, ever; the spinner and its words stay.
+  // O123: no pet in the top bar, ever; the spinner and its words stay.
   const topPets = () => page.evaluate(() => document.querySelectorAll('#agentInd canvas, #indPets').length);
   const spinnerShows = async (text, what) => { assert.equal(await topPets(), 0, what + ': no top-bar pet'); assert.equal(await page.locator('#indGlyph').isVisible(), true, what + ': spinner'); assert.equal(await page.locator('#indText').innerText(), text, what); };
   const drawn = (sel) => page.waitForFunction((sel) => { const c = [...document.querySelectorAll(sel)]; return c.length && c.every((cv) => cv.getContext('2d').getImageData(96, 104, 1, 1).data[3] > 0); }, sel);
@@ -374,7 +374,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   for (const focus of ['Control+2', 'Control+3', 'Control+1']) { await page.keyboard.press(focus); assert.equal(await page.locator('#agentInd').isVisible(), true, focus); }
   await call(instance, `/chat/${id}/cancel`, 'POST', {});
   await page.locator('#agentInd').waitFor({ state: 'hidden', timeout: 15000 });
-  // After a compaction the agent works on with no prompt open (Builder, 2026-10-20: the spinner and pet went away): the
+  // After a compaction the agent works on with no prompt open (the spinner and pet went away): the
   // indicator comes back for that turn and hides on its closing usage_update.
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'compact' });
   await page.getByText('after compact').first().waitFor({ timeout: 15000 });
@@ -430,7 +430,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   }
   await page.click('#mdlX'); await page.locator('#mdl').waitFor({ state: 'hidden' });
   assert.deepEqual(inChat, { [id]: 'good-pet:6', [codex]: 'other-pet:6' });
-  // Each chat keeps its own spot, and a chat window's spot is its own (Builder, 2026-10-19).
+  // Each chat keeps its own spot, and a chat window's spot is its own.
   const petSpots = () => page.evaluate(() => JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'));
   assert.deepEqual(Object.keys(await petSpots()), ['mdlBody:' + codex], 'only the dragged chat window kept a spot');
   // D2: the spot is kept from the message box, in px, so it moves with the box.
@@ -453,7 +453,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // anything else the page could send.
   await app.evaluate(({ shell }) => { globalThis.linkSeen = []; shell.openExternal = async (url) => { globalThis.linkSeen.push(url); }; });
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
-  // First a question naming the whole address (Builder, 2026-11-02: the chat link confirm); Cancel opens nothing.
+  // First a question naming the whole address (the chat link confirm); Cancel opens nothing.
   const linkAsk = async (answer) => {
     await reply.locator('a[href="https://docs.example.test/p"]').click();
     await page.locator('#linkDlg[open] #linkU', { hasText: 'https://docs.example.test/p' }).waitFor({ timeout: 5000 });
@@ -531,7 +531,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.deepEqual([await pane.locator('.attach').count(), await box.inputValue()], [0, '']);
   assert.match(await pane.locator('.msg.user').last().textContent(), /1 image/);
   await shot('attach-sent.png');
-  // A pasted screenshot and a file dropped on the chat attach the same way (Builder, 2026-10-18: "not paste the screenshots").
+  // A pasted screenshot and a file dropped on the chat attach the same way (pasted screenshots did not attach).
   // Synthetic events, so the test never touches the desktop clipboard.
   const small = (await readFile(path.join(profile, 'small.png'))).toString('base64');
   const fire = (sel, kind, name) => pane.locator(sel).evaluate((el, [kind, name, b64]) => {
@@ -551,7 +551,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // Sessions on load: a chat stopped before any message is not listed after a restart; a stopped chat that was sent is.
   const stopped = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${stopped}/stop`, 'POST');
-  // Opened from its panel row, the chat shows its newest message, not the first (Builder, 2026-10-17).
+  // Opened from its panel row, the chat shows its newest message, not the first.
   const hist = page.locator(`#chats .pane[data-id="${md}"] .hist`);
   for (const time of ['first', 'again']) {
     await page.locator(`#navList .row[data-chat="${id}"]`).click();
@@ -648,7 +648,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.locator('[data-pet-remove="new-pet"]').waitFor({ state: 'detached' });
   await assert.rejects(readdir(path.join(pets, 'new-pet')), { code: 'ENOENT' });
   assert.equal((await settingsNow()).pet.mission.system, null);
-  // "Use these pets in all focus modes" (Builder, 2026-10-19) copies Chat's three picks; show, size and spots stay per focus.
+  // "Use these pets in all focus modes" copies Chat's three picks; show, size and spots stay per focus.
   await page.click('[data-pet-mode="chat"]');
   const before = (await settingsNow()).pet, picks = (o) => ({ system: o.system, claude: o.claude, codex: o.codex });
   await page.click('#petAll');
@@ -664,7 +664,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   });
   assert.deepEqual(ipc, ['pet-refused', 'ipc-sender-refused', 'ipc-sender-refused', 'ipc-sender-refused', 'ipc-sender-refused']);
   assert.equal((await readdir(path.join(pets, 'good-pet'))).length, 2, 'the link target is untouched');
-  // Import (Builder, 2026-10-18: "1 for now"): only names in ~/.codex/pets that P9 lacks are offered, and each goes through Add's checks.
+  // Import (option 1 for now): only names in ~/.codex/pets that P9 lacks are offered, and each goes through Add's checks.
   const petdex = path.join(home, 'fake-home', '.codex', 'pets');
   await pet(petdex, 'imp-pet', { displayName: 'Imp', extra: 'not copied' }, { 'spritesheet.png': png, 'run.sh': '#!/bin/sh\n' });
   await pet(petdex, 'good-pet', {}, { 'spritesheet.png': png });
@@ -697,7 +697,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.locator('#toasts', { hasText: 'Added ch-pet.' }).waitFor({ timeout: 10000 });
   assert.deepEqual((await readdir(path.join(pets, 'ch-pet'))).sort(), ['pet.json', 'spritesheet.png']);
   await app.evaluate(() => { delete process.env.CODEX_HOME; });
-  // Install (Builder, 2026-10-18: paste "the npm command from petdex.dev"): main fetches only petdex.dev's manifest and the pet's two
+  // Install (paste the npm command petdex.dev shows): main fetches only petdex.dev's manifest and the pet's two
   // files from assets.petdex.dev (a stand-in fetch here), never runs npx, and each pet goes through Add's checks.
   await app.evaluate(({}, b64) => {
     const files = { 'https://petdex.dev/api/manifest/v2': JSON.stringify({ v: 2, assetBase: 'https://assets.petdex.dev', fields: [], pets: [
@@ -736,7 +736,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.click('#setClose');
   await page.click('#setBtn'); await page.click('[data-pet-mode="chat"]'); await page.selectOption('#setPet-system', 'other-pet'); await page.click('#setClose');
   await page.click('[data-focus-btn="mission"]');
-  // Mission #3 (Builder, 2026-10-18): Usage keeps its full height beside the Apps list.
+  // Mission #3: Usage keeps its full height beside the Apps list.
   assert.ok(await page.locator('#fMission [data-panel="musage"] .pscroll').evaluate((p) => p.scrollHeight <= p.clientHeight + 1), 'Usage squeezed by Apps');
   const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); };
   const walkNow = () => page.evaluate((steps) => {
@@ -752,7 +752,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     const now = await walkNow(); seenSteps.push(now);
     assert.deepEqual([now.n, now.fits, now.pet, now.outlined], [n, true, 'other-pet', true], 'step ' + n);
     if (WALKTHROUGH[n - 1].focus) assert.equal(now.focus, WALKTHROUGH[n - 1].focus, 'step ' + n + ' focus');
-    // Builder, 2026-10-19: the guide pet at Settings' largest size; the running-chats step points at the robot-head row even
+    // The guide pet at Settings' largest size; the running-chats step points at the robot-head row even
     // while it is empty; in Dev the editor (a view drawn over the page) steps aside so the card stays visible.
     assert.equal(now.petSize, '128px', 'step ' + n + ' pet size');
     if (WALKTHROUGH[n - 1].at === '#rBots') { // with no chat running the row is empty: the step still points at it (Back, Next with it emptied)
@@ -833,7 +833,7 @@ test('One look for every focus mode: a pick in Chat or Mission sets Dev Focus to
 });
 
 test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offered, each repaints the page, its fonts load from P9 itself', { timeout: 120000 }, async (t) => {
-  // Builder, 2026-10-19: "add the rest of the duwop themes"
+  // Every DUWOP theme, not a subset
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-themes-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -864,7 +864,7 @@ test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offe
 });
 
 test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus AMOLED, the bundled fonts, every effect and Roll again', { timeout: 120000 }, async (t) => {
-  // Builder, 2026-10-19: "cards + all" (DUWOP's _engine/registry/appearance/appearance.tsx)
+  // The cards and all the themes (DUWOP's _engine/registry/appearance/appearance.tsx)
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-picker-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -1251,15 +1251,15 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   await page.locator('#mdlBody .mlist [data-i]', { hasText: '1 item needs you' }).click();
   await page.locator('#mdlFoot [data-skip]').click();
   if (await page.locator('#mdl[open]').count()) await page.keyboard.press('Escape');
-  // No sample notices in the bell on a live daemon (Builder, 2026-10-18: "its still test data"); they toasted 2.5 s and 5.5 s after load.
+  // No sample notices in the bell on a live daemon (they were sample data); they toasted 2.5 s and 5.5 s after load.
   await page.waitForTimeout(Math.max(0, started + 6500 - Date.now()));
   const bell = await center();
   assert.match(bell, /2 items in _tyler\/\nwaiting/);
   assert.doesNotMatch(bell, /needs you/, 'the skipped item still has its own row');
   assert.doesNotMatch(bell, /rss-report|restic snapshot/, 'sample notices in the live bell');
   await shot('cards-skipped.png');
-  // Sort Waiting on you by newest or by project, the file name's <project>- prefix (Builder, 2026-10-19: "an optional sorter
-  // for the _tyler/ items ... by project, date updated"). old-question.md is touched last, so the two orders differ.
+  // Sort Waiting on you by newest or by project, the file name's <project>- prefix (an optional sorter
+  // for the items, by project or date updated). old-question.md is touched last, so the two orders differ.
   await utimes(path.join(instance.workspace, '_tyler/old-question.md'), new Date(), new Date(Date.now() + 60000));
   await turn(id, 'touch');
   await page.click('#rMission');
@@ -1272,7 +1272,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   await page.reload(); await page.click('#rMission');
   await page.waitForFunction(() => document.querySelector('#fMission .needs [data-list] li .txt')?.textContent === 'Made by the chat', null, { timeout: 10000 });
   assert.equal(await sort.inputValue(), 'project', 'the choice survives a reload');
-  // An item with no A. line (Builder, 2026-10-21: Q1:/Q2: lines, "changed on disk" for days): Save says why, nothing written.
+  // An item with no A. line (Q1:/Q2: lines, "changed on disk" for days): Save says why, nothing written.
   const noLine = '# No answer line\n\nQ1:\nQ2:\n';
   await writeFile(path.join(instance.workspace, '_tyler/qa-lines.md'), noLine);
   await turn(id, 'qa');
@@ -1312,7 +1312,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   const ta = pane.locator('.composer textarea'), menu = pane.locator('[data-slash]');
   await ta.click(); await page.keyboard.type('/');
   assert.deepEqual(await menu.locator('[data-cmd]').evaluateAll((b) => b.map((x) => x.dataset.cmd)), ['compact', 'context', 'review']);
-  // A real agent sends dozens of commands: rows keep their height and the menu scrolls (Builder, 2026-10-19: rows were squashed to slivers).
+  // A real agent sends dozens of commands: rows keep their height and the menu scrolls (rows were squashed to slivers).
   await menu.evaluate((m) => { for (let i = 0; i < 40; i++) m.append(m.firstElementChild.cloneNode(true)); });
   if (process.env.P9_EVIDENCE) await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'slash-menu-long.png') });
   const rows = await menu.evaluate((m) => { const out = { min: Math.min(...[...m.children].map((b) => b.offsetHeight)), scrolls: m.scrollHeight > m.clientHeight, menu: m.clientHeight }; [...m.children].slice(3).forEach((b) => b.remove()); return out; });
@@ -1327,7 +1327,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   assert.equal(await ta.inputValue(), '/compact ');
   assert.equal(await menu.isHidden(), true, 'menu closes once a space follows the name');
   await ta.fill('');
-  // Flashing (Builder, 2026-10-18): a turn updates the pane and its panel row in place; rebuilt ones restart every animation.
+  // Flashing: a turn updates the pane and its panel row in place; rebuilt ones restart every animation.
   await pane.evaluate((el) => { el.kept = 'yes'; }); await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => { el.kept = 'yes'; });
   await choose(page, pane, 'Model', 'Opus');
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the pick at once');
@@ -1336,7 +1336,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the model now in use');
   assert.deepEqual([await pane.evaluate((el) => el.kept), await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => el.kept)], ['yes', 'yes'], 'pane or row rebuilt by the turn');
-  // Effort and the other agent settings (Builder, 2026-10-18: "wire all of them"; threat model row 22): the agent's own lists, picked values reach it.
+  // Effort and the other agent settings (all of them wired; threat model row 22): the agent's own lists, picked values reach it.
   // The default mark needs the daemon's own read of the agent's lists, which may land after the chat's first turn: wait for it.
   await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 20000 });
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High']);
@@ -1357,12 +1357,12 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   assert.equal(await pillValue(pane, 'Effort'), 'High', 'the pill shows the effort now in use');
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On ✓', 'Off'], 'the menu shows the fast mode now in use');
   if (process.env.P9_EVIDENCE) await pane.locator('.composer .bar').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'pickers.png') });
-  // Split shows the last two chats opened (Builder, 2026-10-19: one chat open, then a new one, and Split showed one pane).
+  // Split shows the last two chats opened (one chat open, then a new one, and Split showed one pane).
   await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
   const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await page.waitForFunction(([a, b]) => document.querySelector('#chats').dataset.split === 'true' && [...document.querySelectorAll('#chats .pane')].map((p) => p.dataset.id).join() === b + ',' + a, [id, second], { timeout: 15000 });
   // The new chat's title is painted as a gradient clipped to its text, so the paint stops at the heading's box: the text's
-  // glyph area must sit inside it (Builder, 2026-10-19: "the bottom of the g in 'what are we working on' is cut off").
+  // glyph area must sit inside it (the bottom of the g in "What are we working on" was cut off).
   const title = pane.page().locator('.pane[data-id="' + second + '"] .welcome h2');
   const fit = await title.evaluate((h) => { const r = document.createRange(); r.selectNodeContents(h); const t = r.getBoundingClientRect(), b = h.getBoundingClientRect();
     return { clip: getComputedStyle(h).backgroundClip, below: Math.round(t.bottom - b.bottom), above: Math.round(b.top - t.top), right: Math.round(t.right - b.right) }; });
@@ -1375,10 +1375,10 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   console.log('PASS models: 3 agent models listed, / lists 3 commands and filters to 2, Tab fills /compact, Opus picked and used, Effort High + Fast On used; Split shows the new chat beside the last one');
 });
 
-// Builder, 2026-10-19: "When creating a new chat, a dropdown with what folder i want to open the chat in would be great."
+// A new chat picks the folder it opens in from a dropdown.
 // Threat model row 24: Choose folder... is the system dialog in main (stubbed here); only a folder inside the workspace comes back.
 test('Chat rows: each chat\'s panel row shows the name the agent gave the chat, its dot in the agent\'s colour (Claude orange, Codex blue)', { timeout: 120000 }, async (t) => {
-  // Builder, 2026-10-19: "have the tabs at the top for each chat show the chats name. color the dot the color of the agent (claude orange, codex blue)"
+  // Each chat's tab at the top shows the chat's name; its dot is the agent's colour (Claude orange, Codex blue).
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-tabs-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -1402,7 +1402,7 @@ test('Chat rows: each chat\'s panel row shows the name the agent gave the chat, 
 });
 
 test('Agent images: a generated image and a reply\'s image show at their real size; an image known only by its address is never loaded (threat model row 26)', { timeout: 120000 }, async (t) => {
-  // Builder, 2026-10-19: "I cannot view images that are generated by an agent in the chat feed."
+  // Images an agent makes show in the chat feed.
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-imgs-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -1431,7 +1431,7 @@ test('Agent images: a generated image and a reply\'s image show at their real si
   assert.deepEqual(await pane.evaluate((p) => [...p.querySelectorAll('.agent-imgs img')].slice(2).map((i) => [i.naturalWidth, i.naturalHeight, !!i.closest('details')])),
     [[64, 48, false], [64, 48, false], [64, 48, false]], 'the opened file, its file:// twin and the reply link, outside the collapsed step');
   if (process.env.P9_EVIDENCE) await pane.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'agent-images-disk.png') });
-  // Builder, 2026-10-20: the window lagged and froze on a 25,000-event chat; a chat draws only its latest 200 steps.
+  // The window lagged and froze on a 25,000-event chat; a chat draws only its latest 200 steps.
   await call(instance, '/chat/' + codex + '/prompt', 'POST', { text: 'many steps' });
   await pane.locator('.msg.agent', { hasText: 'All steps done.' }).waitFor({ timeout: 15000 });
   const steps = () => pane.evaluate((p) => ({ tools: p.querySelectorAll('details.tool').length, first: p.querySelector('details.tool .ttl')?.textContent, more: p.querySelector('[data-earlier]')?.textContent ?? null }));
@@ -1444,7 +1444,7 @@ test('Agent images: a generated image and a reply\'s image show at their real si
 });
 
 test('Loosened modes: Full access and Bypass permissions warn in red first; Cancel keeps the old mode; "don\'t show again" and the last pick survive a restart (threat model row 25)', { timeout: 120000 }, async (t) => {
-  // Builder, 2026-10-19: Codex Full access as used daily, Claude's bypass, a red warning with a "don't show again" button; installs start safe.
+  // Codex Full access as used daily, Claude's bypass, a red warning with a "don't show again" button; installs start safe.
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-loose-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -1808,8 +1808,7 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
 });
 
 test('Interrupt and send: a queued message sent with the bolt, or Ctrl+Enter, reaches the agent after the cancel; a refused one goes back in the box', { timeout: 120000 }, async (t) => {
-  // Builder, 2026-10-21: "I sent a message. it went to the waiting queue. i hit the button to interupt and send the message now,
-  // and it didnt send my message, and it cancelled your turn."
+  // A queued message, then Interrupt and send now: it cancelled the turn and did not send the message.
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   // An adapter without steering, so a message sent mid-turn waits queued (with steering it goes into the turn).
   await writeFile(path.join(instance.workspace, 'no-steering'), '');

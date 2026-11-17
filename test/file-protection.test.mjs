@@ -1,4 +1,4 @@
-// File protection (threat model row 4; Builder, 2026-10-18): on by default the guarded save refuses locked names and the
+// File protection (threat model row 4): on by default the guarded save refuses locked names and the
 // script list; the desktop turns it off only after a native warning, the choice survives a restart, and on means refused again.
 import test from 'node:test';
 import assert from 'node:assert/strict';

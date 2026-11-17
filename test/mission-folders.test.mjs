@@ -103,7 +103,7 @@ test('log view root: a log in an allowed folder shows; a root not allowed does n
   assert.deepEqual([(await log('no-root-log')).status, (await log('no-root-log')).body.error], [404, 'unknown-root']);
 });
 
-// P11 (owner, 2026-11-02: "don't restrict access to people's machine or files"): a space folder in _private lists and
+// P11 (access to the machine and its files is not restricted): a space folder in _private lists and
 // opens with File protection on; .env names stay hidden, and the editor's own routes still refuse _private.
 test('P11: a space folder inside _private lists and opens with File protection on; keys stay hidden', { timeout: 60000 }, async (t) => {
   const instance = await start(t);

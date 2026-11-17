@@ -89,7 +89,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.deepEqual(usage.body.totals, { inputTokens: 27600, outputTokens: 3820, cachedTokens: 19200, costUsd: 0.2768 });
   assert.equal(usage.body.discarded, 1);
   assert.equal(JSON.stringify(usage.body).includes('command'), false);
-  // Threat model row 66 (c18, Builder, 2026-10-27, amending rows 15 and 4): a phone reads and changes the agent lock and file
+  // Threat model row 66 (c18, amending rows 15 and 4): a phone reads and changes the agent lock and file
   // protection through the desktop's routes, behind its session and CSRF (test/phone-c18.test.mjs has the refusals).
   const reader = await enrollDevice(server, await passkeyDevice(browser, server, 'lock-probe'));
   assert.deepEqual((await server.remote('/agent-lock', { session: reader })).body, { on: false });
@@ -107,7 +107,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   const picked = await page.locator('#conversation').evaluate((select) => select.selectedOptions[0].textContent);
   assert.match(picked, /^Codex · .+ · idle$/);
   await page.screenshot({ path: path.join(evidence, 'phone-chat.png') });
-  // Phase 17 row 1 (Builder, 2026-10-17: "agent chat not working"): a reply that lands after the send shows without a
+  // Phase 17 row 1 (agent chat did not work): a reply that lands after the send shows without a
   // refresh, as one readable block, and the chat's history is still there after a reload (it used to read
   // "No new recorded events." once the phone had a saved cursor).
   await page.fill('#prompt', 'late'); await page.click('#composer button');
@@ -133,7 +133,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await md.locator('h1').waitFor({ timeout: 10000 });
   assert.deepEqual(await md.evaluate((m) => [!!m.querySelector('ul li strong'), m.querySelectorAll('script, img, iframe, a').length, m.textContent.includes('onerror'), window.pwned]), [true, 0, true, undefined]);
   await md.screenshot({ path: path.join(evidence, 'phone-markdown.png') });
-  // Mode and Model from the phone (Builder, 2026-10-18): a picked mode reaches the agent, "as set" sends none (so it
+  // Mode and Model from the phone: a picked mode reaches the agent, "as set" sends none (so it
   // stays), and the Model list is the agent's own.
   // Waits for this send's own reply (You + Agent added): the same text as the last reply would match at once and the
   // next send would hit the still-running turn (409).
@@ -184,7 +184,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     await desktopPage.locator('#mdl[open]').waitFor({ state: 'detached' });
   }
   assert.ok(await desktopPage.locator('#fMission').evaluate((mission) => mission.scrollHeight <= mission.clientHeight), 'Mission fits without scrolling');
-  // Builder, 2026-10-18 #3: three columns reach the bottom of the window, Usage shows its bars on the page, apps launch from tiles.
+  // #3: three columns reach the bottom of the window, Usage shows its bars on the page, apps launch from tiles.
   const [cols, gap] = await desktopPage.locator('#fMission .mrow').evaluate((r) => [getComputedStyle(r).gridTemplateColumns.split(' ').length, r.parentElement.getBoundingClientRect().bottom - r.getBoundingClientRect().bottom]);
   assert.equal(cols, 3); assert.ok(gap < 30, `Mission leaves ${gap}px empty below its columns`);
   assert.match(await desktopPage.locator('#fMission [data-panel="musage"]').innerText(), /Claude[\s\S]*?Session\s*58% left/);
@@ -207,7 +207,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await desktopPage.locator('#mdlBody pre', { hasText: 'backup line 2' }).waitFor();
   await desktopPage.screenshot({ path: path.join(evidence, 'desktop-space-log.png') });
   await desktopPage.keyboard.press('Escape');
-  // The New idea box (Builder: "keep the _ideas/ box ... I use that often"): one new file, named from its name.
+  // The New idea box (kept: it is used often): one new file, named from its name.
   await desktopPage.click('#fMission .tiles [data-idea]');
   await desktopPage.fill('#mdlBody [data-idea-name]', 'Garage Shelf Plan');
   await desktopPage.fill('#mdlBody [data-idea-text]', 'Two rows over the bench.\n\n');
@@ -248,7 +248,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await openWindowWith('Health check');
   await page.click('#mission summary:has-text("Health check") [data-run-now]');
   await page.waitForFunction(() => document.querySelector('#mission dialog[open] pre[data-output]')?.textContent.includes('ok'));
-  // Copy (Builder, 2026-10-18: "Yes" to phone Copy): the tap puts exactly the shown output on the clipboard.
+  // Copy (approved for the phone): the tap puts exactly the shown output on the clipboard.
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server.origin });
   await page.click('#mission dialog[open] [data-copy]');
   await page.waitForSelector('#mission dialog[open] [data-copy]:has-text("Copied")');

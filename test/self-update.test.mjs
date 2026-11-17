@@ -250,7 +250,7 @@ test('update, laptop: a checkout one version ahead pushes its HEAD and follows t
   assert.match(await swapCall(instance), new RegExp(' --version ' + NEXT.replace(/\./g, '\\.') + ' '));
 });
 
-// W1 (Builder, 2026-11-07): ask first, one rule for every build kind. ask names both versions; "Not now" leaves the server as
+// W1: ask first, one rule for every build kind. ask names both versions; "Not now" leaves the server as
 // it was (no job, nothing built, no pieces), for a checkout, a packaged app and a slim server alike.
 test('W1: every build kind asks with both versions before it changes the server; declining leaves it as it was', { skip, timeout: 60000 }, async (t) => {
   const instance = await server(t);

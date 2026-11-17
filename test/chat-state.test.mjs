@@ -1,5 +1,5 @@
-// O123 (Builder, 2026-11-15): "Remove them all together from the top and use the chat bar on the left to indicate a working
-// chat with a spinning ring. Green circle is idle. Red hand is blocked." Real Electron, the real daemon and the fake agent
+// O123: the pets leave the top bar; the chat bar on the left shows each chat's state: a working chat a spinning ring,
+// an idle one a green circle, a blocked one a red hand. Real Electron, the real daemon and the fake agent
 // ("slow" works until cancelled, "permission" waits on the user). Also: no pet sheet loads at startup while pets are off.
 import test from 'node:test';
 import assert from 'node:assert/strict';

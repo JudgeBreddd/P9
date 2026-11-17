@@ -1,4 +1,4 @@
-// O128 (Builder, 2026-11-16: "Yes for the logs"): the phone sends its own uncaught errors to the daemon, which writes one
+// O128: the phone sends its own uncaught errors to the daemon, which writes one
 // P9_PHONE_ERROR line each to its journal (stderr). Threat model row O128. The real phone page through the real remote
 // listener; the errors are raised in the page itself.
 import test from 'node:test';

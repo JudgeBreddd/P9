@@ -1,5 +1,5 @@
 // An agent program's own warning (codex-acp sends one as a whole reply chunk "Warning: ...\n\n") is a small grey line
-// above the reply, not the agent's words; its "i" opens what it means (the owner, 2026-10-29). Desktop on the real daemon
+// above the reply, not the agent's words; its "i" opens what it means. Desktop on the real daemon
 // and the fake agent; phone on the same events seeded into the ledger.
 import test from 'node:test';
 import assert from 'node:assert/strict';

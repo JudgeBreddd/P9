@@ -102,7 +102,7 @@ test('Server mode: host names ssh would read as options are refused before ssh r
   assert.deepEqual(await s.calls(), []);
   // A server that answers but runs no P9, and one ssh cannot reach, say so apart.
   await assert.rejects(connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local }), /server-no-p9/);
-  // No ssh program at all names itself (owner, 2026-11-02), apart from a remote ssh cannot reach.
+  // No ssh program at all names itself, apart from a remote ssh cannot reach.
   await assert.rejects(connectServer({ host: 'test-host', ssh: path.join(s.directory, 'no-ssh'), runtime: s.local }), /ssh-missing/);
 });
 
@@ -175,8 +175,8 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
     await window.p9.pickVault()]),
   [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, { remote: true }, true,
     { status: 409, body: { error: 'server-mode-local-only' } }]);
-  // U4: New chat's Choose folder... opens a folder dialog over the remote's own folders (Builder, 2026-11-02: "no window at
-  // all"; "just a normal file picker would be better than clicking the .."). With File protection on it walks the workspace
+  // U4: New chat's Choose folder... opens a folder dialog over the remote's own folders (before, no
+  // window opened; a plain file picker beats clicking ".."). With File protection on it walks the workspace
   // and says why it cannot go higher; a click selects, a double click opens, a breadcrumb goes back.
   await mkdir(path.join(remote.workspace, 'proj', 'sub'), { recursive: true });
   const dlg = page.locator('#folderDlg'), row = name => dlg.locator('#folderList [data-fdir]', { hasText: new RegExp('^' + name + '$') });
@@ -207,8 +207,8 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await dlg.locator('button[value="no"]').click();
   await dlg.waitFor({ state: 'hidden', timeout: 5000 });
   assert.match(await page.locator('.pane [data-chat-folder]').innerText(), /proj/, 'Cancel changes nothing');
-  // In Unrestricted mode the walk starts at the workspace's full path and goes up past it (Builder, 2026-11-02: "need a
-  // picker so i can click in and out of folders"); a folder outside it goes as its full path.
+  // In Unrestricted mode the walk starts at the workspace's full path and goes up past it (a picker
+  // that clicks in and out of folders); a folder outside it goes as its full path.
   await http({ socketPath: path.join(remote.state, 'daemon.sock'), route: '/file-protection', method: 'POST',
     headers: { ...authenticated(remote.credentials), 'content-type': 'application/json' }, body: JSON.stringify({ on: false }) });
   await mkdir(path.join(path.dirname(remote.workspace), 'outside-ws'), { recursive: true });
@@ -580,7 +580,7 @@ test('U9 Disconnect on the remote label goes back to this computer; U8 the slim 
   assert.doesNotMatch(await page.locator('#dataNote').textContent(), /Mission/);
   assert.deepEqual(await missionCmds(), [], 'Ctrl K offers no Mission command on the slim P9');
   await evidence(page, 'u8-slim-no-mission');
-  // Builder, 2026-11-02: the agents question, in the same window after connecting, when main says it is due (agentsAsk);
+  // The agents question, in the same window after connecting, when main says it is due (agentsAsk);
   // the boxes go to p9:remote-agents, and the download's phase shows on the status line, Try again when it failed.
   await app.evaluate(({ ipcMain }) => {
     const k = globalThis.slimTest, base = { status: 'ok', mode: 'server', host: 'test-host', background: true, slim: true, ask: false };
@@ -871,7 +871,7 @@ test('xfer window: the first-send and conflict prompts ask in words, and a limit
   console.log('PASS xfer window limit: refused before sending, named Largest file to send, and Open Settings focused it');
 });
 
-// Send to server with the chat's folder (item 23; Builder, 2026-10-27): a folder that needs a choice shows the Send files prompt
+// Send to server with the chat's folder (item 23): a folder that needs a choice shows the Send files prompt
 // before the chat is frozen ("Same prompt first"); Cancel freezes nothing, a choice sends the folder and then the chat. A
 // Syncthing folder sends no files and keeps the wait ("Keep today's wait").
 test('xfer window move: the prompt comes before the freeze, the folder goes first; a Syncthing folder sends no files', { skip, timeout: 60000 }, async (t) => {
@@ -956,7 +956,7 @@ test('xfer window move: the prompt comes before the freeze, the folder goes firs
   console.log('PASS xfer window move: a Syncthing folder moved with no prompt and no files');
 });
 
-// U4 (Builder, 2026-11-02): a chat started outside the workspace. Its folder there: no question. Not there: the remote folder
+// U4: a chat started outside the workspace. Its folder there: no question. Not there: the remote folder
 // picker opens before anything freezes; Cancel keeps the chat here, a picked folder gets the files and the chat.
 test('Send to remote from outside the workspace in the window: the same folder needs no question, else the picker; Cancel keeps it here', { skip, timeout: 90000 }, async (t) => {
   const fill = async ({ workspace, directory }) => {
@@ -1292,7 +1292,7 @@ test('M2: the control folder is used only when it is our own folder', { skip: pr
   console.log('PASS M2: own folder used (0700), a file at that path gives ControlPath=none');
 });
 
-// Owner, 2026-11-02: no ssh program on this computer is said as ssh-missing (with how to install it), not as an unreachable
+// No ssh program on this computer is said as ssh-missing (with how to install it), not as an unreachable
 // remote, and is not retried on a timer. A connection that drops on its own is a notification; a disconnect or a quit is not.
 test('ssh-missing, and a dropped connection is a notification', { timeout: 10000 }, async () => {
   const runtime = await mkdtemp(path.join(os.tmpdir(), 'p9-nossh-'));

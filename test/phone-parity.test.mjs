@@ -460,8 +460,7 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
 });
 
-// O55 (filed 2026-11-12: "the message sends but the text stays and I can keep sending it by hitting send" — it did it
-// mid-turn): after a send the box is empty on every send path, a second tap on Send with nothing typed posts no prompt,
+// O55 (the message sent but its text stayed in the box, and each Send tap sent it again, mid-turn too): after a send the box is empty on every send path, a second tap on Send with nothing typed posts no prompt,
 // and (next test) a mid-turn send the agent cannot take waits for the turn's end. Queue (the P4 test above), Interrupt (the P18 one) and the offline
 // queue (phone-continue.test.mjs PH2) already assert their empty box; this one covers the default send as Steer, a held
 // steer (a tool call running), a send with an image attached, the idle send, and the empty taps.
@@ -775,7 +774,7 @@ for (const how of ['a cancelled mode warning', 'a pick of the value already sele
   assert.equal(posts[0], posts[1], 'the same ID and the same body: ' + posts.join(' | '));
   assert.equal(users, 1, 'the message shows once');
 });
-// Threat model row O48p (Builder, 2026-11-16: "Yes to starting chats with any provider on the phone").
+// Threat model row O48p: the phone starts chats with any provider.
 test('O48 on the phone: New chat lists each provider profile\'s models; the chat it starts is on that profile and model; the phone reads id, name and model names only', { timeout: 90000 }, async (t) => {
   const { page, server, session } = await phoneOn(t);
   const KEY = 'sk-profile-test-0f3a9c71d2e84b56';

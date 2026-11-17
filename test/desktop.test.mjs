@@ -853,7 +853,7 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   await shot('move-reduced', page);
 });
 
-// Builder's test, 2026-11-02: the first press showed nothing for half a minute, and a second press said "A send is running
+// In a hand test the first press showed nothing for half a minute, and a second press said "A send is running
 // already". From the press the chat says what is happening, and its button and message box stay off until it lands or fails.
 test('Send to remote: a notice from the first press, the button and message box off until it lands or fails', { timeout: 90000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {
@@ -867,7 +867,7 @@ test('Send to remote: a notice from the first press, the button and message box 
   const pane = page.locator(`.pane[data-id="${id}"]`), button = pane.locator('[data-send-away]'), box = pane.locator('.composer textarea');
   await button.waitFor({ timeout: 20000 });
   await page.waitForFunction((i) => !document.querySelector(`.pane[data-id="${i}"] [data-send-away]`).disabled, id, { timeout: 20000 });
-  // main's two steps wait until the test lets them go: the plan, then the move (the half minute Builder saw).
+  // main's two steps wait until the test lets them go: the plan, then the move (the half minute seen in the hand test).
   await app.evaluate(({ ipcMain }) => {
     globalThis.calls = []; globalThis.answer = null;
     const held = () => new Promise((done) => { globalThis.release = done; });
