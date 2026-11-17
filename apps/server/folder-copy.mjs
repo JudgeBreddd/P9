@@ -58,7 +58,7 @@ async function writeNew(to, bytes, mode = 0o600) {
 
 // One blob's bytes from the copy's object store. The commit fixes the blob id, so no worktree file is read to apply.
 const blobOf = (copy, id) => new Promise((resolve, reject) => execFile('git', ['-C', copy, 'cat-file', 'blob', id],
-  { encoding: 'buffer', maxBuffer: Infinity, timeout: 60_000, windowsHide: true },
+  { encoding: 'buffer', maxBuffer: Infinity, timeout: 60_000, windowsHide: true, env: childEnv() },
   (error, out) => (error ? reject(error) : resolve(out))));
 
 // Git's index for folder: regular files are copied. Links, submodules, deleted files, and untracked or ignored files are

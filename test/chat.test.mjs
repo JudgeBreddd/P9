@@ -516,8 +516,6 @@ test('every process the server starts gets childEnv(); only launchTree adds name
     ['server.mjs', 'execFile(command, args, { cwd: checkout', 'not childEnv(): { ...process.env, PATH: toolPath() }'],
     ['update.mjs', 'execFile(command, args, { cwd, timeout', "not childEnv(): { ...process.env, PATH: toolPath(), CI: '1' }"],
     ['setup-routes.mjs', 'execFile(process.execPath, [script', "no env: it inherits the daemon's"],
-    ['xfer.mjs', "run('git', ['-C', cwd, 'ls-files'", "not childEnv(): { ...process.env, GIT_OPTIONAL_LOCKS: '0' }"],
-    ['folder-copy.mjs', "execFile('git', ['-C', copy, 'cat-file'", "no env: it inherits the daemon's"],
   ];
   // The text of the value after `key:` (a balanced { } or one token), or null.
   const value = (text, at) => {
