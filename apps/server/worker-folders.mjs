@@ -191,6 +191,8 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     const part = path.join(dirOf(sprint), 'clone.part-' + randomBytes(4).toString('hex'));
     const made = await git(dirOf(sprint), ['clone', '--quiet', '--no-checkout', '--', top, part], { timeout: 10 * 60_000 });
     if (made.code !== 0) { await rm(part, { recursive: true, force: true }); return { error: 'clone-failed', detail: made.err.slice(-TAIL) }; }
+    // Which folder the clone came from, inside the clone's own config, for clear(): origin is changed to the real remote below.
+    await git(part, ['config', 'p9.from', top]);
     const remote = await one(top, ['remote', 'get-url', 'origin']);
     if (remote) {
       await git(part, ['remote', 'set-url', 'origin', remote]);
@@ -279,12 +281,18 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
   // nothing is stashed and every local branch's work is in the main line or held outside the clone: a remote-tracking
   // ref contains its tip (pushed, or, in a folder clone, the owner's own branch as cloned from the owner's folder, which
   // still has it). A git failure keeps it.
+  // A local branch may go with the clone only when its tip has landed, or a branch or tag that exists now in the folder the
+  // clone was made from (p9.from) or in a remote on this disk holds it. The clone's own remote-tracking refs are not asked:
+  // they date from the clone or the last fetch, and the outside branch may since be reset or deleted (Reviewer #246). A
+  // remote at an address cannot be asked, and a git that cannot answer (the commit is not there, the folder is gone)
+  // leaves the branch unproven: the clone stays.
   async function clear(clone) {
     const main = await mainOf(clone);
     const heads = main && await git(clone, ['for-each-ref', '--format=%(objectname)', 'refs/heads/']);
     if (!heads || heads.code !== 0 || await one(clone, ['rev-parse', '-q', '--verify', 'refs/stash'])) return false;
-    for (const tip of heads.out.split('\n').filter(Boolean)) {
-      if (await one(clone, ['for-each-ref', '--count=1', '--contains', tip, '--format=%(refname)', 'refs/remotes/'])) continue;
+    const outside = [await one(clone, ['config', '--get', 'p9.from']), await one(clone, ['remote', 'get-url', 'origin'])].filter((d) => d && path.isAbsolute(d));
+    next: for (const tip of heads.out.split('\n').filter(Boolean)) {
+      for (const dir of outside) if (await one(dir, ['for-each-ref', '--count=1', '--contains', tip, '--format=%(refname)', 'refs/heads/', 'refs/tags/'])) continue next;
       if (!await landed(clone, main, tip)) return false;
     }
     return true;

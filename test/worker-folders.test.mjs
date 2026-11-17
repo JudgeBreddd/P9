@@ -211,6 +211,20 @@ test('Worker folders daemon-6 (2): a folder whose sprint branch is in the main l
   console.log('PASS Worker folders daemon-6 (2)');
 });
 
+test('Worker folders daemon-6 (4): a branch whose only outside copy was deleted keeps the clone, though the clone still has a stale remote-tracking ref for it', { timeout: 60000 }, async (t) => {
+  const { owner, home } = repos(t);
+  g(owner, 'checkout', '-qb', 'extra'); write(path.join(owner, 'extra.txt'), 'only here\n'); g(owner, 'add', 'extra.txt'); g(owner, 'commit', '-qm', 'extra'); g(owner, 'checkout', '-q', '-');
+  const folders = createWorkerFolders({ home });
+  const { folder } = await folders.make(ID, 'w', owner);
+  g(folder, 'branch', 'keep', 'origin/extra');
+  g(owner, 'branch', '-qD', 'extra');
+  assert.deepEqual(await folders.clean(ID), { removed: ['w'], kept: [] });
+  const clone = path.join(home, ID, 'clone');
+  assert.ok(fs.existsSync(clone), 'the clone holds the last copy of keep');
+  assert.equal(g(clone, 'show', 'keep:extra.txt'), 'only here');
+  console.log('PASS Worker folders daemon-6 (4)');
+});
+
 test('Worker folders daemon-6 (3): work squash-merged and then reverted in the main line is kept; merging it back would change the main line', { timeout: 60000 }, async (t) => {
   const { dir, remote, owner, home } = repos(t);
   const folders = createWorkerFolders({ home });

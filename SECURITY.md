@@ -929,7 +929,13 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   squash merge, merging that commit into the main line would change nothing there: git's own three-way merge, `git
   merge-tree`, ends on the main line's exact tree, also after later PRs changed the same files elsewhere). A conflict,
   for example when the main line later rewrote the very lines the worker wrote, or a git too old for `merge-tree
-  --write-tree` (before 2.38), keeps the folder. "Nothing unsaved" looks only at what git tracks or would track: a changed tracked file, or a new file git
+  --write-tree` (before 2.38), keeps the folder. The sprint's clone, which holds every worker's branch, goes only after its
+  last worker folder, with nothing stashed, and with every local branch either landed in the same sense or held by a branch
+  or tag that exists at that moment in the folder the clone was made from, or in its remote when that is on this disk (P9
+  runs a read-only `git for-each-ref` there; the folder's path is kept in the clone's own git config).
+  The clone's own remote-tracking refs do not count, since the outside branch may have been reset or deleted after the
+  last fetch. A remote at an address cannot be asked, so a branch only there and not landed keeps the clone, and so does anything
+  git cannot answer. A clone kept this way is not named in the button's kept list. "Nothing unsaved" looks only at what git tracks or would track: a changed tracked file, or a new file git
   does not ignore. Removing a folder removes everything in it, including files git ignores (build output, a local env
   file or database, anything not committed and not tracked); P9 does not look for them and does not keep a folder for
   them, and the "Clean up worker folders" button says so beside it. Its branch is
