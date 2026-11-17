@@ -155,6 +155,32 @@ test('O133: a message that picks another model and effort mid-turn waits for the
   console.log('PASS O133 mid-turn pick: ' + JSON.stringify({ first: sent.body.when, reply: reply.hit.data.content.text, same: same.body.when }));
 });
 
+// O133 mode half: a mode picked and sent mid-turn was steered in and dropped (steer() sends only the text), so the turn
+// and the next steps ran in the old mode with no mode event. It waits for the turn's end like a model pick, and the next
+// prompt sets it first; a message in the chat's own mode is steered as before.
+test('O133 mode: a message that picks another mode mid-turn waits for the turn end, then runs in it', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode: 'Manual' });
+  const first = await until(instance, said(id, 'mode:'));
+  assert.equal(first.hit.data.content.text, 'mode:default');
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1', mode: 'Manual' });
+  const { cursor } = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call', first.cursor);
+  const sent = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode: 'Plan' }));
+  assert.deepEqual([sent.status, sent.body.when], [202, 'queue'], sent.text);
+  const reply = await until(instance, said(id, 'mode:'), cursor);
+  assert.equal(reply.hit.data.content.text, 'mode:plan', 'the next turn runs in Plan');
+  const mode = reply.seen.filter((e) => e.conversation === id && e.type === 'mode').at(-1);
+  assert.equal(mode?.data.name, 'Plan', 'no mode event says Plan');
+  // A message in the mode the chat already runs is steered as before.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1', mode: 'Plan' });
+  const again = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call', reply.cursor);
+  const same = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'same', mode: 'Plan' }));
+  assert.equal(same.body.when ?? (same.body.steered && 'steered'), 'steer', same.text);
+  await until(instance, said(id, 'got:same'), again.cursor);
+  console.log('PASS O133 mode mid-turn pick: ' + JSON.stringify({ first: sent.body.when, reply: reply.hit.data.content.text, same: same.body.when }));
+});
+
 // #257 FIX1 (Reviewer on cf3bd33): a repick that replaces a held steer still waits for the turn's end; queued messages
 // with different picks are not joined into one prompt that keeps only the last one's.
 test('O133 FIX1: a repick replacing a held steer waits and applies; queued messages with different picks keep every pick, in order', { timeout: 120000 }, async (t) => {
