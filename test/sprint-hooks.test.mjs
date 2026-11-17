@@ -790,22 +790,31 @@ test('Close sprint: a before-close script refuses it, the close_sprint tool asks
 // agent lock turned on while a blocking before-close script runs stops nothing and records nothing.
 test('Close sprint held: a lock during before-close stops nothing; a worker that closes its sprint is not stopped with its lead', { timeout: 300000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
-  const ws = instance.workspace, repo = path.join(ws, 'repo'), node = process.execPath, held = path.join(ws, 'held'), go = path.join(ws, 'go');
+  const ws = instance.workspace, repo = path.join(ws, 'repo'), node = process.execPath, held = path.join(ws, 'gate.held'), go = path.join(ws, 'gate.go');
   fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false }); // Delegation's Agent decides, as the Close test sets it
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation; // P9 reads claude's model list, which Start checks the roles against
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
   // The gate says it started, then waits for the test's go.
   const gate = path.join(ws, 'gate.mjs');
-  fs.writeFileSync(gate, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(held)}, '1'); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 50)); console.log('gate says go');`);
+  const why = path.join(ws, 'gate.err');
+  fs.writeFileSync(gate, `import fs from 'node:fs'; process.on('uncaughtException', (e) => { fs.writeFileSync(${JSON.stringify(why)}, String(e?.stack ?? e)); process.exit(1); });
+fs.appendFileSync(${JSON.stringify(held)}, '1'); const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(go)})) { clearInterval(t); console.log('gate says go'); } }, 50);`);
   const project = (await call(instance, '/projects', 'POST', { name: 'Held', work: { kind: 'new', parent: '', name: 'held' } })).body.project.id;
   const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Held close' })).body, sprint = s.sprint;
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: the thing; role w1\n');
-  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
   fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
   fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'gate', command: `${node} ${gate}`, point: 'before-close', blocking: true }] }));
   const row = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
-  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash })).status, 200);
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
   assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
   const L = await attach(t, instance, sprint);
-  const w1 = await L.tool('open_chat', { text: 'mcp', key: 'w1' }); assert.ok(w1.chat && !w1.error, JSON.stringify(w1));
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }] })); // as the Close test: the worker's role after Start
+  const w1 = await L.tool('open_chat', { text: 'config', key: 'w1' }); assert.ok(w1.chat && !w1.error, JSON.stringify(w1));
+  await replied(instance, w1.chat, 'config:');
+  await call(instance, `/chat/${w1.chat}/prompt`, 'POST', { text: 'mcp' }); // its first message carries its role's rules; this one is only mcp
   const W = await attach(t, instance, w1.chat);
   const status = async () => (await call(instance, `/sprints/${sprint}/status`)).body;
   const stateOf = async (id) => (await rows(instance)).find((c) => c.id === id)?.state;
@@ -818,7 +827,7 @@ test('Close sprint held: a lock during before-close stops nothing; a worker that
   assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).status, 200);
   fs.writeFileSync(go, '1');
   const locked = await going;
-  assert.equal(locked.error, 'agent-lock-on', JSON.stringify(locked));
+  assert.equal(locked.error, 'agent-lock-on', JSON.stringify(locked) + (fs.existsSync(why) ? ' gate.err: ' + fs.readFileSync(why, 'utf8') : ''));
   assert.deepEqual([(await status()).closed, await stateOf(sprint) === 'stopped', await stateOf(w1.chat) === 'stopped'], [null, false, false], 'a lock turned on during before-close still closed or stopped something');
   await call(instance, '/agent-lock', 'POST', { on: false });
 
