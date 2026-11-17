@@ -101,7 +101,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     const sprints = full && sprintFiles ? [...db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id),
       ...preps(value.id).filter((p) => !row(p.id))]
       .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: sprintFiles.list(c.id), prep: !row(c.id),
-        ...(started(c.id) && { started: started(c.id) }) })) : [];
+        ...(started(c.id) && { started: started(c.id) }), ...(pref('paused:' + c.id) && { paused: true }) })) : [];
     // Two projects may use one work folder (N1 spec, 2026-11-08): the others using it, for the dialog to name.
     const where = value.work.kind === 'p9' ? null : path.resolve(workspace, value.work.folder);
     const sharedWith = [];

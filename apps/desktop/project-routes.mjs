@@ -28,6 +28,9 @@ export const projectRoutes = (uuid) => {
     removeScript: ({ name, sprint, ...rest }) => typeof name === 'string' && (sprint === undefined || uuid(sprint)) && !Object.keys(rest).length && ['POST', '/sprint-scripts', { remove: name, ...(sprint && { sprint }) }],
     addScript: ({ name, sprint, ...rest }) => typeof name === 'string' && uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprint-scripts', { add: name, sprint }],
     runSprintScript: ({ sprint, name, ...rest }) => uuid(sprint) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/run-script', { name }],
+    // SECURITY.md § Pause sprint: the owner's Pause and Resume on the sprint row.
+    pauseSprint: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/pause', {}],
+    resumeSprint: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/resume', {}],
     sprintSettings: ({ id, source, setup, ...rest }) => uuid(id) && typeof source === 'string' && typeof setup === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-settings', { source, setup }],
     removeProjectFile: ({ id, name, ...rest }) => uuid(id) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files/remove', { name }],
     startedIn: ({ folder, ...rest }) => typeof folder === 'string' && folder.length <= 4096 && !Object.keys(rest).length && ['GET', '/chat/started-in?' + new URLSearchParams({ folder })],
