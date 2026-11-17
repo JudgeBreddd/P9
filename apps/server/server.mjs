@@ -161,7 +161,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
   const editor = transport === 'unix' && state ? daemonEditor({ socket: path.join(state, 'editor.sock'), unit: 'p9-editor-server-' + instance }) : null;
-  // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
+  // File protection (threat model row 4): on unless the desktop turned it off; createChat made the prefs table.
   // v0.1.6 U5: no read or write reaches inside P9's own folders, whatever root a request names.
   guardFolders(state, recovery, ownership && (() => { try { return realpathSync.native(ownership); } catch { return ownership; } })());
   setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
@@ -211,7 +211,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (mtimeMs !== recoveryCounted.mtime) recoveryCounted = { mtime: mtimeMs, count: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length };
     return recoveryCounted.count;
   };
-  // File protection off lifts these three read-only rules too (Builder, 2026-10-18: "Everything").
+  // File protection off lifts these three read-only rules too: off turns off every protection, not only some.
   const readOnly = (file, name = file.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
     // ponytail: Builder edits registry.json outside P9; a reviewed registry editor would need its own confirm step.
@@ -285,7 +285,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const target = await readTarget(c); if (target.error) return reply(c, target);
     return c.json({ entries: (await listDirectory(target.root, c.req.query('path') ?? '', { privateRoot: target.privateRoot })).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) });
   });
-  // U4 on a remote (Builder, 2026-11-02: "need a picker so i can click in and out of folders"): in Unrestricted mode the
+  // U4 on a remote (a picker that steps in and out of folders): in Unrestricted mode the
   // desktop's New chat picker walks the whole computer, folders only, from an absolute path ('': the workspace). Links are
   // not listed; the chat's own start check (chat.mjs folderCheck) still decides. Off: refused.
   api.get('/files/folders', async (c) => {

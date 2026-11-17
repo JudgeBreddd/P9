@@ -55,7 +55,7 @@ export function setupRoutes(outer) {
       // Item 15: every dependency, its reason and, for a system package, the admin command (deps.mjs).
       dependencies: await wizardDependencies() });
   });
-  // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
+  // "Create my starter files" (threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.
   // The new settings load live: with no settings every Mission route answered 503, so no run exists to lose here.
   // The body is {} (the settings file's paths, or the starter paths in an empty folder) or the wizard's chosen paths, which
@@ -167,7 +167,7 @@ export function setupRoutes(outer) {
     try { return outer.reply(c, { status: 200, installed: await placeAgents(AGENTS.filter((agent) => body[agent])) }); }
     catch (error) { return outer.reply(c, { status: 500, error: 'agents-not-installed', detail: error.code ?? error.message }); }
   });
-  // Builder, 2026-11-02: the slim Temporary P9 installs without the agents' binary packages (about 600 MB); the desktop asks for
+  // The slim Temporary P9 installs without the agents' binary packages (about 600 MB); the desktop asks for
   // the ones the owner picked once it is connected, and this fetches them (scripts/agents.mjs: pinned versions, checked against
   // their sha512, an agent already there skipped). Only a folder with agents.json (a daemon bundle) fetches; a checkout says so.
   outer.app.post('/setup/agents-fetch', async (c) => {

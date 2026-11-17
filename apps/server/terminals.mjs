@@ -63,7 +63,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
   }
   // The tmux server runs as its own user unit, so a daemon restart or SIGKILL leaves it alone. The server gets exactly
   // childEnv(), not the user manager's environment.
-  // O43 (Builder, 2026-11-09): tmux moves each new pane into its own tmux-spawn-*.scope, made in the server's slice and
+  // O43: tmux moves each new pane into its own tmux-spawn-*.scope, made in the server's slice and
   // not tied to the unit, so a job a pane detached after that move outlived a stop of the unit alone. The server gets a
   // slice of its own (inside p9.slice, so its cap and telemetry still hold; '-' escaped, since it nests slices), and
   // Stop All stops the unit and that slice, which ends every scope in it.
@@ -72,10 +72,10 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
   // A failed query counts as running, so Stop All never reports a stop it could not confirm.
   const serverState = (which = unit) => systemctl(['is-active', which]).then(({ stdout }) => stdout.trim(), (error) => String(error.stdout ?? '').trim() || 'query-failed');
   const gone = (state) => state === 'inactive' || state === 'failed';
-  // O43 review (Builder, 2026-11-09): a server an older P9 started is kept across an upgrade, in p9.slice, so its panes'
+  // O43 review: a server an older P9 started is kept across an upgrade, in p9.slice, so its panes'
   // scopes are not in `slice`. tmux puts each pane's scope in the server's slice and describes it as "tmux child pane <pid>
   // launched by process <server pid>"; the two, read before the server's last session ends, find only this socket's scopes.
-  // O43 re-check (Builder, 2026-11-09): a scope must also have started after the server did, so a stale scope an exited
+  // O43 re-check: a scope must also have started after the server did, so a stale scope an exited
   // server left in the shared p9.slice never matches a later server that got the same PID. A failed owner query is null,
   // like a failed scope list, so Stop All reports a stop it could not confirm instead of skipping the scopes.
   const props = (text) => Object.fromEntries(text.split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
@@ -206,7 +206,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
     let pending = '', held = null, heldBytes = 0, snapping = 0, waiting = false, drawn = Promise.resolve();
     // Control mode sends only new output, so a phone attaching to a running shell first gets the screen as it stands, and
     // the lines above it (the page keeps 2000).
-    // O83 (Builder, 2026-11-15): after a resize too. tmux reflows its own screen, but the terminal in the page reflows its
+    // O83: after a resize too. tmux reflows its own screen, but the terminal in the page reflows its
     // copy differently (lines that unwrap when it widens left blank rows at the top; a line tmux pushed up when it narrowed
     // stayed on screen), and its cursor is then not where tmux's is. So the page's copy is replaced by tmux's, scrollback
     // included, so a line a narrower size pushed off the top is still there above. Output that arrives meanwhile is held;
