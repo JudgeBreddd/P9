@@ -641,6 +641,11 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.deepEqual([(await server.desk('/sprints/11111111-1111-4111-8111-111111111111/approve-scripts', 'POST', { other: 1 })).status,
     (await server.remote('/sprints/11111111-1111-4111-8111-111111111111/approve-scripts', { method: 'POST', session: auth, body: { other: 1 } })).status], [400, 404]);
   assert.equal((await server.desk('/sprint-scripts')).body.allowed, false, 'a phone session turned Allow additional scripts on');
+  // Sprint View's status route is the desktop's alone. An unknown sprint is 404 on the desktop too, so the body tells
+  // them apart: the desktop's route answers unknown-sprint, the phone has no such route.
+  const deskStatus = await server.desk('/sprints/11111111-1111-4111-8111-111111111111/status'), phoneStatus = await server.remote('/sprints/11111111-1111-4111-8111-111111111111/status', { session: auth });
+  assert.deepEqual([deskStatus.status, deskStatus.body?.error, phoneStatus.status, phoneStatus.body?.error === 'unknown-sprint'], [404, 'unknown-sprint', 404, false], phoneStatus.text);
+  console.log('PASS Sprint View phone: the status route answers the desktop and is absent for a signed-in phone');
   console.log('PASS S20 phone: the switch and Approve are 404 for a signed-in phone');
   console.log('PASS S18 phone: the script library answers the desktop and is 404 for a signed-in phone, read and write');
   await chmod(path.join(server.workspace, '_ideas'), 0o500);

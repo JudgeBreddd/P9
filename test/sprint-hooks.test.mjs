@@ -597,3 +597,58 @@ test('Sprint scripts S20: a script added after Start waits with "Allow additiona
   assert.deepEqual([await stands(), names((await page()).started.scripts)], [[false, [], []], ['two', 'three', 'free']]);
   console.log('PASS S20: off, an added script waited (worker made, Run now refused); a batch was one question; no and changed-while-asked approved nothing; owner Approve by hash and name; yes ran the gate; a changed row ran the old copy until asked again; a removed Start row still ran; lock refused; on ran an added row with no question; off again it waited; the next Start reset');
 });
+
+// Sprint View: the page's route and the agent's tool give one answer, and its numbers are the plan file's.
+test('Sprint status: the sprint_status tool and the desktop\'s status route give the same answer, with the plan\'s items, the count done, the time since Start and each worker\'s own work', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  const project = (await call(instance, '/projects', 'POST', { name: 'Delta', work: { kind: 'new', parent: '', name: 'delta' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Watched' })).body, sprint = s.sprint;
+  const plan = (two) => `# Plan\n\n- [x] A1: the first thing; role w1\n- [${two ? 'x' : ' '}] A2: the second thing; role w1\n- [ ] B1: the lead's own; role lead\n`;
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(false));
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  const route = async (id = sprint) => call(instance, `/sprints/${id}/status`);
+  // Not started: the plan's items are there, nothing runs yet.
+  let got = await route();
+  assert.deepEqual([got.status, got.body.sprint.started, got.body.running_ms, got.body.done, got.body.workers], [200, null, null, { passed: 0, ticked: 1, total: 3 }, []], JSON.stringify(got.body));
+  assert.deepEqual([(await route('11111111-1111-4111-8111-111111111111')).status, (await route('nope')).body.error], [404, 'unknown-sprint']);
+  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', {})).status, 200);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
+  const L = await attach(t, instance, sprint);
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const w1 = await L.tool('open_chat', { text: 'config', key: 'w1' }); assert.ok(w1.chat && !w1.error, JSON.stringify(w1));
+  await replied(instance, w1.chat, 'config:');
+  // The moving parts (the clock, a chat's last use and state) are compared apart; the rest must be the same answer.
+  const still = (v) => ({ ...v, at: 0, running_ms: 0, workers: v.workers.map((w) => ({ ...w, active: 0, state: 0, waiting: 0, context: 0 })) });
+  const both = async () => eventually(async () => { const tool = await L.tool('sprint_status'), page = (await route()).body; try { assert.deepEqual(still(tool), still(page)); return { tool, page }; } catch { return null; } }, 'the tool and the route never agreed');
+  let { tool, page } = await both();
+  assert.deepEqual([tool.error, 'contract' in tool, 'script' in tool, 'point' in tool], [undefined, false, false, false], JSON.stringify(tool).slice(0, 400));
+  assert.deepEqual(tool.items.map((i) => [i.id, i.role, i.ticked]), planItems(plan(false)).map((i) => [i.id, i.role, i.ticked]));
+  assert.deepEqual([tool.done, tool.sprint.id, tool.sprint.title, tool.project.id, tool.scripts], [{ passed: 0, ticked: 1, total: 3 }, sprint, 'Watched', project, { running: 0, additional: 0, waiting: 0 }]);
+  assert.deepEqual(tool.workers.map((w) => [w.key, w.chat, w.model, w.work]), [['lead', sprint, 'opus', tool.workers[0].work], ['w1', w1.chat, 'haiku', { done: 0, total: 2 }]], JSON.stringify(tool.workers));
+  assert.ok(tool.sprint.started.at && Number.isInteger(tool.running_ms) && tool.running_ms >= 0 && page.running_ms >= tool.running_ms, JSON.stringify([tool.sprint.started, tool.running_ms, page.running_ms]));
+  // A sprint named from a chat of the same project, and from the worker with no name: the same sprint.
+  assert.equal((await L.tool('sprint_status', { sprint })).sprint.id, sprint);
+  assert.equal((await L.tool('sprint_status', { sprint: '11111111-1111-4111-8111-111111111111' })).error, 'unknown-sprint');
+  // The plan changes on disk: both follow.
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(true));
+  ({ tool, page } = await both());
+  assert.deepEqual([tool.done, page.done], [{ passed: 0, ticked: 2, total: 3 }, { passed: 0, ticked: 2, total: 3 }]);
+  // Scripts: running is every script that runs (Start's and the ones approved after), additional is the part of it
+  // approved after Start, waiting is apart. One of each kind: 2, 1, 1, from the tool and the route.
+  const row = (name) => ({ name, command: `/usr/bin/touch ${name}.txt`, point: 'after-close', blocking: false });
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [row('base')] }));
+  got = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await call(instance, '/sprint-scripts?sprint=' + sprint)).body.hash }); assert.equal(got.status, 200, JSON.stringify(got.body));
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [row('base'), row('later'), row('unseen')] }));
+  const shown = (await call(instance, '/sprint-scripts?sprint=' + sprint)).body;
+  got = await call(instance, `/sprints/${sprint}/approve-scripts`, 'POST', { hash: shown.hash, names: ['later'] });
+  assert.deepEqual([got.status, got.body.approved?.map((r) => r.name)], [200, ['later']], JSON.stringify(got.body));
+  ({ tool, page } = await both());
+  assert.deepEqual([tool.scripts, page.scripts], [{ running: 2, additional: 1, waiting: 1 }, { running: 2, additional: 1, waiting: 1 }]);
+  console.log('PASS Sprint status: scripts 2 running (1 of them additional), 1 waiting; before Start the route gave the plan and no clock; after it the tool and the route agreed, with the plan\'s three items, 1 then 2 ticked, the lead and w1 with w1\'s 0 of 2, the time since Start, and unknown-sprint for a sprint that is not there');
+});

@@ -1026,10 +1026,10 @@ test('projects: Sprint Setup page opens from the sprint\'s button on the project
   await back.click();
   await page.locator('#pjName').waitFor({ timeout: 5000 });
   assert.deepEqual([await title.count(), await page.locator('[data-sprint]').count(), await page.locator('[data-pj="spopen"]').count()], [0, 0, 2]);
-  // A started sprint's button: its page, named Sprint, with its approval record and Start again.
+  // A started sprint's button: its page, named Sprint View, with its approval record and Start again.
   await btn(run.sprint).click();
   await page.locator(`[data-sp-page="${run.sprint}"]`).waitFor({ timeout: 5000 });
-  assert.equal(await title.textContent(), 'Sprint');
+  assert.equal(await title.textContent(), 'Sprint View');
   assert.deepEqual([await page.locator('[data-sprint] h2').textContent(), (await page.locator('[data-pj="spstart"]').textContent()).trim(), await page.locator('[data-sp-started]').count()], ['Running one', 'Start again', 1]);
   // The project's row in the panel is a way back too.
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
@@ -1044,7 +1044,7 @@ test('projects: Sprint Setup page opens from the sprint\'s button on the project
   await back.click();
   await until(async () => (await page.locator('[data-pj="spopen"]').count()) === 3, 'three sprints listed');
   assert.deepEqual(errors, []);
-  console.log('PASS Sprint Setup page: the project page listed two sprints as buttons and no sprint files; the prep opened as Sprint Setup with its Start, roles and files; Back returned; the started one opened as Sprint; New sprint landed in its Sprint Setup');
+  console.log('PASS Sprint Setup page: the project page listed two sprints as buttons and no sprint files; the prep opened as Sprint Setup with its Start, roles and files; Back returned; the started one opened as Sprint View; New sprint landed in its Sprint Setup');
 });
 
 // Instructions are saved 600 ms after the last key. A sprint's button pressed inside that time replaces the page, so the
@@ -1074,4 +1074,74 @@ test('projects: Instructions typed just before a sprint\'s button are saved firs
   assert.equal(await page.locator('#pjInstr').count(), 1, 'the box left the page after a refused save: ' + JSON.stringify([await page.locator('[data-sp-title]').count(), await page.locator('#projPage [data-pj=edit]').allTextContents(), await page.locator('#toasts').textContent(), (await saved()).length]));
   assert.deepEqual([await page.locator('[data-sp-title]').count(), (await page.locator('#pjInstr').inputValue()).length, await saved()], [0, 32001, 'Typed and left at once.']);
   console.log('PASS Instructions before a sprint button: the text typed just before the click was on the daemon when the sprint page opened; a refused save kept the box, its 32001 characters and the project page');
+});
+
+// Sprint View: a started sprint's page opens on where the sprint stands. Its numbers are the daemon's status answer
+// (the one the sprint_status tool gives an agent), and they follow the plan file with no reload.
+test('projects: Sprint View shows a started sprint\'s items, time and chats from the status answer, and follows the plan file', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Views', work: { kind: 'new', parent: '', name: 'views' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const run = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Watched one' });
+  const plan = (two) => `# Plan\n\n- [x] A1: draw the page; role lead\n- [${two ? 'x' : ' '}] A2: test the page; role lead\n- [ ] B1: write it up; role docs\n`;
+  await writeFile(path.join(run.folder, 'sprint.md'), plan(false));
+  await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+  const script = (name) => ({ name, command: `/usr/bin/touch ${name}.txt`, point: 'after-close', blocking: false });
+  await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base')] }));
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Not yet' });
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const btn = (lead) => page.locator(`[data-pj="spopen"][data-lead="${lead}"]`), view = page.locator('[data-sv]'), fact = (k) => page.locator(`[data-sv-fact="${k}"]`).textContent();
+  // Sprint Setup has no Sprint View: nothing runs yet.
+  await btn(prep.sprint).click();
+  await page.locator(`[data-sp-page="${prep.sprint}"]`).waitFor({ timeout: 5000 });
+  await new Promise((go) => setTimeout(go, 1200));
+  assert.deepEqual([await page.locator('[data-sp-title]').textContent(), await view.count()], ['Sprint Setup', 0]);
+  await page.locator('[data-pj="spback"]').click();
+  await btn(run.sprint).waitFor({ timeout: 5000 });
+  const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', { hooks: (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash }); assert.equal(started.status, 200, JSON.stringify(started));
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads the project again: the sprint is started now
+  await until(async () => /Started/.test(await btn(run.sprint).textContent().catch(() => '')), 'the started sprint\'s button');
+  await btn(run.sprint).click();
+  await view.waitFor({ timeout: 10000 });
+  const st = await call(instance, `/sprints/${run.sprint}/status`);
+  assert.deepEqual([st.status, st.done, st.items.length, st.workers.map((w) => w.key)], [200, { passed: 0, ticked: 1, total: 3 }, 3, ['lead']], JSON.stringify(st).slice(0, 600));
+  assert.equal(await page.locator('[data-sp-title]').textContent(), 'Sprint View');
+  assert.equal(await page.locator('[data-sv-done]').textContent(), `${st.done.passed} of ${st.done.total} items passed review`);
+  assert.deepEqual([await fact('ticked'), await fact('chats'), await fact('scripts')], [`${st.done.ticked} of ${st.done.total}`, String(st.workers.length), '1']);
+  await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base'), script('later'), script('unseen')] }));
+  assert.match(await fact('time'), /^(under a minute|\d+ min)$/);
+  assert.equal(await page.locator('.sv-ring.big b').textContent(), '0/3');
+  // Each item of the plan, in the plan's order, with its role and that a tick is not a review.
+  assert.deepEqual(await page.locator('[data-sv-item]').evaluateAll((rows) => rows.map((r) => [r.dataset.svItem, r.querySelector('.box').textContent, r.querySelector('.muted').textContent, r.querySelector('.tag').textContent])),
+    [['A1', '☑', 'lead', 'Ticked, not reviewed'], ['A2', '☐', 'lead', 'Open'], ['B1', '☐', 'docs', 'Open']]);
+  // Each chat of the sprint by its role, with its model and effort and what it is doing.
+  const lead = page.locator('[data-sv-worker="lead"]'), w = st.workers[0];
+  assert.deepEqual([await page.locator('[data-sv-worker]').count(), await lead.getAttribute('data-chat')], [1, run.sprint]);
+  assert.ok((await lead.textContent()).includes(`${w.model} · ${w.effort}`), await lead.textContent());
+  assert.match(await lead.locator('[data-sv-state]').textContent(), /^(Working|Idle)$/);
+  // The lead's own two items (A1, A2) are its ring, and the big ring is drawn at its size (a 15 px page icon rule once shrank it).
+  assert.deepEqual([w.work, await lead.locator('.sv-ring b').textContent(), await page.locator('.sv-ring.big svg').evaluate((el) => el.getBoundingClientRect().width)], [{ done: 0, total: 2 }, '0/2', 76]);
+  // The Setup parts are still below: the roles and the files.
+  assert.deepEqual([await page.locator('[data-role-row]').count() > 0, await page.locator('[data-pj="spfile"]').count() > 0, (await page.locator('[data-pj="spstart"]').textContent()).trim()], [true, true, 'Start again']);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // The plan changes on disk (an agent ticks a box): the page follows with no click.
+  await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
+  await until(async () => (await fact('ticked')) === '2 of 3', async () => 'the page never followed the plan: ' + await fact('ticked'), 12000);
+  assert.equal(await page.locator('[data-sv-item="A2"] .tag').textContent(), 'Ticked, not reviewed');
+  // Scripts are counted once each: one approved at Start, one approved after it, one still waiting is "2 running, 1 waiting".
+  const hash = (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash;
+  const ok = await call(instance, `/sprints/${run.sprint}/approve-scripts`, 'POST', { hash, names: ['later'] });
+  assert.deepEqual([ok.status, ok.approved?.map((r) => r.name)], [200, ['later']], JSON.stringify(ok));
+  const counts = (await call(instance, `/sprints/${run.sprint}/status`)).scripts;
+  assert.deepEqual(counts, { running: 2, additional: 1, waiting: 1 });
+  await until(async () => (await fact('scripts')) === '2 running, 1 waiting for you', async () => 'the scripts fact: ' + await fact('scripts'), 12000);
+  // A chat's row opens that chat.
+  await lead.click();
+  await until(async () => await page.locator('#projPage').isHidden(), 'the lead\'s row never opened its chat');
+  assert.deepEqual(errors, []);
+  console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items passed, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
 });

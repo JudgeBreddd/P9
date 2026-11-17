@@ -54,6 +54,7 @@ export function installProjects(o, api) {
   // The sprint whose own page is open (its lead's id), '' for the project page. Each sprint is one button on the project
   // page; the button opens the sprint's page: Sprint Setup until it is started.
   let spPage = '';
+  let sv = null, svFor = '', svN = 0; // Sprint View (loadView): the status drawn { lead, html }, the sprint being read, the read's number
   const say = (txt, level = 'ok') => o.toast({ kind: 'project', txt, level }, true);
   const failed = r => say(ERR[r.body?.error] || 'That did not work (' + (r.body?.error || r.status) + ').', 'warn');
 
@@ -108,9 +109,9 @@ export function installProjects(o, api) {
       : p.instructions ? instrText(p.instructions) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
     const files = p.files ?? [], open = spPage && (p.sprints ?? []).find(x => x.lead === spPage);
     if (open) return `<div class="wrap" data-page="${esc(p.id)}" data-sp-page="${esc(open.lead)}">
-      <div class="ph"><div class="grow"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spback" title="Back to the project's page">‹ ${esc(p.name)}</button><h1 data-sp-title>${open.prep ? 'Sprint Setup' : 'Sprint'}</h1>
-        <p class="about">${open.prep ? 'Everything before Start: the plan, the roles and each role\'s files, the rules and the scripts. Each is a file in the sprint\'s folder, so an agent can fill in the same things. Nothing runs until Start sprint.' : 'This sprint is started. Its roles and files are below; Start again makes any chat an earlier Start did not.'}</p></div></div>
-      ${sprintHtml(open)}</div>`;
+      <div class="ph"><div class="grow"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spback" title="Back to the project's page">‹ ${esc(p.name)}</button><h1 data-sp-title>${open.prep ? 'Sprint Setup' : 'Sprint View'}</h1>
+        <p class="about">${open.prep ? 'Everything before Start: the plan, the roles and each role\'s files, the rules and the scripts. Each is a file in the sprint\'s folder, so an agent can fill in the same things. Nothing runs until Start sprint.' : 'This sprint is started. Where it stands is first, read again every few seconds; an agent reads the same with sprint_status. Its roles and files are below.'}</p></div></div>
+      ${sv?.lead === open.lead && !open.prep ? sv.html : ''}${sprintHtml(open)}</div>`;
     const stamp = sp => sp.prep ? '<span class="tag">Not started</span>' : `<span class="when">Started${sp.started ? ' ' + esc(new Date(sp.started.at).toLocaleDateString([], { month: 'short', day: 'numeric' })) : ''}</span>`;
     const sprintRows = (p.sprints ?? []).map(sp => `<button class="crow" data-pj="spopen" data-lead="${esc(sp.lead)}" title="${sp.prep ? 'Open its Sprint Setup' : 'Open this sprint'}">${svg.files}<span class="t">${esc(sp.title)}</span>${stamp(sp)}</button>`).join('');
     return `<div class="wrap" data-page="${esc(p.id)}">
@@ -233,6 +234,18 @@ export function installProjects(o, api) {
     // morph changes an option's selected attribute only; a pick the user changed keeps showing their choice, so each role
     // pick is set to what roles.json says (after a refused save it says the lead's value).
     page.querySelectorAll('select[data-spr]').forEach(s => { s.value = s.querySelector('option[selected]')?.value ?? ''; });
+    if (spPage && svFor !== spPage) loadView();
+  }
+  // ---- Sprint View: the shown sprint's status, drawn by sprint-view.mjs (loaded on first use) from the answer
+  // sprint_status gives an agent. ponytail: read again every 5 s while its page shows; no push from the daemon.
+  async function loadView() {
+    const lead = svFor = spPage, n = ++svN;
+    if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
+      const [m, r] = await Promise.all([import('./sprint-view.mjs').catch(() => null), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
+      if (n !== svN) return;
+      if (m && r.status === 200) { sv = { lead, html: m.statusHtml(r.body, esc) }; renderPage(); }
+    }
+    setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
   }
   const refresh = p => { if (p) cur = p; o.loadProjects(); renderPage(); };
   async function update(body) { const r = await call('updateProject', { id: cur.id, ...body }); if (r.status !== 200) { failed(r); return false; } refresh(r.body.project); return true; }

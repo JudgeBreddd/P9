@@ -193,6 +193,23 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     };
   }
 
+  // Sprint View and sprint_status: one answer for the page and the tool, so both show the same sprint. It is what a
+  // script is told (state, above) without the parts that are about one script run, plus the counts the page draws:
+  // done (plan items passed in review, and ticked), running_ms (since Start), each worker's own work, and how many scripts stand. Reads only.
+  async function view(sprint) {
+    const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status');
+    const st = standing(sprint), start = chat.projects.started(sprint);
+    return { ...s,
+      // passed: by P9's own review record; ticked: the box in the plan, a model's say-so.
+      done: { passed: s.items.filter((i) => i.review?.state === 'passed').length, ticked: s.items.filter((i) => i.ticked).length, total: s.items.length },
+      running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
+      // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
+      workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : s.items.filter((i) => i.role && i.role === w.key);
+        return { ...w, work: q ? { done: q.done, total: q.total } : own.length ? { done: own.filter((i) => i.review?.state === 'passed').length, total: own.length } : null }; }),
+      scripts: { running: st.running.length, additional: st.additional.length, waiting: st.waiting.length } };
+  }
+  async function status(caller, named) { const { sprint, ...no } = where(caller, named); return no.error ? no : view(sprint); }
+
   // The library and the tools (sprint spec S18; SECURITY.md § Sprint scripts, "The library"). The library is one list per
   // user in P9's database, usable in any sprint of any project. It is only text: nothing in it runs. A script reaches a
   // sprint as a copy in that sprint's hooks.json, and runs only after the owner's Start approves it, so a later change
@@ -310,6 +327,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // sprint named: that sprint's hooks.json (checked and saved as the tools do); left out: the library.
   const known = (sprint) => ID.test(sprint ?? '') && chat.sprintFiles.exists(sprint);
   const owner = {
+    // Sprint View's numbers: the same answer sprint_status gives an agent.
+    status: async (sprint) => (known(sprint) ? view(sprint) : { error: 'unknown-sprint' }),
     // sprint named and known: also what stands there (the window's Approve needs the waiting rows and the file's hash).
     library(sprint) {
       // One read: the hash the window sends back with Approve is of the rows it is shown here.
@@ -341,5 +360,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       return script.error ? script : runNow(sprint, script, 'owner');
     },
   };
-  return { fire, read, approved, save, remove, add, run: runAsked, request, owner };
+  return { fire, read, status, approved, save, remove, add, run: runAsked, request, owner };
 }
