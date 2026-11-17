@@ -11,7 +11,7 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
-import { planItems } from '../apps/server/sprint-files.mjs';
+import { planItems, hashOf } from '../apps/server/sprint-files.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -440,7 +440,7 @@ test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lo
   const held = async (during) => {
     let lock = false, scripts = [script], reached, release; const at = new Promise((r) => { reached = r; }), ac = new AbortController();
     const chat = { lock: () => ({ on: lock }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
-      sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [],
+      sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false,
       sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
       projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts }), prepOf: () => null, record: async () => null } };
     const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
@@ -457,4 +457,143 @@ test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lo
   const ran = await held(() => {});
   assert.deepEqual([ran.exit, ran.script, fs.readFileSync(mark, 'utf8')], [0, 'mark', 'x'], JSON.stringify(ran));
   console.log('PASS S18 held: a cancel, the agent lock and a changed approval during the wait for the state each ran nothing; with none of them the script ran once');
+});
+
+// #229 FIX1. The window's Approve sends the hash of the hooks.json it showed. The hash check and the rows approved must
+// come from one read of the file: with two reads, a writer between them gets a row nobody saw approved under the hash
+// of the row that was shown. The stand-in file here answers A to the first read and B to every later one.
+test('Sprint scripts S20 one read: the owner\'s Approve approves the rows of the text whose hash it checked, and the window is given the hash of the rows it is shown, when hooks.json is replaced between two reads', { timeout: 60000 }, async () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+  const file = (command) => JSON.stringify({ scripts: [{ name: 'x', command, point: 'sprint-start' }] });
+  const A = file('/bin/echo shown'), B = file('/bin/echo unseen');
+  const made = (texts) => {
+    let n = 0, record = { at: 1, by: 'owner', plan: null, scripts: [] };
+    const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id }], list: () => [{ id }],
+      sprint: () => ({}), gauge: () => null, scriptLibrary: () => [], allowScripts: () => false,
+      sprintFiles: { exists: (c) => c === id, read: (c, name) => (name === 'hooks.json' ? texts[Math.min(n++, texts.length - 1)] : null), log: () => {} },
+      projects: { started: () => record, prepOf: () => null, recordStart: (c, next) => { record = next; } } };
+    return { owner: createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true }).owner, extra: () => record.extra ?? [] };
+  };
+  const shown = made([A, B]), lib = shown.owner.library(id);
+  assert.deepEqual([lib.hash, lib.waiting.map((r) => r.command)], [hashOf(A), ['/bin/echo shown']], 'the window was given the hash of one text and the rows of another');
+  const swapped = made([A, B]), got = swapped.owner.approve(id, hashOf(A), ['x']);
+  assert.deepEqual([got.approved?.map((r) => r.command), swapped.extra().map((r) => r.command)], [['/bin/echo shown'], ['/bin/echo shown']], 'Approve approved a row it never checked: ' + JSON.stringify(got));
+  assert.deepEqual(got.additional.waiting.map((r) => r.command), ['/bin/echo unseen'], 'the row written after the check must wait');
+  const late = made([B]), refused = late.owner.approve(id, hashOf(A), ['x']);
+  assert.deepEqual([refused.error, late.extra()], ['scripts-changed', []], JSON.stringify(refused));
+  console.log('PASS S20 one read: a hooks.json replaced between two reads never has its unseen row approved; the window\'s hash is of the rows it is shown; a file already replaced refuses');
+});
+
+test('Sprint scripts S20: a script added after Start waits with "Allow additional scripts" off until the user approves it (one question for a batch, a change asks again) and runs with no question when the switch is on', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo'), node = process.execPath;
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: the question below is still asked
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  // Each script leaves its own mark; a gate exits with its own code, so which copy ran is read from the refusal.
+  const script = (name, exit) => { const f = path.join(ws, name + '.mjs'); fs.writeFileSync(f, `import fs from 'node:fs'; import path from 'node:path'; fs.appendFileSync(path.join(import.meta.dirname, '${name}.ran'), '1'); process.exit(${exit});`); return `${node} ${f}`; };
+  const ran = (name) => (fs.existsSync(path.join(ws, name + '.ran')) ? fs.readFileSync(path.join(ws, name + '.ran'), 'utf8').length : 0);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Gamma', work: { kind: 'new', parent: '', name: 'gamma' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Later scripts' })).body, sprint = s.sprint;
+  const low = { provider: 'claude', model: 'haiku', effort: 'low' };
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  const atStart = { name: 'notify', command: script('notify', 0), point: 'sprint-start', blocking: false };
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [atStart] }));
+  const page = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
+  const hash = async () => (await page()).files.find((f) => f.name === 'hooks.json').hash;
+  assert.equal((await call(instance, `/sprints/${sprint}/approve-scripts`, 'POST', { hash: await hash() })).body.error, 'sprint-not-started');
+  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: await hash() })).status, 200);
+  await eventually(() => ran('notify') === 1, 'sprint-start never ran');
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
+  const L = await attach(t, instance, sprint);
+  // The worker roles come after Start, so Start made no chat for them: each open_chat below is a new worker and fires before-new-worker.
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', ...low }, { key: 'w2', ...low }] }));
+  const asked = async () => (await events(instance, sprint)).filter((e) => e.type === 'approval');
+  const answer = async (seen, optionId) => {
+    const q = await eventually(async () => (await asked())[seen], 'the approve question');
+    await call(instance, `/chat/${sprint}/answer`, 'POST', { request: q.data.request, answer: { optionId } }); return q.data.toolCall.title;
+  };
+  const names = (rows) => rows.map((r) => r.name);
+  const stands = async () => { const r = await L.tool('sprint_scripts'); return [r.additional.allowed, names(r.additional.running), names(r.additional.waiting)]; };
+
+  // Off is the default. Nothing waits right after Start, and there is nothing to ask.
+  assert.deepEqual(await stands(), [false, [], []]);
+  let got = await L.tool('request_sprint_scripts');
+  assert.deepEqual([got.error, got.approved, (await asked()).length], [undefined, [], 0], JSON.stringify(got));
+
+  // The agent adds a blocking gate after Start: it waits. The worker it would refuse is made, and Run now refuses it.
+  const stop = { name: 'stop', command: script('stop', 3), point: 'before-new-worker', blocking: true };
+  got = await L.tool('sprint_script_save', stop); assert.equal(got.error, undefined, JSON.stringify(got));
+  assert.deepEqual(await stands(), [false, [], ['stop']]);
+  const w1 = await L.tool('open_chat', { text: 'config', key: 'w1' });
+  assert.ok(w1.chat && !w1.error && !w1.existing, 'a waiting script refused the worker: ' + JSON.stringify(w1)); assert.equal(ran('stop'), 0, 'a script nobody approved ran');
+  assert.equal((await L.tool('run_sprint_script', { name: 'stop' })).error, 'script-not-approved');
+  assert.equal((await call(instance, `/sprints/${sprint}/run-script`, 'POST', { name: 'stop' })).body.error, 'script-not-approved');
+
+  // A batch is one question, each row whole. No: nothing is approved.
+  const two = { name: 'two', command: script('two', 0), point: 'worker-folder-made', blocking: false };
+  await L.tool('sprint_script_save', two);
+  let ask = L.tool('request_sprint_scripts'), title = await answer(0, 'reject'); got = await ask;
+  assert.ok(title.includes('these 2 scripts') && title.includes(`stop (before-new-worker, blocking): ${stop.command}`) && title.includes(`two (worker-folder-made): ${two.command}`), title);
+  assert.deepEqual([got.error, await stands()], ['not-allowed', [false, [], ['stop', 'two']]], JSON.stringify(got));
+  // Changed while the user is asked: the yes approves nothing.
+  const three = { name: 'three', command: script('three', 0), point: 'worker-folder-made', blocking: false };
+  ask = L.tool('request_sprint_scripts'); await eventually(async () => (await asked())[1], 'the second question');
+  assert.equal((await call(instance, '/sprint-scripts', 'POST', { save: three, sprint })).status, 200);
+  await answer(1, 'allow'); got = await ask;
+  assert.deepEqual([got.error, await stands()], ['scripts-changed', [false, [], ['stop', 'two', 'three']]], JSON.stringify(got));
+  // The owner's own Approve: refused on a file that is not the one shown, then one row by name.
+  got = await call(instance, `/sprints/${sprint}/approve-scripts`, 'POST', { hash: 'f'.repeat(64), names: ['three'] });
+  assert.deepEqual([got.status, got.body.error], [409, 'scripts-changed'], JSON.stringify(got.body));
+  assert.equal((await call(instance, `/sprints/${sprint}/approve-scripts`, 'POST', { hash: await hash(), names: [] })).status, 400);
+  got = await call(instance, `/sprints/${sprint}/approve-scripts`, 'POST', { hash: await hash(), names: ['three'] });
+  assert.deepEqual([got.status, names(got.body.approved), await stands()], [200, ['three'], [false, ['three'], ['stop', 'two']]], JSON.stringify(got.body));
+  // Yes: the two left are approved by one question, and the gate now refuses the next worker with its own exit.
+  ask = L.tool('request_sprint_scripts'); title = await answer(2, 'allow'); got = await ask;
+  assert.ok(title.includes('these 2 scripts') && !title.includes('three ('), title);
+  assert.deepEqual([got.error, names(got.approved), await stands(), (await asked()).length], [undefined, ['stop', 'two'], [false, ['three', 'stop', 'two'], []], 3], JSON.stringify(got));
+  got = await L.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.deepEqual([got.error, got.script, got.exit, ran('stop')], ['script-refused', 'stop', 3, 1], JSON.stringify(got));
+
+  // A change asks again: until the yes, the copy the user approved keeps running, not the new text.
+  const stop2 = { ...stop, command: script('stop2', 4) };
+  await L.tool('sprint_script_save', stop2);
+  assert.deepEqual(await stands(), [false, ['three', 'stop', 'two'], ['stop']]);
+  got = await L.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.deepEqual([got.error, got.exit, ran('stop2')], ['script-refused', 3, 0], 'the changed row ran on the old yes: ' + JSON.stringify(got));
+  ask = L.tool('request_sprint_scripts'); title = await answer(3, 'allow'); got = await ask;
+  assert.ok(title.includes('this script') && title.includes(stop2.command), title);
+  got = await L.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.deepEqual([got.error, got.exit, ran('stop2')], ['script-refused', 4, 1], JSON.stringify(got));
+  // A row approved at Start is removed from the file by the agent: it still runs (only the next Start drops it).
+  assert.equal((await L.tool('sprint_script_remove', { name: 'notify' })).error, undefined);
+  got = await call(instance, `/sprints/${sprint}/run-script`, 'POST', { name: 'notify' });
+  assert.deepEqual([got.status, got.body.exit, ran('notify')], [200, 0, 2], JSON.stringify(got.body));
+  // The agent lock refuses the ask.
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await L.tool('request_sprint_scripts')).error, 'agent-lock-on');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+
+  // The switch is the owner's: a route, checked. On: a row the agent adds runs with no question, and a row it removes stops.
+  assert.equal((await call(instance, '/sprint-scripts/allow', 'POST', { on: 'yes' })).status, 400);
+  got = await call(instance, '/sprint-scripts/allow', 'POST', { on: true }); assert.deepEqual([got.status, got.body], [200, { allowed: true }]);
+  await L.tool('sprint_script_remove', { name: 'stop' });
+  const free = { name: 'free', command: script('free', 5), point: 'before-new-worker', blocking: true };
+  await L.tool('sprint_script_save', free);
+  assert.deepEqual(await stands(), [true, ['two', 'three', 'free'], []]);
+  got = await L.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.deepEqual([got.error, got.script, got.exit, ran('free'), (await asked()).length], ['script-refused', 'free', 5, 1, 4], JSON.stringify(got));
+  got = await L.tool('request_sprint_scripts'); assert.deepEqual([got.approved, (await asked()).length], [[], 4]); assert.match(got.detail, /Allow additional scripts is on/);
+  // Off again: what ran only because the switch was on waits; what the user approved by name runs as approved.
+  await call(instance, '/sprint-scripts/allow', 'POST', { on: false });
+  assert.deepEqual(await stands(), [false, ['three', 'two', 'stop'], ['free']]); // stop: the copy approved last, though the file no longer has it
+  assert.equal((await L.tool('run_sprint_script', { name: 'free' })).error, 'script-not-approved');
+  // The next Start approves the file as it is and drops everything approved since the last one.
+  // (Lead only again: Start would make w2's chat, and the gate "free" it approves here would refuse that.)
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  got = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: await hash() }); assert.equal(got.status, 200, JSON.stringify(got.body));
+  assert.deepEqual([await stands(), names((await page()).started.scripts)], [[false, [], []], ['two', 'three', 'free']]);
+  console.log('PASS S20: off, an added script waited (worker made, Run now refused); a batch was one question; no and changed-while-asked approved nothing; owner Approve by hash and name; yes ran the gate; a changed row ran the old copy until asked again; a removed Start row still ran; lock refused; on ran an added row with no question; off again it waited; the next Start reset');
 });

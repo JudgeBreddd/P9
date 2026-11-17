@@ -138,3 +138,11 @@ dialog.pj-dlg{max-width:min(540px,calc(100vw - 40px))}
 .pj-dlg .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 .pj-dlg .body2{margin:0;font-size:13.5px;line-height:1.55;color:var(--muted-foreground)}
 .pj-dlg .body2 b{color:var(--foreground);font-weight:550;overflow-wrap:anywhere}
+/* S20: the "Allow additional scripts" switch, its warning, and the rows added after Start */
+.pj-scripts section>.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--foreground)}
+.pj-scripts section>.chk input{accent-color:var(--primary)}
+.pj-scripts h4{margin:4px 0 0;font-size:12px;font-weight:600;color:var(--muted-foreground)}
+.pj-scripts section>.acts{display:flex;justify-content:flex-end}
+.pj-scripts .ss-warn{display:grid;gap:8px;padding:10px 12px;border:1px solid var(--destructive);border-radius:8px;font-size:12.5px;line-height:1.45}
+.pj-scripts .ss-warn p{margin:0}
+.pj-scripts .ss-warn .acts{display:flex;gap:6px;justify-content:flex-end}
