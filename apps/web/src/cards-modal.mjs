@@ -111,6 +111,7 @@ function renderCards() {
   cardsOverlay();
   const n = centerCount();
   outer.$('#rBell').innerHTML = svg.bell + `<b>${n || ''}</b>`;
+  outer.$('#rBell').dataset.items = n - outer.S.alerts.length; // the count from loaded chats and waiting items only; tests' shellReady reads it
   outer.$('#rBell').title = 'Notification Center' + (n ? ` (${n})` : '') + ' · Ctrl Shift N';
   if (outer.mdl.open && outer.S.modal?.kind === 'center') outer.renderModal();
   // F2: Mission's lists redraw only where they can be seen (its page, or a window other than a chat); setFocus redraws them on the way in.
