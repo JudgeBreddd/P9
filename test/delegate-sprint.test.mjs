@@ -83,12 +83,26 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   endTurn(worker, 'turn-1', false, { inputTokens: 9, outputTokens: 2 });
   assert.equal(cards.length, 1);
   assert.match(cards[0].text, /B1/);
-  assert.match(cards[0].text, /Input 9; output 2/);
+  // An adapter that reports no cache: the report says so instead of passing the input off as the whole.
+  assert.match(cards[0].text, /Tokens used: Input 9 \(cached input not reported\); output 2/);
   assert.match(notes[0][1], /Ready report pinned/);
   endTurn(worker, 'turn-1', false, { inputTokens: 9, outputTokens: 2 });
   endTurn(worker, 'turn-2', true, { inputTokens: 9, outputTokens: 2 });
   assert.equal(cards.length, 1);
   assert.equal(notes.length, 1);
+  // Cached input counted (2026-11-13: "Input 24; output 5065" with 64,508 tokens in context).
+  await tools.ready(valid, worker);
+  endTurn(worker, 'turn-1', false, { inputTokens: 24, outputTokens: 5065, cachedReadTokens: 64484, cachedWriteTokens: 310 });
+  assert.equal(cards.length, 2);
+  assert.match(cards[1].text, /Tokens used: Input 24; cached input read 64484, written 310; output 5065/);
+  // Each count stands alone: one missing (or invalid) reads "not reported", never 0; a reported 0 stays 0.
+  const line = async (usage) => { await tools.ready(valid, worker); endTurn(worker, 'turn-1', false, { inputTokens: 1, outputTokens: 2, ...usage }); return /Tokens used: [^\n]*/.exec(cards.at(-1).text)[0]; };
+  assert.equal(await line({ cachedReadTokens: 64484 }), 'Tokens used: Input 1; cached input read 64484, written not reported; output 2');
+  assert.equal(await line({ cachedWriteTokens: 310 }), 'Tokens used: Input 1; cached input read not reported, written 310; output 2');
+  assert.equal(await line({ cachedReadTokens: 0, cachedWriteTokens: 0 }), 'Tokens used: Input 1; cached input read 0, written 0; output 2');
+  assert.equal(await line({ cachedReadTokens: -5, cachedWriteTokens: 7 }), 'Tokens used: Input 1; cached input read not reported, written 7; output 2');
+  assert.equal(await line({ cachedReadTokens: 'x', cachedWriteTokens: 1.5 }), 'Tokens used: Input 1 (cached input not reported); output 2');
+  assert.equal(cards.length, 7);
   let release, locked = false;
   const pendingFolder = new Promise((resolve) => { release = resolve; });
   const racing = createDelegate({ chat: { ...chat, lock: () => ({ on: locked }), startFolder: () => pendingFolder } });
