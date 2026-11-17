@@ -292,6 +292,33 @@ test('Delegate F2: archive_chat archives and brings back a chat the caller start
   console.log('PASS Delegate F2 archive_chat');
 });
 
+test('Delegate daemon-10: rename_chat renames a chat the caller started, or its own; never a chat beside it; refused under the agent lock', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), out = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'cwd', title: 'Kid' });
+  await a.done(made.chat);
+  const title = async (id) => (await rows(instance)).find((c) => c.id === id)?.title;
+  assert.equal((await b.tool('rename_chat', { chat: made.chat, title: 'x' })).error, 'not-a-descendant');
+  assert.equal((await b.tool('rename_chat', { chat: a.conversation, title: 'x' })).error, 'not-a-descendant', 'never a chat beside it');
+  assert.equal((await out.tool('rename_chat', { chat: made.chat, title: 'x' })).error, 'chat-not-found');
+  for (const bad of ['', '   ', 'x'.repeat(121), undefined]) assert.equal((await a.tool('rename_chat', { chat: made.chat, title: bad })).error, 'request-refused', JSON.stringify(bad));
+  assert.equal(await title(made.chat), 'Kid', 'nothing refused changed it');
+  assert.deepEqual(await a.tool('rename_chat', { chat: made.chat, title: '  Builds the\nwindow  ' }), { chat: made.chat, title: 'Builds the window' });
+  assert.equal(await title(made.chat), 'Builds the window');
+  // A later turn does not name it from its messages again.
+  await a.tool('send_chat', { chat: made.chat, text: 'more' }); await a.done(made.chat);
+  assert.equal(await title(made.chat), 'Builds the window');
+  // Its own chat: no chat named.
+  assert.deepEqual(await b.tool('rename_chat', { title: 'Reviewer' }), { chat: b.conversation, title: 'Reviewer' });
+  assert.equal(await title(b.conversation), 'Reviewer');
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await a.tool('rename_chat', { chat: made.chat, title: 'Locked' })).error, 'agent-lock-on');
+  assert.equal(await title(made.chat), 'Builds the window');
+  console.log('PASS Delegate daemon-10 rename_chat');
+});
+
 test('Delegate: chats in one project read and message each other but stop only their own workers; a worker starts in its parent\'s project', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
