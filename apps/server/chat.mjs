@@ -357,8 +357,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
+    if (type === 'user' && Array.isArray(data.held)) settleResumed(data.held);
+    else if (type === 'unheld') settleResumed([data.id]);
     wakeAll(type);
   };
+  // A resumed message that went into a running turn's queue (202 held) stays in resuming:<lead> as queued: <held id>
+  // until a 'user' event carries that id (it reached the agent) or an 'unheld' names it (refused, replaced, cancelled):
+  // the queue is memory, so a restart in between sends it again (resumeLeft). Hoisted: emit runs before the prefs helpers.
+  function settleResumed(ids) {
+    for (const { key, value } of db.prepare("SELECT key, value FROM prefs WHERE key LIKE 'resuming:%'").all()) {
+      let list; try { list = JSON.parse(value); } catch { continue; }
+      const left = list.filter((i) => !ids.includes(i.queued));
+      if (left.length === list.length) continue;
+      if (left.length) db.prepare('UPDATE prefs SET value = ? WHERE key = ?').run(JSON.stringify(left), key);
+      else db.prepare('DELETE FROM prefs WHERE key = ?').run(key);
+    }
+  }
   // Streamed updates wake long polls once per tick, not once per event: a burst is one read for each poller (finding 16).
   // Every other event wakes them now, so 'created' reaches a window before the create's reply (controller.mjs relies on it).
   let waking = false;
@@ -378,9 +392,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const gauge = (id) => {
     if (!gauges.has(id)) {
       const newest = (type, has) => { try { return JSON.parse(db.prepare('SELECT data FROM events WHERE conversation = ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1').get(id, type, has)?.data ?? 'null'); } catch { return null; } };
-      gauges.set(id, { model: newest('config', '"model"')?.model?.current ?? null, context: contextOf(newest('update', '"usage_update"')) });
+      gauges.set(id, { model: newest('config', '"model"')?.model?.current ?? null, context: contextOf(newest('update', '"usage_update"')), fold: undefined });
     }
-    return gauges.get(id);
+    // Row 716: spent is what the chat has used so far (its turns' tokens, its reported cost), topped up from the ledger on each read.
+    const kept = gauges.get(id), { into, usage } = ledger.spent(id, kept.fold);
+    kept.fold = into;
+    return { model: kept.model, context: kept.context, spent: usage };
   };
   // O48 (SECURITY.md "Provider profiles"): a Claude chat started on a profile keeps { id, name, model } in prefs under
   // profile:<chat>; the key stays in profiles.mjs. gone: the profile was removed, so the chat can be read, not continued.
@@ -394,6 +411,53 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
+  // S13 Pause sprint (SECURITY.md § Pause sprint): prefs paused:<lead> is the list, in order, of what agents and P9 sent that
+  // lead's workers while it is paused ({ id, chat, held, from, mixed, body }). In the ledger, so a restart keeps the pause
+  // and every message it holds. Absent: not paused.
+  // ponytail: in memory only; after a P9 restart there is no check left and a held message goes out (SECURITY.md § Pause sprint).
+  const heldAuthority = new Map();
+  const pausedOf = (lead) => {
+    const value = ID.test(lead ?? '') ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('paused:' + lead)?.value : undefined;
+    if (value === undefined) return null;
+    try { const list = JSON.parse(value); return Array.isArray(list) ? list : []; } catch { return []; }
+  };
+  const setPaused = (lead, list) => list
+    ? db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('paused:' + lead, JSON.stringify(list))
+    : db.prepare('DELETE FROM prefs WHERE key = ?').run('paused:' + lead);
+  // What Resume has still to send, under resuming:<lead>: a message leaves it once its prompt answered (taken or refused),
+  // so a restart in between sends the rest. sending: the ledger's cursor when its prompt began; a 'user' event of its
+  // text after that cursor means it was recorded before the restart, and it is not sent twice.
+  const resumingOf = (lead) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('resuming:' + lead)?.value ?? '[]'); } catch { return []; } };
+  const setResuming = (lead, list) => list.length
+    ? db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('resuming:' + lead, JSON.stringify(list))
+    : db.prepare('DELETE FROM prefs WHERE key = ?').run('resuming:' + lead);
+  const delivering = new Set(); // leads whose resuming list is being sent now
+  // narrow (delegate.mjs): the mode each kept message may run in now, from its senders' modes now, or { error }.
+  async function deliver(lead, narrow) {
+    if (delivering.has(lead)) return; // the running pass takes what was added
+    delivering.add(lead);
+    try {
+      for (let item; (item = resumingOf(lead).find((i) => !i.queued));) {
+        const done = () => setResuming(lead, resumingOf(lead).filter((i) => i.id !== item.id));
+        const allowed = heldAuthority.get(item.id) ?? (() => true);
+        heldAuthority.delete(item.id);
+        const recorded = item.sending !== undefined && db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'user' AND cursor > ? AND json_valid(data) AND data ->> '$.text' = ? LIMIT 1").get(item.chat, item.sending, item.body.text);
+        if (recorded) { done(); continue; }
+        const picked = !allowed() ? { error: 'session-ended' } : narrow ? narrow(item) : { mode: item.body.mode };
+        if (picked.error) { emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: picked.error }); done(); continue; }
+        setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
+        const body = { ...item.body, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
+        if (item.mixed) mixed.set(body, item.mixed);
+        const result = await api.prompt(item.chat, body, undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
+        if (result.status !== 202 && result.status !== 200) emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: result.error ?? 'refused' });
+        // Into a running turn's queue: kept until settleResumed sees it delivered or refused.
+        if (result.held && result.when === 'queue') setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, queued: result.held } : i)));
+        else done();
+      }
+    } finally { delivering.delete(lead); }
+  }
+  // The name of the mode last set on a chat's agent (its 'mode' event), so a sender not running still has one.
+  const lastMode = (id) => db.prepare("SELECT data ->> '$.name' AS name FROM events WHERE conversation = ? AND type = 'mode' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id)?.name ?? null;
   // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, the sprint folder's rules.md (D3; before it, prefs
   // under rules:<parent>, still read until the first set_rules); never set, it is DEFAULT_RULES, and '' is none. It rides
   // as its own block with every message that chat's agent sends a chat it started (a compaction in the worker cannot lose
@@ -1160,7 +1224,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1214,6 +1278,23 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
+      // S13: a paused sprint's worker starts no turn and takes nothing into a running one for what an agent or P9 sends
+      // (a lead's send_chat, a reviewer wake, the messages that waited for a turn's end): each is kept, in order, for
+      // Resume. The owner's own message goes through (Lead's choice, 2026-11-16: holding it would look like a dead chat),
+      // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
+      const pausing = (from || mixed.has(body)) && !notes.has(body) && pausedOf(conversation.parent);
+      if (pausing) {
+        release();
+        if (solo) return refused(409, 'sprint-paused');
+        if (pausing.length >= 100) return refused(409, 'sprint-paused-full'); // SECURITY.md § Pause sprint
+        const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, mixed: mixed.get(body) ?? null,
+          body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } };
+        setPaused(conversation.parent, [...pausing, item]);
+        heldAuthority.set(item.id, captureAuthority()); // a phone's line in it, from a phone revoked by Resume, sends nothing
+        // Messages that waited for a turn's end are on the window already, under their own IDs.
+        if (!held?.length) emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: 'pause' });
+        return { status: 202, held: item.id, when: 'pause' };
+      }
       if (conversation.state === 'turn') {
         const session = live.get(id);
         try {
@@ -1418,6 +1499,33 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
     activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
     sprint: sprintOf,
+    // S13 (delegate.mjs pause_sprint / resume_sprint and the project page's buttons). pause: false when already paused.
+    paused: (lead) => pausedOf(lead) !== null,
+    lastMode,
+    pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
+    // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
+    // end. Returns how many were held, or null when the sprint was not paused.
+    async resume(lead, narrow) {
+      const list = pausedOf(lead);
+      if (!list) return null;
+      for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
+      db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
+      try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
+      wakeAll('resumed');
+      await deliver(lead, narrow);
+      return list.length;
+    },
+    // After a restart, what a Resume had not sent yet (delegate.mjs calls it once, with its narrow).
+    async resumeLeft(narrow) {
+      await recovered;
+      for (const { key } of db.prepare("SELECT key FROM prefs WHERE key LIKE 'resuming:%'").all()) {
+        // A message left in a turn's queue when P9 stopped: recorded (a 'user' event carries its id, or an 'unheld' names
+        // it) leaves the list; otherwise the queue it was in is gone, and it is sent again in its place.
+        const lead = key.slice(9), seen = db.prepare("SELECT 1 FROM events WHERE conversation = ? AND json_valid(data) AND ((type = 'user' AND EXISTS (SELECT 1 FROM json_each(data, '$.held') WHERE value = ?)) OR (type = 'unheld' AND data ->> '$.id' = ?)) LIMIT 1");
+        setResuming(lead, resumingOf(lead).flatMap((i) => (!i.queued ? [i] : seen.get(i.chat, i.queued, i.queued) ? [] : [{ ...i, queued: undefined }])));
+        deliver(lead, narrow).catch(() => {});
+      }
+    },
     queue: (id) => { const c = db.prepare('SELECT parent, key FROM conversations WHERE id = ?').get(id); return c ? queueOf(c.parent, c.key, sprintOf(id)) : null; },
     setSprint,
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),

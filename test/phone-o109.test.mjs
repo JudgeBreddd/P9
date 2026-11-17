@@ -137,3 +137,44 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   const reopened = await composerOnScreen(page);
   assert.ok(reopened.inside && reopened.hit, 'the composer is on screen after the next report: ' + JSON.stringify(reopened));
 });
+
+// window-3 on the phone: a worker archived anywhere but its card row (here the daemon's archive route, which the sidebar and
+// archive_chat use) left its report pinned on the phone, which looked only at this phone's closed list. A closed but not
+// archived worker keeps its report pinned (stop_chat close only stops the process).
+test('window-3 phone: an archived worker\'s report leaves the pinned box, live and after a reload', { timeout: 180000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  const LEAD = '00000000-0000-4000-8000-000000010902', WORKER = '00000000-0000-4000-8000-000000010903', CARD = 'ready-' + WORKER;
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db')), at = Date.now();
+  const conv = db.prepare('INSERT INTO conversations (id, provider, title, state, created, parent) VALUES (?, ?, ?, ?, ?, ?)');
+  conv.run(LEAD, 'claude', 'Lead', 'idle', at, null); conv.run(WORKER, 'claude', 'Worker W1', 'stopped', at, LEAD);
+  const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
+  event.run(LEAD, 'card', JSON.stringify({ id: 'sprint', kind: 'note', text: 'SPRINT: 2 workers' }), at);
+  event.run(LEAD, 'card', JSON.stringify({ id: CARD, kind: 'note', text: 'Worker report: PR #900' }), at);
+  event.run(LEAD, 'user', JSON.stringify({ text: 'Run the sprint' }), at);
+  event.run(WORKER, 'closed', JSON.stringify({}), at); // closed with stop and close, not archived
+  db.close();
+  const { page } = await phone(t, server);
+  await page.evaluate((id) => history.replaceState(null, '', '#chat=' + id), LEAD);
+  await page.reload();
+  const pinnedReport = () => page.evaluate((id) => document.querySelectorAll(`#pinned [data-card="${id}"]`).length, CARD);
+  // The report's own row in the chat: how many, and whether it is drawn (hidden while its card is pinned above the box).
+  const chatReport = () => page.evaluate(() => { const rows = [...document.querySelectorAll('#events article[data-kind="report"]')].filter((row) => /PR #900/.test(row.textContent)); return { rows: rows.length, visible: rows.length === 1 && rows[0].checkVisibility() }; });
+  const shown = () => page.waitForFunction(() => [...document.querySelectorAll('#events article[data-kind="report"]')].some((row) => /PR #900/.test(row.textContent) && row.checkVisibility()), null, { timeout: 20000 }).catch(() => {});
+  await page.waitForFunction(() => /2 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
+  assert.equal(await pinnedReport(), 1, 'a closed, not archived, worker\'s report is pinned');
+  assert.deepEqual(await chatReport(), { rows: 1, visible: false }, 'a pinned report is drawn a second time in the chat');
+  await shot(page, 'w3-phone-report-pinned');
+  const archived = await server.desk(`/chat/${WORKER}/archive`, 'POST', { archived: true });
+  assert.equal(archived.status, 200, JSON.stringify(archived.body));
+  await shown();
+  assert.deepEqual(await chatReport(), { rows: 1, visible: true }, 'the archived worker\'s report is not readable in the chat before a reload');
+  assert.equal(await pinnedReport(), 0, 'the archived worker\'s report is still pinned on the phone');
+  assert.match(await page.textContent('#chips'), /1 pinned/, 'the sprint card stays pinned');
+  await page.reload();
+  await page.waitForFunction(() => /1 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 30000 });
+  assert.equal(await pinnedReport(), 0, 'the archived worker\'s report came back after a reload');
+  await shown();
+  assert.deepEqual(await chatReport(), { rows: 1, visible: true }, 'the report is not readable in the chat after a reload');
+  await shot(page, 'w3-phone-archived');
+  console.log('PASS window-3 phone: closed worker report pinned; archived through the daemon it left the pinned box and its chat row is drawn, live and after a reload');
+});

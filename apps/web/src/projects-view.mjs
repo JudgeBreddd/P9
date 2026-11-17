@@ -47,6 +47,9 @@ export function installProjects(o, api) {
         : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
         : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
   const startBtn = sp => (!sp.prep && !sp.started) || sp.closed ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
+  // S13 (SECURITY.md § Pause sprint): Pause or Resume on a started sprint's row. ponytail: here until the Sprint View
+  // (Window's row) takes them.
+  const pauseBtn = sp => sp.prep || sp.closed ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="${sp.paused ? 'spresume' : 'sppause'}" data-lead="${esc(sp.lead)}" title="${sp.paused ? 'Sends every message kept while it was paused, in order.' : 'Its workers start no new turn; what agents and P9 send them is kept until Resume. Turns already running finish.'}">${sp.paused ? 'Resume sprint' : 'Pause sprint'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
@@ -143,7 +146,7 @@ export function installProjects(o, api) {
     const roles = rolesOf(sp), files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
     const fixed = ['sprint.md', 'rules.md', 'roles.json', 'hooks.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : fixed.length;
     files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < fixed.length ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}${sp.paused ? '<span class="tag" data-sp-paused>Paused</span>' : ''}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${pauseBtn(sp)}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
       ${startedHtml(sp)}${scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
@@ -156,6 +159,8 @@ export function installProjects(o, api) {
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
+  const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;
+    if (t == null) return 'it is missing'; if (!t.trim()) return 'it is empty'; try { const d = JSON.parse(t); return Array.isArray(d?.roles) ? 'a row has no "key"' : 'it has no "roles" list'; } catch (e) { return e.message; } };
   const rolesOf = sp => { try { const d = JSON.parse(sp.files.find(f => f.name === 'roles.json')?.text ?? ''); return Array.isArray(d?.roles) && d.roles.every(r => r && typeof r.key === 'string') ? d.roles : null; } catch { return null; } };
   // O110: a roles.json read between an outside writer's truncate and its write comes back empty or cut short. The page
   // keeps the last good one it had (its hash too, so a pick made meanwhile is refused as changed) and reads the project
@@ -200,11 +205,13 @@ export function installProjects(o, api) {
   }
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
-  const roleFiles = sp => (sp.prep ? ['rules.md'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
+  const roleFiles = sp => (sp.prep ? ['rules.md', 'roles.json'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
   const ROLE = { lead: 'Lead: runs the sprint, merges what passed review', review: 'Reviewer: reviews each piece, gets no worker folder' };
   function rolesHtml(sp, roles) {
-    if (!sp.files.some(f => f.name === 'roles.json')) return '';
-    if (!roles) return '<p class="hint" data-sp-roles-bad role="status">roles.json is not a list of roles P9 can read. Fix it in its file below; the rows show again when it reads.</p>';
+    // A prep is made with its roles.json, so one gone was deleted: it says so, and the file is listed to make again
+    // (FIX1). Any other sprint folder (a chat's notes, made without one) shows no roles.
+    if (!sp.prep && !sp.files.some(f => f.name === 'roles.json')) return '';
+    if (!roles) return `<p class="hint" data-sp-roles-bad role="status">roles.json does not read: <span class="mono" data-sp-roles-why>${esc(rolesWhy(sp))}</span>. Fix it in its file below; the rows show again when it reads.</p>`;
     const row = r => { const worker = r.key !== 'lead' && r.key !== 'review', p = runnerPicks(o, { agent: String(r.provider ?? ''), model: String(r.model ?? ''), effort: String(r.effort ?? '') },
       { first: ['', 'Not set'], attr: k => `data-spr="${k}" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}"`, aria: k => `${r.key} ${k}` });
       return `<div class="set-row sp-role" data-role-row="${esc(r.key)}"><span><strong class="mono">${esc(r.key)}</strong><span class="muted sm">${ROLE[r.key] ?? `Worker: its own folder on branch sprint/…/${esc(r.key)}`}${p.empty ? `. Start one ${esc(o.names[p.a] ?? p.a)} chat first: its models and efforts are listed here after that.` : ''}</span></span>${p.html}`
@@ -241,12 +248,23 @@ export function installProjects(o, api) {
   // sprint_status gives an agent. ponytail: read again every 5 s while its page shows; no push from the daemon.
   async function loadView() {
     const lead = svFor = spPage, n = ++svN;
+    rereadFiles(lead);
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
       const [m, r] = await Promise.all([import('./sprint-view.mjs').catch(() => null), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
       if (m && r.status === 200) { sv = { lead, draw: opts => m.statusHtml(r.body, esc, opts) }; renderPage(); if (r.body.closed) return; } // a closed sprint's record does not change: read once
     }
     setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
+  }
+  // O138: the shown sprint's files are read again with it (on opening, then every 5 s), so a roles.json changed on disk
+  // shows: a torn or broken one through takeFiles (last good rows, then the file as written and why it does not read),
+  // a fixed one as its rows. Drawn again only when a file of that sprint changed.
+  const filesSeen = sp => (sp?.files ?? []).map(f => f.name + ' ' + f.hash).join('\n');
+  async function rereadFiles(lead) {
+    const id = cur?.id, r = id && await call('project', { id }, { quiet: true }).catch(() => null);
+    if (r?.status !== 200 || cur?.id !== id || spPage !== lead) return;
+    if (filesSeen(cur.sprints?.find(x => x.lead === lead)) === filesSeen(r.body.project.sprints?.find(x => x.lead === lead))) return;
+    adopt(r.body.project, ''); renderPage(); fillBox(false);
   }
   const refresh = p => { if (p) cur = p; o.loadProjects(); renderPage(); };
   async function update(body) { const r = await call('updateProject', { id: cur.id, ...body }); if (r.status !== 200) { failed(r); return false; } refresh(r.body.project); return true; }
@@ -334,6 +352,11 @@ export function installProjects(o, api) {
       if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);
       o.loadProjects(); renderPage(); if (spPage === lead) loadView(); return; }
     if (k === 'spscripts') return openScripts(b.dataset.lead);
+    if (k === 'sppause' || k === 'spresume') { b.disabled = true; const id = cur.id, r = await call(k === 'sppause' ? 'pauseSprint' : 'resumeSprint', { sprint: b.dataset.lead }, { quiet: true });
+      if (r.status !== 200) failed(r);
+      const again = cur?.id === id && await call('project', { id }, { quiet: true });
+      if (again?.status === 200 && cur?.id === id) adopt(again.body.project, b.dataset.lead);
+      renderPage(); return fillBox(false); }
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
     if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }

@@ -114,7 +114,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       if (!info) continue;
       workers.push({ chat: c.id, key: c.id === sprint ? 'lead' : c.key ?? null, title: info.title, provider: info.provider, profile: info.profile?.id ?? null,
         model: info.model ?? gauge?.model ?? null, effort: info.effort?.value ?? null, mode: info.mode ?? null, state: stateOf(info), waiting: Boolean(row?.waiting),
-        context: gauge?.context ?? null, folder: await chat.startFolder(c.id), active: iso(row?.used),
+        context: gauge?.context ?? null, spent: gauge?.spent ?? null, folder: await chat.startFolder(c.id), active: iso(row?.used),
         task: mine.task ? { item: mine.task.item } : null,
         ready: mine.ready ? { item: mine.ready.item, commit: mine.ready.commit, at: iso(mine.ready.at) } : null,
         verdict: mine.verdict ? { result: mine.verdict.result ?? null, by: mine.verdict.by ?? null, at: iso(mine.verdict.at), note: clean(mine.verdict.note ?? '') } : null });

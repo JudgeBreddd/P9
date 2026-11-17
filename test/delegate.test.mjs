@@ -554,7 +554,15 @@ test('Delegate: sprint rules ride with every message a parent\'s agent sends its
   assert.deepEqual(row.context, { used: 400, size: 1000 });
   assert.ok(Math.abs(Date.now() - Date.parse(row.active)) < 60000, row.active);
   assert.ok('model' in row);
-  console.log('PASS Delegate sprint rules: default on the first message, set_rules on the next and on a steer, none on the user\'s, none when empty; list_chats context ' + JSON.stringify(row.context) + ', model ' + row.model);
+  // Row 716: spent, what the worker has used so far. Two turns that report 2 and 3 (tokens per turn, cost as the session's
+  // running total) add 5000 input, 500 output and 50 cached tokens and two turns; the cost is the latest one, $3.
+  const zero = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, turns: 0 }, before = { ...zero, ...row.spent };
+  for (const text of ['spend 2', 'spend 3']) { await a.tool('send_chat', { chat: other.chat, text }); await a.done(other.chat); }
+  const spent = (await a.tool('list_chats')).chats.find((c) => c.id === other.chat).spent;
+  assert.ok(spent, 'list_chats has no spent for a worker that reported usage');
+  assert.deepEqual(Object.fromEntries(Object.keys(zero).map((k) => [k, spent[k] - before[k]])), { inputTokens: 5000, outputTokens: 500, cachedTokens: 50, turns: 2 });
+  assert.equal(spent.costUsd, 3);
+  console.log('PASS Delegate sprint rules: default on the first message, set_rules on the next and on a steer, none on the user\'s, none when empty; list_chats context ' + JSON.stringify(row.context) + ', model ' + row.model + ', spent ' + JSON.stringify(spent));
 });
 
 test('Delegate: after a restart the top chat of a sprint that was cut mid-turn gets one line and one turn; an idle sprint is not started; the third start in 10 minutes wakes nothing', { timeout: 240000 }, async (t) => {

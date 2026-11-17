@@ -851,6 +851,18 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   console.log('PASS S19 page: the sprint section lists the scripts Start approves, the approved copy after it, and a file changed since');
   await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT start-again ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // S13 (SECURITY.md § Pause sprint): the started sprint's Pause and Resume, the owner's press.
+  const pause = section.locator('[data-pj="sppause"], [data-pj="spresume"]'), pausedTag = section.locator('[data-sp-paused]');
+  assert.equal((await pause.textContent()).trim(), 'Pause sprint'); assert.equal(await pausedTag.count(), 0);
+  await pause.click();
+  await pausedTag.waitFor({ timeout: 10000 });
+  assert.equal((await pause.textContent()).trim(), 'Resume sprint');
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT s13-paused ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await pause.click();
+  await until(async () => await pausedTag.count() === 0, 'Resume cleared the Paused mark');
+  assert.equal((await pause.textContent()).trim(), 'Pause sprint');
+  console.log('PASS S13 page: Pause sprint marks the started sprint Paused and turns into Resume sprint; Resume clears it');
   assert.deepEqual(errors, []);
   console.log('PASS window-10: Start sprint held shows Starting… and sends one press; halfway says what was made; Start again keeps the lead and makes w2; the record shows by you and the plan\'s sha256');
 });
@@ -1204,4 +1216,43 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   assert.match(await btn.locator('[data-sp-closed]').textContent(), /^Closed /);
   assert.deepEqual(errors, []);
   console.log('PASS Close sprint page: the press asked first and Cancel closed nothing; a before-close exit 1 was said beside the button and the sprint stayed open; the next press closed it: Closed sprint, by you, Ran, the lead Stopped, no Close and no Start, equal to the status route; a box ticked after Close changed nothing; the project page\'s button says Closed');
+});
+
+test('projects: a sprint page shows why its roles.json does not read, and follows the file when it changes', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Broken roles', work: { kind: 'new', parent: '', name: 'broken' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Roles prep' });
+  const file = path.join(prep.folder, 'roles.json');
+  const good = (keys) => JSON.stringify({ folder: 'broken', roles: keys.map((key) => ({ key, provider: 'claude', model: '', effort: '' })) });
+  await writeFile(file, good(['lead']));
+  const { page } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const open = page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`), why = page.locator('[data-sp-roles-why]'), row = (k) => page.locator(`[data-role-row="${k}"]`);
+  await open.waitFor({ timeout: 10000 }); // the project is read, with roles.json as it was then
+  const parseError = (text) => page.evaluate((x) => { try { JSON.parse(x); return 'parsed'; } catch (error) { return error.message; } }, text);
+  // Broken after the project was read, then the sprint opened from its button: the page reads it again and says why.
+  const broken = '{ "roles": [ { "key": "lead",, } ] }';
+  await writeFile(file, broken);
+  await open.click();
+  await until(async () => (await why.textContent().catch(() => '')) === await parseError(broken), async () => 'the parse error was not shown: ' + JSON.stringify([await why.textContent().catch(() => 'no hint'), await row('lead').count()]), 20000);
+  assert.equal(await row('lead').count(), 0, 'no rows from a file that does not read');
+  // Fixed on disk: the rows come back with no click.
+  await writeFile(file, good(['lead', 'docs']));
+  await until(async () => (await row('docs').count()) === 1 && (await why.count()) === 0, 'the fixed file\'s rows', 20000);
+  // Broken while the page is open, then a valid file that is not a roles list: each says why.
+  await writeFile(file, '{"roles": ');
+  await until(async () => (await why.textContent().catch(() => '')) === await parseError('{"roles": '), async () => 'the cut-off file\'s error: ' + await why.textContent().catch(() => 'no hint'), 20000);
+  await writeFile(file, '{"folder": "broken"}');
+  await until(async () => (await why.textContent().catch(() => '')) === 'it has no "roles" list', async () => 'the no-list reason: ' + await why.textContent().catch(() => 'no hint'), 20000);
+  await writeFile(file, good(['lead']));
+  await until(async () => (await row('lead').count()) === 1 && (await row('docs').count()) === 0 && (await why.count()) === 0, 'the rows again', 20000);
+  // FIX1: deleted, it says it is missing and stays listed as a file to make again; written back, the rows return.
+  await rm(file);
+  await until(async () => (await why.textContent().catch(() => '')) === 'it is missing', async () => 'the missing reason: ' + JSON.stringify([await why.textContent().catch(() => 'no hint'), await row('lead').count()]), 20000);
+  assert.equal(await row('lead').count(), 0, 'no rows from a deleted file');
+  assert.equal(await page.locator(`[data-sprint="${prep.sprint}"] [data-pj="spfile"]`, { hasText: /^roles\.json/ }).count(), 1, 'roles.json still listed while gone');
+  await writeFile(file, good(['lead', 'docs']));
+  await until(async () => (await row('docs').count()) === 1 && (await why.count()) === 0, 'the rows after the file was made again', 20000);
+  if (!process.env.GITHUB_ACTIONS) { await writeFile(file, broken); await why.waitFor({ timeout: 20000 }); console.log('P9_SHOT o138-roles-error ' + (await page.screenshot({ type: 'png' })).toString('base64')); }
+  console.log('PASS roles.json that does not read: opened from its button after a break, the parse error shown with no rows; fixed on disk, the rows back with no click; cut off while open and not a roles list, each reason shown; fixed again, the rows; deleted, it says missing and stays listed; written back, the rows');
 });
