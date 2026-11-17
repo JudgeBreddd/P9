@@ -678,6 +678,13 @@ test('window-4: the worker report floats folded to its title above the box, slid
   await shot(page, 'window4-short-open');
   assert.ok(tb.top >= top - 1 && cb.top >= top - 1, 'opened on a short window, the title and close sit under the history top: ' + JSON.stringify({ top, tb, cb }));
   assert.deepEqual([await hit(title), await hit(close)], ['', ''], 'a click on the title and on the close reaches them');
+  // Not just their centres: no part of the title or its x sits under a top-right card or the sprint card (an x centred in the
+  // gap between two cards passed before).
+  const over = (l) => l.evaluate((el) => { const r = el.getBoundingClientRect();
+    return [...document.querySelectorAll('#cards .card, .pane > .sprint')].map((o) => [o.className, o.getBoundingClientRect()]).filter(([, b]) => b.height && b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top).map(([n, b]) => `${n} ${Math.round(b.left)},${Math.round(b.top)}-${Math.round(b.right)},${Math.round(b.bottom)} over ${el.className} ${Math.round(r.left)},${Math.round(r.top)}-${Math.round(r.right)},${Math.round(r.bottom)}`); });
+  const under = [...await over(title), ...await over(close)];
+  console.log('P9_W4_SHORT ' + JSON.stringify({ top, tb, cb, under, body: await card.evaluate((el) => getComputedStyle(el.closest('.tuck')).getPropertyValue('--tuck-body')) }));
+  assert.deepEqual(under, [], 'nothing covers any part of the opened report\'s title or its x');
   await close.click();
   await until(async () => await card.count() === 0, 'closed from its x on the short window');
   assert.deepEqual(errors, []);

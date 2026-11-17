@@ -12,20 +12,16 @@ export const tab = (s, c, mdOf) => { const on = OPENED.has(reportKey(s, c));
 
 // FIX1 (Reviewer): the open body is capped by the room between the history's top and the bottom's top, not by 45vh alone, so
 // with tall pins or a queue on a short window its title and close stay inside the pane. Both boxes are watched, so a window
-// resize, a growing text box or a new pin refits it; a new .tuck is measured once when it is observed. The top-right cards stack
-// (#cards, as placeSprints reads it) and the pane's sprint card float over the history, so the title row also stays below
-// whichever of them it would run under (on a 560 px window the stack covered its x). ponytail: an opened sprint card that
-// reaches the bottom leaves the report its title only.
-const below = (o, r) => { const b = o?.getBoundingClientRect(); return b && b.height && getComputedStyle(o).visibility !== 'hidden' && b.left < r.right && b.right > r.left ? b.bottom + 4 : 0; };
+// resize, a growing text box or a new pin refits it; a new .tuck is measured once when it is observed. What floats over the
+// pane's top right (the cards stack, the sprint card) is kept off the title and its x by placing both at the left (shell.css).
 const fit = new ResizeObserver(() => document.querySelectorAll('.pane').forEach(p => { const t = p.querySelector('.tuck'), h = p.querySelector('.hist'); if (!t || !h) return;
-  const c = t.firstElementChild, r = c.getBoundingClientRect(), k = document.querySelector('#cards');
-  const top = Math.max(h.getBoundingClientRect().top, below(k?.querySelector('.card') && k, r), below(p.querySelector(':scope > .sprint'), r));
-  t.style.setProperty('--tuck-body', Math.max(0, Math.floor(t.parentElement.getBoundingClientRect().top - 6 - top - (c.offsetHeight - c.querySelector('.tb').offsetHeight))) + 'px'); }));
+  const c = t.firstElementChild, room = t.parentElement.getBoundingClientRect().top - 6 - h.getBoundingClientRect().top;
+  t.style.setProperty('--tuck-body', Math.max(0, Math.floor(room - (c.offsetHeight - c.querySelector('.tb').offsetHeight))) + 'px'); }));
 
 // The title slides the report up and down in place (no redraw, so the slide shows). The close shuts it as the strip's did (the
 // desktop strip draws no report since window-4, so this is the desktop's only report close; the phone keeps its own).
 export function wire(p, s, redraw) {
-  [...p.querySelectorAll('.hist, .bottom > .col, .tuck, :scope > .sprint'), document.querySelector('#cards')].forEach(el => el && fit.observe(el));
+  p.querySelectorAll('.hist, .bottom > .col, .tuck').forEach(el => fit.observe(el));
   p.querySelectorAll('.tuck [data-card-close]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardClose); if (c) SHUT.add(reportKey(s, c)); redraw(); });
   p.querySelectorAll('[data-card-tab]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardTab), t = b.closest('.tuck'); if (!c || !t) return;
     const k = reportKey(s, c), on = !OPENED.has(k); on ? OPENED.add(k) : OPENED.delete(k);
