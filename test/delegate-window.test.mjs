@@ -604,7 +604,7 @@ test('O133: a Settings default effort applies to a worker an agent opens, after 
 // window-4 (row 730, Tyler: "the card above the chat box labeled Worker Report, that is what goes behind the chat box showing
 // the title and clicking the title slides it up, click title again slides it down. that way its not permanently in the way").
 test('window-4: the worker report floats folded to its title above the box, slides up and down from it, and the chat never moves', { timeout: 240000 }, async (t) => {
-  const ctx = await busyLead(t, 0), { instance, parent, made, a, kid, head, page, errors, pane } = ctx;
+  const { instance, parent, made, a, kid, head, page, errors, pane } = await busyLead(t, 0);
   const card = pane.locator(`.card-pin[data-card="ready-${made.chat}"]`), title = card.locator('[data-card-tab]'), body = card.locator('.tb');
   const state = async () => (await call(instance, '/chat')).conversations.find((c) => c.id === parent).state;
   await until(async () => await state() !== 'turn', 'the lead\'s turn ended (the history stops growing)', 120000);
@@ -662,8 +662,8 @@ test('window-4: the worker report floats folded to its title above the box, slid
   await shot(page, 'window4-two-titles');
   // FIX1 (Reviewer): a short window with the bottom at its 70vh cap (a tall pinned card), the long report opened: its title
   // and close stay inside the pane, under the history's top, and a click there reaches them (nothing drawn over them).
-  const { app } = ctx;
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 560));
+  await page.setViewportSize({ width: 1280, height: 560 });
+  assert.equal(await page.evaluate(() => innerHeight), 560, 'the window is short');
   assert.equal((await a.tool('pin_card', { id: 'tall', kind: 'markdown', text: Array.from({ length: 30 }, (_, i) => 'Tall pinned line ' + (i + 1)).join('\n\n') })).pinned, 'tall');
   await pane.locator('.bottom .pinned [data-card="tall"]').waitFor({ timeout: 15000 });
   await page.waitForTimeout(600);

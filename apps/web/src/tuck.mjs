@@ -3,12 +3,12 @@
 // shows until it is clicked, so it never pushes the history up; its body stays in the page (inert, no height) while folded.
 // Loaded by pinned.mjs only once a report is open, so the shell's startup JS stays inside its budget (shell-bundle.test.mjs).
 import { esc } from './helpers.mjs';
-import { reportKey } from './pinned.mjs';
+import { reportKey, SHUT } from './pinned.mjs';
 
 // The reports unfolded in this window, by reportKey, so a new report arrives folded. ponytail: window memory only; a reload folds it again.
 const OPENED = new Set(), say = on => on ? 'Slide the report down' : 'Slide the report up';
-export const tab = (s, c) => { const on = OPENED.has(reportKey(s, c));
-  return `<div class="tuck" data-tuck-open="${on}"><div class="card-pin" data-card="${esc(c.id)}"><div class="tab"><button type="button" class="eyebrow" data-card-tab="${esc(c.id)}" aria-expanded="${on}" title="${say(on)}">Worker report</button><button type="button" class="card-close" data-card-close="${esc(c.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button></div><div class="tb"${on ? '' : ' inert'}><div class="msg agent">${c.html}</div></div></div></div>`; };
+export const tab = (s, c, mdOf) => { const on = OPENED.has(reportKey(s, c));
+  return `<div class="tuck" data-tuck-open="${on}"><div class="card-pin" data-card="${esc(c.id)}"><div class="tab"><button type="button" class="eyebrow" data-card-tab="${esc(c.id)}" aria-expanded="${on}" title="${say(on)}">Worker report</button><button type="button" class="card-close" data-card-close="${esc(c.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button></div><div class="tb"${on ? '' : ' inert'}><div class="msg agent">${mdOf(c)}</div></div></div></div>`; };
 
 // FIX1 (Reviewer): the open body is capped by the room between the history's top and the bottom's top, not by 45vh alone, so
 // with tall pins or a queue on a short window its title and close stay inside the pane. Both boxes are watched, so a window
@@ -17,9 +17,11 @@ const fit = new ResizeObserver(es => new Set(es.map(e => e.target.closest('.pane
   const c = t.firstElementChild, room = t.parentElement.getBoundingClientRect().top - 6 - h.getBoundingClientRect().top;
   t.style.setProperty('--tuck-body', Math.max(0, Math.floor(room - (c.offsetHeight - c.querySelector('.tb').offsetHeight))) + 'px'); }));
 
-// The title slides the report up and down in place (no redraw, so the slide shows). The close button is chat-view's, as in the strip.
-export function wire(p, s) {
+// The title slides the report up and down in place (no redraw, so the slide shows). The close shuts it as the strip's did (the
+// desktop strip draws no report since window-4, so this is the desktop's only report close; the phone keeps its own).
+export function wire(p, s, redraw) {
   p.querySelectorAll('.hist, .bottom > .col, .tuck').forEach(el => fit.observe(el));
+  p.querySelectorAll('.tuck [data-card-close]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardClose); if (c) SHUT.add(reportKey(s, c)); redraw(); });
   p.querySelectorAll('[data-card-tab]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardTab), t = b.closest('.tuck'); if (!c || !t) return;
     const k = reportKey(s, c), on = !OPENED.has(k); on ? OPENED.add(k) : OPENED.delete(k);
     t.dataset.tuckOpen = on; b.setAttribute('aria-expanded', on); b.title = say(on); t.querySelector('.tb').inert = !on; });
