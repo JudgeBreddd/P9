@@ -635,6 +635,13 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.deepEqual([(await server.desk('/sprint-scripts')).body.library, (await server.remote('/sprint-scripts', { session: auth })).status], [[], 404]);
   assert.equal((await server.remote('/sprint-scripts', { method: 'POST', session: auth, body: { save: { name: 'p', command: '/usr/bin/true', point: 'after-close' } } })).status, 404);
   assert.deepEqual((await server.desk('/sprint-scripts')).body.library, [], 'a phone session wrote the script library');
+  // S20: the "Allow additional scripts" switch and the owner's Approve are the desktop's alone.
+  assert.equal((await server.remote('/sprint-scripts/allow', { method: 'POST', session: auth, body: { on: true } })).status, 404);
+  // (A body the route itself refuses with 400: a 404 here is the route missing, not the sprint.)
+  assert.deepEqual([(await server.desk('/sprints/11111111-1111-4111-8111-111111111111/approve-scripts', 'POST', { other: 1 })).status,
+    (await server.remote('/sprints/11111111-1111-4111-8111-111111111111/approve-scripts', { method: 'POST', session: auth, body: { other: 1 } })).status], [400, 404]);
+  assert.equal((await server.desk('/sprint-scripts')).body.allowed, false, 'a phone session turned Allow additional scripts on');
+  console.log('PASS S20 phone: the switch and Approve are 404 for a signed-in phone');
   console.log('PASS S18 phone: the script library answers the desktop and is 404 for a signed-in phone, read and write');
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {

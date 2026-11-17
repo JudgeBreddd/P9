@@ -916,3 +916,60 @@ test('projects: Sprint scripts S18 window makes, removes, keeps in the library, 
   assert.deepEqual(errors, []);
   console.log('PASS S18 page: the Sprint scripts window saved a row to the sprint and the library, refused a bad one, removed and added it back, edited the library alone, and ran only the copy Start approved');
 });
+
+test('projects: Sprint scripts S20 window lists the scripts added after Start, approves one or all, refuses a list that changed, and asks before the switch is turned on', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Later', work: { kind: 'new', parent: '', name: 'later' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'S2' });
+  const sprint = prep.sprint, folder = prep.folder;
+  await writeFile(path.join(folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  await writeFile(path.join(folder, 'roles', 'lead.work.md'), 'config');
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', {}); assert.equal(started.status, 200, JSON.stringify(started));
+  const line = (n) => `${n} (after-close): /usr/bin/touch ${n}.txt`;
+  const add = async (name) => assert.equal((await call(instance, '/sprint-scripts', 'POST', { sprint, save: { name, command: `/usr/bin/touch ${name}.txt`, point: 'after-close' } })).status, 200);
+  const stands = async () => { const b = await call(instance, '/sprint-scripts?sprint=' + sprint), n = (rows) => rows.map((r) => r.name); return [b.allowed, n(b.additional), n(b.waiting)]; };
+  await add('one');
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const section = page.locator(`[data-sprint="${sprint}"]`), dlg = page.locator('#pjScripts'), said = dlg.locator('[data-ss-said]'), sw = dlg.locator('[data-ss="allow"]'), warn = dlg.locator('[data-ss-warn]');
+  const rows = (where) => dlg.locator(`[data-ss-row="${where}"]`).evaluateAll((all) => all.map((li) => li.querySelector('.mono').textContent));
+  const press = (k, where, name) => (where ? dlg.locator(`[data-ss-row="${where}"]`, { hasText: name }) : dlg).locator(`[data-ss="${k}"]`).click();
+  const says = (re) => until(async () => re.test(await said.textContent()), async () => 'the window said ' + re + '; it says ' + await said.textContent());
+  await section.locator('[data-pj="spscripts"]').click();
+  await dlg.locator('[data-ss-sec="later"]').waitFor({ timeout: 10000 });
+  // Off: the row added after Start waits, with Approve and no Run now. One row: no Approve all.
+  assert.deepEqual([await sw.isChecked(), await rows('additional'), await rows('waiting')], [false, [], [line('one')]]);
+  assert.deepEqual([await dlg.locator('[data-ss-row="waiting"] [data-ss="run"]').count(), await dlg.locator('[data-ss="approveall"]').count()], [0, 0]);
+  await press('approve', 'waiting', 'one'); await says(/^Approved: one\. It runs at its point from now on\.$/);
+  assert.deepEqual([await rows('additional'), await rows('waiting'), await stands()], [[line('one')], [], [false, ['one'], []]]);
+  await press('run', 'additional', 'one'); await says(/^Ran one: exit 0 in \d+ ms/);
+  assert.equal(existsSync(path.join(folder, 'one.txt')), true, 'Run now did not run the row approved after Start');
+  // A row saved here waits and says so. The list then changes behind the window: its Approve approves nothing and shows the list as it is.
+  await dlg.locator('[name=name]').fill('two'); await dlg.locator('[name=command]').fill('/usr/bin/touch two.txt'); await dlg.locator('[name=point]').selectOption('after-close');
+  await press('save'); await says(/^In this sprint: two\. It waits under Added after Start until you approve it\.$/);
+  await add('three');
+  assert.deepEqual(await rows('waiting'), [line('two')]);
+  await press('approve', 'waiting', 'two'); await says(/^Not done: hooks\.json changed since it was shown\. Look again\.$/);
+  assert.deepEqual([await said.evaluate((e) => e.classList.contains('err')), await rows('waiting'), await stands()], [true, [line('two'), line('three')], [false, ['one'], ['two', 'three']]]);
+  await press('approveall'); await says(/^Approved: two, three\. They run at their points from now on\.$/);
+  assert.deepEqual([await rows('waiting'), await stands()], [[], [false, ['one', 'two', 'three'], []]]);
+  // The switch: on is asked first, in the window. Keep off changes nothing.
+  await sw.click(); await warn.waitFor({ timeout: 5000 });
+  assert.match(await warn.textContent(), /any script an agent adds to a started sprint runs as you.*without asking you first/);
+  assert.deepEqual([await sw.isChecked(), (await stands())[0]], [false, false], 'the switch turned on before the warning was answered');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-scripts-later ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await press('allowno'); assert.deepEqual([await warn.count(), await sw.isChecked(), (await stands())[0]], [0, false, false]);
+  await sw.click(); await press('allowon'); await says(/^Allow additional scripts is on, for every sprint\.$/);
+  assert.deepEqual([await sw.isChecked(), (await stands())[0]], [true, true]);
+  // On: a row saved now runs with no Approve. Off is not asked: the row then waits.
+  await dlg.locator('[name=name]').fill('four'); await dlg.locator('[name=command]').fill('/usr/bin/touch four.txt');
+  await press('save'); await says(/^In this sprint: four\. It runs from now on\.$/);
+  assert.deepEqual([await rows('waiting'), (await rows('additional')).includes(line('four')), await dlg.locator('[data-ss="approve"], [data-ss="approveall"]').count()], [[], true, 0]);
+  await sw.click(); await says(/^Allow additional scripts is off\./);
+  assert.deepEqual([await warn.count(), await sw.isChecked(), await rows('waiting'), await stands()], [0, false, [line('four')], [false, ['one', 'two', 'three'], ['four']]]);
+  assert.deepEqual(errors, []);
+  console.log('PASS S20 page: a row added after Start waited with Approve and no Run now; Approve ran it; a changed list approved nothing; Approve all; the switch asked first, Keep off kept it off, on ran a new row with no Approve, off made it wait');
+});

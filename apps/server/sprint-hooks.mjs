@@ -80,6 +80,20 @@ export function run(command, input, { cwd, timeout }) {
 // chat: the chat service; usage: () => what GET /usage answers (or absent); stateOf, rolesOf: delegate's own.
 export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   const approved = (sprint) => { const s = chat.projects.started(sprint)?.scripts; return Array.isArray(s) ? s : []; };
+  // Scripts added after Start (sprint spec S20; SECURITY.md § Sprint scripts, "Scripts added after Start"; threat model
+  // row S20). A hooks.json row that is new, or differs in any field from the Start-approved row of its name, is an
+  // additional script. The owner's switch "Allow additional scripts" on: it runs as the file says. Off: it runs only
+  // as the exact row the owner approved since Start (kept in the start record as extra). A row approved at Start runs
+  // until the next Start, whatever the file says. running: what fire and Run now use, and nothing else decides it.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const extras = (sprint) => { const s = chat.projects.started(sprint)?.extra; return Array.isArray(s) ? s : []; };
+  function standing(sprint) {
+    if (!chat.projects.started(sprint)) return { running: [], additional: [], waiting: [] };
+    const base = approved(sprint), file = parse(chat.sprintFiles.read(sprint, 'hooks.json')).scripts ?? [];
+    const over = chat.allowScripts() ? file.filter((f) => !base.some((b) => same(b, f))) : extras(sprint);
+    const running = [...base.map((b) => over.find((o) => o.name === b.name) ?? b), ...over.filter((o) => !base.some((b) => b.name === o.name))];
+    return { running, additional: running.filter((r) => !base.some((b) => same(b, r))), waiting: file.filter((f) => !running.some((r) => same(r, f))) };
+  }
   const logLines = (sprint, n = 20) => (chat.sprintFiles.read(sprint, 'hooks.log') ?? '').split('\n').filter(Boolean).slice(-n);
   const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 
@@ -127,10 +141,10 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     const how = r.reason ? r.reason : 'exit ' + r.exit;
     try { chat.sprintFiles.log(sprint, `${new Date().toISOString()} | ${s.point} | ${s.name} | ${how} | ${r.ms} ms | ${r.line}`); } catch { /* the run stands; the file is a convenience */ }
   };
-  // Runs the approved scripts of one point, in the file's order. A blocking one that fails refuses: the rest do not run
+  // Runs the approved scripts of one point (standing: Start's, and the additional ones the owner allows), in order. A blocking one that fails refuses: the rest do not run
   // and { error: 'script-refused', ... } comes back. Notices are started and not waited for. null: go on.
   // scripts: only Start passes it (the list being approved by this very press, not yet recorded).
-  async function fire(sprint, point, subject, scripts = approved(sprint)) {
+  async function fire(sprint, point, subject, scripts = standing(sprint).running) {
     const due = scripts.filter((s) => s.point === point);
     if (!due.length || !ID.test(sprint ?? '')) return null;
     const cwd = chat.sprintFiles.folderOf(sprint);
@@ -163,15 +177,17 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   function read(caller, named) {
     const { sprint, ...no } = where(caller, named);
     if (no.error) return no;
-    const text = chat.sprintFiles.read(sprint, 'hooks.json'), file = parse(text), start = chat.projects.started(sprint), ok = approved(sprint);
+    const text = chat.sprintFiles.read(sprint, 'hooks.json'), file = parse(text), start = chat.projects.started(sprint), ok = approved(sprint), st = standing(sprint);
     return {
       sprint, points: POINTS, blocking: BLOCKING, fired: FIRED,
       approved: start ? { at: iso(start.at), by: start.by, scripts: ok } : null,
       file: file.error ? { error: file.error } : { scripts: file.scripts, ...(text !== null && { hash: hashOf(text) }) },
       pending: Boolean(file.error) || JSON.stringify(file.scripts) !== JSON.stringify(ok),
+      // S20: allowed is the user's switch (no tool changes it). running: additional scripts that run now. waiting: rows that do not run yet.
+      additional: { allowed: chat.allowScripts(), running: st.additional, waiting: st.waiting },
       library: library(),
       log: logLines(sprint),
-      note: 'Only the approved scripts run. A change to hooks.json runs after the user starts the sprint again and approves it; no tool approves a script, and run_sprint_script runs only an approved one.',
+      note: 'The scripts approved at Start run, and the additional.running ones. A row in additional.waiting does not run: request_sprint_scripts asks the user to approve the waiting rows (one question for all), or the user approves them in the Sprint scripts window, or starts the sprint again. With additional.allowed true a row added after Start runs with no question. No tool approves a script or changes that switch.',
     };
   }
 
@@ -202,7 +218,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     let saved; try { saved = chat.sprintFiles.write(sprint, 'hooks.json', body, text === null ? '' : hashOf(text)); } catch { saved = false; }
     if (saved !== true) return saved === 'changed' ? { error: 'sprint-file-changed', detail: 'hooks.json changed meanwhile. Read sprint_scripts and try again.' } : { error: 'not-saved' };
     return { sprint, file: { scripts: next.scripts, hash: hashOf(body) }, pending: JSON.stringify(next.scripts) !== JSON.stringify(approved(sprint)),
-      note: 'In hooks.json. It runs only after the user starts the sprint again and approves it.' };
+      note: 'In hooks.json. Before Start, Start approves it. In a started sprint it waits (sprint_scripts: additional.waiting; request_sprint_scripts asks the user) unless the user allows additional scripts.' };
   }
   const rowOf = (a) => ({ name: a.name, command: a.command, point: a.point, ...(a.blocking !== undefined && { blocking: a.blocking }) });
   const locked = (caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : null);
@@ -231,11 +247,11 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // Which script may be run on request: one the owner approved at Start, by name, and that copy. The one place that
   // decides it (S20 puts the owner's "Allow additional scripts" switch here).
   function runnable(sprint, name) {
-    const found = approved(sprint).find((s) => s.name === name);
+    const found = standing(sprint).running.find((s) => s.name === name);
     if (found) return found;
     const inFile = parse(chat.sprintFiles.read(sprint, 'hooks.json')).scripts?.some((s) => s.name === name), inLibrary = library().some((s) => s.name === name);
-    return { error: 'script-not-approved', name, detail: inFile ? `"${name}" is in hooks.json and the user has not approved it: it runs after the user starts the sprint again.`
-      : inLibrary ? `"${name}" is only in the library. Add it to the sprint (sprint_script_add); it runs after the user starts the sprint again.` : `This sprint has no approved script named "${name}".` };
+    return { error: 'script-not-approved', name, detail: inFile ? `"${name}" is in hooks.json and the user has not approved it: ${chat.projects.started(sprint) ? 'request_sprint_scripts asks them' : 'it runs after the user starts the sprint'}.`
+      : inLibrary ? `"${name}" is only in the library. Add it to the sprint (sprint_script_add) first.` : `This sprint has no approved script named "${name}".` };
   }
   // One approved script, now, waited for. Its input is the same state, with subject { manual: true, by } (by: 'owner' or
   // the asking chat). It refuses nothing: its result is returned and logged. still: asked after the state is gathered
@@ -264,11 +280,50 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     };
     return still() ?? runNow(at.sprint, script, caller, still);
   }
+  // Approves rows added after Start: they join the start record as extra, the exact rows, replacing an earlier one of the name.
+  function approveRows(sprint, rows) {
+    const extra = [...extras(sprint).filter((e) => !rows.some((r) => r.name === e.name)), ...rows];
+    if (extra.length > MAX_SCRIPTS * 2) return { error: 'too-many-scripts', detail: `At most ${MAX_SCRIPTS * 2} scripts approved after Start. Start the sprint again to approve the file as it is.` };
+    chat.projects.recordStart(sprint, { ...chat.projects.started(sprint), extra });
+    return { sprint, approved: rows, additional: { allowed: chat.allowScripts(), running: standing(sprint).additional, waiting: standing(sprint).waiting } };
+  }
+  // request_sprint_scripts: one question for every waiting row, each shown whole, asked in every mode (Unrestricted
+  // too: this switch is the owner's control here, as Start's question is). Read again after the yes.
+  async function request(caller, args, signal) {
+    const no = locked(caller); if (no) return no;
+    const at = where(caller, args.sprint);
+    if (at.error) return at;
+    if (!chat.projects.started(at.sprint)) return { error: 'sprint-not-started', detail: 'Nothing is approved before Start: the user\'s Start approves every script in hooks.json.' };
+    const before = standing(at.sprint).waiting;
+    if (!before.length) return { sprint: at.sprint, approved: [], detail: chat.allowScripts() ? 'No script waits: Allow additional scripts is on, so hooks.json runs as it is.' : 'No script waits.' };
+    const title = `P9 sprint scripts: approve ${before.length === 1 ? 'this script' : 'these ' + before.length + ' scripts'}, added after Start, to run as you at ${before.length === 1 ? 'its point' : 'their points'}, outside every agent's mode: ` + before.map(said).join(' | ');
+    if (!await chat.approve(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (signal?.aborted) return { error: 'cancelled' };
+    const late = locked(caller); if (late) return late;
+    if (!same(standing(at.sprint).waiting, before)) return { error: 'scripts-changed', detail: 'The waiting scripts changed while the user was asked. Read sprint_scripts and ask again.' };
+    return approveRows(at.sprint, before);
+  }
+
   // The owner's own (the project page, desktop only): the library, and a run of one approved script.
   // sprint named: that sprint's hooks.json (checked and saved as the tools do); left out: the library.
   const known = (sprint) => ID.test(sprint ?? '') && chat.sprintFiles.exists(sprint);
   const owner = {
-    library: () => ({ library: library(), points: POINTS, blocking: BLOCKING }),
+    // sprint named and known: also what stands there (the window's Approve needs the waiting rows and the file's hash).
+    library(sprint) {
+      const text = known(sprint) ? chat.sprintFiles.read(sprint, 'hooks.json') : null, st = known(sprint) ? standing(sprint) : null;
+      return { library: library(), points: POINTS, blocking: BLOCKING, allowed: chat.allowScripts(), ...(st && { additional: st.additional, waiting: st.waiting, hash: text === null ? '' : hashOf(text) }) };
+    },
+    // The switch: the owner's alone. One setting for every sprint.
+    allow(on) { if (typeof on !== 'boolean') return { error: 'request-refused' }; chat.setAllowScripts(on); return { allowed: chat.allowScripts() }; },
+    // Approve on a row (names) or Approve all (no names). hash: of the hooks.json the window showed.
+    approve(sprint, hash, names) {
+      if (!known(sprint)) return { error: 'unknown-sprint' };
+      if (!chat.projects.started(sprint)) return { error: 'sprint-not-started' };
+      const text = chat.sprintFiles.read(sprint, 'hooks.json');
+      if (typeof hash !== 'string' || (text === null ? '' : hashOf(text)) !== hash) return { error: 'scripts-changed', detail: 'hooks.json changed since it was shown. Look again.' };
+      const rows = standing(sprint).waiting.filter((r) => !names || names.includes(r.name));
+      return rows.length ? approveRows(sprint, rows) : { sprint, approved: [] };
+    },
     save: (row, sprint) => (sprint === undefined ? libraryWrite((rows) => upsert(rows, row)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => upsert(rows, row))),
     remove: (name, sprint) => (sprint === undefined ? libraryWrite((rows) => without(rows, name)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => without(rows, name))),
     add(name, sprint) {
@@ -281,5 +336,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       return script.error ? script : runNow(sprint, script, 'owner');
     },
   };
-  return { fire, read, approved, save, remove, add, run: runAsked, owner };
+  return { fire, read, approved, save, remove, add, run: runAsked, request, owner };
 }

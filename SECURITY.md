@@ -1030,7 +1030,7 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
 ## Sprint scripts
 
 A sprint can name commands that P9 runs at fixed points of the sprint: a check before it starts, a notice when a
-worker folder is made. Written before the code (sprint spec S19; threat model row S19).
+worker folder is made. Written before the code (sprint spec S18 to S20; threat model rows S18, S19, S20).
 
 - **What a script is.** A row of `hooks.json` in the sprint folder (§ Sprint files): a name, a command, a point, and
   optionally `"blocking": true`. At most 12 rows, a name of at most 60 characters, a command of at most 200. The
@@ -1102,8 +1102,28 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
   right before the program is started, after its input is gathered. The run is not blocking, has the 60-second limit, gets the same state on its input with
   `subject: { manual: true, by }`, and adds its line to `hooks.log` with the point marked "(run now)". A manual run
   carries the limit of the approval above: it runs whatever the named program holds at that moment.
-- **Where the owner's routes are.** `GET` and `POST /sprint-scripts` and `POST /sprints/:id/run-script` exist on the
-  desktop's connection only: a phone session gets 404, as for Start.
+- **Scripts added after Start.** Pressing Start approves every script then in `hooks.json`. A row that appears in the
+  file later, or that differs in any field from the approved copy of the same name, is an additional script, whoever
+  wrote it. What P9 does with it is your switch, "Allow additional scripts", in the Sprint scripts window:
+  - **Off (the default).** It does not run until you approve that exact row. You approve in the window (Approve on
+    the row, or Approve all; the press carries the SHA-256 of the `hooks.json` the window showed and is refused if the
+    file is no longer that one), or by your yes to an agent's `request_sprint_scripts`, which asks one question for
+    every waiting row, each shown whole, in every mode, Unrestricted too; the rows are read again after your yes and
+    nothing is approved if they changed. A row changed after you approved it waits again, and until then the copy you
+    approved keeps running.
+  - **On.** It runs at its point with no question, and a changed row replaces the approved one. This is the one
+    place P9 gives up the rule above that nothing runs that you did not approve: with the switch on, any agent
+    that can write the sprint folder can have a command run as you, outside its mode, at the next point. Turn it
+    on only for agents you would give your own shell. The window says this before it turns on.
+  In both positions a script approved at Start keeps running when its row is removed from the file: only your next
+  Start drops it. A `hooks.json` P9 cannot read adds nothing. The switch is one setting for all sprints, kept in P9's
+  database; `sprint_scripts` tells an agent whether it is on, which additional scripts run and which wait, and no
+  tool changes it. The agent lock refuses `request_sprint_scripts`. At most 24 rows can be approved between one Start
+  and the next (`too-many-scripts`); Start again approves the file as it is. Run now, yours and the agent's, runs
+  what stands: the copies approved at Start and the additional ones running, never a waiting row.
+- **Where the owner's routes are.** `GET` and `POST /sprint-scripts`, `POST /sprints/:id/run-script`,
+  `POST /sprint-scripts/allow` (the switch) and `POST /sprints/:id/approve-scripts` exist on the desktop's connection
+  only: a phone session gets 404, as for Start.
 - **Points nothing fires yet.** `before-merge`, `before-close`, `ci-red`, `gate-passed`, `pause`, `resume` and
   `after-close` are accepted in the file and approved like the rest, but P9 has no such action yet, so their scripts
   do not run.

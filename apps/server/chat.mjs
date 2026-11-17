@@ -1455,6 +1455,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // The sprint script library (S18; sprint-hooks.mjs checks every row on the way in and out), in prefs under 'sprint-scripts'.
     scriptLibrary: () => { try { const v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'sprint-scripts'").get()?.value ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; } },
     setScriptLibrary: (rows) => { db.prepare("INSERT INTO prefs (key, value) VALUES ('sprint-scripts', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(rows)); },
+    // "Allow additional scripts" (S20; SECURITY.md § Sprint scripts, "Scripts added after Start"): off until the owner turns it on.
+    allowScripts: () => db.prepare("SELECT value FROM prefs WHERE key = 'sprint-scripts-allow'").get()?.value === 'true',
+    setAllowScripts: (on) => { db.prepare("INSERT INTO prefs (key, value) VALUES ('sprint-scripts-allow', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(on === true ? 'true' : 'false'); },
     // Settings > Delegation (SECURITY.md § Delegate), kept in prefs under 'delegation'. start: who starts a sprint ('off',
     // 'ask' the default, 'agent'); max: running workers per chat (1 to 20, 5 until set); workers: one row per worker, in the
     // order they start: agent ('' the parent's own, an agent's name, or 'profile:<id>'), model and effort ('' not set).

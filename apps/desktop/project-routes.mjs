@@ -18,7 +18,9 @@ export const projectRoutes = (uuid) => {
     // hooks: the SHA-256 of the hooks.json the page showed, so the press approves the scripts the owner saw (SECURITY.md § Sprint scripts).
     startSprint: ({ sprint, hooks, ...rest }) => uuid(sprint) && !Object.keys(rest).length && (hooks === undefined || /^[0-9a-f]{64}$/.test(hooks)) && ['POST', '/sprints/' + sprint + '/start', hooks ? { hooks } : {}],
     // SECURITY.md § Sprint scripts, "The library": the owner's saved scripts, and a run of one approved script of a sprint.
-    scriptLibrary: (rest) => !Object.keys(rest).length && ['GET', '/sprint-scripts'],
+    scriptLibrary: ({ sprint, ...rest }) => (sprint === undefined || uuid(sprint)) && !Object.keys(rest).length && ['GET', '/sprint-scripts' + (sprint ? '?sprint=' + sprint : '')],
+    allowScripts: ({ on, ...rest }) => typeof on === 'boolean' && !Object.keys(rest).length && ['POST', '/sprint-scripts/allow', { on }],
+    approveScripts: ({ sprint, hash, names, ...rest }) => uuid(sprint) && typeof hash === 'string' && (names === undefined || (Array.isArray(names) && names.every((n) => typeof n === 'string'))) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/approve-scripts', { hash, ...(names && { names }) }],
     // sprint: that sprint's hooks.json; left out: the library.
     saveScript: ({ script, sprint, ...rest }) => body(script) && (sprint === undefined || uuid(sprint)) && !Object.keys(rest).length && ['POST', '/sprint-scripts', { save: script, ...(sprint && { sprint }) }],
     removeScript: ({ name, sprint, ...rest }) => typeof name === 'string' && (sprint === undefined || uuid(sprint)) && !Object.keys(rest).length && ['POST', '/sprint-scripts', { remove: name, ...(sprint && { sprint }) }],

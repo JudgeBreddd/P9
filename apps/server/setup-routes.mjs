@@ -251,8 +251,19 @@ export function setupRoutes(outer) {
   });
   // Desktop only (SECURITY.md § Sprint scripts, "The library"): the owner's script library and a run of one approved
   // script. No phone route. An agent has the tools instead (sprint_script_save, _remove, _add, run_sprint_script).
-  const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);
-  outer.app.get('/sprint-scripts', (c) => c.json(outer.mcp.ownerScripts.library()));
+  const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed', 'scripts-changed', 'sprint-not-started', 'too-many-scripts'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);
+  outer.app.get('/sprint-scripts', (c) => c.json(outer.mcp.ownerScripts.library(c.req.query('sprint'))));
+  // The owner's switch and Approve (S20, "Scripts added after Start"): desktop only, and no agent tool does either.
+  outer.app.post('/sprint-scripts/allow', async (c) => {
+    const body = await outer.json(c), result = body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).join() === 'on' ? outer.mcp.ownerScripts.allow(body.on) : { error: 'request-refused' };
+    return c.json(result, scriptStatus(result));
+  });
+  outer.app.post('/sprints/:id/approve-scripts', async (c) => {
+    const body = await outer.json(c), ok = body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).every((k) => ['hash', 'names'].includes(k))
+      && (body.names === undefined || (Array.isArray(body.names) && body.names.length > 0 && body.names.every((n) => typeof n === 'string')));
+    const result = ok ? outer.mcp.ownerScripts.approve(c.req.param('id'), body.hash, body.names) : { error: 'request-refused' };
+    return c.json(result, scriptStatus(result));
+  });
   outer.app.post('/sprint-scripts', async (c) => {
     // One of save (a row), remove (a name) or add (a library name, into a sprint); sprint: that sprint's hooks.json instead of the library.
     const body = await outer.json(c), { sprint, ...rest } = body && typeof body === 'object' && !Array.isArray(body) ? body : {}, keys = Object.keys(rest).join();
