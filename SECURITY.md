@@ -1147,8 +1147,10 @@ migration spec S13).
   worker yourself goes through. `open_chat` and `start_sprint` from the lead make no chat while it is paused.
 - **Where it is kept.** In P9's ledger, never in a file an agent can edit, so a P9 restart keeps the pause and every
   message it holds. At most 100 messages are held per sprint; the next one is refused `sprint-paused-full`.
-- **Resume.** Every held message goes out in the order it was sent, each with the sender it had, so each still carries
-  its sender's rules and runs no wider than its sender's mode. Pause and Resume each send the lead one note.
+- **Resume.** Every held message goes out in the order it was sent, each as if its sender sent it now: with that
+  sender's rules, and no wider than that sender's mode at Resume. A held message that carries a line you sent from a
+  phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
+  Pause and Resume each send the lead one note.
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Agent modes

@@ -394,9 +394,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
-  // S13 Pause sprint (SECURITY.md § Delegate): prefs paused:<lead> is the list, in order, of what agents and P9 sent that
+  // S13 Pause sprint (SECURITY.md § Pause sprint): prefs paused:<lead> is the list, in order, of what agents and P9 sent that
   // lead's workers while it is paused ({ id, chat, held, from, mixed, body }). In the ledger, so a restart keeps the pause
   // and every message it holds. Absent: not paused.
+  // ponytail: in memory only; after a P9 restart there is no check left and a held message goes out (SECURITY.md § Pause sprint).
+  const heldAuthority = new Map();
   const pausedOf = (lead) => {
     const value = ID.test(lead ?? '') ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('paused:' + lead)?.value : undefined;
     if (value === undefined) return null;
@@ -1237,6 +1239,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, mixed: mixed.get(body) ?? null,
           body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } };
         setPaused(conversation.parent, [...pausing, item]);
+        heldAuthority.set(item.id, captureAuthority()); // a phone's line in it, from a phone revoked by Resume, sends nothing
         // Messages that waited for a turn's end are on the window already, under their own IDs.
         if (!held?.length) emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: 'pause' });
         return { status: 202, held: item.id, when: 'pause' };
@@ -1457,6 +1460,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       wakeAll('resumed');
       for (const item of list) {
         for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
+        const allowed = heldAuthority.get(item.id) ?? (() => true);
+        heldAuthority.delete(item.id);
+        if (!allowed()) { emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: 'session-ended' }); continue; }
         const body = { ...item.body, when: 'queue' };
         if (item.mixed) mixed.set(body, item.mixed);
         const result = await api.prompt(item.chat, body, undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
