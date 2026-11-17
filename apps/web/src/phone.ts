@@ -445,7 +445,8 @@ function blockHtml(block: Block) {
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
 let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
 function itemsOf(blocks: Block[]) {
-  const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size; // O712: a closed report shows its chat row // F4 item 9: a poll that changed no block signs none again
+  // O712: a closed report shows its chat row; window-3: so does one whose worker was archived (same blocks, same SHUT), so the pinned one is in the key
+  const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
   const out: Entry[] = [];
   for (let i = 0; i < blocks.length; i++) {
