@@ -1,5 +1,5 @@
 // Anymouse: DUWOP's idea / bug / gripe box (@duwop/anymouse, the same box and limits), sending GitHub issues instead of
-// Discord (Builder, 2026-10-15). With a token in the daemon a note becomes an issue on the P9 repo through the API, its
+// Discord. With a token in the daemon a note becomes an issue on the P9 repo through the API, its
 // kind as the label. Without one the reply carries GitHub's prefilled new-issue page; the desktop opens it in the
 // browser, so the user files it under their own login. The token is read once at startup and never sent to a page.
 export const REPO = 'JudgeBreddd/p9';
