@@ -814,6 +814,28 @@ test('Delegate daemon-7: ask_chat to a stopped worker whose parent is at Workers
   console.log('PASS daemon-7 ask_chat: a question to a stopped worker over its parent\'s limit was refused: ' + asked.error);
 });
 
+test('Delegate daemon-10 FIX1: compact_chat on a stopped worker takes a place under Workers per chat: at the limit it is too-many-chats and starts nothing; two starts at once with one place start one; the place comes back', { timeout: 180000 }, async (t) => {
+  const { instance, a, b, kids } = await sevenSetup(t);
+  const started = async (id) => !['stopped', 'moved'].includes((await a.tool('list_chats')).chats.find((c) => c.id === id).state);
+  // One place free: a compaction and a send at the same moment to the two stopped workers start only one.
+  const both = await Promise.all([a.tool('compact_chat', { chat: kids[0] }), b.tool('send_chat', { chat: kids[1], text: 'hello' })]);
+  assert.deepEqual(both.map((r) => r.error ?? 'ok').sort(), ['ok', 'too-many-chats'], 'both stopped workers started past Workers per chat: ' + JSON.stringify(both));
+  const [won, lost] = both[0].action ? [kids[0], kids[1]] : [kids[1], kids[0]];
+  await a.done(won);
+  assert.equal(await started(lost), false, 'the refused one started');
+  // At the limit: compact_chat on the stopped one is refused and sends it nothing.
+  const at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  assert.equal((await a.tool('compact_chat', { chat: lost })).error, 'too-many-chats');
+  await pause(500);
+  assert.equal((await events(instance, lost)).filter((e) => e.cursor > at && e.type === 'user').length, 0, 'the refused compaction reached the worker');
+  // The refused calls held nothing: once the running one stops, the place is free again.
+  assert.equal((await a.tool('stop_chat', { chat: won, close: true })).action, 'stopped');
+  assert.deepEqual(await a.tool('compact_chat', { chat: lost }), { chat: lost, action: 'compacting' });
+  await a.done(lost);
+  assert.equal((await events(instance, lost)).filter((e) => e.type === 'user').at(-1).data.text, '/compact');
+  console.log('PASS Delegate daemon-10 FIX1 compact_chat Workers per chat: ' + JSON.stringify(both.map((r) => r.action ?? r.sent ?? r.error)));
+});
+
 test('Delegate peer help: ask_chat asks a chat the user opened to questions; its turn is alone, read-only and its own; the helper\'s mode comes back; no chains, no parent or worker', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });

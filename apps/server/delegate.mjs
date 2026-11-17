@@ -875,7 +875,12 @@ export function createDelegate({ chat, allowed, usage }) {
   async function compactChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!reach(caller, args.chat, true)) return { error: reach(caller, args.chat) ? 'not-a-descendant' : 'chat-not-found' };
-    const result = await chat.command(args.chat, '/compact', caller);
+    // A stopped worker starts again to compact, so it takes a place under Workers per chat like send_chat (daemon-7),
+    // held until the start is through and released on every outcome.
+    const target = chat.info(args.chat);
+    const place = target?.parent && ['stopped', 'moved'].includes(target.state) ? take(target.parent, args.chat) : null;
+    if (place?.error) return place;
+    const result = await chat.command(args.chat, '/compact', caller).finally(() => place?.release());
     return result.status === 202 ? { chat: args.chat, action: 'compacting' } : { error: result.error };
   }
 
