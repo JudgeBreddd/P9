@@ -1470,6 +1470,44 @@ test('O125 point 2: two notes from one worker while the steerable parent runs a 
   assert.equal(kid.length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
 });
 
+// O125 point 3: an urgent message is send_chat's `when: steer`. With an agent that steers, it waits only for the running
+// tool call's end and goes into the turn there, before the turn ends. With an agent that cannot steer (Claude's on ACP 2;
+// both real adapters steer today), nothing can enter a running turn: the steer is refused, naming queue, and a queued
+// message goes when the turn ends.
+test('O125 point 3: send_chat steer reaches a working chat at its next tool step, before the turn ends; without steering it is refused, naming queue', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const tools = (chat, after) => until(instance, (e) => e.conversation === chat && e.type === 'update' && e.data.sessionUpdate === 'tool_call', after);
+  const made = await a.tool('open_chat', { text: 'tools 2', title: 'Steers' });
+  const first = await tools(made.chat);
+  const sent = await a.tool('send_chat', { chat: made.chat, text: 'urgent', when: 'steer' });
+  assert.equal(sent.sent, 'waiting for its next step', JSON.stringify(sent));
+  await until(instance, (e) => e.conversation === made.chat && (e.data?.content?.text === 'got:urgent' || e.type === 'turn-end'), first.cursor);
+  await until(instance, (e) => e.conversation === made.chat && e.type === 'turn-end', first.cursor);
+  const mine = (await events(instance, made.chat)).filter((e) => e.cursor > first.cursor);
+  const at = (test) => mine.findIndex(test);
+  const steered = at((e) => e.type === 'user' && e.data.text?.endsWith('urgent') && e.data.steered === true);
+  const answered = at((e) => e.data?.content?.text === 'got:urgent');
+  const done = at((e) => e.type === 'update' && e.data.sessionUpdate === 'tool_call_update' && e.data.status === 'completed');
+  const end = at((e) => e.type === 'turn-end');
+  assert.ok(done >= 0 && steered > done && answered > steered && answered < end, 'not steered in at the tool step, before the turn end: ' + JSON.stringify({ done, steered, answered, end }));
+  await a.tool('stop_chat', { chat: made.chat });
+  // Without steering (read at the chat's start), a steer is refused and names queue; a queued message goes at the turn's end.
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
+  const plain = await a.tool('open_chat', { text: 'tools 2', title: 'Plain' });
+  await tools(plain.chat);
+  const refused = await a.tool('send_chat', { chat: plain.chat, text: 'urgent', when: 'steer' });
+  assert.equal(refused.reason, 'turn-running', JSON.stringify(refused));
+  assert.match(refused.detail ?? '', /when: queue/);
+  assert.equal((await a.tool('send_chat', { chat: plain.chat, text: 'later', when: 'queue' })).sent, 'waiting for the turn to end');
+  await until(instance, (e) => e.conversation === plain.chat && e.type === 'user' && e.data.text?.endsWith('later'));
+  const all = await events(instance, plain.chat);
+  const later = all.findIndex((e) => e.type === 'user' && e.data.text?.endsWith('later'));
+  assert.equal(all.slice(0, later).filter((e) => e.type === 'turn-end').length, 1, 'the queued message did not wait for the turn to end');
+  console.log('PASS O125 point 3: ' + JSON.stringify({ steer: sent.sent, order: { done, steered, answered, end }, plain: refused.reason }));
+});
+
 // O140: prompts the daemon sends at a time. Real minutes: the first run is 2 s out, then every minute, with a SIGTERM
 // restart between the first and second run, so the second and third come from what the restarted daemon read back.
 test('O140: a scheduled prompt fires at its time and every minute, across a daemon restart; a once prompt fires once and is gone; paused, it stops', { timeout: 300000 }, async (t) => {
