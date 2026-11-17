@@ -812,8 +812,10 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   one of your provider profiles), a model and an effort. A chat's new worker takes the first row
   no running worker of that chat holds, and keeps it until it is stopped. Past the limit
   `open_chat` is refused (`too-many-chats`); lowering the limit stops nothing. A stopped worker
-  has given up its place: `send_chat` to it starts it again only while its parent is under the
-  limit, and is refused the same way otherwise (a note is still taken). A worker that is idle
+  has given up its place: `send_chat` to it, or another chat's `ask_chat`, starts it again only
+  while its parent is under the limit, and is refused the same way otherwise (a note is still
+  taken). The place is held from that check until the start is through, so two starts at once
+  never pass the limit together. A worker that is idle
   or waiting on an answer keeps its place, so a message to it is never refused for the limit.
   What the call
   names still wins over the row, then the row, then the parent's own: the rows are your

@@ -188,6 +188,15 @@ export function createDelegate({ chat, allowed, usage }) {
   const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' });
   const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
   const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
+  // daemon-7: a stopped worker started again (send_chat, ask_chat) takes a place under Workers per chat from the check
+  // until its start is through, held like open_chat's, so two starts at once never pass the limit together. Its own row
+  // is the one held. Returns tooMany, or the place with its release.
+  const take = (parent, id) => {
+    const set = chat.delegation(), row = chat.slot(id);
+    if (running(parent, chat.family()) + (holding.get(parent)?.length ?? 0) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
+    holding.set(parent, [...(holding.get(parent) ?? []), row]);
+    return { release: () => { const left = holding.get(parent); left.splice(left.indexOf(row), 1); if (!left.length) holding.delete(parent); } };
+  };
   // opts (Start sprint only, never from a tool's arguments): approved, the press already was the user's yes; profile, the
   // provider profile the role names.
   // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
@@ -756,12 +765,6 @@ export function createDelegate({ chat, allowed, usage }) {
     if (stateOf(target) === 'working' && !(tierOf(target.provider, target.mode) <= picked.ceiling)) {
       return { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' };
     }
-    // F8: a stopped worker gave up its place, so starting it again needs a free one, like open_chat. A worker that is
-    // idle or waiting on an answer still holds its place and is never refused here.
-    if (target.parent && ['stopped', 'moved'].includes(target.state)) {
-      const set = chat.delegation();
-      if (running(target.parent, chat.family()) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
-    }
     // O82: the new key is set before the message, so rulesFor reads the new role's rules file for it. The worker is told
     // where its notes now live and where the old ones are; nothing is moved.
     let told = '';
@@ -773,7 +776,11 @@ export function createDelegate({ chat, allowed, usage }) {
       chat.sprintFiles.ensureWorker(caller, args.key);
       told = `[P9: your role key is now ${args.key}: your rules come from roles/${args.key}.rules.md and your notes file is notes/${args.key}.md. Your notes so far are in notes/${target.key ?? args.chat}.md.]\n\n`;
     }
-    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller);
+    // F8: a stopped worker gave up its place, so starting it again needs a free one, like open_chat. A worker that is
+    // idle or waiting on an answer still holds its place and is never refused here.
+    const place = target.parent && ['stopped', 'moved'].includes(target.state) ? take(target.parent, args.chat) : null;
+    if (place?.error) { if (told) chat.rekey(args.chat, target.key ?? null); return place; }
+    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller).finally(() => place?.release());
     // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
     if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };
@@ -985,7 +992,11 @@ export function createDelegate({ chat, allowed, usage }) {
       if (stateOf(it) === 'failed') return { error: 'chat-not-askable', reason: it.state };
       // S13: a paused sprint's worker takes no question (chat.mjs refuses it too); said now, not as an answer that never came.
       if (chat.paused(it?.parent)) return { error: 'sprint-paused', detail: 'That chat\'s sprint is paused. Ask again once the user resumes it, or work it out yourself.' };
+      // daemon-7: a question to a stopped worker starts it again, so it needs a free place under its parent's limit.
+      const place = it?.parent && ['stopped', 'moved'].includes(it.state) ? take(it.parent, args.chat) : null;
+      if (place?.error) return { ...place, detail: 'That chat is a stopped worker and its parent is at its Workers per chat limit. Ask again later, or work it out yourself.' };
       const asked = chat.ask(args.chat, args.text, caller, () => beside()), mine = open = { chat: args.chat, waits: 0 };
+      asked.sent.finally(() => place?.release()).catch(() => {});
       mine.dropped = new Promise((resolve) => { mine.drop = resolve; });
       // Sending can take as long as starting a stopped helper, so the call does not wait for it (timeoutMs: 0 returns at
       // once). A question the helper could not take ends as an answer that did not come.
