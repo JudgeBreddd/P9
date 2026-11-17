@@ -1,5 +1,5 @@
-// O140: prompts the daemon sends at a time, once or every so many minutes (Tyler, 2026-11-16: "that would make P9 the
-// engine and its up as long as the deamon is up"). Kept in the ledger's database, so a restart keeps them; a run missed
+// O140: prompts the daemon sends at a time, once or every so many minutes, so they run for as long as the daemon is
+// up. Kept in the ledger's database, so a restart keeps them; a run missed
 // while P9 was down goes once when it is back, not once per missed run. fire(schedule) sends one; what it answered is
 // kept as the schedule's last result. A once prompt is gone from the list as it is sent.
 import { randomUUID } from 'node:crypto';
