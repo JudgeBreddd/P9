@@ -11,7 +11,7 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
-import { planItems } from '../apps/server/sprint-files.mjs';
+import { planItems, hashOf } from '../apps/server/sprint-files.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -457,6 +457,31 @@ test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lo
   const ran = await held(() => {});
   assert.deepEqual([ran.exit, ran.script, fs.readFileSync(mark, 'utf8')], [0, 'mark', 'x'], JSON.stringify(ran));
   console.log('PASS S18 held: a cancel, the agent lock and a changed approval during the wait for the state each ran nothing; with none of them the script ran once');
+});
+
+// #229 FIX1. The window's Approve sends the hash of the hooks.json it showed. The hash check and the rows approved must
+// come from one read of the file: with two reads, a writer between them gets a row nobody saw approved under the hash
+// of the row that was shown. The stand-in file here answers A to the first read and B to every later one.
+test('Sprint scripts S20 one read: the owner\'s Approve approves the rows of the text whose hash it checked, and the window is given the hash of the rows it is shown, when hooks.json is replaced between two reads', { timeout: 60000 }, async () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+  const file = (command) => JSON.stringify({ scripts: [{ name: 'x', command, point: 'sprint-start' }] });
+  const A = file('/bin/echo shown'), B = file('/bin/echo unseen');
+  const made = (texts) => {
+    let n = 0, record = { at: 1, by: 'owner', plan: null, scripts: [] };
+    const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id }], list: () => [{ id }],
+      sprint: () => ({}), gauge: () => null, scriptLibrary: () => [], allowScripts: () => false,
+      sprintFiles: { exists: (c) => c === id, read: (c, name) => (name === 'hooks.json' ? texts[Math.min(n++, texts.length - 1)] : null), log: () => {} },
+      projects: { started: () => record, prepOf: () => null, recordStart: (c, next) => { record = next; } } };
+    return { owner: createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true }).owner, extra: () => record.extra ?? [] };
+  };
+  const shown = made([A, B]), lib = shown.owner.library(id);
+  assert.deepEqual([lib.hash, lib.waiting.map((r) => r.command)], [hashOf(A), ['/bin/echo shown']], 'the window was given the hash of one text and the rows of another');
+  const swapped = made([A, B]), got = swapped.owner.approve(id, hashOf(A), ['x']);
+  assert.deepEqual([got.approved?.map((r) => r.command), swapped.extra().map((r) => r.command)], [['/bin/echo shown'], ['/bin/echo shown']], 'Approve approved a row it never checked: ' + JSON.stringify(got));
+  assert.deepEqual(got.additional.waiting.map((r) => r.command), ['/bin/echo unseen'], 'the row written after the check must wait');
+  const late = made([B]), refused = late.owner.approve(id, hashOf(A), ['x']);
+  assert.deepEqual([refused.error, late.extra()], ['scripts-changed', []], JSON.stringify(refused));
+  console.log('PASS S20 one read: a hooks.json replaced between two reads never has its unseen row approved; the window\'s hash is of the rows it is shown; a file already replaced refuses');
 });
 
 test('Sprint scripts S20: a script added after Start waits with "Allow additional scripts" off until the user approves it (one question for a batch, a change asks again) and runs with no question when the switch is on', { timeout: 300000 }, async (t) => {

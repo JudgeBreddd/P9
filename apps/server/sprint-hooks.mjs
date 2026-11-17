@@ -87,9 +87,11 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // until the next Start, whatever the file says. running: what fire and Run now use, and nothing else decides it.
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const extras = (sprint) => { const s = chat.projects.started(sprint)?.extra; return Array.isArray(s) ? s : []; };
-  function standing(sprint) {
+  // text: the hooks.json a caller has already read (and hashed), so its rows and its hash are of the same bytes;
+  // left out, the file is read here.
+  function standing(sprint, text) {
     if (!chat.projects.started(sprint)) return { running: [], additional: [], waiting: [] };
-    const base = approved(sprint), file = parse(chat.sprintFiles.read(sprint, 'hooks.json')).scripts ?? [];
+    const base = approved(sprint), file = parse(text === undefined ? chat.sprintFiles.read(sprint, 'hooks.json') : text).scripts ?? [];
     const over = chat.allowScripts() ? file.filter((f) => !base.some((b) => same(b, f))) : extras(sprint);
     const running = [...base.map((b) => over.find((o) => o.name === b.name) ?? b), ...over.filter((o) => !base.some((b) => b.name === o.name))];
     return { running, additional: running.filter((r) => !base.some((b) => same(b, r))), waiting: file.filter((f) => !running.some((r) => same(r, f))) };
@@ -310,7 +312,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   const owner = {
     // sprint named and known: also what stands there (the window's Approve needs the waiting rows and the file's hash).
     library(sprint) {
-      const text = known(sprint) ? chat.sprintFiles.read(sprint, 'hooks.json') : null, st = known(sprint) ? standing(sprint) : null;
+      // One read: the hash the window sends back with Approve is of the rows it is shown here.
+      const text = known(sprint) ? chat.sprintFiles.read(sprint, 'hooks.json') : null, st = known(sprint) ? standing(sprint, text) : null;
       return { library: library(), points: POINTS, blocking: BLOCKING, allowed: chat.allowScripts(), ...(st && { additional: st.additional, waiting: st.waiting, hash: text === null ? '' : hashOf(text) }) };
     },
     // The switch: the owner's alone. One setting for every sprint.
@@ -321,7 +324,9 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       if (!chat.projects.started(sprint)) return { error: 'sprint-not-started' };
       const text = chat.sprintFiles.read(sprint, 'hooks.json');
       if (typeof hash !== 'string' || (text === null ? '' : hashOf(text)) !== hash) return { error: 'scripts-changed', detail: 'hooks.json changed since it was shown. Look again.' };
-      const rows = standing(sprint).waiting.filter((r) => !names || names.includes(r.name));
+      // The rows approved are those of the text whose hash was just checked: the file is not read again, so a row
+      // written between two reads can never be approved unseen.
+      const rows = standing(sprint, text).waiting.filter((r) => !names || names.includes(r.name));
       return rows.length ? approveRows(sprint, rows) : { sprint, approved: [] };
     },
     save: (row, sprint) => (sprint === undefined ? libraryWrite((rows) => upsert(rows, row)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => upsert(rows, row))),
