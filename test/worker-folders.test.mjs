@@ -371,6 +371,29 @@ test('Worker folders A1: a sprint clones from an address the owner set, without 
   console.log('PASS Worker folders A1 address');
 });
 
+// daemon-4: the owner clears the project's address mid-sprint. The sprint's later workers still get the address clone,
+// whatever the folder's own origin says (here the plain path, the address its file:// spelling); a folder sprint keeps
+// its one-repository check.
+test('Worker folders daemon-4: a sprint cloned from an address keeps its clone after the owner clears the address; a folder sprint still has one repository', { timeout: 60000 }, async (t) => {
+  const { remote, owner, home, dir } = repos(t);
+  const address = 'file://' + remote.split(path.sep).join('/').replace(/^(?!\/)/, '/');
+  const folders = createWorkerFolders({ home, protocols: ['file'] });
+  const a = await folders.make(ID, 'item-a', null, '', address);
+  assert.equal(a.error, undefined, a.detail);
+  const before = ownerState(owner);
+  const b = await folders.make(ID, 'item-b', owner, '', '');
+  assert.equal(b.error, undefined, 'address cleared: ' + JSON.stringify(b));
+  assert.equal(g(b.folder, 'remote', 'get-url', 'origin'), address, 'the address clone, not one from the folder');
+  assert.equal(ownerState(owner), before, 'the owner\'s folder was not touched');
+  // A folder sprint: no record, and a folder of another repository is still refused.
+  const other = path.join(dir, 'other'); fs.mkdirSync(other); g(other, 'init', '-q', '-b', 'main'); write(path.join(other, 'o.txt'), 'o\n'); g(other, 'add', '.'); g(other, 'commit', '-qm', 'o');
+  const sprint = ID.replace('1', '4');
+  assert.equal((await folders.make(sprint, 'x', owner, '', '')).error, undefined);
+  assert.equal(fs.existsSync(path.join(home, sprint, 'clone-record.json')), false, 'a folder clone is not recorded as an address clone');
+  assert.equal((await folders.make(sprint, 'y', other, '', '')).error, 'other-repository');
+  console.log('PASS Worker folders daemon-4');
+});
+
 test('Worker folders A1 A4: a project\'s sprint source and setup command are set on the desktop route only, checked there, and used by open_chat', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const repo = path.join(instance.workspace, 'repo');

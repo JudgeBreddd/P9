@@ -148,7 +148,10 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     if (await realDir(clone, 2)) {
       // One repository per sprint (dogfood 3.5): a folder of another one is refused, never handed this clone. Its
       // origin is the folder's own origin, else the folder itself, as the clone below was made.
+      // daemon-4: a clone made from an address stays this sprint's after the owner clears or respells it (SECURITY.md
+      // § A sprint from an address): no folder is read for it, as while the address was set.
       if (address || typeof source !== 'string' || !path.isAbsolute(source)) return { clone };
+      if (await readFile(path.join(dirOf(sprint), 'clone-record.json'), 'utf8').then((text) => JSON.parse(text).from === 'address', () => false)) return { clone };
       const top = await one(source, ['rev-parse', '--show-toplevel']);
       const from = top && ((await one(top, ['remote', 'get-url', 'origin'])) || top);
       if (from && from === await one(clone, ['remote', 'get-url', 'origin'])) return { clone };
@@ -164,6 +167,9 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
       if (made.code !== 0) { await rm(part, { recursive: true, force: true }); return { error: 'clone-failed', detail: made.err.slice(-TAIL) }; }
       if ((await git(part, ['remote', 'set-head', 'origin', '--auto'])).code !== 0) await git(part, ['remote', 'set-head', 'origin', '--delete']);
       await rename(part, clone);
+      // After the rename: a record never outlives a failed clone (a later folder clone would inherit it). Lost, the
+      // sprint falls back to the folder check (refused), never to a looser one.
+      await writeFile(path.join(dirOf(sprint), 'clone-record.json'), JSON.stringify({ from: 'address' }) + '\n', { mode: 0o600 });
       return { clone };
     }
     // Never git's own default: with no folder git would run in the daemon's working directory.
@@ -264,7 +270,7 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
     if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) {
       // The copy (folder-copy.mjs) goes only once its work is provably applied (copyKeptBecause); its apply record stays.
-      const parts = ['workers', 'ready', 'clone'];
+      const parts = ['workers', 'ready', 'clone', 'clone-record.json'];
       if (await copyKeptBecause(dirOf(sprint)) === null) parts.push('copy');
       for (const part of parts) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
       await rmdir(dirOf(sprint)).catch(() => {});
