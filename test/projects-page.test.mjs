@@ -483,7 +483,7 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   await writeFile(path.join(sprint, 'roles', 'w1.instructions.md'), 'You write the install page.');
   await writeFile(path.join(sprint, 'notes', 'w1.md'), '## Now\nDoing: install page\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n');
   const { page, errors } = await launch(t, instance);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click();
   const row = page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' });
   await row.waitFor({ timeout: 10000 });
   assert.equal(await page.locator('[data-pj="spfile"]').count(), 5); // sprint.md, rules.md, the role file, the notes file, and hooks.json (listed before it is made)
@@ -572,7 +572,7 @@ test('projects: Clean up worker folders on the sprint section says what it remov
   await writeFile(path.join(clone, '.git', 'info', 'exclude'), 'local.env\n'); await writeFile(path.join(sprint, 'workers', 'done', 'local.env'), 'KEY=1\n');
   await writeFile(path.join(open, 'o.txt'), 'o\n'); g(open, 'add', 'o.txt'); g(open, 'commit', '-qm', 'not merged');
   const { page, errors } = await launch(t, instance);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click();
   const button = page.getByRole('button', { name: 'Clean up worker folders' }), said = page.locator('[data-sp-clean]');
   await button.waitFor({ timeout: 10000 });
   assert.equal(await page.locator('[data-sp-ignored]').textContent(), 'Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.', 'it says ignored files go too');
@@ -609,6 +609,7 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await page.locator('#pjAsk [value=yes]').click();
   const section = page.locator('[data-sprint]');
   await section.locator('[data-sp-prep]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-sp-title]').textContent(), 'Sprint Setup', 'New sprint lands in its Sprint Setup page');
   const lead = await section.getAttribute('data-sprint');
   assert.match(await section.locator('h2').textContent(), /Docs sprint/);
   assert.equal(await section.locator('[data-pj="spclean"]').count(), 0, 'a prep has no worker folders to clean up');
@@ -692,17 +693,22 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   // O110: a writer that empties roles.json, pauses, then writes. A save answered in the pause read roles.json empty: the
   // rows stay (the last good ones) and show the written file once it is there, without a reload. A second sprint torn at
   // the same time, met only in the first one's fresh read, keeps its rows too and shows its own file when written.
+  // Each sprint has its own page now: New sprint is on the project's page, and it lands in the new sprint's Setup.
+  const openSprint = async (l) => { await page.locator('[data-pj="spback"]').click(); await page.locator(`[data-pj="spopen"][data-lead="${l}"]`).click(); await page.locator(`[data-sp-page="${l}"]`).waitFor({ timeout: 5000 }); };
+  await page.locator('[data-pj="spback"]').click();
   await page.locator('[data-pj="spnew"]').click();
   await page.locator('#pjAsk input').fill('Site sprint');
   await page.locator('#pjAsk [value=yes]').click();
-  await until(async () => (await page.locator('[data-sprint]').count()) === 2, 'the second prep');
-  const lead2 = (await page.locator('[data-sprint]').evaluateAll((e) => e.map((x) => x.dataset.sprint))).find((x) => x !== lead);
+  await until(async () => (await page.locator('[data-sp-page]').getAttribute('data-sp-page', { timeout: 1000 }).catch(() => lead)) !== lead, 'the second prep, on its own page');
+  const lead2 = await page.locator('[data-sp-page]').getAttribute('data-sp-page');
+  assert.equal(await page.locator('[data-sprint]').count(), 1, 'one sprint to a page');
   const file = path.join(folder, 'roles.json'), file2 = path.join(path.dirname(folder), lead2, 'roles.json');
   const written = JSON.parse(await readFile(file, 'utf8')), written2 = JSON.parse(await readFile(file2, 'utf8'));
   written.roles[0].provider = 'claude'; written2.roles[0].provider = 'codex';
   const leadPick = (l) => page.locator(`[data-sprint="${l}"] [data-spr="agent"][data-role="lead"]`);
   const seen = async (l) => (await leadPick(l).inputValue({ timeout: 1000 }).catch(() => null));
   await until(async () => (await seen(lead2)) === '', 'the second prep\'s rows');
+  await openSprint(lead);
   await page.evaluate(() => { window.notReloaded = true; });
   await writeFile(file, ''); await writeFile(file2, '');
   await page.locator('[data-pj="spfile"]', { hasText: 'roles/docs.work.md' }).click();
@@ -713,10 +719,13 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; })).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
   await writeFile(file, JSON.stringify(written, null, 2) + '\n');
   await until(async () => (await seen(lead)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator(`[data-sprint="${lead}"] [data-sp-roles]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
+  // The second sprint was off screen while it was torn: its page, opened now, still has its rows, and shows its file once written.
+  await openSprint(lead2);
   assert.equal(await seen(lead2), '', 'the second sprint, still torn, keeps its rows');
   await writeFile(file2, JSON.stringify(written2, null, 2) + '\n');
   await until(async () => (await seen(lead2)) === 'codex', async () => 'the second sprint\'s rows show its written roles.json; seen ' + await page.locator(`[data-sprint="${lead2}"]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
   assert.equal(await page.evaluate(() => window.notReloaded), true, 'the page reloaded');
+  await openSprint(lead);
   // Remove: workers only; the lead and the reviewer have no Remove.
   assert.equal(await page.locator('[data-pj="sprole-rm"][data-role="lead"], [data-pj="sprole-rm"][data-role="review"]').count(), 0);
   await page.locator('[data-pj="sprole-rm"][data-role="docs"]').click();
@@ -749,7 +758,7 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   await writeFile(path.join(folder, 'hooks.json'), JSON.stringify({ scripts: [script] }));
   const planOf = async () => createHash('sha256').update(await readFile(path.join(folder, 'sprint.md'), 'utf8') + '\0' + await readFile(path.join(folder, 'roles.json'), 'utf8')).digest('hex');
   const { app, page, errors } = await launch(t, instance);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click();
   const section = page.locator(`[data-sprint="${sprint}"]`), start = section.locator('[data-pj="spstart"]'), said = section.locator('[data-sp-start]'), record = section.locator('[data-sp-started]');
   await section.locator('[data-sp-prep]').waitFor({ timeout: 10000 });
   assert.equal((await start.textContent()).trim(), 'Start sprint');
@@ -786,7 +795,7 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   assert.equal((await start.textContent()).trim(), 'Start sprint'); assert.equal(await start.isDisabled(), false);
   assert.equal((await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).started, undefined);
   await putHooks([script]);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads a project's files when it is opened
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click(); // the page reads a project's files when it is opened
   await until(async () => !/inject/.test(await pendingScripts.textContent()), 'the page shows the restored hooks.json');
   console.log('PASS S19 page held save: a hooks.json that arrived while the draft saved is shown, not approved');
   // An open plan with a draft: its save is held first. A second press while it is held sends nothing either.
@@ -832,7 +841,7 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   // The file changed after Start (an agent can write it): the page says so and shows what the next press would approve.
   const was = (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
   assert.equal((await call(instance, '/projects/' + p.id + '/sprint-file', 'POST', { lead: sprint, name: 'hooks.json', hash: was, text: JSON.stringify({ scripts: [script, { name: 'gate', command: 'node gate.mjs', point: 'before-new-worker', blocking: true }] }) })).status, 200);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads a project's files when it is opened
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click(); // the page reads a project's files when it is opened
   await pendingScripts.waitFor({ timeout: 10000 });
   assert.match(await pendingScripts.textContent(), /^hooks\.json has changed since\. Not run until you press Start again, which approves these scripts\..*gate \(before-new-worker, blocking\): node gate\.mjs$/);
   console.log('PASS S19 page: the sprint section lists the scripts Start approves, the approved copy after it, and a file changed since');
@@ -856,7 +865,7 @@ test('projects: Sprint scripts S18 window makes, removes, keeps in the library, 
   await writeFile(path.join(folder, 'roles', 'lead.work.md'), 'config');
   const onDisk = async () => JSON.parse(await readFile(path.join(folder, 'hooks.json'), 'utf8')).scripts, library = async () => (await call(instance, '/sprint-scripts')).library;
   const { page, errors } = await launch(t, instance);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click();
   const section = page.locator(`[data-sprint="${sprint}"]`), dlg = page.locator('#pjScripts'), said = dlg.locator('[data-ss-said]');
   const rows = (where) => dlg.locator(`[data-ss-row="${where}"]`).evaluateAll((all) => all.map((li) => li.querySelector('.mono').textContent));
   const press = (k, where, name) => (where ? dlg.locator(`[data-ss-row="${where}"]`, { hasText: name }) : dlg).locator(`[data-ss="${k}"]`).click();
@@ -933,7 +942,7 @@ test('projects: Sprint scripts S20 window lists the scripts added after Start, a
   const stands = async () => { const b = await call(instance, '/sprint-scripts?sprint=' + sprint), n = (rows) => rows.map((r) => r.name); return [b.allowed, n(b.additional), n(b.waiting)]; };
   await add('one');
   const { page, errors } = await launch(t, instance);
-  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`#navList [data-proj="${p.id}"]`).click(); await page.locator('[data-pj="spopen"]').click();
   const section = page.locator(`[data-sprint="${sprint}"]`), dlg = page.locator('#pjScripts'), said = dlg.locator('[data-ss-said]'), sw = dlg.locator('[data-ss="allow"]'), warn = dlg.locator('[data-ss-warn]');
   const rows = (where) => dlg.locator(`[data-ss-row="${where}"]`).evaluateAll((all) => all.map((li) => li.querySelector('.mono').textContent));
   const press = (k, where, name) => (where ? dlg.locator(`[data-ss-row="${where}"]`, { hasText: name }) : dlg).locator(`[data-ss="${k}"]`).click();
@@ -972,4 +981,64 @@ test('projects: Sprint scripts S20 window lists the scripts added after Start, a
   assert.deepEqual([await warn.count(), await sw.isChecked(), await rows('waiting'), await stands()], [0, false, [line('four')], [false, ['one', 'two', 'three'], ['four']]]);
   assert.deepEqual(errors, []);
   console.log('PASS S20 page: a row added after Start waited with Approve and no Run now; Approve ran it; a changed list approved nothing; Approve all; the switch asked first, Keep off kept it off, on ran a new row with no Approve, off made it wait');
+});
+
+// Sprint screens, the first: the project's page lists its sprints, one button each; the button opens that sprint's own page,
+// Sprint Setup until it is started, with a way back. New sprint lands in the new sprint's Sprint Setup.
+test('projects: Sprint Setup page opens from the sprint\'s button on the project page, one sprint to a page, with Back', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Pages', work: { kind: 'new', parent: '', name: 'pages' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const run = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Running one' });
+  await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+  const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', {}); assert.equal(started.status, 200, JSON.stringify(started));
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Docs prep' });
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const btn = (lead) => page.locator(`[data-pj="spopen"][data-lead="${lead}"]`), title = page.locator('[data-sp-title]'), back = page.locator('[data-pj="spback"]');
+  await btn(prep.sprint).waitFor({ timeout: 10000 });
+  // The project page: one button per sprint, saying which is started; no sprint's files on it.
+  assert.equal(await page.locator('[data-pj="spopen"]').count(), 2);
+  assert.match(await btn(prep.sprint).textContent(), /^Docs prepNot started$/);
+  assert.match(await btn(run.sprint).textContent(), /^Running oneStarted \S/);
+  assert.deepEqual([await page.locator('[data-sprint]').count(), await page.locator('[data-pj="spfile"]').count(), await title.count()], [0, 0, 0], 'the project page shows a sprint\'s files');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprints-list ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // The prep's button: its Sprint Setup, that sprint only, with Start sprint, its roles and its files.
+  await btn(prep.sprint).click();
+  await page.locator(`[data-sp-page="${prep.sprint}"]`).waitFor({ timeout: 5000 });
+  assert.equal(await title.textContent(), 'Sprint Setup');
+  assert.deepEqual(await page.locator('[data-sprint]').evaluateAll((e) => e.map((x) => x.dataset.sprint)), [prep.sprint]);
+  assert.equal(await page.locator('[data-sprint] h2').textContent(), 'Docs prep');
+  assert.equal((await page.locator('[data-pj="spstart"]').textContent()).trim(), 'Start sprint');
+  assert.deepEqual(await page.locator('[data-role-row]').evaluateAll((r) => r.map((x) => x.dataset.roleRow)), ['lead', 'review']);
+  assert.ok(await page.locator('[data-pj="spfile"]', { hasText: /^sprint\.md/ }).count(), 'the plan file is on Sprint Setup');
+  assert.deepEqual([await page.locator('[data-pj="spnew"]').count(), await page.locator('#pjName').count()], [0, 0], 'the project page\'s own parts are on a sprint page');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-setup-page ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // Back: the project page again.
+  assert.match(await back.textContent(), /Pages/);
+  await back.click();
+  await page.locator('#pjName').waitFor({ timeout: 5000 });
+  assert.deepEqual([await title.count(), await page.locator('[data-sprint]').count(), await page.locator('[data-pj="spopen"]').count()], [0, 0, 2]);
+  // A started sprint's button: its page, named Sprint, with its approval record and Start again.
+  await btn(run.sprint).click();
+  await page.locator(`[data-sp-page="${run.sprint}"]`).waitFor({ timeout: 5000 });
+  assert.equal(await title.textContent(), 'Sprint');
+  assert.deepEqual([await page.locator('[data-sprint] h2').textContent(), (await page.locator('[data-pj="spstart"]').textContent()).trim(), await page.locator('[data-sp-started]').count()], ['Running one', 'Start again', 1]);
+  // The project's row in the panel is a way back too.
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator('#pjName').waitFor({ timeout: 5000 });
+  assert.equal(await title.count(), 0);
+  // New sprint lands in the new sprint's Sprint Setup, and Back then lists three.
+  await page.locator('[data-pj="spnew"]').click();
+  await page.locator('#pjAsk input').fill('Third');
+  await page.locator('#pjAsk [value=yes]').click();
+  await until(async () => (await page.locator('[data-sprint] h2').textContent({ timeout: 1000 }).catch(() => '')) === 'Third', 'New sprint landed on its own page');
+  assert.equal(await title.textContent(), 'Sprint Setup');
+  await back.click();
+  await until(async () => (await page.locator('[data-pj="spopen"]').count()) === 3, 'three sprints listed');
+  assert.deepEqual(errors, []);
+  console.log('PASS Sprint Setup page: the project page listed two sprints as buttons and no sprint files; the prep opened as Sprint Setup with its Start, roles and files; Back returned; the started one opened as Sprint; New sprint landed in its Sprint Setup');
 });
