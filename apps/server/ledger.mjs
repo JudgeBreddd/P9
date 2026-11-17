@@ -133,7 +133,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     // O35: a deleted chat's 'deleted' event carries what it had spent, so the totals keep it once its own rows are gone.
     usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
       + " WHERE e.cursor > ? AND (e.type IN ('turn-end', 'deleted') OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
-    spent: db.prepare("SELECT cursor, conversation, type, NULL AS provider, data, at FROM events WHERE conversation = ?"
+    spent: db.prepare("SELECT cursor, conversation, type, NULL AS provider, data, at FROM events WHERE conversation = ? AND cursor > ?"
       + " AND (type = 'turn-end' OR type = 'update' AND (instr(data, 'usage_update') > 0 OR NOT json_valid(data))) ORDER BY cursor"),
     // O35: the photo hashes a chat's messages name (sent, steered or held), and which of those any other event still names.
     photos: db.prepare("SELECT DISTINCT i.value ->> '$.hash' AS hash FROM events e, json_each(CASE WHEN json_valid(e.data) THEN e.data ELSE '{}' END, '$.images') i"
@@ -254,13 +254,22 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       return { state: any ? (Date.now() - latest > 15 * 60 * 1000 ? 'stale' : 'recorded') : 'unavailable',
         updatedAt: latest || null, samples, discarded, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive };
     },
+    // Row 716: one chat's own spend (list_chats, sprint_status). into is the fold the caller keeps (chat.mjs gauge), so each
+    // call reads only that chat's usage rows after it. usage is null until the chat reports a turn's tokens or a cost.
+    spent(id, into = fresh()) {
+      for (const row of statements.spent.all(id, into.cursor)) add(into, row);
+      let costUsd = 0;
+      for (const amount of into.costs.values()) costUsd += amount;
+      const { inputTokens, outputTokens, cachedTokens } = into.totals;
+      return { into, usage: into.samples || into.costs.size ? { inputTokens, outputTokens, cachedTokens, costUsd, turns: into.samples } : null };
+    },
     // O35: a chat's events and row go in one transaction. Returned: what it had spent (its own fold, for the 'deleted'
     // event the caller appends next) and the photo hashes it named that no other event names now. The fold starts
     // again, so the totals are made from the same rows a restart reads.
     // ponytail: the refold reads every usage row once per delete; an incremental subtraction if deletes ever get frequent.
     remove(id) {
       const own = fresh();
-      for (const row of statements.spent.all(id)) add(own, row);
+      for (const row of statements.spent.all(id, 0)) add(own, row);
       const { totals, samples, discarded, latest } = own;
       let costUsd = 0;
       for (const amount of own.costs.values()) costUsd += amount;

@@ -666,7 +666,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -727,10 +727,18 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
-- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `archive_chat` and `answer_chat` are refused while it
-  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat` and `answer_chat` are refused while it
+  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
+- **Sprint Setup.** `sprint_setup` gives a chat the script tools let reach a sprint (its lead, its workers, a chat of
+  its project) every Setup file with its text and hash, and roles.json's rows. `sprint_setup_save` writes one of those
+  files, or one role row, through the same guarded save as the project page: the hash it sends must still be the
+  file's, else nothing is written and it gets the files as they are now. Only sprint.md, rules.md, roles.json and the
+  three files of each role; hooks.json only through the script tools, the review trail and script log never. A role
+  row it saves is checked for shape only; Start checks every row, and asks you, as before. What this adds: an agent
+  whose own sandbox cannot write P9's sprint folder can now change these files. An agent that can write the folder
+  directly still can, with no hash check, as before.
 - **Approvals.** An agent may answer an approval or a question asked by a chat it started,
   directly or through a worker, and by no other chat. For an approval, P9 first asks you in
   the parent's chat, naming the worker, what it asked and the answer the parent wants to give;
@@ -933,6 +941,85 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
 - **Disk.** One clone per sprint plus one worktree (and whatever the setup command installs) per worker, in P9's own
   folder, until cleaned up.
 
+## Sprint from a folder with no remote
+
+A sprint can start from a folder with no `origin`, or from a folder inside a larger repository, which the worker-folder
+clone (above) cannot serve: `git clone` needs a repository of its own. Written before the code (sprint spec daemon-3).
+
+- **What is copied: git's index, not ignore rules.** P9 copies into the sprint's own state, `sprints/<that chat's id>/copy/`
+  (0700, like the clone), every path git's index lists for the owner's folder (`git ls-files`), as it is on disk now: an
+  unsaved edit to a tracked file is copied with the edit. A tracked file stays tracked and is copied even when an ignore
+  pattern matches it. Untracked files are not copied, even when git does not ignore them. Ignored untracked files are not
+  copied. Symbolic links, submodules and any other non-regular entry are not followed or copied; each is listed as left
+  out. A folder inside a larger repository is copied alone, by its own path; the parent's files and history are not read.
+- **What is not copied, and what the sprint sees instead.** So the copy is not your whole working tree: a new file you have
+  not yet added to git stays in your folder and is not in the copy. The sprint's record holds the count and the names
+  (never the contents) of each left-out untracked file, ignored file, link and submodule. A worker that needs one of them
+  will not find it in the copy.
+- **Where the copy's history comes from.** P9 runs `git init` in the copy and makes one commit of the copied files, with
+  the author P9 uses for its own commits. None of your `.git` is copied: your history, branches and stash are not in the
+  copy. The copy has no `origin`, so P9 never fetches from or pushes to anything from it. That is all the claim: an
+  agent, the setup command and the copied code run with their own network and file access in their own modes, as in any
+  folder, so the copy does not stop them reaching a network.
+- **A "PR" is a branch.** A worker's change is a branch of the copy (`sprint/<first 8 of the chat id>/<key>`, as for
+  worker folders) with a verdict and a merge in the copy's own history. A merge is a commit in the copy only.
+- **Baseline.** The copy's one commit is the baseline. For each path it records whether the file existed and its content
+  hash. Apply compares your folder with that baseline.
+- **Applying to your folder is a yes, and nothing else writes there.** When a sprint closes, P9 shows the change from
+  the baseline to the copy's main line: each path added, changed or removed. Only on your yes does P9 apply it. The
+  apply has no all-or-nothing claim. Its promise is narrower: no file is overwritten unless it still matched the baseline
+  at its check, and nothing P9 wrote is undone over a newer edit by your own or another program.
+  - **Conflict states, per path, checked before any write.** Baseline present and unchanged: applies. Baseline present
+    and changed since the copy: conflict. Baseline present and gone: conflict. Baseline absent and still absent: applies,
+    since the change adds it. Baseline absent and now present: conflict, since something created it. A path that is now
+    a link, or whose parent is now a link: conflict. A conflict found here means nothing is written.
+  - **Backup before any write.** Before the first write, P9 copies the bytes of every touched owner file, as they were,
+    into the apply record in P9's state folder, and keeps the record until the sprint closes. If the record cannot be
+    written in full, the apply refuses and writes nothing.
+  - **Per file.** P9 re-checks the file against the baseline, writes a temporary file in the target's folder, and renames
+    it over the target. A write never follows a link. P9 records the hash of the content it wrote.
+  - **If a later file fails.** A failure is a write error, a failed rename, or a file that no longer matches at its
+    check. On failure P9 rolls back a written file only if its current bytes still equal the hash P9 wrote. A file whose
+    bytes differ was edited after P9 wrote it: P9 leaves it as it is, keeps its backup, and lists it as left, newer than
+    P9's write. Rollback restores the backup bytes, or removes an added path, and only for files that still match.
+  - **The result, always three lists.** Every apply names: written (P9's version is in place), rolled back (restored to
+    the backup, or removed for an added path), and left or failed (with the reason: a conflict, a newer edit, a failed
+    write or rename). The close view shows a partial result as partial. The outcome is recorded as pending before any
+    of your files change; if the final result cannot be written, the close view reads it as unknown, says to check your
+    files, and blocks another apply. The close view's sentences are derived from those three lists. The backup stays in
+    the apply record until the sprint closes, so every file P9 touched can be recovered by hand from it.
+  - **The route refuses without the yes.** `POST /sprints/:id/apply` (desktop socket only) accepts exactly `{yes, shown}` with
+    `yes: true`; any other body is refused by the route before the worker runs. `shown` is the digest of the change the owner
+    was shown, and apply refuses if the change now differs. The copy is kept after a partial or conflicted apply, so
+    clean-up cannot remove the only backup. Retry after a partial apply: not built.
+  - **What is not guaranteed.** The check and each write are separate steps. Another program can write a file between
+    P9's check and its rename, and between P9's hash proof and a rollback rename. P9 cannot close either window on a
+    shared filesystem. That single window per file is the residual, and a file written in it can be overwritten.
+- **Your folder is snapshotted at copy time, not refreshed.** The copy is made from the folder as it is when the sprint
+  starts; that snapshot is not updated during the sprint. The apply, at close, rereads your folder against the baseline,
+  so it sees the folder as it is then. P9 reads it as a folder the lead chat may use (the same check as a worker folder). A folder inside the sprint's own state,
+  or one that holds the workspace, P9's state or the home folder, is refused before anything is copied.
+- **A sprint's copy is kept until clean-up.** Like a clone, it is removed only by clean-up, from the desktop, with the rule
+  for worker folders, and for the copy only when its apply is recorded clean and the copy holds nothing but the applied
+  commit: every file, link and folder in it is in that commit's tree with the same bytes, nothing in the tree is missing,
+  every ref is that commit or older, and the index matches it. Anything else (an untracked or ignored file, a changed file,
+  an empty folder, a link, a stash) keeps the copy, and the close view names the first paths. Clean-up never deletes your original folder.
+- **Disk.** One copy per sprint plus one working folder per worker, in P9's own folder, until cleaned up, plus the saved
+  originals for an apply. The copy is the size of the tracked files at the time it was made.
+- **What remains.** The copy is a snapshot taken when the sprint starts: a change you make to a tracked file during the
+  sprint is not seen by it, and the apply refuses that file as a conflict, not a merge. Its agents read and run the copied
+  files in their own modes, as they would in any folder you point a chat at. P9 limits no network access in that: a
+  copied script, a dependency installed by the setup command, or an agent can open connections in its mode exactly as
+  in your folder. The copy is a folder, not a sandbox, and nothing in this section makes it one.
+- **Required tests before any claim above is made.** Each must fail without its guard: a copy with an ignored tracked file
+  (copied) and an ignored untracked file (not copied); a link and a submodule (listed, not followed); an apply with a
+  changed file (nothing written); a file changed between its check and its write (refused, nothing written to it); B
+  fails after A is written (A rolled back to its backup, and listed as rolled back); A edited externally after P9 wrote
+  it, then B fails (A left, its backup kept, listed as left, newer than P9's write); the rename fails (the file is left as
+  it was, listed as failed); the backup cannot be written (the apply refuses before any write); an added path that
+  appears in your folder before apply (conflict); a baseline-present path that is deleted (conflict); a baseline-absent
+  path that is added by the change, applied when still absent and refused when present.
+
 ## Sprint files
 
 A sprint's plan, rules, role files and workers' notes are plain files in the sprint's folder, `sprints/<lead chat
@@ -1071,7 +1158,7 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
 - **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
   sprint: its id, title and folder, the approval record, the project's id and name, the role rows, the plan's items
   with P9's review record, each chat of the sprint (key, title, agent, model, effort, mode, state, context use,
-  folder, its ready and verdict records), plan usage and limits as the usage page shows them, and the last 20 lines
+  what it has spent (token counts and reported cost, as `list_chats` shows them), folder, its ready and verdict records), plan usage and limits as the usage page shows them, and the last 20 lines
   of the script log. No key, no provider profile's address, no chat text.
 - **The log.** Every run adds one line to `hooks.log` in the sprint folder: time, point, name, exit or reason,
   duration, last output line. P9 keeps the last 100 lines. The project page and `set_rules` cannot write it, but it
