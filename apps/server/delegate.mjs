@@ -43,6 +43,7 @@ export const DELEGATE_TOOLS = (input) => {
     sprint_script_save: 'Do not write a script the user did not ask for.', sprint_script_remove: 'Do not remove a script you did not add unless the user asked.',
     sprint_script_add: 'Do not take adding a script as approving it.', run_sprint_script: 'Do not run a script to get around a refusal.', request_sprint_scripts: 'Do not ask again for scripts the user refused.',
     pause_sprint: 'Do not pause to stop a turn already running; it finishes.',
+    resume_sprint: 'Do not resume a sprint the user paused unless the user asked you to.',
   };
   return [
     ['open_chat', 'Start a worker: a new chat in your project that begins work on text. Left out, provider, model and effort are what the user set for that worker (Settings > Delegation), else yours. Named, each must be what one of the user\'s free Settings > Delegation rows starts; anything else is refused (delegation-refused, naming the field and what the rows allow), never swapped. mode and folder are yours. The user also sets how many workers you may have running at once. mode may be narrower '
