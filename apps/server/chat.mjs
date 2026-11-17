@@ -1550,7 +1550,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!c) return null;
       const session = live.get(id), effort = session?.pickers?.find((o) => o.category === 'thought_level');
       const asks = session && !session.stopping ? [...session.pending].map(([request, p]) => ({ kind: p.kind, request,
-        text: String(p.kind === 'approval' ? p.request.toolCall?.title ?? '' : p.request.message ?? '').slice(0, 2000), ...(p.form && { form: p.form }) })) : [];
+        text: String(p.kind === 'approval' ? p.request.toolCall?.title ?? '' : p.request.message ?? '').slice(0, 2000), ...(p.form && { form: p.form }),
+        // daemon-9: an approval's answer is one of its options' optionId; without them a parent chat cannot answer it.
+        ...(p.kind === 'approval' && { options: (p.request.options ?? []).map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind })) }) })) : [];
       return { id: c.id, provider: c.provider, title: c.title, state: c.state, folder: c.folder, project: c.project, parent: c.parent, key: c.key,
         // session.back: during and after a turn that answered another chat, the chat's own mode is the one it returns to.
         mode: (session?.back ?? session?.mode) ? Object.keys(MODES[c.provider]).find((k) => MODES[c.provider][k] === (session.back ?? session.mode)) ?? null : null,

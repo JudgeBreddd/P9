@@ -670,7 +670,8 @@ function render() {
   const plan = (strip.events[0]?.entries ?? []) as string[][], chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   // O712: the desktop's rule: only the newest worker report not closed is pinned, with a × (the sheet's click handler below).
-  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get(), shelved); pinStrip = strip;
+  // window-4: the phone keeps its open report in the strip, with this x (the desktop folds it into tuck.mjs's tab instead).
+  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get(), shelved, (card: { id: string }) => `<button type="button" class="card-close" data-card-close="${esc(card.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button>`); pinStrip = strip;
   const cards = one('#pinned').querySelectorAll('[data-card]').length;
   // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
   pinSig = cards ? JSON.stringify([...strip.cards!.values()]) : '';
@@ -2021,9 +2022,11 @@ async function loadUsage() {
     // it stalls (P5). A stopped chat's last fill is history and is left out.
     const chat = (id: string) => state.conversations.find((item) => item.id === id);
     const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
+    // The redraw (startup twice, Refresh, every 20 s) keeps an opened Details open.
+    const more = one('#usage').querySelector('details.more')?.open ? ' open' : '';
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
     one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p><p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>`
-      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
+      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"${more}><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
   } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
 }
 one<HTMLButtonElement>('#refreshUsage').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadUsage);
