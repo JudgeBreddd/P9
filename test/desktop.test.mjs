@@ -205,9 +205,20 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await page.mouse.move(...grab); await page.mouse.down(); await page.mouse.move(grab[0] - 75, grab[1] + 40, { steps: 8 }); await page.mouse.move(grab[0] - 100, grab[1] + 60, { steps: 4 }); await page.mouse.up();
     const d1 = await dockBox();
     assert.deepEqual([Math.round(d1.x - d0.x), Math.round(d1.y - d0.y), await page.evaluate(() => getSelection().toString())], [-100, 60, ''], 'moves with the cursor, selects nothing');
+    // O111/O144: CI twice lost the corner drag after 2 or 3 of its 6 moves. Blink ends a CSS resize when the resizing box goes away
+    // (a one-frame #dock hide at move 2 gives CI's [40,26]); the trigger is not named yet, so a failure lists every change to the
+    // dock's hidden, class and style and to the focus (setFocus mirrors S.focus on .shell data-focus) during the drag.
+    const record = await page.evaluateHandle(() => {
+      const dock = document.querySelector('#dock'), shell = document.querySelector('.shell'), t0 = performance.now(), log = [];
+      const add = list => { for (const m of list) log.push(`${Math.round(performance.now() - t0)} ms ${m.target === dock ? '#dock' : 'S.focus'} ${m.attributeName} was ${JSON.stringify(m.oldValue)}`); }, seen = new MutationObserver(add);
+      seen.observe(dock, { attributes: true, attributeOldValue: true, attributeFilter: ['hidden', 'class', 'style'] });
+      seen.observe(shell, { attributes: true, attributeOldValue: true, attributeFilter: ['data-focus'] });
+      return { stop: () => { add(seen.takeRecords()); seen.disconnect();
+        return [...log, `now: #dock hidden ${dock.hidden}, class ${JSON.stringify(dock.className)}, style ${JSON.stringify(dock.getAttribute('style'))}, S.focus ${shell.dataset.focus}`].join('\n'); } };
+    });
     await page.mouse.move(d1.x + d1.width - 3, d1.y + d1.height - 3); await page.mouse.down(); await page.mouse.move(d1.x + d1.width + 117, d1.y + d1.height + 77, { steps: 6 }); await page.mouse.up();
-    const d2 = await dockBox();
-    assert.deepEqual([Math.round(d2.width - d1.width), Math.round(d2.height - d1.height)], [120, 80], 'the corner resizes it');
+    const d2 = await dockBox(), changes = await record.evaluate(r => r.stop());
+    assert.deepEqual([Math.round(d2.width - d1.width), Math.round(d2.height - d1.height)], [120, 80], 'the corner resizes it; changes during the drag:\n' + changes);
     if (process.env.P9_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.P9_SCREENSHOTS, 'terminal-float.png') });
     if (!wasFloat) await page.click('#dFloat'); await page.keyboard.press('Control+Backquote');
     console.log('PASS floating terminal: drag follows the cursor with no selection, corner resize');
