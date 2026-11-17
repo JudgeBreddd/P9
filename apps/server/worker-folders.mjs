@@ -1,13 +1,12 @@
 // Worker folders (sprint spec A1, A2, A4, A6, A7; SECURITY.md § Worker folders). One clone of the repository per sprint
 // in P9's own folder, one git worktree and branch per worker, made by P9 when the worker starts. The owner's folder is
 // only read. gitFacts is what P9 reads from git by itself, for the sprint's version stamp.
-import { execFile } from 'node:child_process';
-import { lstat, mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { childEnv } from './child-env.mjs';
 import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
+import { applySprint, closeOf, copyKeptBecause, git, previewSprint, startCopy } from './folder-copy.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -28,14 +27,8 @@ export function remoteOk(address, protocols = ['https', 'ssh']) {
   return protocols.includes('ssh') && !address.includes('::') && /^[\w.][\w.-]*@[a-z0-9][\w.-]*:[^:-]/i.test(address);
 }
 
-// Every git P9 runs: allow-listed environment, never a prompt, no hooks, no file-system monitor, no external diff.
-// ponytail: a clean or smudge filter in the repository's own config still runs on status (SECURITY.md says so).
-export function git(cwd, args, { timeout = 60_000 } = {}) {
-  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', SSH_ASKPASS_REQUIRE: 'never', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
-  const safe = ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', '-c', 'core.pager=cat'];
-  return new Promise((resolve) => execFile('git', [...safe, ...args], { cwd, env, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
-    (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, out: String(stdout), err: String(stderr) })));
-}
+// git lives in folder-copy.mjs (imported here, not the other way round: a cycle between the two hangs the bundled daemon's start).
+export { git };
 const one = async (cwd, args) => { const r = await git(cwd, args); return r.code === 0 ? r.out.trim() : null; };
 // File names as git wrote them with -z: never trimmed or unquoted, so an odd name stays itself. null when git failed.
 const names = async (cwd, args) => { const r = await git(cwd, [...args.slice(0, 1), '-z', ...args.slice(1)]); return r.code === 0 ? r.out.split('\0').filter(Boolean) : null; };
@@ -82,6 +75,9 @@ async function realDir(at, levels = 1) {
   for (let i = 0; i < levels; i += 1, at = path.dirname(at)) if (!(await lstat(at).catch(() => null))?.isDirectory()) return false;
   return true;
 }
+
+// inner is outer, or sits inside it (both real paths).
+const inside = (inner, outer) => inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
 async function bytes(at) {
   let total = 0;
   for (const entry of await readdir(at, { recursive: true, withFileTypes: true }).catch(() => [])) {
@@ -140,7 +136,15 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
   // A1: the sprint's clone, made once: from the address the owner set for the project, else from the folder the worker
   // would have started in. With an address the owner's folder is not read at all.
   async function cloneFor(sprint, source, address = '') {
-    const clone = path.join(dirOf(sprint), 'clone');
+    const clone = path.join(dirOf(sprint), 'clone'), copy = path.join(dirOf(sprint), 'copy');
+    // A sprint from a folder with no remote, or a folder inside a larger repository: its copy (folder-copy.mjs), made once.
+    if (await realDir(copy, 2)) {
+      if (address) return { clone: copy };
+      const record = await readFile(path.join(dirOf(sprint), 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
+      const real = typeof source === 'string' && path.isAbsolute(source) ? await realpath(source).catch(() => null) : null;
+      if (real && record?.source === real) return { clone: copy };
+      return { error: 'other-repository', detail: 'This sprint\'s worker folders all come from one copy, made from another folder: a sprint has one repository. Leave folder out, name the folder the sprint started from, or start this work from another chat.' };
+    }
     if (await realDir(clone, 2)) {
       // One repository per sprint (dogfood 3.5): a folder of another one is refused, never handed this clone. Its
       // origin is the folder's own origin, else the folder itself, as the clone below was made.
@@ -166,6 +170,20 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     if (typeof source !== 'string' || !path.isAbsolute(source)) return { error: 'folder-refused', detail: 'The worker\'s folder is not one P9 may use.' };
     const top = await one(source, ['rev-parse', '--show-toplevel']);
     if (!top) return { error: 'not-a-repository', detail: 'A worker folder is made from a git repository; this folder is not one: ' + source };
+    // SECURITY.md § Sprint from a folder with no remote: a folder that holds or sits inside P9's state, the home folder or
+    // the workspace is refused before anything is copied. A folder inside a larger repository, or with no origin, is copied
+    // alone (startCopy), never cloned: the parent's files and history are not read.
+    const real = await realpath(source).catch(() => null), realTop = await realpath(top).catch(() => null);
+    if (!real || !realTop) return { error: 'folder-refused', detail: 'The worker\'s folder is not one P9 may use.' };
+    if ([home, os.homedir(), path.join(os.homedir(), 'workspace')].some((x) => inside(x, real)) || inside(real, home)) {
+      return { error: 'folder-refused', detail: 'A sprint cannot start from this folder: it holds, or sits inside, P9\'s own state, the home folder or the workspace. Name another folder.' };
+    }
+    const origin = real === realTop ? await one(top, ['remote', 'get-url', 'origin']) : null;
+    if (real !== realTop || !origin) {
+      const made = await startCopy(dirOf(sprint), real);
+      if (made.error) return { error: made.error === 'record-failed' ? 'copy-failed' : made.error, detail: made.detail ?? 'The folder could not be copied.' };
+      return { clone: made.copy };
+    }
     await mkdir(dirOf(sprint), { recursive: true, mode: 0o700 });
     const part = path.join(dirOf(sprint), 'clone.part-' + randomBytes(4).toString('hex'));
     const made = await git(dirOf(sprint), ['clone', '--quiet', '--no-checkout', '--', top, part], { timeout: 10 * 60_000 });
@@ -220,9 +238,11 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     return queued(sprint, () => cleanNow(sprint));
   }
   async function cleanNow(sprint) {
-    const clone = path.join(dirOf(sprint), 'clone'), root = path.join(dirOf(sprint), 'workers');
+    const copy = path.join(dirOf(sprint), 'copy'), hasCopy = await realDir(copy, 2), root = path.join(dirOf(sprint), 'workers');
+    const clone = hasCopy ? copy : path.join(dirOf(sprint), 'clone');
     if (!await realDir(clone, 2)) return { removed: [], kept: [] };
-    await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 }); // best effort: offline, the main line known so far
+    // Best effort: offline, the main line known so far. A copy has no origin of its own (SECURITY.md): it is never fetched.
+    if (!hasCopy) await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 });
     const removed = [], kept = [];
     for (const item of (await readdir(root).catch(() => [])).sort()) {
       const folder = path.join(root, item), branch = branchOf(sprint, item);
@@ -243,11 +263,38 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it. The
     // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
     if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) {
-      for (const part of ['workers', 'ready', 'clone']) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
+      // The copy (folder-copy.mjs) goes only once its work is provably applied (copyKeptBecause); its apply record stays.
+      const parts = ['workers', 'ready', 'clone'];
+      if (await copyKeptBecause(dirOf(sprint)) === null) parts.push('copy');
+      for (const part of parts) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
       await rmdir(dirOf(sprint)).catch(() => {});
     }
     return { removed, kept };
   }
 
-  return { make, where, clean };
+  // The owner's consent (folder-copy.mjs): preview is read-only; apply runs in the sprint's queue, so it never races a clean.
+  async function preview(sprint) {
+    if (!home || !ID.test(sprint ?? '')) return { refused: 'request-refused' };
+    return previewSprint(dirOf(sprint));
+  }
+  async function apply(sprint, consent) {
+    if (!home || !ID.test(sprint ?? '')) return { refused: 'request-refused' };
+    return queued(sprint, () => applySprint(dirOf(sprint), consent));
+  }
+  // The close view: read-only, so it runs without the sprint's queue. Null (not-applied) until the owner's apply is recorded.
+  async function close(sprint) {
+    if (!home || !ID.test(sprint ?? '')) return { error: 'request-refused' };
+    return (await closeOf(dirOf(sprint))) ?? { error: 'not-applied' };
+  }
+  // The copies P9 made, for the desktop's review list: each sprint id, and whether its apply is recorded. Read-only.
+  async function copies() {
+    const out = [];
+    for (const id of home ? (await readdir(home).catch(() => [])).filter((n) => ID.test(n)).sort() : []) {
+      const dir = path.join(home, id);
+      if (!await lstat(path.join(dir, 'copy-record.json')).then(() => true, () => false)) continue;
+      out.push({ id, applied: await lstat(path.join(dir, 'apply-result.json')).then(() => true, () => false) });
+    }
+    return { copies: out };
+  }
+  return { make, where, clean, preview, apply, close, copies };
 }
