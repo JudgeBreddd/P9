@@ -132,6 +132,29 @@ test('approvals and questions are answered only with options and fields the agen
   console.log('PASS chat answers: unknown option 400, unknown request 404, unknown field 400; allow and colour reached the agent; busy 409; cancel; codex agent (Auto review)');
 });
 
+// O133: a model or effort picked and sent mid-turn is not steered into the turn (which keeps its model): the message
+// waits for the turn's end and goes as the next prompt, on the picked model and effort, with a config event.
+test('O133: a message that picks another model and effort mid-turn waits for the turn end, then runs on them', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' });
+  const { cursor } = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call');
+  const sent = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'config', model: 'haiku', config: { effort: 'high' } }));
+  assert.deepEqual([sent.status, sent.body.when], [202, 'queue'], sent.text);
+  const reply = await until(instance, said(id, 'config:'), cursor);
+  assert.match(reply.hit.data.content.text, /model=haiku,effort=high/, reply.hit.data.content.text);
+  const config = reply.seen.filter((e) => e.conversation === id && e.type === 'config').at(-1);
+  assert.equal(config?.data.model.current, 'haiku', 'no config event says haiku');
+  assert.equal(config.data.pickers.find((p) => p.id === 'effort').current, 'high');
+  // A message that picks what the chat already runs is steered as before.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' });
+  const again = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call', reply.cursor);
+  const same = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'same', model: 'haiku', config: { effort: 'high' } }));
+  assert.equal(same.body.when ?? (same.body.steered && 'steered'), 'steer', same.text);
+  await until(instance, said(id, 'got:same'), again.cursor);
+  console.log('PASS O133 mid-turn pick: ' + JSON.stringify({ first: sent.body.when, reply: reply.hit.data.content.text, same: same.body.when }));
+});
+
 // contracts.md rule 2 for Claude (O51): claude-agent-acp 0.104.1 starts a session in auto, which approves on its own.
 // A prompt that names no mode (the phone, the API) must still run in Manual, on a new chat and on a resumed one.
 // The fake starts every process 'unset', so only the daemon setting the mode makes this pass.

@@ -1357,7 +1357,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try {
           // No steering: 409 as before, and the window keeps the message queued itself.
           // During a turn that answers another chat, everything waits for its end.
-          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo ? 'queue' : body.when ?? 'steer');
+          // O133: a steer joins the running turn, which keeps its model and effort, so a message that picks another one waits
+          // for the turn's end and goes as the next prompt, which sets them first (Tyler, 2026-11-16: an Opus pick sent
+          // mid-turn was steered in and the chat stayed on Sonnet, with no config event).
+          const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
+            || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v)));
+          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer');
           if (solo) return refused(409, 'turn-running');
           return await steer(id, body, images);
         } finally { release(); }
