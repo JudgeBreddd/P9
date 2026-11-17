@@ -157,7 +157,7 @@ export function startShell() {
   // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
   const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
     .catch(() => ({ status: 'unavailable' as const }))
-    .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }) => {
+    .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; note?: [string, string]; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }) => {
       const label = document.getElementById('daemonStatus'), disconnect = document.getElementById('disconnectBtn');
       // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
       if (result.mode === 'server') {
@@ -276,6 +276,8 @@ export function startShell() {
       if (label && result.status === 'ok' && result.savedWorkspace) {
         label.textContent = 'Workspace folder not found: ' + result.savedWorkspace + '. Using ' + result.workspace + ' for now';
         label.title = 'P9 goes back to ' + result.savedWorkspace + ' the next time its background service starts with that folder there (plug the drive in, then restart P9 or sign in again).';
+      } else if (label && result.note) {
+        [label.textContent, label.title] = result.note; // O135: main.mjs says the daemon is another version
       } else if (label) {
         label.textContent = result.status === 'ok' ? 'Daemon connected' : result.reason === 'missing-library' ? 'Daemon cannot start: install ' + result.library
           : result.reason === 'task-missing' || result.reason === 'task-stale'
