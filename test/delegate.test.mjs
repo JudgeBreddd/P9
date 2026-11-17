@@ -38,8 +38,8 @@ async function agent(t, instance, more = {}) {
   return connect(t, instance, conversation);
 }
 // The same client for a chat that was already sent 'mcp' (a worker whose task was that word).
-async function connect(t, instance, conversation) {
-  const { hit, cursor } = await until(instance, (event) => event.conversation === conversation && event.data?.content?.text?.startsWith('mcp:'));
+async function connect(t, instance, conversation, after = 0) {
+  const { hit, cursor } = await until(instance, (event) => event.conversation === conversation && event.data?.content?.text?.startsWith('mcp:'), after);
   const [entry] = JSON.parse(hit.data.content.text.slice(4));
   const client = new Client({ name: 'p9-test', version: '1' });
   await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
@@ -595,6 +595,37 @@ test('Delegate: after a restart the top chat of a sprint that was cut mid-turn g
   assert.equal((await events(instance, kid.chat)).filter((e) => e.cursor > mark && e.type === 'interrupted' && e.data.reason === 'daemon-restart').length, 1, 'the kill was not seen as a restart mid-turn');
   assert.deepEqual(await woke(busy.conversation), [line], 'the third start in 10 minutes woke the sprint');
   console.log('PASS Delegate restart wake: one line to the working sprint\'s top chat after a SIGTERM restart, no chat of the idle sprint started, none on the third start');
+});
+
+// daemon-5: a note waiting for a chat's next prompt survives a P9 restart, keeps its sender, and goes once.
+test('Delegate: a waiting note survives a P9 restart and goes with the chat\'s next prompt, once, as a note from its sender; the newest 20 go, in order, with one sent after the restart', { timeout: 240000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  let a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'hello', title: 'Kid' });
+  await a.done(made.chat);
+  const kept = Array.from({ length: 20 }, (_, i) => 'kept ' + (i + 1));
+  for (const text of kept) assert.equal((await a.tool('send_chat', { chat: made.chat, text, when: 'note' })).sent, 'as a note: it reads it with its next message');
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  instance = await restart(t, instance, 'state-2');
+  // Its old MCP client went with the restart: a new one from a fresh 'mcp' message.
+  const fresh = (await call(instance, '/chat/events?after=0')).body.cursor;
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' });
+  a = await connect(t, instance, a.conversation, fresh);
+  // FIX1 (#241): a note sent after the restart is the newest of 21, so the oldest kept one is the one dropped.
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'after the restart', when: 'note' })).sent, 'as a note: it reads it with its next message');
+  const mark = (await call(instance, '/chat/events?after=0')).body.cursor;
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'hello again' });
+  const got = await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', mark);
+  const said = (await events(instance, made.chat)).filter((e) => e.cursor > mark && typeof e.data?.content?.text === 'string').map((e) => e.data.content.text).filter((x) => x.startsWith('note:'));
+  assert.deepEqual(said, [...kept.slice(1), 'after the restart'].map((x) => 'note:' + x), 'the waiting notes after a restart were not the newest 20 in order');
+  assert.equal((await events(instance, made.chat)).filter((e) => e.cursor > mark && e.type === 'user').length, 1);
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'and again' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', got.cursor);
+  const all = (await events(instance, made.chat)).map((e) => e.data?.content?.text).filter((x) => typeof x === 'string');
+  assert.equal(all.filter((x) => x === 'note:kept 20').length, 1, 'a waiting note went twice');
+  console.log('PASS daemon-5: after a SIGTERM restart the next prompt carried the newest 20 waiting notes in order (kept 2..20, then the one sent after the restart), each once, as notes from their sender');
 });
 
 test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first worker even in Unrestricted; Off refuses; each worker starts on its own Settings row; a provider, model or effort open_chat names that no free row starts is refused by field; no more workers than Workers per chat', { timeout: 180000 }, async (t) => {
