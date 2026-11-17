@@ -1217,6 +1217,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     list: (plans = new Map()) => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent, key,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
+        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'renamed') AS named,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
           AND a.cursor > COALESCE((SELECT cursor FROM events WHERE conversation = c.id AND type IN ('turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error') ORDER BY cursor DESC LIMIT 1), 0)
           AND NOT EXISTS (SELECT 1 FROM events b WHERE b.conversation = c.id AND b.type = 'answered' AND b.cursor > a.cursor
@@ -1224,7 +1225,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
