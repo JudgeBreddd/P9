@@ -221,6 +221,15 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
     assert.notEqual(await chevron(), closed, 'the chevron turns when Details opens');
     await page.click('#usage details.more summary');
   });
+  // Usage redraws itself (startup twice, Refresh, every 20 s); an opened Details stays open across the redraw.
+  await soft('Details stays open across a redraw', async () => {
+    await page.click('#usage details.more summary');
+    await page.waitForSelector('#usage details.more[open]');
+    await page.click('#refreshUsage');
+    await page.waitForSelector('#refreshUsage:not([aria-busy])');
+    assert.equal(await page.locator('#usage details.more[open]').count(), 1, 'Details is still open after Refresh redraws Usage');
+    await page.click('#usage details.more summary');
+  });
   // A3: each plan window is a row with the time to its reset and a pace tick on its bar (phone.test.mjs Phase 11 holds
   // the same check, but stops early with no network).
   const row = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .prow'), b = r.querySelector('.pbar').getBoundingClientRect(), t = r.querySelector('.pbar u').getBoundingClientRect();
