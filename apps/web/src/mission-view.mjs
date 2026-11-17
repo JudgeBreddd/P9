@@ -885,7 +885,9 @@ function missionModal(m, body, row) {
       else { m.hint = 'Open tmux: ' + (r.body?.error || r.status); outer.renderModal(); }
     };
   } else if (m.kind === 'sprintcopy') {
-    import('./sprint-copy-view.mjs').then(v => { if (outer.mdl.open && outer.S.modal === m) v.sprintCopyModal(outer, m, body); }, () => { body.textContent = 'Cannot show this copy right now.'; });
+    // Loaded or not, it draws only while this window is still the one open.
+    import('./sprint-copy-view.mjs').then(v => () => v.sprintCopyModal(outer, m, body), () => () => { body.textContent = 'Cannot show this copy right now.'; })
+      .then(draw => { if (outer.mdl.open && outer.S.modal === m) draw(); });
   } else if (m.kind === 'idea') {
     // New idea (the old hub's box): the daemon names the file and refuses to replace one.
     outer.$('#mdlT').textContent = 'New idea';
