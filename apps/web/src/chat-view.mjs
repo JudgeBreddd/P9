@@ -57,10 +57,10 @@ function autoArtifact(s) {
   const onScreen = outer.S.focus === 'chat' ? (outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)).includes(s.id) : outer.S.focus === 'dev' && outer.sideSession()?.id === s.id;
   if (found.length && onScreen) openArtifact({ ...found.at(-1), sid: s.id });
 }
-// Chat files (the request, 2026-10-30: "a button just to the left of the running indicator that will open a side pannel and show me
-// the artifacts and files and such? just like anthropic does"). The button sits left of the chat's own Running label (pane());
-// its panel, the side panel's 'chat-files' slot, has two tabs (Builder, 2026-11-02: "separate the artifacts from the diffs into
-// their own tabs"), each newest first. Artifacts: every artifact the chat's replies posted (a click opens it as its chip does).
+// Chat files (a button just left of the running indicator opens a side panel of the chat's artifacts and files).
+// The button sits left of the chat's own Running label (pane());
+// its panel, the side panel's 'chat-files' slot, has two tabs (the artifacts and the diffs each
+// in their own tab), each newest first. Artifacts: every artifact the chat's replies posted (a click opens it as its chip does).
 // Changes: every file its finished edit calls wrote (editFiles), created or edited; a click shows that file's diffs, read-only
 // ("let me at lease read only the diff"), from the edit calls themselves, so nothing is read from the disk and nothing can be
 // applied. The open list and its tab are remembered per chat (localStorage 'p9-chat-files:<id>'): that chat shown again in
@@ -69,7 +69,7 @@ function autoArtifact(s) {
 // artifacts are the exception (keptArts, below).
 const CF = { sid: null, ws: null, asked: false, html: null, tab: 'artifacts' };
 const cfKey = id => 'p9-chat-files:' + id;
-// Artifacts outlive the loaded events (Builder, 2026-11-02: "the artifacts are lost on compact"): a chat long enough to compact
+// Artifacts outlive the loaded events (they were lost on compact): a chat long enough to compact
 // loads only its newest TAIL steps after a reload, and its older artifacts fell out of the list. Every artifact a chat's loaded
 // replies hold is kept for that chat (localStorage 'p9-artifacts:<id>') and listed after the loaded ones.
 // ponytail: this window's storage only, the newest 30 per chat; an artifact this window never loaded shows once Show earlier reaches it.
@@ -165,7 +165,7 @@ function chatFilesFollow(ids) {
   if (want) openChatFiles(want); else renderChatFiles();
 }
 function focus(id) { const s = outer.S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); outer.renderTabs(); renderChats(); }
-// The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
+// The chat shown goes first and the one before it second, so Split has the last two (replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
 const show = id => { outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
 // N1: Stop is final (no Undo): on the chat's row and first in its menu (panel.mjs), and in its header. The chat stays in
@@ -174,13 +174,13 @@ function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, 
 const untab = id => { outer.S.open = outer.S.open.map(o => o === id ? (outer.S.sessions.find(x => !x.hidden && !outer.S.open.includes(x.id)) || {}).id : o).filter(Boolean); outer.renderTabs(); renderChats(); };
 function newSession(agent, model, project = null, profile = '') {
   outer.usedAgent(agent);
-  // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
+  // Dev Focus had no way to start a new chat: one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
   if (outer.liveChat.on) return outer.liveChat.create(agent, '', project, model, profile);
   const s = { id: 's-' + Date.now(), agent, title: `${outer.names[agent]} ${outer.S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: outer.startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: outer.M.sessions?.[agent === 'claude' ? 0 : 1]?.limits ?? { h5: 0, d7: 0 }, cacheMin: null, cwd: outer.M.sessions?.[0]?.cwd ?? 'P9 workspace', events: [] };
   s.project = project; outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
 }
-// U4 on a remote (Builder, 2026-11-02: "no window at all"; "just a normal file picker would be better than clicking the .."):
+// U4 on a remote (no window opened, and a normal file picker beats clicking ".." through folders):
 // a folder dialog like the system's. A path bar (type or paste, Enter goes there), Up, clickable breadcrumbs, the folder
 // list (a click selects, a double click or Enter opens), Select and Cancel. In Unrestricted mode it walks the whole server
 // (/files/folders); with either switch on, or a server P9 older than that route, it walks the workspace (/files/list) and
@@ -385,7 +385,7 @@ const sprintSync = conversations => { const was = JSON.stringify(outer.S.session
 setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
 const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));
-// Only a chat's latest TAIL steps are drawn (Builder, 2026-10-20: the window lagged and froze; one redraw of a 25,000-event
+// Only a chat's latest TAIL steps are drawn (the window lagged and froze; one redraw of a 25,000-event
 // chat built 31 MB of HTML in about 170 ms, and live chats redraw on every batch). "Show earlier" adds TAIL more.
 const TAIL = 200;
 function shown(s) {
@@ -398,7 +398,7 @@ function shown(s) {
    only its attributes change, and the menu is never part of a pane, so it stays open with its focus while a chat streams,
    and refreshPill brings its checked item up to date. Each pill is a button with aria-haspopup; the menu is role=menu with
    menuitemradio choices; Escape closes it and focuses its pill; arrows move; Enter picks. The Model menu lists the agent's
-   models directly, then Fast mode under its own heading (Builder, 2026-11-05: no "More" submenu). Live chats list the agent's
+   models directly, then Fast mode under its own heading (no "More" submenu). Live chats list the agent's
    own models; the sample data keeps its two names. */
 // O47: a chat whose own report is older than the agent's kept list (a chat not run since) offers the kept list, so a
 // model the agent dropped is gone from its menu; its own model stays its current one (goneModel says so in the menu).
@@ -441,7 +441,7 @@ const radio = (list, now, data, s, id) => list.map(o => mi(s ? dflt(s, id, o) : 
 // O47: what the Model menu says while this daemon run's fresh read is on, or after it failed (signed out, offline).
 const listNote = s => { const st = s.live && outer.listState[s.agent], n = outer.names[s.agent], has = modelList(s)?.options.length;
   return st === 'loading' ? `Reading ${n}'s models…` : st === 'failed' ? (has ? `Could not read ${n}'s models just now. This is the last list it reported.` : `Could not read ${n}'s models. Is ${n} signed in?`) : ''; };
-// O29 (Builder, 2026-11-08): the Agent pill. Each row says what a chat on that agent runs with: this chat's own, or the
+// O29: the Agent pill. Each row says what a chat on that agent runs with: this chat's own, or the
 // other agent's start (its saved mode, and the Default model and effort from Settings when it still offers them).
 // A chat with messages keeps its agent (its session is that agent's): the other row is shown, disabled, and says why.
 const started = s => !!(s.sent || s.session || s.queue?.length || s.events.some(e => e.t === 'user'));
@@ -762,13 +762,13 @@ function answered(s) {
   if (outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id === s.id) outer.closeModal();
   outer.renderTabs(); renderChats(new Set([s.id]));
 }
-// Paperclip (Builder, 2026-10-17: it only drew a blue square). Threat model row 20; the daemon checks the same limits.
+// Paperclip (it only drew a blue square). Threat model row 20; the daemon checks the same limits.
 function pickImages(s) {
   const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMG_OK.join(','), multiple: true });
   input.onchange = () => addImages(s, input.files);
   input.click();
 }
-// The paperclip, a pasted screenshot and dropped files all come through here (Builder, 2026-10-18: "not paste the screenshots").
+// The paperclip, a pasted screenshot and dropped files all come through here (pasting screenshots did not work).
 async function addImages(s, files) {
   for (const file of files) {
     if ((s.images ||= []).length >= MAX_IMAGES) { outer.toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
@@ -784,7 +784,7 @@ function sendText(s, t, now, when) {
   if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); return; }
   (now ? interrupt : outer.startTurn)(s, t, mid ? when || 'steer' : undefined);
 }
-// Builder, 2026-10-21 (an interrupt-and-send message was lost): the daemon refuses a prompt while the cancelled turn is
+// An interrupt-and-send message was lost: the daemon refuses a prompt while the cancelled turn is
 // still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
 function interrupt(s, t) {
   if (!busy(s)) return outer.startTurn(s, t);
@@ -800,7 +800,7 @@ function cancelTurn(s, quiet) {
   if (!quiet) s.events.push({t:'notice', text:'Turn cancelled.'});
 }
 // The end of a turn applies a queued mode, then sends the next queued message.
-// Threat model row 21 (Builder, 2026-10-18: no notice when a turn ended): a live turn-end nobody is watching leaves an
+// Threat model row 21 (no notice when a turn ended): a live turn-end nobody is watching leaves an
 // "<agent> finished" card, and a desktop notice while the window is in the background. Only P9's words, never reply text.
 function finished(s) {
   if (s.queue.length) return;
@@ -830,7 +830,7 @@ async function continueOnPhone(s) {
   outer.$('#phoneDlg').showModal();
 }
 // A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser,
-// after a question showing the whole address (Builder, 2026-11-02: the chat link confirm, "yes on 1.6"); "don't ask again"
+// after a question showing the whole address (the chat link confirm, item 1.6); "don't ask again"
 // is kept on this computer.
 const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true) : new Promise(done => {
   const d = outer.$('#linkDlg'); outer.$('#linkU').textContent = href; d.returnValue = '';
@@ -934,7 +934,7 @@ function applyChat(ev, into) {
       if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
       else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
       // Every agent request reads and re-warms the prompt cache, so the cache clock starts again from any agent output: a
-      // turn nobody prompted (owner, 2026-10-25: a background task's wake-up left the clock at 57 min) and a long prompted
+      // turn nobody prompted (a background task's wake-up left the clock at 57 min) and a long prompted
       // turn alike (an agent working on its own for hours inside one turn left it cold); turn-end sets it once more.
       if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {

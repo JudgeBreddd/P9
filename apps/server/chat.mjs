@@ -1,6 +1,6 @@
 // Chat over ACP: one adapter process per running conversation. On Linux each adapter runs in its own systemd user
-// scope, so Stop ends everything the session spawned, setsid children included. Adapted from Builder's
-// agent-first-workspace (_engine/acp-connection.ts, os-process.ts, provider-service.ts, 2026-10-09); the adapter
+// scope, so Stop ends everything the session spawned, setsid children included. Adapted from
+// agent-first-workspace (_engine/acp-connection.ts, os-process.ts, provider-service.ts); the adapter
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -33,7 +33,7 @@ const MAX_TEXT = 100_000, MAX_EVENT = 64 * 1024;
 export const DEFAULT_RULES = ['Before you start, say in one line which folder you are in and, if it is a git repository, its branch, newest commit and remote.',
   'Do not end your turn while something you started (a build, a test run, a check) is still running: wait for it.',
   'End every reply with one line that says whether the work passed, failed or is waiting, and on what.'].join('\n');
-// Photos from the paperclip (Builder, 2026-10-17; threat model row 20): raster types only, base64, 2 MiB each, four a message.
+// Photos from the paperclip (threat model row 20): raster types only, base64, 2 MiB each, four a message.
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']), MAX_IMAGES = 4, MAX_IMAGE = 2 * 1024 * 1024;
 const imagesOk = (images) => Array.isArray(images) && images.length <= MAX_IMAGES && images.every((image) => image && typeof image === 'object'
   && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data));
@@ -561,7 +561,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
   };
   // A message another chat's agent sent (send_chat, open_chat) says so to the agent that gets it, as its own leading block:
-  // without it the text reads as the user's (Builder, 2026-11-11: a helper chat took a peer's questions for his).
+  // without it the text reads as the user's (a helper chat took a peer's questions for the user's).
   const fromFor = (body) => {
     const from = senders.get(body), title = ID.test(from ?? '') ? row(from)?.title : null;
     if (!ID.test(from ?? '')) return null;
@@ -581,7 +581,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const ASK_NOTE = '[P9: this is a question from that chat (ask_chat). Answer it in your reply to this message: that reply is returned to the asker as it is. This turn is read-only: do not edit, run or change anything, and do not present a plan. Say what you checked and what you are not sure of, and name anything that is the user\'s decision as the user\'s.]\n\n';
   // A chat's folder (threat model row 24): workspace-relative, walked like GET /files/list; in Unrestricted mode (v0.1.6 U4)
   // also an absolute path to any real directory (no links: listDirectory wants its realpath; not inside P9's own folders).
-  // A typed full path is resolved first: "/x/y/" with its trailing slash failed the walk's realpath match (Builder, 2026-11-02).
+  // A typed full path is resolved first: "/x/y/" with its trailing slash failed the walk's realpath match.
   const folderCheck = (folder) => (path.isAbsolute(folder) ? (loose() ? listDirectory(path.resolve(folder), '') :Promise.reject(new Error('unsafe-path'))) : listDirectory(workspace, folder));
   const folderThere = (folder) => folderCheck(folder).then(() => true, () => false);
   const folderPath = (folder) => path.resolve(workspace, folder ?? '');
@@ -594,7 +594,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     await folderCheck(conversation.folder ?? '');
     return folderPath(conversation.folder);
   };
-  // Step 1d (threat model row N1d; the owner, 2026-11-08: "the act of moving is permission"): while a chat is in a project,
+  // Step 1d (threat model row N1d; moving a chat into a project is the permission): while a chat is in a project,
   // a read by its agent of that project's own files/ is answered here, once, without asking. Only Claude asks for reads
   // (Codex's sandbox reads anywhere), so only Claude's built-in Read, Glob and Grep, by their real request shape
   // (claude-agent-acp's permissionToolCall: name, rawInput, locations). Anything else, or any doubt, goes to the user.
@@ -636,13 +636,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.modeChain = set.catch(() => {}).finally(() => { session.modeWaits -= 1; });
     return set;
   };
-  // The chat's Mode picker, sent with each desktop prompt (Builder, 2026-10-17: Auto still asked before every command). Codex's
+  // The chat's Mode picker, sent with each desktop prompt (Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   const MODES = { claude: { Auto: 'auto', Manual: 'default', Plan: 'plan', 'Accept edits': 'acceptEdits', 'Bypass permissions': 'bypassPermissions' },
     codex: { 'Read-only': 'read-only', 'Workspace access': 'workspace-write', 'Auto review': 'agent', 'Full access': 'agent-full-access' } };
-  // The agent's own model list (Builder, 2026-10-17: the picker offered two models). The window shows it; a prompt picks only from it.
-  // Threat model row 22: beside the model, only effort, fast mode and Codex's plan switch (Builder, 2026-10-18: "wire all of
-  // them"). Mode stays P9's own picker with the lock; any other or future category never reaches the window.
+  // The agent's own model list (the picker offered two models). The window shows it; a prompt picks only from it.
+  // Threat model row 22: beside the model, only effort, fast mode and Codex's plan switch (all of them
+  // wired). Mode stays P9's own picker with the lock; any other or future category never reaches the window.
   const PICKERS = ['thought_level', 'model_config', 'collaboration_mode'];
   // category: the window tells Effort (thought_level), Fast mode (model_config) and Codex's plan switch (collaboration_mode) apart by it.
   const select = (o) => ({ id: o.id, name: String(o.name ?? o.id).slice(0, 60), current: String(o.currentValue ?? ''), category: typeof o.category === 'string' ? o.category.slice(0, 40) : '',
@@ -710,7 +710,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : { outcome: { outcome: 'cancelled' } };
   };
   const command = (provider) => adapterOverride ? [process.execPath, adapterOverride, provider] : [process.execPath, adapterEntry(provider)];
-  // O47 (Builder, 2026-11-10: "I like B"): the lists are read fresh once per daemon run, the first time a window or phone
+  // O47 (option B): the lists are read fresh once per daemon run, the first time a window or phone
   // asks for them, with no chat: start the agent, open a session, read its lists, end it. No prompt is ever sent, so no
   // model is called. Not while the agent lock is on. A failure (signed out, offline, slow) is quiet: the kept list stays
   // and the reply says 'failed'. A second ask never starts a second read.
@@ -1272,7 +1272,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }));
       return { status: 200, on: locked };
     },
-    // Most recently used first, for the desktop's History and the phone (owner, 2026-10-25). used: the chat's newest event,
+    // Most recently used first, for the desktop's History and the phone. used: the chat's newest event,
     // not counting NOT_USE (protocol): the stops a close, an exit or a restart write, a move, rename or archive, nor the created event (its time is a later Date.now()
     // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
@@ -1347,7 +1347,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
       // S13: a paused sprint's worker starts no turn and takes nothing into a running one for what an agent or P9 sends
       // (a lead's send_chat, a reviewer wake, the messages that waited for a turn's end): each is kept, in order, for
-      // Resume. The owner's own message goes through (Lead's choice, 2026-11-16: holding it would look like a dead chat),
+      // Resume. The owner's own message goes through (holding it would look like a dead chat),
       // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
       const pausing = (from || mixed.has(body)) && !notes.has(body) && pausedOf(conversation.parent);
       const bare = commands.has(body);
@@ -1467,7 +1467,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
         (error) => {
-          // phone-1 (2026-11-15): after "No, keep planning" on the plan approval, Claude's adapter can fail the prompt with
+          // phone-1: after "No, keep planning" on the plan approval, Claude's adapter can fail the prompt with
           // this diagnostic instead of ending it as cancelled (seen twice on adapter 0.106.0, not reproduced outside P9).
           // A decline is a cancel the user chose, so it ends the same way; any other failure still shows its error.
           if (session.planDeclined === turn && /\[ede_diagnostic\][^]*stop_reason=tool_use/.test(String(error?.message))) return done({ stopReason: 'cancelled' });
@@ -1527,7 +1527,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }
       return refused(409, 'not-held');
     },
-    // close: the tab's x (owner, 2026-10-25: closing a chat stops it, running or idle); 'closed' takes its tab out of
+    // close: the tab's x (closing a chat stops it, running or idle); 'closed' takes its tab out of
     // every window, and History opens it again.
     // spare: one chat below id left running, it and the chats under it (Close sprint's calling worker). Not from the route.
     async stop(id, body = {}, spare = null) {
