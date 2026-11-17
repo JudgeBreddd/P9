@@ -3,7 +3,7 @@
 // the hooks panel.mjs asks for (o.openProject, o.newProject, o.chatMenuItems, o.renderPage). The page lives in #projPage
 // beside #chats; o.S.view says which shows ({ kind: 'project', id }, { kind: 'archived' } or null for the chats).
 // Every change goes through the daemon's project routes (p9:chat); nothing here reads or writes a folder.
-import { svg, esc, runnerPicks, modes, LOOSE } from './helpers.mjs';
+import { svg, esc } from './helpers.mjs';
 import { PANEL_ICONS, LABEL, listedChats, stateOf } from './panel.mjs';
 
 const ERR = { 'folder-exists': 'A folder with that name is already there. Change the name or the parent.', 'folder-refused': 'P9 can\'t use that folder. Pick another.',
@@ -163,8 +163,6 @@ export function installProjects(o, api) {
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
-  const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;
-    if (t == null) return 'it is missing'; if (!t.trim()) return 'it is empty'; try { const d = JSON.parse(t); return Array.isArray(d?.roles) ? 'a row has no "key"' : 'it has no "roles" list'; } catch (e) { return e.message; } };
   const rolesOf = sp => { try { const d = JSON.parse(sp.files.find(f => f.name === 'roles.json')?.text ?? ''); return Array.isArray(d?.roles) && d.roles.every(r => r && typeof r.key === 'string') ? d.roles : null; } catch { return null; } };
   // O110: a roles.json read between an outside writer's truncate and its write comes back empty or cut short. The page
   // keeps the last good one it had (its hash too, so a pick made meanwhile is refused as changed) and reads the project
@@ -191,7 +189,7 @@ export function installProjects(o, api) {
         if (!sp || rolesOf(sp) !== null || i === 9) {
           adopt(r.body.project, lead); renderPage(); fillBox(false);
           // renderPage leaves the page alone while its file box has the focus: the rows alone are redrawn then.
-          const rows = sp && document.activeElement?.matches?.('[data-sp-box]') && page.querySelector(`[data-sprint="${CSS.escape(lead)}"] :is([data-sp-roles], [data-sp-roles-bad])`);
+          const rows = sp && document.activeElement?.matches?.('[data-sp-box]') && page.querySelector(`[data-sprint="${CSS.escape(lead)}"] :is([data-sp-roles], [data-sp-roles-bad], [data-sp-roles-wait])`);
           if (rows) rows.outerHTML = rolesHtml(sp, rolesOf(sp));
           return;
         }
@@ -210,23 +208,10 @@ export function installProjects(o, api) {
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
   const roleFiles = sp => (sp.prep ? ['rules.md', 'roles.json'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
-  const ROLE = { lead: 'Lead: runs the sprint, merges what passed review', review: 'Reviewer: reviews each piece, gets no worker folder' };
-  function rolesHtml(sp, roles) {
-    // A prep is made with its roles.json, so one gone was deleted: it says so, and the file is listed to make again
-    // (FIX1). Any other sprint folder (a chat's notes, made without one) shows no roles.
-    if (!sp.prep && !sp.files.some(f => f.name === 'roles.json')) return '';
-    if (!roles) return `<p class="hint" data-sp-roles-bad role="status">roles.json does not read: <span class="mono" data-sp-roles-why>${esc(rolesWhy(sp))}</span>. Fix it in its file below; the rows show again when it reads.</p>`;
-    const row = r => { const worker = r.key !== 'lead' && r.key !== 'review', p = runnerPicks(o, { agent: String(r.provider ?? ''), model: String(r.model ?? ''), effort: String(r.effort ?? '') },
-      { first: ['', 'Not set'], attr: k => `data-spr="${k}" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}"`, aria: k => `${r.key} ${k}` });
-      // H3: its permissions (the mode Start opens it in; Not set: P9's usual one) and what it owns, for the lead to send work by.
-      const mode = String(r.mode ?? ''), ms = modes[p.a] ?? [], mo = [['', 'Not set'], ...ms.map(m => [m, m]), ...(mode && !ms.includes(mode) ? [[mode, mode]] : [])];
-      const pick = r.provider ? `<label class="set-pick">Mode<select data-slot="input" data-spr="mode" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}" aria-label="${esc(r.key)} mode"${LOOSE[mode] ? ` title="${esc(LOOSE[mode])}"` : ''}>${mo.map(([v, n]) => `<option value="${esc(v)}"${v === mode ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '';
-      return `<div class="set-row sp-role" data-role-row="${esc(r.key)}"><span><strong class="mono">${esc(r.key)}</strong><span class="muted sm">${ROLE[r.key] ?? `Worker: its own folder on branch sprint/…/${esc(r.key)}`}${p.empty ? `. Start one ${esc(o.names[p.a] ?? p.a)} chat first: its models and efforts are listed here after that.` : ''}</span></span>${p.html}`
-        + (worker ? `<button class="rm" data-pj="sprole-rm" data-lead="${esc(sp.lead)}" data-role="${esc(r.key)}" title="Remove the role ${esc(r.key)}" aria-label="Remove the role ${esc(r.key)}">${svg.x}</button>` : '')
-        + `<span class="sp-role2"><label class="set-pick sp-owns">Owns<input data-slot="input" data-sp-owns data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}" maxlength="500" spellcheck="false" autocomplete="off" placeholder="for example: the window, Settings" aria-label="${esc(r.key)} owns" value="${esc(String(r.owns ?? ''))}"></label>${pick}</span></div>`; };
-    return `<div class="sp-roles" data-sp-roles><h3>Roles</h3>${roles.map(row).join('')}`
-      + `<div class="sp-add"><input data-slot="input" class="mono" data-sp-newkey data-lead="${esc(sp.lead)}" maxlength="64" spellcheck="false" autocomplete="off" placeholder="worker name, for example docs" aria-label="New worker's name"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sprole-add" data-lead="${esc(sp.lead)}">${svg.plus}Add worker</button></div></div>`;
-  }
+  // The Roles rows are drawn by sprint-view.mjs, loaded on first use: until it is in, the heading alone, then a redraw.
+  let svMod = null, svP = null;
+  const loadSv = () => (svP ??= import('./sprint-view.mjs').then(m => { svMod = m; renderPage(); return m; }, () => (svP = null)));
+  const rolesHtml = (sp, roles) => svMod ? svMod.rolesHtml(sp, roles, o, esc) : (loadSv(), '<div class="sp-roles" data-sp-roles-wait><h3>Roles</h3></div>');
   // A draft whose file was deleted since (a worker, the lead): still listed, with its text, until saved again or discarded.
   const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
   const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1)); };
@@ -259,7 +244,7 @@ export function installProjects(o, api) {
     const lead = svFor = spPage, n = ++svN;
     rereadFiles(lead);
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
-      const [m, r] = await Promise.all([import('./sprint-view.mjs').catch(() => null), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
+      const [m, r] = await Promise.all([loadSv(), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
       if (m && r.status === 200) { sv = { lead, html: m.statusHtml(r.body, esc) }; renderPage(); }
     }
