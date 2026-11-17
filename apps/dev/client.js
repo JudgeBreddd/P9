@@ -62,17 +62,17 @@ const heavy = Object.fromEntries(['node_modules', '.venv', 'venv', '__pycache__'
 await initUserConfiguration(JSON.stringify({ 'workbench.colorTheme': 'P9 Prime', 'workbench.startupEditor': 'none', 'workbench.editor.enablePreview': false,
   'files.hotExit': 'onExitAndWindowClose', 'workbench.localHistory.enabled': false, 'security.workspace.trust.enabled': false,
   'extensions.autoUpdate': false, 'telemetry.telemetryLevel': 'off', 'remote.extensionKind': { 'openai.codex-audio': ['workspace'] },
-  // Builder's long-running VS Code-over-SSH OOM: the watcher took one inotify watch per folder (29,346 on the real ICM tree,
+  // A long-running editor-over-SSH session ran out of memory: the watcher took one inotify watch per folder (29,346 on the real ICM tree,
   // 82% of them in these folders) and search walked them too. Generated and dependency folders only (packages/files HEAVY);
-  // since item 23 (Builder, 2026-10-27: "keep them out of P9's file crawler") the tree leaves them out too.
+  // since item 23 (kept out of P9's file crawler) the tree leaves them out too.
   'files.watcherExclude': heavy, 'search.exclude': heavy, 'files.exclude': heavy, 'search.followSymlinks': false }));
 const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
   contributes: { themes: [{ id: 'P9 Prime', label: 'P9 Prime', uiTheme: 'vs-dark', path: './prime-theme.json' },
     // The shell's Event Horizon Azure look (p9-event-horizon-azure): its own editor colours and syntax colours.
     { id: 'P9 Event Horizon Azure', label: 'P9 Event Horizon Azure', uiTheme: 'vs-dark', path: './event-horizon-azure-theme.json' }],
     // Defaults, not user settings: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles wrap.
-    // files.autoSave: the web workbench defaults to afterDelay, which wrote every edit a second after the last key (Builder, 2026-10-26:
-    // "save only on ctrl s or save button"). Off: an edit stays in the editor, with the unsaved dot on its tab, until Save.
+    // files.autoSave: the web workbench defaults to afterDelay, which wrote every edit a second after the last key (saving is
+    // only on Ctrl S or the Save button). Off: an edit stays in the editor, with the unsaved dot on its tab, until Save.
     configurationDefaults: { 'editor.wordWrap': 'on', 'files.autoSave': 'off' } } }, ExtensionHostKind.LocalProcess);
 theme.registerFileUrl('./prime-theme.json', new URL('./prime-theme.json', location.href).href);
 theme.registerFileUrl('./event-horizon-azure-theme.json', new URL('./event-horizon-azure-theme.json', location.href).href);
@@ -120,7 +120,7 @@ guarded.writeFile = async function (uri, bytes, options) {
   let text;
   try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { throw new Error('P9 saves UTF-8 text only.'); } // a BOM stays
   // New File and Save As (create flag) go through the create-only route. A name already on disk (Save As after VS Code's
-  // Replace prompt; Builder, 2026-10-18: "replace save as or rename it. just like normal file explorers") is replaced by a
+  // Replace prompt; replace or rename, as a file explorer does) is replaced by a
   // guarded save on the bytes read here, so a change on disk in between still conflicts.
   let basis = loaded.get(name);
   if (basis === undefined) {
@@ -203,7 +203,7 @@ await initialize({ ...getAuthentication(), ...getTesting(), ...getTask(), ...get
   // Extension pages (webviews) load from p9://webview, an origin walled off from this page and window.p9dev (threat model row 5).
   ...getExplorer(), ...getWorkbench(undefined, 'p9://webview') }, document.querySelector('#workbench'), {
   remoteAuthority: authority, connectionToken: config.token,
-  // The Extensions view browses Open VSX, the same gallery the editor host installs from (Builder, 2026-10-17: "itll be fine to install the extensions").
+  // The Extensions view browses Open VSX, the same gallery the editor host installs from (installing extensions from it was approved).
   productConfiguration: { commit: config.commit, quality: 'stable', nameShort: 'P9', nameLong: 'P9 Event Horizon',
     extensionsGallery: { serviceUrl: 'https://open-vsx.org/vscode/gallery', itemUrl: 'https://open-vsx.org/vscode/item',
       resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}' } },
