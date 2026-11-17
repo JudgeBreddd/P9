@@ -407,6 +407,38 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const setPaused = (lead, list) => list
     ? db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('paused:' + lead, JSON.stringify(list))
     : db.prepare('DELETE FROM prefs WHERE key = ?').run('paused:' + lead);
+  // What Resume has still to send, under resuming:<lead>: a message leaves it once its prompt answered (taken or refused),
+  // so a restart in between sends the rest. sending: the ledger's cursor when its prompt began; a 'user' event of its
+  // text after that cursor means it was recorded before the restart, and it is not sent twice.
+  const resumingOf = (lead) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('resuming:' + lead)?.value ?? '[]'); } catch { return []; } };
+  const setResuming = (lead, list) => list.length
+    ? db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('resuming:' + lead, JSON.stringify(list))
+    : db.prepare('DELETE FROM prefs WHERE key = ?').run('resuming:' + lead);
+  const delivering = new Set(); // leads whose resuming list is being sent now
+  // narrow (delegate.mjs): the mode each kept message may run in now, from its senders' modes now, or { error }.
+  async function deliver(lead, narrow) {
+    if (delivering.has(lead)) return; // the running pass takes what was added
+    delivering.add(lead);
+    try {
+      for (let item; (item = resumingOf(lead)[0]);) {
+        const done = () => setResuming(lead, resumingOf(lead).filter((i) => i.id !== item.id));
+        const allowed = heldAuthority.get(item.id) ?? (() => true);
+        heldAuthority.delete(item.id);
+        const recorded = item.sending !== undefined && db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'user' AND cursor > ? AND json_valid(data) AND data ->> '$.text' = ? LIMIT 1").get(item.chat, item.sending, item.body.text);
+        if (recorded) { done(); continue; }
+        const picked = !allowed() ? { error: 'session-ended' } : narrow ? narrow(item) : { mode: item.body.mode };
+        if (picked.error) { emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: picked.error }); done(); continue; }
+        setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
+        const body = { ...item.body, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
+        if (item.mixed) mixed.set(body, item.mixed);
+        const result = await api.prompt(item.chat, body, undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
+        if (result.status !== 202 && result.status !== 200) emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: result.error ?? 'refused' });
+        done();
+      }
+    } finally { delivering.delete(lead); }
+  }
+  // The name of the mode last set on a chat's agent (its 'mode' event), so a sender not running still has one.
+  const lastMode = (id) => db.prepare("SELECT data ->> '$.name' AS name FROM events WHERE conversation = ? AND type = 'mode' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id)?.name ?? null;
   // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, the sprint folder's rules.md (D3; before it, prefs
   // under rules:<parent>, still read until the first set_rules); never set, it is DEFAULT_RULES, and '' is none. It rides
   // as its own block with every message that chat's agent sends a chat it started (a compaction in the worker cannot lose
@@ -1450,25 +1482,24 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     sprint: sprintOf,
     // S13 (delegate.mjs pause_sprint / resume_sprint and the project page's buttons). pause: false when already paused.
     paused: (lead) => pausedOf(lead) !== null,
+    lastMode,
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
     // end. Returns how many were held, or null when the sprint was not paused.
-    async resume(lead) {
+    async resume(lead, narrow) {
       const list = pausedOf(lead);
       if (!list) return null;
-      setPaused(lead, null);
+      for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
+      db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
+      try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       wakeAll('resumed');
-      for (const item of list) {
-        for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
-        const allowed = heldAuthority.get(item.id) ?? (() => true);
-        heldAuthority.delete(item.id);
-        if (!allowed()) { emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: 'session-ended' }); continue; }
-        const body = { ...item.body, when: 'queue' };
-        if (item.mixed) mixed.set(body, item.mixed);
-        const result = await api.prompt(item.chat, body, undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
-        if (result.status !== 202 && result.status !== 200) emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: result.error ?? 'refused' });
-      }
+      await deliver(lead, narrow);
       return list.length;
+    },
+    // After a restart, what a Resume had not sent yet (delegate.mjs calls it once, with its narrow).
+    async resumeLeft(narrow) {
+      await recovered;
+      for (const { key } of db.prepare("SELECT key FROM prefs WHERE key LIKE 'resuming:%'").all()) deliver(key.slice(9), narrow).catch(() => {});
     },
     queue: (id) => { const c = db.prepare('SELECT parent, key FROM conversations WHERE id = ?').get(id); return c ? queueOf(c.parent, c.key, sprintOf(id)) : null; },
     setSprint,

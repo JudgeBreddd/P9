@@ -297,6 +297,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const still = () => {
       if (signal?.aborted) return { error: 'cancelled' };
       if (chat.lock(caller).on) return { error: 'agent-lock-on' };
+      if (chat.paused(caller)) return PAUSED; // a Pause pressed while the user was asked or the folder was made
       const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
       if (now.start === 'off') return OFF;
       if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
@@ -394,14 +395,31 @@ export function createDelegate({ chat, allowed, usage }) {
   const PAUSED = { error: 'sprint-paused', detail: 'Your sprint is paused: resume_sprint first, or wait for the user to resume it.' };
   const isLead = (id) => ID.test(id ?? '') && !!chat.info(id) && chat.sprintFiles.exists(id);
   function pauseSprint(lead, owner) {
+    if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
     if (!chat.pause(lead)) return { paused: true, already: true };
     if (owner) chat.note(lead, '[p9] The user paused this sprint. Your workers start no new turn; what you, the reviewer or P9 send them is kept and sent when the user resumes it. Turns already running finish.', 'p9').catch(() => {});
     return { paused: true };
   }
+  // A kept message runs in no mode wider than any of its senders' modes at Resume (modeFor's ceiling, read now and not
+  // when it was kept), so narrowing a sender while paused narrows what it sent. A sender with no mode known is refused.
+  function narrow(item) {
+    const target = chat.info(item.chat);
+    if (!target) return { error: 'chat-not-found' };
+    let mode = item.body.mode;
+    for (const id of item.mixed ?? (item.from ? [item.from] : [])) {
+      if (!ID.test(id)) continue; // P9's own
+      const s = chat.info(id), name = s && (s.mode ?? chat.lastMode(id)), ceiling = name ? tierOf(s.provider, name) : undefined;
+      if (ceiling === undefined) return { error: s ? 'mode-unknown' : 'chat-not-found' };
+      if (!(tierOf(target.provider, mode) <= ceiling)) mode = target.provider === s.provider ? name : under(target.provider, ceiling);
+    }
+    return { mode };
+  }
+  chat.resumeLeft?.(narrow)?.catch(() => {});
   async function resumeSprint(lead, owner) {
+    if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
-    const sent = await chat.resume(lead);
+    const sent = await chat.resume(lead, narrow);
     if (sent === null) return { paused: false, already: true };
     if (owner) chat.note(lead, `[p9] The user resumed this sprint. ${sent} kept message${sent === 1 ? '' : 's'} sent in order.`, 'p9').catch(() => {});
     return { paused: false, sent };
@@ -414,6 +432,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const project = lead?.project ?? prep.project;
     if (caller && (chat.info(caller)?.project ?? null) !== project) return { error: 'unknown-sprint' };
     if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
+    if (chat.paused(sprint) || (caller && chat.paused(caller))) return PAUSED; // S13: a paused sprint makes no chat
     if (starting.has(sprint)) return { error: 'sprint-starting', detail: 'This sprint is being started now.' };
     starting.add(sprint);
     let reserved = null;
@@ -454,6 +473,7 @@ export function createDelegate({ chat, allowed, usage }) {
       // per chat and the modes, read again. leadMode is the one read last, so no chat is made wider than its caller is now.
       const again = () => {
         if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
+        if (chat.paused(sprint) || (caller && chat.paused(caller))) return PAUSED;
         const now = chat.delegation();
         if (now.start === 'off') return OFF;
         // A lower Workers per chat: the place held is this start's own, so it does not count against it.
@@ -502,6 +522,7 @@ export function createDelegate({ chat, allowed, usage }) {
       if (!chat.info(sprint)?.mode) return { error: 'lead-not-started', chats, detail: 'The lead\'s agent did not start within a minute. Press Start again to make the rest.' };
       for (const [i, r] of roles.rest.entries()) {
         if (signal?.aborted) return { error: 'cancelled', chats };
+        if (chat.paused(sprint)) return { ...PAUSED, chats };
         const existing = chat.family().find((c) => c.parent === sprint && c.key === r.key);
         if (!existing && i) await pause(STAGGER_MS, signal);
         const work = (chat.sprintFiles.read(sprint, `roles/${r.key}.work.md`) ?? '').trim() || 'Your sprint started. Read your instructions and your notes file, then begin your work.';

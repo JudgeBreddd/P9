@@ -15,7 +15,7 @@ import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelc
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
-  .then((result) => ({ ...result, body: result.text ? JSON.parse(result.text) : null }));
+  .then((result) => { let body = null; try { body = result.text ? JSON.parse(result.text) : null; } catch { body = { text: result.text.slice(0, 80) }; } return { ...result, body }; });
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const rows = async (instance) => (await call(instance, '/chat')).body.conversations;
@@ -69,11 +69,17 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   const notices = async (prefix) => (await events(instance, sprint)).filter((e) => told({ ...e, conversation: sprint }, prefix)).map((e) => e.data.text);
   const turns = async (chat, text, after) => (await events(instance, chat)).filter((e) => e.cursor > after && e.type === 'user' && e.data.text?.includes(text));
 
-  // The owner's press: desktop route, no fields, a sprint only; the lead hears of it once; the page and rows say Paused.
+  // The owner's press, then what it is for: the lead's messages to a worker are kept, and no turn starts.
+  let got = await call(instance, `/sprints/${sprint}/pause`, 'POST', {});
+  let mark = await cursor(instance);
+  for (const text of ['pause-one', 'pause-two']) {
+    const sent = await lead.tool('send_chat', { chat: id.w1, text });
+    assert.ok(sent.held, 'a paused sprint\'s worker took the lead\'s message: ' + JSON.stringify(sent));
+  }
+  // The press: desktop route, no fields, a sprint only; the lead hears of it once; the page and rows say Paused.
+  assert.deepEqual([got.status, got.body], [200, { paused: true }]);
   assert.equal((await call(instance, `/sprints/${sprint}/pause`, 'POST', { by: 'x' })).status, 400, 'the press has no fields');
   assert.equal((await call(instance, `/sprints/${id.w1}/pause`, 'POST', {})).status, 404, 'a worker was paused as a sprint');
-  let got = await call(instance, `/sprints/${sprint}/pause`, 'POST', {});
-  assert.deepEqual([got.status, got.body], [200, { paused: true }]);
   assert.deepEqual((await call(instance, `/sprints/${sprint}/pause`, 'POST', {})).body, { paused: true, already: true });
   await until(instance, (e) => told(e, '[p9] The user paused'));
   assert.equal((await notices('[p9] The user paused')).length, 1, 'the lead was not told once');
@@ -82,12 +88,6 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.deepEqual([marked[sprint], marked[id.w1], marked[id.w2], marked[first]], [true, true, true, false]);
   assert.equal((await w1.tool('pause_sprint')).error, 'not-a-sprint-lead');
 
-  // Agents' messages are kept: no turn starts.
-  let mark = await cursor(instance);
-  for (const text of ['pause-one', 'pause-two']) {
-    got = await lead.tool('send_chat', { chat: id.w1, text });
-    assert.ok(got.held, JSON.stringify(got));
-  }
   // A note passes (it starts nothing), a question from beside is refused, the lead opens no worker.
   assert.match((await lead.tool('send_chat', { chat: id.w1, text: 'a note', when: 'note' })).sent, /^as a note/);
   await call(instance, `/chat/${id.w1}/askable`, 'POST', { on: true });
@@ -121,13 +121,79 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.equal((await call(instance, '/projects/' + project)).body.project.sprints.find((s) => s.lead === sprint).paused, undefined);
   assert.deepEqual((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).body, { paused: false, already: true });
 
-  // The cap: the lead's own pause (no note to itself), 100 kept, the 101st refused by name.
+  // The lead's own tools from here (its old MCP client went with the restart).
   await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
-  const again = await attach(t, instance, sprint, mark);
+  let again = await attach(t, instance, sprint, mark);
+  const isPaused = async () => !!(await rows(instance)).find((c) => c.id === sprint).paused;
+  const approvals = async () => (await events(instance, sprint)).filter((e) => e.type === 'approval');
+  const lock = async (on) => assert.equal((await call(instance, '/agent-lock', 'POST', { on })).status, 200);
+
+  // The lock: an agent under it neither pauses nor resumes (the owner's press still does, above and below).
+  await lock(true);
+  assert.equal((await again.tool('pause_sprint')).error, 'agent-lock-on');
+  await lock(false);
+  assert.equal(await isPaused(), false, 'a locked agent paused its sprint');
+  const lastMode = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'mode').at(-1)?.data.name;
+  mark = await cursor(instance);
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'widened', mode: 'Auto' }); // the lock going off left it in Manual
+  await until(instance, (e) => e.conversation === sprint && e.data?.content?.text?.includes('widened'), mark);
+
+  // start_sprint makes no chat for a paused sprint: an added role, paused while the user is asked, then asked while paused.
+  const rolesFile = path.join(prep.folder, 'roles.json'), plan = JSON.parse(fs.readFileSync(rolesFile, 'utf8'));
+  fs.writeFileSync(rolesFile, JSON.stringify({ ...plan, roles: [...plan.roles, row('w3', 'haiku', 'low')] }));
+  fs.writeFileSync(path.join(prep.folder, 'roles/w3.work.md'), 'mcp');
+  const chatsBefore = (await rows(instance)).length, seen = (await approvals()).length;
+  const starting = again.tool('start_sprint', { sprint });
+  for (let i = 0; i < 100 && (await approvals()).length === seen; i += 1) await pause(100);
+  const asked = (await approvals())[seen];
+  assert.ok(asked, 'start_sprint did not ask');
+  assert.deepEqual(await again.tool('pause_sprint'), { paused: true });
+  await call(instance, `/chat/${sprint}/answer`, 'POST', { request: asked.data.request, answer: { optionId: 'allow' } });
+  assert.equal((await starting).error, 'sprint-paused', 'a Pause during the question did not stop the start');
+  assert.equal((await again.tool('start_sprint', { sprint })).error, 'sprint-paused');
+  assert.equal((await approvals()).length, seen + 1, 'a paused sprint\'s start asked the user');
+  assert.equal((await rows(instance)).length, chatsBefore, 'a paused sprint\'s start made a chat');
+
+  // Kept while the lead runs in Auto; the lead is narrowed to Manual before Resume; the lock refuses resume_sprint.
+  assert.equal(await lastMode(sprint), 'Auto');
+  mark = await cursor(instance);
+  for (const text of ['crash-one', 'crash-two', 'crash-three']) assert.ok((await again.tool('send_chat', { chat: id.w2, text })).held, text + ' was not kept');
+  await lock(true);
+  assert.equal((await again.tool('resume_sprint')).error, 'agent-lock-on');
+  await lock(false);
+  assert.equal(await isPaused(), true, 'a locked agent resumed its sprint');
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'narrowed', mode: 'Manual' });
+  await until(instance, (e) => e.conversation === sprint && e.data?.content?.text?.includes('narrowed'), mark);
+  await pause(1000);
+  assert.deepEqual(await turns(id.w2, 'crash-', mark), [], 'a locked resume_sprint sent what was kept');
+
+  // A restart while Resume sends: the first message's agent never starts (hang-init), P9 stops dead, and the next start
+  // sends the rest, each once, in the lead's mode now.
+  const hang = path.join(instance.workspace, 'hang-init'); // every agent starts in the workspace; only w2's starts here
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  fs.writeFileSync(hang, '');
+  instance = await restart(t, instance, 'state-3');
+  mark = await cursor(instance);
+  call(instance, `/sprints/${sprint}/resume`, 'POST', {}).catch(() => null);
+  await until(instance, (e) => e.conversation === id.w2 && e.type === 'user' && e.data.text?.includes('crash-one'), mark);
+  instance.child.kill('SIGKILL'); await once(instance.child, 'exit');
+  fs.rmSync(hang);
+  instance = await restart(t, instance, 'state-4');
+  await until(instance, (e) => e.conversation === id.w2 && e.data?.content?.text?.includes('crash-three'), mark);
+  await pause(1000);
+  assert.deepEqual((await turns(id.w2, 'crash-', mark)).map((e) => e.data.text.match(/crash-\w+/)[0]), ['crash-one', 'crash-two', 'crash-three'], 'a message was lost or sent twice');
+  const modes = (await events(instance, id.w2)).filter((e) => e.cursor > mark && e.type === 'mode').map((e) => e.data.name);
+  assert.equal(modes.at(-1), 'Manual', 'a kept message ran wider than its sender is now: ' + JSON.stringify(modes));
+  assert.equal(await isPaused(), false);
+
+  // The cap: the lead's own pause (no note to itself), 100 kept, the 101st refused by name.
+  mark = await cursor(instance);
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  again = await attach(t, instance, sprint, mark);
   assert.deepEqual(await again.tool('pause_sprint'), { paused: true });
   assert.equal((await notices('[p9] The user paused')).length, 1, 'the lead\'s own pause sent it a note');
   for (let i = 0; i < 100; i += 1) assert.ok((await again.tool('send_chat', { chat: id.w2, text: 'cap-' + i })).held, 'message ' + i + ' was not kept');
   got = await again.tool('send_chat', { chat: id.w2, text: 'cap-100' });
   assert.equal(got.reason ?? got.error, 'sprint-paused-full', JSON.stringify(got));
-  console.log('PASS Pause sprint: held in order across a restart, resumed with senders; note and owner pass; ask_chat, open_chat refused; cap 100');
+  console.log('PASS Pause sprint: held in order across a restart, resumed with senders; note and owner pass; ask_chat, open_chat, start_sprint refused; lock; senders\' mode now; a restart mid-Resume loses and repeats nothing; cap 100');
 });
