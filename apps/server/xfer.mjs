@@ -9,6 +9,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { HEAVY, listDirectory, lockedName, openSafe, removeFile, replaceFile } from '../../packages/files/index.mjs';
 import { appendPiece, checkStaged, readPiece, sha256File, validPiece } from './pieces.mjs';
+import { childEnv } from './child-env.mjs';
 
 const run = promisify(execFile);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, HASH = /^[0-9a-f]{64}$/;
@@ -22,7 +23,7 @@ const relative = (value) => typeof value === 'string' && value.length > 0 && val
 // git's own list of a repo folder's files (tracked and untracked, ignored left out), no shell; null when not a repo.
 async function gitList(cwd, args) {
   try {
-    const { stdout } = await run('git', ['-C', cwd, 'ls-files', '-z', ...args], { maxBuffer: 256 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
+    const { stdout } = await run('git', ['-C', cwd, 'ls-files', '-z', ...args], { maxBuffer: 256 * 1024 * 1024, env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0' } });
     return stdout.split('\0').filter(Boolean);
   } catch { return null; }
 }
