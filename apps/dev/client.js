@@ -62,8 +62,8 @@ const heavy = Object.fromEntries(['node_modules', '.venv', 'venv', '__pycache__'
 await initUserConfiguration(JSON.stringify({ 'workbench.colorTheme': 'P9 Prime', 'workbench.startupEditor': 'none', 'workbench.editor.enablePreview': false,
   'files.hotExit': 'onExitAndWindowClose', 'workbench.localHistory.enabled': false, 'security.workspace.trust.enabled': false,
   'extensions.autoUpdate': false, 'telemetry.telemetryLevel': 'off', 'remote.extensionKind': { 'openai.codex-audio': ['workspace'] },
-  // A long-running editor-over-SSH session ran out of memory: the watcher took one inotify watch per folder (29,346 on the real ICM tree,
-  // 82% of them in these folders) and search walked them too. Generated and dependency folders only (packages/files HEAVY);
+  // The watcher takes one inotify watch per folder and search walks every folder, so generated and dependency folders cost
+  // memory for nothing. Generated and dependency folders only (packages/files HEAVY);
   // since item 23 (kept out of P9's file crawler) the tree leaves them out too.
   'files.watcherExclude': heavy, 'search.exclude': heavy, 'files.exclude': heavy, 'search.followSymlinks': false }));
 const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
