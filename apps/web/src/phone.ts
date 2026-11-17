@@ -444,19 +444,41 @@ function blockHtml(block: Block) {
 // Three or more tool calls in a row fold into one row; their images stay in the chat below it, as on the desktop. A block's key is its index (a group's is its first block's), so a
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
 let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
+// O145: a poll that adds an event rebuilds every block of the chat (`build`), so every signature was stringified again: on a
+// long chat megabytes of strings per poll, and a full garbage collection every few polls. A block equal in content to the one
+// last signed under its key keeps that signature (the same string). It is compared with a copy taken when it was signed,
+// never the live object, because render() sets `pinned` on the blocks it was given.
+let sigsKept = new Map<string, { snap: Block[]; extra: string; sig: string }>();
+function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+  const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
+  for (const key in x) if (!same(x[key], y[key])) return false;
+  for (const key in y) if (!(key in x) && y[key] !== undefined) return false;
+  return true;
+}
 function itemsOf(blocks: Block[]) {
   // O712: a closed report shows its chat row; window-3: so does one whose worker was archived (same blocks, same SHUT), so the pinned one is in the key
   const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
-  const out: Entry[] = [];
+  const out: Entry[] = [], sigs = new Map<string, { snap: Block[]; extra: string; sig: string }>();
+  const sign = (key: string, run: Block[], extra: string, make: () => string) => {
+    const was = sigsKept.get(key);
+    const kept = was && was.extra === extra && was.snap.length === run.length && run.every((block, n) => same(block, was.snap[n])) ? was : { snap: run.map((block) => ({ ...block })), extra, sig: make() };
+    sigs.set(key, kept); return kept.sig;
+  };
   for (let i = 0; i < blocks.length; i++) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
     if (j - i >= 2) {
       const run = blocks.slice(i, j + 1);
-      out.push({ key: 'g' + blocks[i].at, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
+      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, '', () => JSON.stringify(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
       i = j;
-    } else { const block = blocks[i]; out.push({ key: 'b' + block.at, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion(), html: () => blockHtml(block) }); }
+    } else {
+      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion();
+      out.push({ key: 'b' + block.at, sig: sign('b' + block.at, [block], extra, () => JSON.stringify(block) + extra), html: () => blockHtml(block) });
+    }
   }
+  sigsKept = sigs;
   itemsKept = { blocks, key, out };
   return out;
 }
