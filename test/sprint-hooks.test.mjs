@@ -459,6 +459,31 @@ test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lo
   console.log('PASS S18 held: a cancel, the agent lock and a changed approval during the wait for the state each ran nothing; with none of them the script ran once');
 });
 
+// #232 FIX1 (c): the owner's Run now waits for the state too; a Close landing in that wait runs nothing.
+test('Sprint scripts held: the owner\'s Run now checks for a Close again right before it starts the script', { timeout: 60000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-held-owner-')), mark = path.join(dir, 'ran'), prog = path.join(dir, 'mark.mjs');
+  fs.writeFileSync(prog, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(mark)}, 'x');\n`);
+  const id = '22222222-2222-4222-8222-222222222222', script = { name: 'mark', command: `${process.execPath} ${prog}`, point: 'sprint-start', blocking: false };
+  const held = async (during) => {
+    let closed = null, reached, release; const at = new Promise((r) => { reached = r; });
+    const chat = { lock: () => ({ on: false }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
+      sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false,
+      sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
+      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts: [script] }), closed: () => closed, prepOf: () => null, record: async () => null } };
+    const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
+    const going = hooks.owner.run(id, 'mark');
+    await at; // every first check passed and the run now waits for the state
+    during({ close: () => { closed = { at: 2, by: 'owner' }; } });
+    release(null);
+    return going;
+  };
+  assert.equal((await held((d) => d.close())).error, 'sprint-closed');
+  assert.equal(fs.existsSync(mark), false, 'the owner\'s Run now started its script after the sprint closed during the wait for the state');
+  const ran = await held(() => {});
+  assert.deepEqual([ran.exit, ran.script, fs.readFileSync(mark, 'utf8')], [0, 'mark', 'x'], JSON.stringify(ran));
+  console.log('PASS owner held: a Close during the wait for the state ran nothing (sprint-closed); with no Close the script ran once');
+});
+
 // #229 FIX1. The window's Approve sends the hash of the hooks.json it showed. The hash check and the rows approved must
 // come from one read of the file: with two reads, a writer between them gets a row nobody saw approved under the hash
 // of the row that was shown. The stand-in file here answers A to the first read and B to every later one.
@@ -759,4 +784,49 @@ test('Close sprint: a before-close script refuses it, the close_sprint tool asks
   got = JSON.parse((await again.callTool({ name: 'open_chat', arguments: { text: 'config', key: 'w2' } })).content[0].text);
   assert.deepEqual([got.error, got.chat, (await rows(instance)).length], ['sprint-closed', undefined, chatsBefore], JSON.stringify(got));
   console.log('PASS Close sprint: the reopened lead\'s open_chat was refused sprint-closed;not started 409; a before-close exit 1 refused the press with its last line and changed nothing; the tool was unknown outside the project, refused by the lock, asked first and closed nothing on no; on yes the worker then the lead were stopped, after-close ran once, the tool and the route gave the same kept record, a later plan edit did not move it, and a second close, Start and Run now were refused');
+});
+
+// #232 FIX1 (a, b): a worker's own close_sprint leaves the worker running (its lead's stop does not take it), and an
+// agent lock turned on while a blocking before-close script runs stops nothing and records nothing.
+test('Close sprint held: a lock during before-close stops nothing; a worker that closes its sprint is not stopped with its lead', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo'), node = process.execPath, held = path.join(ws, 'held'), go = path.join(ws, 'go');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  // The gate says it started, then waits for the test's go.
+  const gate = path.join(ws, 'gate.mjs');
+  fs.writeFileSync(gate, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(held)}, '1'); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 50)); console.log('gate says go');`);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Held', work: { kind: 'new', parent: '', name: 'held' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Held close' })).body, sprint = s.sprint;
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: the thing; role w1\n');
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'gate', command: `${node} ${gate}`, point: 'before-close', blocking: true }] }));
+  const row = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
+  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash })).status, 200);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
+  const L = await attach(t, instance, sprint);
+  const w1 = await L.tool('open_chat', { text: 'mcp', key: 'w1' }); assert.ok(w1.chat && !w1.error, JSON.stringify(w1));
+  const W = await attach(t, instance, w1.chat);
+  const status = async () => (await call(instance, `/sprints/${sprint}/status`)).body;
+  const stateOf = async (id) => (await rows(instance)).find((c) => c.id === id)?.state;
+  const asked = async () => (await events(instance, w1.chat)).filter((e) => e.type === 'approval');
+  const allow = async (seen) => { const q = await eventually(async () => (await asked())[seen], 'the close question'); await call(instance, `/chat/${w1.chat}/answer`, 'POST', { request: q.data.request, answer: { optionId: 'allow' } }); };
+
+  // (b) The worker asks, the user says yes, the gate starts and waits; the agent lock goes on; then the gate passes.
+  let going = W.tool('close_sprint'); await allow(0);
+  await eventually(() => fs.existsSync(held), 'the gate never started');
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).status, 200);
+  fs.writeFileSync(go, '1');
+  const locked = await going;
+  assert.equal(locked.error, 'agent-lock-on', JSON.stringify(locked));
+  assert.deepEqual([(await status()).closed, await stateOf(sprint) === 'stopped', await stateOf(w1.chat) === 'stopped'], [null, false, false], 'a lock turned on during before-close still closed or stopped something');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+
+  // (a) The same worker closes it: the lead is stopped, the worker is not.
+  going = W.tool('close_sprint'); await allow(1);
+  const done = await going;
+  assert.deepEqual([done.error, done.stopped, typeof done.note], [undefined, [sprint], 'string'], JSON.stringify(done));
+  assert.deepEqual([await stateOf(sprint), await stateOf(w1.chat) === 'stopped'], ['stopped', false], 'the calling worker was stopped with its lead');
+  assert.equal((await status()).closed.by, w1.chat);
+  console.log('PASS Close held: the lock turned on during a blocking before-close refused agent-lock-on with nothing stopped or recorded; the worker\'s own close stopped only the lead and left the worker running');
 });

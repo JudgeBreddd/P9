@@ -271,6 +271,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // Which script may be run on request: one the owner approved at Start, by name, and that copy. The one place that
   // decides it (S20 puts the owner's "Allow additional scripts" switch here).
   function runnable(sprint, name) {
+    if (chat.projects.closed(sprint)) return { error: 'sprint-closed', detail: 'This sprint is closed: its scripts are off.' };
     const found = standing(sprint).running.find((s) => s.name === name);
     if (found) return found;
     const inFile = parse(chat.sprintFiles.read(sprint, 'hooks.json')).scripts?.some((s) => s.name === name), inLibrary = library().some((s) => s.name === name);
@@ -300,6 +301,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       if (signal?.aborted) return { error: 'cancelled' };
       const late = locked(caller); if (late) return late;
       const now = runnable(at.sprint, args.name);
+      if (now.error === 'sprint-closed') return now;
       return now.error || JSON.stringify(now) !== JSON.stringify(script) ? { error: 'scripts-changed', detail: 'The approved scripts changed while the user was asked. Read sprint_scripts and ask again.' } : null;
     };
     return still() ?? runNow(at.sprint, script, caller, still);
@@ -362,7 +364,9 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     run(sprint, name) {
       if (!known(sprint)) return { error: 'unknown-sprint' };
       const script = runnable(sprint, name);
-      return script.error ? script : runNow(sprint, script, 'owner');
+      // Asked again after the state is gathered (it waits): a Close or a changed script meanwhile runs nothing.
+      const still = () => { const now = runnable(sprint, name); return now.error ? now : JSON.stringify(now) !== JSON.stringify(script) ? { error: 'scripts-changed', detail: 'The approved scripts changed. Press Run now again.' } : null; };
+      return script.error ? script : runNow(sprint, script, 'owner', still);
     },
   };
   return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner };

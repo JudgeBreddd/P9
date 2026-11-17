@@ -587,12 +587,15 @@ export function createDelegate({ chat, allowed, usage }) {
       const scripts = hooks.standing(sprint).running;
       const refused = await hooks.fire(sprint, 'before-close', null, scripts);
       if (refused) return refused;
-      if (signal?.aborted) return { error: 'cancelled' };
+      // Checked again after each wait (a blocking before-close script, the record): a lock turned on meanwhile stops nothing.
+      const late = () => (signal?.aborted ? { error: 'cancelled' } : caller && chat.lock(caller).on ? { error: 'agent-lock-on' } : null);
+      if (late()) return late();
       const record = await hooks.view(sprint), stopped = [];
+      if (late()) return late();
       for (const id of [...below(chat.family(), sprint).reverse(), sprint]) {
         const info = chat.info(id);
         if (id === caller || !info || stateOf(info) === 'stopped') continue;
-        const result = await chat.stop(id);
+        const result = await chat.stop(id, {}, caller);
         if (result.status !== 200) return { error: 'stop-failed', chat: id, stopped, detail: 'A chat did not stop, so the sprint is not closed and nothing was recorded. Close it again.' };
         stopped.push(id);
       }

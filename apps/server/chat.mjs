@@ -1448,7 +1448,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     // close: the tab's x (owner, 2026-10-25: closing a chat stops it, running or idle); 'closed' takes its tab out of
     // every window, and History opens it again.
-    async stop(id, body = {}) {
+    // spare: one chat below id left running, it and the chats under it (Close sprint's calling worker). Not from the route.
+    async stop(id, body = {}, spare = null) {
       // Startup recovery settles every row first, so it never overwrites a Stop that began meanwhile.
       await recovered;
       if (!ID.test(id) || !row(id)) return refused(404, 'unknown-conversation');
@@ -1458,7 +1459,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // A7: the chats it started go first, deepest first, so none works on with nobody to report to.
       const started = [];
       for (let level = [id]; level.length && started.length < 1000;) {
-        level = level.flatMap((parent) => db.prepare('SELECT id FROM conversations WHERE parent = ?').all(parent).map((c) => c.id)).filter((c) => !started.includes(c));
+        level = level.flatMap((parent) => db.prepare('SELECT id FROM conversations WHERE parent = ?').all(parent).map((c) => c.id)).filter((c) => c !== spare && !started.includes(c));
         started.push(...level);
       }
       for (const child of started.reverse()) if (!['stopped', 'moving', 'moved'].includes(row(child).state)) await stopConversation(child);
