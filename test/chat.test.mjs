@@ -505,6 +505,70 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused, kept across a restart with the state folder gone; a photo left in the state folder from before item 26 moved to the ownership folder and the start went on; a link there still refuses the start');
 });
 
+// PD-1 (b): every process the server starts is given childEnv() as its environment, read from the source. On top of it
+// only launchTree (process-tree.mjs) adds names it is handed for one child (O48: a profile chat's model names); any other
+// start may add only the fixed flags below. The starts listed in KNOWN do not use childEnv yet: an open question
+// (OPEN-ITEMS-0.1.9 PD-2), kept here by file with their exact shape, so a new one fails, a changed one fails, and a fixed one must leave the list.
+test('every process the server starts gets childEnv(); only launchTree adds names to it, others only fixed flags', async () => {
+  const FIXED = { P9_PHONE: 'terminal opened from the phone', P9_NO_GREETING: 'terminal welcome hidden',
+    GIT_TERMINAL_PROMPT: 'git never asks', GIT_OPTIONAL_LOCKS: 'git status takes no lock', SSH_ASKPASS_REQUIRE: 'git never asks', GIT_PAGER: 'git never pages' };
+  const KNOWN = [ // [file, words in the start's line, what is wrong with it exactly]: open question, held to that shape
+    ['server.mjs', 'execFile(command, args, { cwd: checkout', 'not childEnv(): { ...process.env, PATH: toolPath() }'],
+    ['update.mjs', 'execFile(command, args, { cwd, timeout', "not childEnv(): { ...process.env, PATH: toolPath(), CI: '1' }"],
+    ['setup-routes.mjs', 'execFile(process.execPath, [script', "no env: it inherits the daemon's"],
+    ['xfer.mjs', "run('git', ['-C', cwd, 'ls-files'", "not childEnv(): { ...process.env, GIT_OPTIONAL_LOCKS: '0' }"],
+    ['folder-copy.mjs', "execFile('git', ['-C', copy, 'cat-file'", "no env: it inherits the daemon's"],
+  ];
+  // The text of the value after `key:` (a balanced { } or one token), or null.
+  const value = (text, at) => {
+    if (text[at] !== '{') return /^[^,}\n]*/.exec(text.slice(at))[0].trim();
+    for (let depth = 0, i = at; i < text.length; i += 1) { depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0; if (!depth) return text.slice(at, i + 1); }
+    return null;
+  };
+  // What is wrong with one environment object's text, or ''.
+  const judge = (object, file) => {
+    if (object === 'childEnv()') return '';
+    if (!object.startsWith('{ ...childEnv(),')) return 'not childEnv(): ' + object.slice(0, 80);
+    const rest = object.slice('{ ...childEnv(),'.length, -1);
+    for (const spread of rest.matchAll(/\.\.\.\s*([\w.]+|\()/g)) {
+      if (spread[1] === '(') { // only `...(test ? { NAME: 'x' } : {})`, both sides written out
+        if (!/^\.\.\.\s*\([^?{}]*\?\s*\{[^{}]*\}\s*:\s*\{[^{}]*\}\s*\)/.test(rest.slice(spread.index))) return 'adds names it was handed: ' + rest.slice(spread.index, spread.index + 60);
+      } else if (!(file === 'process-tree.mjs' && spread[1] === 'env')) return 'adds names it was handed (...' + spread[1] + ')';
+    }
+    if (/\[/.test(rest)) return 'a computed name';
+    const names = [...rest.matchAll(/([A-Za-z_]\w*)\s*:/g)].map(([, name]) => name);
+    const unknown = names.filter((name) => !Object.hasOwn(FIXED, name));
+    return unknown.length ? 'a name not in FIXED: ' + unknown.join(', ') : '';
+  };
+  const wrong = [], seen = new Set();
+  for (const file of (await readdir(path.join(root, 'apps/server'))).filter((name) => name.endsWith('.mjs'))) {
+    const source = await readFile(path.join(root, 'apps/server', file), 'utf8');
+    const starts = ['spawn', 'spawnSync', 'execFile', 'spawnPty', ...[...source.matchAll(/const (\w+) = promisify\(execFile\)/g)].map(([, name]) => name)];
+    // Not `db.run(` and the like; conpty.spawnPty is the one start called through its module.
+    for (const found of source.matchAll(new RegExp('(?<![.\\w])(?:conpty\\.)?(' + starts.join('|') + ')\\(', 'g'))) {
+      const lineStart = source.lastIndexOf('\n', found.index) + 1, line = source.slice(lineStart, source.indexOf('\n', found.index));
+      if (/^\s*(\/\/|\*)/.test(line) || /function\s+\w*\s*$/.test(source.slice(lineStart, found.index))) continue; // a comment, or its own definition
+      const known = KNOWN.find(([where, words]) => where === file && line.includes(words));
+      if (known) seen.add(known);
+      const call = source.slice(found.index, found.index + 600), close = call.indexOf(');');
+      const env = /[{,]\s*env\s*(:\s*|(?=[,}\s]))/.exec(close < 0 ? call : call.slice(0, close + 2));
+      let problem;
+      if (!env) problem = 'no env: it inherits the daemon\'s';
+      else if (env[1].includes(':')) problem = judge(value(call, env.index + env[0].length), file);
+      else { // `env` shorthand: the const env = { ... } before it in the same file
+        const made = source.slice(0, found.index).lastIndexOf('const env = ');
+        problem = made < 0 ? 'env from elsewhere' : judge(value(source, made + 'const env = '.length), file);
+      }
+      if (known && problem !== known[2]) problem = problem ? 'changed from its known shape: ' + problem : 'follows the rule now: take it off KNOWN';
+      else if (known) problem = '';
+      if (problem) wrong.push(`${file}:${source.slice(0, found.index).split('\n').length} ${problem}`);
+    }
+  }
+  assert.deepEqual(wrong, [], 'a process start outside the rule');
+  assert.deepEqual(KNOWN.filter((entry) => !seen.has(entry)), [], 'a KNOWN entry no longer matches a start: take it off the list');
+  console.log('PASS PD-1 (b): every process start gets childEnv(); launchTree alone adds names; fixed flags only elsewhere; ' + KNOWN.length + ' known open-question starts listed');
+});
+
 // Phase 4 #107: the window takes its new chat from 'created' or the create's reply, whichever comes first, and the file
 // browser needs 'created' first (controller.mjs, claimFresh). A long poll waiting when a chat is made answers before the create.
 test("a long poll waiting when a chat is created answers with 'created' before the create's reply", async (t) => {
@@ -578,15 +642,7 @@ test('agents see only allowlisted environment names, in a new session and a resu
     assert.ok(names.includes('LANG') && names.includes('PATH'), names.join(','));
     assert.ok(!names.includes('P9_SENTINEL_TOKEN') && !names.includes('OPENAI_API_KEY') && !names.includes('P9_TEST_HOME'), names.join(','));
   }
-  // Every process the server starts goes through childEnv. launchTree may add names after it for one child (O48: a
-  // profile chat's model names), so the allow list is still the base of every environment.
-  for (const file of (await readdir(path.join(root, 'apps/server'))).filter((name) => name.endsWith('.mjs'))) {
-    const source = await readFile(path.join(root, 'apps/server', file), 'utf8');
-    for (const line of source.split('\n').filter((text) => /\bspawn(Sync)?\(/.test(text) && !/^\s*\/\//.test(text))) {
-      const call = source.slice(source.indexOf(line), source.indexOf(line) + 400);
-      assert.match(call.slice(0, call.indexOf(');') + 2), /env: (\{ \.\.\.)?childEnv\(\)/, `${file}: ${line}`);
-    }
-  }
+  // Every process the server starts goes through childEnv: the static check is the test after this one.
   // Locale names pass by category, not by pattern.
   const { childEnv } = await import('../apps/server/child-env.mjs');
   assert.deepEqual(Object.keys(childEnv({ LC_TIME: 'C', LC_ALL: 'C', LC_SECRET_TOKEN: 'sentinel' })), ['LC_TIME', 'LC_ALL']);
@@ -594,7 +650,7 @@ test('agents see only allowlisted environment names, in a new session and a resu
   assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'linux').PATH, '/usr/bin:/h/.local/bin:/h/.local/share/p9/bin');
   assert.equal(childEnv({ HOME: '/h', PATH: '/h/.local/bin:/usr/bin' }, 'linux').PATH, '/h/.local/bin:/usr/bin:/h/.local/share/p9/bin');
   assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'darwin').PATH, '/usr/bin');
-  console.log(`PASS child env: agent saw ${fresh.length} names (no sentinel, no API key), same after resume; every server spawn passes childEnv`);
+  console.log(`PASS child env: agent saw ${fresh.length} names (no sentinel, no API key), same after resume`);
 });
 
 test('Stop ends everything the session started, setsid children included, inside 5 s', { skip: !userBus && 'no systemd user bus' }, async (t) => {
