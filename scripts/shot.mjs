@@ -58,8 +58,13 @@ try {
         blocked.push(request.method() + ' ' + new URL(request.url()).pathname);
         return route.abort('blockedbyclient');
       });
-      // Setting onMessage on the page side stops Playwright forwarding the page's frames; the server's are forwarded as they come.
-      await context.routeWebSocket(/.*/, (socket) => { socket.connectToServer(); socket.onMessage(() => { dropped += 1; }); });
+      // A terminal socket stays closed: connecting one attaches a terminal client on the server. Every other socket connects;
+      // setting onMessage on the page side stops Playwright forwarding the page's frames; the server's are forwarded as they come.
+      await context.routeWebSocket(/.*/, (socket) => {
+        const where = new URL(socket.url()).pathname;
+        if (where.startsWith('/terminals/')) { blocked.push('WebSocket ' + where); return socket.close(); }
+        socket.connectToServer(); socket.onMessage(() => { dropped += 1; });
+      });
       const page = await context.newPage();
       await page.goto(new URL(shot.path, base).href, { waitUntil: 'load', timeout: 30000 });
       await page.waitForTimeout(wait);

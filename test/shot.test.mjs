@@ -11,7 +11,7 @@ import { remoteDaemon } from './helpers.mjs';
 import { phone } from './phone-c16-helpers.mjs';
 
 // O146: scripts/shot.mjs only looks. Every request it lets out is a GET or a HEAD, a WebSocket connects but none of the page's
-// frames reach the server (the server's frames reach the page), and the
+// frames reach the server (the server's frames reach the page), a terminal socket never reaches the server at all, and the
 // session token is never printed or written. It runs against a real daemon, signed in, through a proxy that records every
 // method it sees; a probe page served by the proxy tries every way a page can send something.
 const script = fileURLToPath(new URL('../scripts/shot.mjs', import.meta.url));
@@ -22,6 +22,7 @@ const xhr = new XMLHttpRequest(); xhr.open('POST', '/chat/x/prompt'); xhr.send('
 const ws = new WebSocket(location.origin.replace('http', 'ws') + '/probe-socket');
 ws.onopen = () => ws.send('from-page-on-open');
 ws.onmessage = (event) => { ws.send('from-page-reply'); fetch('/got/' + event.data); };
+new WebSocket(location.origin.replace('http', 'ws') + '/terminals/x/socket');
 setTimeout(() => document.getElementById('f').submit(), 200);
 </script>`;
 
@@ -76,6 +77,7 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
   const changing = seen.filter((line) => !/^(GET|HEAD) /.test(line));
   assert.deepEqual(changing, [], 'a request that is not GET or HEAD reached the server');
   assert.ok(upgrades.includes('/probe-socket'), 'the probe page\'s WebSocket never connected');
+  assert.ok(!upgrades.some((url) => url.startsWith('/terminals/')), 'a terminal socket reached the server: ' + JSON.stringify(upgrades));
   assert.ok(seen.includes('GET /got/live'), 'the server\'s frame never reached the page');
   assert.equal(framesFromPage, 0, 'a WebSocket frame from the page reached the server');
   assert.ok(Number(probe.stderr.match(/dropped (\d+) WebSocket frame/)?.[1] ?? 0) >= 2, 'the script did not drop the probe page\'s two frames: ' + probe.stderr);
@@ -98,5 +100,5 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
   // The token is never printed and never written to the output folder.
   for (const result of [probe, phoneShot, many]) assert.ok(!(result.stdout + result.stderr).includes(session.token), 'the token was printed');
   for (const name of await readdir(day)) assert.ok(!(await readFile(path.join(day, name))).includes(session.token), 'the token was written to ' + name);
-  console.log('PASS O146: GET/HEAD only, socket live with 0 page frames out, token never shown; ' + JSON.stringify({ upgrades, framesFromPage, requests: seen.length, answered: answered.length, stopped: probe.stderr.trim(), files: (await readdir(day)).length }));
+  console.log('PASS O146: GET/HEAD only, socket live with 0 page frames out, terminal socket never upgraded, token never shown; ' + JSON.stringify({ upgrades, framesFromPage, requests: seen.length, answered: answered.length, stopped: probe.stderr.trim(), files: (await readdir(day)).length }));
 });
