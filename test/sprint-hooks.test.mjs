@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { parse, run, said, clean, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
+import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
 import { planItems } from '../apps/server/sprint-files.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -266,4 +266,195 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.equal(br.workers[1].task.item, 'B4'); assert.equal(br.workers[1].folder, made.folder);
   assert.equal(out().some((r) => r.point === 'before-merge'), false, 'a point P9 does not fire ran');
   console.log('PASS S19: Start approves scripts by hash; before-start, sprint-start, before-new-worker, worker-folder-made, before-ready ran with the state; the file edited after Start ran nothing; blocking failures refused by name');
+});
+
+// S18: the library and the tools. A script saved from one project's sprint is used in another project's sprint; the
+// library is only text, so a sprint holds a copy and runs only what its owner approved at Start.
+test('Sprint scripts S18: a script saved to the library from project A is added to project B\'s sprint, approved at Start and run there; a library edit changes no sprint; run_sprint_script asks and refuses an unapproved script', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo'), node = process.execPath;
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  const hook = path.join(ws, 'h.mjs'), outFile = path.join(ws, 'h-out.jsonl'), evil = path.join(ws, 'evil.mjs');
+  fs.writeFileSync(hook, `import fs from 'node:fs'; import path from 'node:path';
+let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { fs.appendFileSync(path.join(import.meta.dirname, 'h-out.jsonl'), JSON.stringify({ ...JSON.parse(s), cwd: process.cwd() }) + '\\n'); console.log('ran fine'); });`);
+  fs.writeFileSync(evil, `import fs from 'node:fs'; import path from 'node:path'; fs.writeFileSync(path.join(import.meta.dirname, 'evil-ran'), '1'); process.exit(7);`);
+  const cmd = `${node} ${hook}`, bad = `${node} ${evil}`; assert.ok(cmd.length <= 200 && bad.length <= 200);
+  const out = () => (fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const noEvil = (what) => assert.equal(fs.existsSync(path.join(ws, 'evil-ran')), false, what);
+  // Two projects, a prepared sprint in each, and one chat in each with the tools.
+  const side = async (name, dir) => {
+    const project = (await call(instance, '/projects', 'POST', { name, work: { kind: 'new', parent: '', name: dir } })).body.project.id;
+    const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: name + ' sprint' })).body;
+    fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+    fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+    const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+    await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'mcp', mode: 'Auto' });
+    const page = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === s.sprint);
+    return { project, sprint: s.sprint, folder: s.folder, chat, page, tool: (await attach(t, instance, chat)).tool, file: () => JSON.parse(fs.readFileSync(path.join(s.folder, 'hooks.json'), 'utf8')).scripts };
+  };
+  const A = await side('Alpha', 'alpha'), B = await side('Beta', 'beta');
+  const row = { name: 'notify', command: cmd, point: 'sprint-start' }, kept = { ...row, blocking: false };
+  const answer = async (who, seen, optionId) => {
+    const q = await eventually(async () => (await events(instance, who)).filter((e) => e.type === 'approval')[seen], 'the run question');
+    await call(instance, `/chat/${who}/answer`, 'POST', { request: q.data.request, answer: { optionId } }); return q;
+  };
+  const asks = async (who) => (await events(instance, who)).filter((e) => e.type === 'approval').length;
+
+  // A: a script into its own sprint (no hooks.json yet), then the same one into the library.
+  let got = await A.tool('sprint_script_save', { ...row, sprint: A.sprint });
+  assert.deepEqual([got.error, got.sprint, got.file.scripts, got.pending], [undefined, A.sprint, [kept], true], JSON.stringify(got));
+  assert.deepEqual(A.file(), [kept]);
+  assert.equal((await A.page()).files.find((f) => f.name === 'hooks.json').hash, got.file.hash, 'the tool\'s hash is the file\'s');
+  got = await A.tool('sprint_script_save', { ...row, library: true });
+  assert.deepEqual([got.error, got.library], [undefined, [kept]], JSON.stringify(got));
+  // Refused by row and field, and nothing kept; the library and a sprint are never both named.
+  got = await A.tool('sprint_script_save', { name: 'long', command: 'x'.repeat(201), point: 'sprint-start', library: true });
+  assert.equal(got.error, 'scripts-refused', JSON.stringify(got)); assert.match(got.detail, /The library, script 2 \(long\), command/);
+  got = await A.tool('sprint_script_save', { name: 'gate', command: cmd, point: 'sprint-start', blocking: true, sprint: A.sprint });
+  assert.equal(got.error, 'scripts-refused', JSON.stringify(got)); assert.match(got.detail, /hooks\.json, script 2 \(gate\), blocking/);
+  assert.equal((await A.tool('sprint_script_save', { ...row, library: true, sprint: A.sprint })).error, 'request-refused');
+  assert.equal((await A.tool('sprint_script_remove', { name: 'nope', sprint: A.sprint })).error, 'unknown-script');
+  assert.equal((await A.tool('sprint_script_add', { name: 'nope', sprint: A.sprint })).error, 'unknown-script');
+  assert.equal((await A.tool('sprint_script_save', { ...row, sprint: B.sprint })).error, 'unknown-sprint', 'a chat wrote another project\'s sprint');
+  assert.deepEqual(A.file(), [kept]);
+  // Nothing was approved: a script in hooks.json is refused by name, and nobody is asked.
+  got = await A.tool('run_sprint_script', { name: 'notify', sprint: A.sprint });
+  assert.deepEqual([got.error, got.name], ['script-not-approved', 'notify'], JSON.stringify(got)); assert.match(got.detail, /in hooks\.json and the user has not approved it/);
+  assert.equal(await asks(A.chat), 0, 'the user was asked about a script nobody approved'); assert.deepEqual(out(), []);
+
+  // B, another project: the library is the same one. A library-only script is refused by name; added, it is a copy.
+  let read = await B.tool('sprint_scripts', { sprint: B.sprint });
+  assert.deepEqual([read.library, read.file.scripts, read.approved], [[kept], [], null], JSON.stringify(read).slice(0, 600));
+  got = await B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint });
+  assert.equal(got.error, 'script-not-approved', JSON.stringify(got)); assert.match(got.detail, /only in the library/);
+  fs.writeFileSync(path.join(B.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'notify', command: bad, point: 'before-merge' }, { name: 'other', command: cmd, point: 'before-ready' }] }));
+  got = await B.tool('sprint_script_add', { name: 'notify', sprint: B.sprint });
+  assert.deepEqual([got.error, got.file.scripts.map((x) => [x.name, x.command, x.point])], [undefined, [['notify', cmd, 'sprint-start'], ['other', cmd, 'before-ready']]], JSON.stringify(got));
+  assert.equal((await B.tool('sprint_script_remove', { name: 'other', sprint: B.sprint })).error, undefined);
+  assert.deepEqual(B.file(), [kept]);
+  got = await B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint });
+  assert.equal(got.error, 'script-not-approved', 'adding a script approved it: ' + JSON.stringify(got)); assert.deepEqual(out(), []);
+
+  // The owner starts B naming the file: the script is approved and runs at sprint-start, in B's folder with B's state.
+  const shown = (await B.page()).files.find((f) => f.name === 'hooks.json');
+  const start = await call(instance, `/sprints/${B.sprint}/start`, 'POST', { hooks: shown.hash });
+  assert.equal(start.status, 200, JSON.stringify(start.body));
+  assert.deepEqual((await B.page()).started.scripts, [kept]);
+  const ss = await eventually(() => out().find((r) => r.point === 'sprint-start'), 'sprint-start never ran in B');
+  assert.deepEqual([ss.sprint.id, ss.project.name, ss.cwd, ss.script, ss.subject], [B.sprint, 'Beta', fs.realpathSync(B.folder), { name: 'notify' }, null]);
+
+  // The library changed and emptied afterwards: B's file, B's approved copy and what runs there stay as they were.
+  got = await A.tool('sprint_script_save', { name: 'notify', command: bad, point: 'sprint-start', library: true });
+  assert.deepEqual(got.library.map((x) => x.command), [bad], JSON.stringify(got));
+  assert.deepEqual(B.file(), [kept]); assert.deepEqual((await B.page()).started.scripts, [kept]);
+
+  // run_sprint_script: the user is asked, shown the whole command; a no runs nothing; a yes runs the approved copy.
+  assert.equal((await call(instance, '/file-protection', 'POST', { on: true })).status, 200); // not Unrestricted: the tools ask
+  let run = B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint });
+  let q = await answer(B.chat, 0, 'reject');
+  assert.ok(q.data.toolCall.title.includes(`notify (sprint-start): ${cmd}`), q.data.toolCall.title); assert.equal(q.data.toolCall.kind, 'execute');
+  got = await run; assert.equal(got.error, 'not-allowed', JSON.stringify(got)); assert.equal(out().length, 1, 'a declined run ran');
+  run = B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint }); await answer(B.chat, 1, 'allow'); got = await run;
+  assert.deepEqual([got.error, got.sprint, got.script, got.point, got.exit, got.reason, got.line], [undefined, B.sprint, 'notify', 'sprint-start', 0, null, 'ran fine'], JSON.stringify(got));
+  assert.equal(out().length, 2); const first1 = out()[1], manual = () => out().filter((r) => r.subject?.manual);
+  assert.deepEqual([first1.sprint.id, first1.cwd, first1.point, first1.blocking, first1.subject], [B.sprint, fs.realpathSync(B.folder), 'sprint-start', false, { manual: true, by: B.chat }]);
+  noEvil('the library\'s later command ran in a sprint that approved the earlier one');
+  // Approved again as another row while the user is asked: the yes is for the row shown, so nothing runs.
+  const moved = { ...kept, command: cmd + ' again', point: 'after-close' }; // a point nothing fires
+  fs.writeFileSync(path.join(B.folder, 'hooks.json'), JSON.stringify({ scripts: [moved] }));
+  run = B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint });
+  q = await eventually(async () => (await events(instance, B.chat)).filter((e) => e.type === 'approval')[2], 'the third run question');
+  assert.ok(q.data.toolCall.title.includes(`notify (sprint-start): ${cmd}`) && !q.data.toolCall.title.includes('again'), q.data.toolCall.title);
+  got = await call(instance, `/sprints/${B.sprint}/start`, 'POST', { hooks: (await B.page()).files.find((f) => f.name === 'hooks.json').hash });
+  assert.deepEqual([got.status, (await B.page()).started.scripts.map((x) => x.command)], [200, [moved.command]], JSON.stringify(got.body));
+  await call(instance, `/chat/${B.chat}/answer`, 'POST', { request: q.data.request, answer: { optionId: 'allow' } });
+  got = await run; assert.equal(got.error, 'scripts-changed', JSON.stringify(got)); assert.deepEqual([out().length, manual().length], [2, 1], 'a changed script ran on the old yes');
+  fs.writeFileSync(path.join(B.folder, 'hooks.json'), JSON.stringify({ scripts: [kept] }));
+  got = await call(instance, `/sprints/${B.sprint}/start`, 'POST', { hooks: (await B.page()).files.find((f) => f.name === 'hooks.json').hash });
+  assert.deepEqual([got.status, (await B.page()).started.scripts], [200, [kept]], JSON.stringify(got.body));
+  // The owner's own run (the project page): no question, the same refusal by name.
+  got = await call(instance, `/sprints/${B.sprint}/run-script`, 'POST', { name: 'notify' });
+  assert.deepEqual([got.status, got.body.exit, got.body.line], [200, 0, 'ran fine'], JSON.stringify(got.body));
+  assert.deepEqual(manual()[1].subject, { manual: true, by: 'owner' }); assert.equal(await asks(B.chat), 3);
+  got = await call(instance, `/sprints/${A.sprint}/run-script`, 'POST', { name: 'notify' });
+  assert.deepEqual([got.status, got.body.error], [409, 'script-not-approved'], JSON.stringify(got.body));
+  assert.equal((await call(instance, `/sprints/${B.sprint}/run-script`, 'POST', { name: 'notify', command: bad })).status, 400);
+  read = await B.tool('sprint_scripts', { sprint: B.sprint });
+  assert.equal(read.log.filter((l) => / \| sprint-start \(run now\) \| notify \| exit 0 \| /.test(l)).length, 2, read.log.join('\n'));
+  assert.equal(read.pending, false);
+
+  // The owner's library routes: read, save, remove; a refused row names its field.
+  got = await call(instance, '/sprint-scripts'); assert.deepEqual([got.status, got.body.library.map((x) => x.name)], [200, ['notify']]);
+  got = await call(instance, '/sprint-scripts', 'POST', { save: { name: 'mine', command: cmd, point: 'before-start', blocking: true } });
+  assert.deepEqual([got.status, got.body.library.map((x) => [x.name, x.blocking])], [200, [['notify', false], ['mine', true]]], JSON.stringify(got.body));
+  got = await call(instance, '/sprint-scripts', 'POST', { save: { name: 'mine', command: cmd, point: 'whenever' } });
+  assert.deepEqual([got.status, got.body.error], [400, 'scripts-refused']); assert.match(got.body.detail, /\(mine\), point/);
+  assert.equal((await call(instance, '/sprint-scripts', 'POST', { save: { name: 'x', command: cmd, point: 'before-start' }, remove: 'mine' })).status, 400);
+  got = await call(instance, '/sprint-scripts', 'POST', { remove: 'notify' }); assert.deepEqual([got.status, got.body.library.map((x) => x.name)], [200, ['mine']]);
+  assert.equal((await call(instance, '/sprint-scripts', 'POST', { remove: 'notify' })).status, 404);
+  // The same routes with a sprint named write that sprint's hooks.json (the page's Sprint scripts window), checked the same way.
+  got = await call(instance, '/sprint-scripts'); assert.deepEqual([got.body.points, got.body.blocking], [POINTS, BLOCKING]);
+  got = await call(instance, '/sprint-scripts', 'POST', { add: 'mine', sprint: A.sprint });
+  assert.deepEqual([got.status, got.body.file.scripts.map((x) => x.name), got.body.pending], [200, ['notify', 'mine'], true], JSON.stringify(got.body));
+  got = await call(instance, '/sprint-scripts', 'POST', { save: { name: 'own', command: cmd, point: 'after-close' }, sprint: A.sprint });
+  assert.deepEqual([got.status, A.file().map((x) => x.name)], [200, ['notify', 'mine', 'own']], JSON.stringify(got.body));
+  got = await call(instance, '/sprint-scripts', 'POST', { save: { name: 'own', command: cmd, point: 'after-close', blocking: true }, sprint: A.sprint });
+  assert.deepEqual([got.status, got.body.error], [400, 'scripts-refused'], JSON.stringify(got.body));
+  got = await call(instance, '/sprint-scripts', 'POST', { remove: 'mine', sprint: A.sprint }); assert.deepEqual([got.status, A.file().map((x) => x.name)], [200, ['notify', 'own']]);
+  assert.equal((await call(instance, '/sprint-scripts', 'POST', { remove: 'mine', sprint: A.sprint })).status, 404);
+  assert.equal((await call(instance, '/sprint-scripts', 'POST', { add: 'mine' })).status, 400);
+  assert.equal((await call(instance, '/sprint-scripts', 'POST', { add: 'mine', sprint: '00000000-0000-4000-8000-000000000000' })).status, 404);
+  assert.deepEqual((await call(instance, '/sprint-scripts')).body.library.map((x) => x.name), ['mine'], 'a sprint write changed the library');
+  assert.deepEqual((await A.tool('sprint_scripts')).error, 'unknown-sprint'); // A's chat leads no sprint: it names one
+  assert.deepEqual((await A.tool('sprint_scripts', { sprint: A.sprint })).library.map((x) => x.name), ['mine']);
+  assert.deepEqual(B.file(), [kept]); assert.deepEqual((await B.page()).started.scripts, [kept]);
+
+  // The agent lock: no tool writes or runs.
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).status, 200);
+  for (const [name, args] of [['sprint_script_save', { ...row, library: true }], ['sprint_script_save', { ...row, name: 'two', sprint: B.sprint }], ['sprint_script_remove', { name: 'mine', library: true }],
+    ['sprint_script_remove', { name: 'notify', sprint: B.sprint }], ['sprint_script_add', { name: 'mine', sprint: B.sprint }], ['run_sprint_script', { name: 'notify', sprint: B.sprint }]]) {
+    assert.equal((await B.tool(name, args)).error, 'agent-lock-on', name + ' ' + JSON.stringify(args));
+  }
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: false })).status, 200);
+  assert.deepEqual((await call(instance, '/sprint-scripts')).body.library.map((x) => x.name), ['mine']); assert.deepEqual(B.file(), [kept]);
+  assert.equal(manual().length, 2, 'a locked run ran'); assert.equal(await asks(B.chat), 3, 'a locked run asked');
+  // Unrestricted mode (the user turned the asks off): the approved script runs with no question; the refusal stays.
+  assert.equal((await call(instance, '/file-protection', 'POST', { on: false })).status, 200);
+  got = await B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint });
+  assert.deepEqual([got.exit, manual().length, await asks(B.chat)], [0, 3, 3], JSON.stringify(got));
+  assert.equal((await B.tool('run_sprint_script', { name: 'mine', sprint: B.sprint })).error, 'script-not-approved');
+  noEvil('a script nobody approved ran');
+  console.log('PASS S18: library saved in A, added in B, approved at Start and run there; a library edit changed no sprint; run_sprint_script asked, ran the approved copy, ran nothing when the approved copy changed while it asked, refused unapproved and library-only scripts; the lock refused every write and run');
+});
+
+// The state a run is given is gathered with waits (the usage reading among them). A lock, a cancel or a new Start that
+// lands in that wait must still stop the run: the checks are repeated right before the start. The hooks are built here
+// on a stand-in chat service whose usage reading is held open, so the test decides what happens during the wait.
+test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lock and the approved copy again right before it starts the script', { timeout: 60000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-held-')), mark = path.join(dir, 'ran'), prog = path.join(dir, 'mark.mjs');
+  fs.writeFileSync(prog, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(mark)}, 'x');\n`);
+  const id = '11111111-1111-4111-8111-111111111111', script = { name: 'mark', command: `${process.execPath} ${prog}`, point: 'sprint-start', blocking: false };
+  const held = async (during) => {
+    let lock = false, scripts = [script], reached, release; const at = new Promise((r) => { reached = r; }), ac = new AbortController();
+    const chat = { lock: () => ({ on: lock }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
+      sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [],
+      sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
+      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts }), prepOf: () => null, record: async () => null } };
+    const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
+    const going = hooks.run(id, { name: 'mark' }, ac.signal);
+    await at; // the user said yes, every first check passed, and the run now waits for the state
+    during({ lockOn: () => { lock = true; }, cancel: () => ac.abort(), restart: () => { scripts = [{ ...script, command: script.command + ' changed' }]; } });
+    release(null);
+    return going;
+  };
+  assert.equal((await held((d) => d.cancel())).error, 'cancelled');
+  assert.equal((await held((d) => d.lockOn())).error, 'agent-lock-on');
+  assert.equal((await held((d) => d.restart())).error, 'scripts-changed');
+  assert.equal(fs.existsSync(mark), false, 'a script ran after a cancel, the lock or a new Start landed while its state was gathered');
+  const ran = await held(() => {});
+  assert.deepEqual([ran.exit, ran.script, fs.readFileSync(mark, 'utf8')], [0, 'mark', 'x'], JSON.stringify(ran));
+  console.log('PASS S18 held: a cancel, the agent lock and a changed approval during the wait for the state each ran nothing; with none of them the script ran once');
 });

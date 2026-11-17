@@ -130,7 +130,7 @@ export function installProjects(o, api) {
     const roles = rolesOf(sp), files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
     const fixed = ['sprint.md', 'rules.md', 'roles.json', 'hooks.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : fixed.length;
     files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < fixed.length ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
       ${startedHtml(sp)}${scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
@@ -295,6 +295,7 @@ export function installProjects(o, api) {
       const again = cur?.id === id && await call('project', { id }, { quiet: true });
       if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);
       o.loadProjects(); renderPage(); return fillBox(false); }
+    if (k === 'spscripts') return openScripts(b.dataset.lead);
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
     if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }
@@ -420,6 +421,15 @@ export function installProjects(o, api) {
     const r = await call('deleteChat', { id: s.id }); if (r.status !== 200) return failed(r);
     o.S.sessions = o.S.sessions.filter(x => x !== s); o.S.open = o.S.open.filter(x => x !== s.id); o.renderTabs(); o.renderChats();
     say(`Deleted ${s.title}.`);
+  }
+
+  // ---- Sprint scripts (S18): the window is sprint-scripts-view.mjs, loaded on first use ----
+  let scriptsWin = null;
+  async function openScripts(lead) {
+    clearTimeout(saveT); await saveSprint().catch(() => false);
+    scriptsWin ??= import('./sprint-scripts-view.mjs').then(m => m.installScripts({ cur: () => cur, esc, scriptLine, scriptsOf, call, failed, ERR, say, adopt, renderPage, fillBox }));
+    const win = await scriptsWin.catch(() => { scriptsWin = null; });
+    return win ? win.show(lead) : say('The Sprint scripts window did not load. Try again.', 'warn');
   }
 
   // ---- New project ----

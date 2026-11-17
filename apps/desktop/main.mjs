@@ -772,7 +772,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!state) return { status: 503, body: { error: 'daemon-unavailable', ...where } };
     // window-10: Start sprint waits for the lead's agent (up to a minute) and then each chat under it, staggered. The daemon
     // goes on if this gives up first (its route takes no signal); a press meanwhile is refused as sprint-starting.
-    try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : action === 'startSprint' ? SPRINT_START_MS : undefined); }
+    try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : ['startSprint', 'runSprintScript'].includes(action) ? SPRINT_START_MS : undefined); }
     catch (error) { const reply = failedReply(error); return { ...reply, body: { ...reply.body, ...where } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
