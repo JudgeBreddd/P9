@@ -362,6 +362,11 @@ test('Remote mode: a long chat loads its newest blocks over the ssh link; Show e
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
+  // A status poll that answered not-ok arms one reload for the first ok poll (a window that loaded before the forward
+  // answered loads once more, so its content comes from the remote). The history itself can already be up before that
+  // reload lands, so read only past the title-bar label: it is set in the same poll that connects, and after it no
+  // reload is armed, so every read below is on a document that stays.
+  await page.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   const hist = page.locator('.hist').filter({ hasText: 'answer 300.' }).first();
   await hist.waitFor({ timeout: 30000 });
   const text = () => hist.evaluate((h) => h.textContent);
