@@ -1089,6 +1089,8 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await writeFile(path.join(run.folder, 'sprint.md'), plan(false));
   await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
   await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+  const script = (name) => ({ name, command: `/usr/bin/touch ${name}.txt`, point: 'after-close', blocking: false });
+  await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base')] }));
   const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Not yet' });
   const { page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
@@ -1100,7 +1102,7 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.deepEqual([await page.locator('[data-sp-title]').textContent(), await view.count()], ['Sprint Setup', 0]);
   await page.locator('[data-pj="spback"]').click();
   await btn(run.sprint).waitFor({ timeout: 5000 });
-  const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', {}); assert.equal(started.status, 200, JSON.stringify(started));
+  const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', { hooks: (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash }); assert.equal(started.status, 200, JSON.stringify(started));
   await page.locator(`#navList [data-proj="${p.id}"]`).click(); // the page reads the project again: the sprint is started now
   await until(async () => /Started/.test(await btn(run.sprint).textContent().catch(() => '')), 'the started sprint\'s button');
   await btn(run.sprint).click();
@@ -1109,7 +1111,8 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.deepEqual([st.status, st.done, st.items.length, st.workers.map((w) => w.key)], [200, { passed: 0, ticked: 1, total: 3 }, 3, ['lead']], JSON.stringify(st).slice(0, 600));
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Sprint View');
   assert.equal(await page.locator('[data-sv-done]').textContent(), `${st.done.passed} of ${st.done.total} items passed review`);
-  assert.deepEqual([await fact('ticked'), await fact('chats'), await fact('scripts')], [`${st.done.ticked} of ${st.done.total}`, String(st.workers.length), '0']);
+  assert.deepEqual([await fact('ticked'), await fact('chats'), await fact('scripts')], [`${st.done.ticked} of ${st.done.total}`, String(st.workers.length), '1']);
+  await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base'), script('later'), script('unseen')] }));
   assert.match(await fact('time'), /^(under a minute|\d+ min)$/);
   assert.equal(await page.locator('.sv-ring.big b').textContent(), '0/3');
   // Each item of the plan, in the plan's order, with its role and that a tick is not a review.
@@ -1129,9 +1132,16 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
   await until(async () => (await fact('ticked')) === '2 of 3', async () => 'the page never followed the plan: ' + await fact('ticked'), 12000);
   assert.equal(await page.locator('[data-sv-item="A2"] .tag').textContent(), 'Ticked, not reviewed');
+  // Scripts are counted once each: one approved at Start, one approved after it, one still waiting is "2 running, 1 waiting".
+  const hash = (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash;
+  const ok = await call(instance, `/sprints/${run.sprint}/approve-scripts`, 'POST', { hash, names: ['later'] });
+  assert.deepEqual([ok.status, ok.approved?.map((r) => r.name)], [200, ['later']], JSON.stringify(ok));
+  const counts = (await call(instance, `/sprints/${run.sprint}/status`)).scripts;
+  assert.deepEqual(counts, { running: 2, additional: 1, waiting: 1 });
+  await until(async () => (await fact('scripts')) === '2 running, 1 waiting for you', async () => 'the scripts fact: ' + await fact('scripts'), 12000);
   // A chat's row opens that chat.
   await lead.click();
   await until(async () => await page.locator('#projPage').isHidden(), 'the lead\'s row never opened its chat');
   assert.deepEqual(errors, []);
-  console.log('PASS Sprint View: Sprint Setup had none; the started sprint opened as Sprint View with 0 of 3 items passed, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
+  console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items passed, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
 });

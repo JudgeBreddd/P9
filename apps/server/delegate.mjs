@@ -102,7 +102,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'The sprint\'s scripts (hooks.json, see sprint_scripts) are listed in that question, command by command: the user\'s yes approves them too, and P9 runs only that approved copy.',
     input({ sprint: { type: 'string', description: 'The id new_sprint returned.' } }, ['sprint'])],
     ['sprint_status', 'Read where a sprint stands, as the user\'s Sprint View page shows it: the plan\'s items (ticked, and each one\'s review), done (items passed in P9\'s review record, items ticked in the plan, and the total), running_ms since Start, each chat of the sprint '
-      + '(its role key, agent, model, effort, state, context, its task, ready and verdict, and work: its own items passed of its total), the verdicts, usage, how many scripts stand, and the last lines of hooks.log. '
+      + '(its role key, agent, model, effort, state, context, its task, ready and verdict, and work: its own items passed of its total), the verdicts, usage, how many scripts stand (running: every script that runs; additional: those of running approved after Start, already counted in it; waiting: not run yet), and the last lines of hooks.log. '
       + 'A sprint not yet started answers with started null. This tool changes nothing.',
     input({ sprint: sprintArg })],
     ['sprint_scripts', 'Read a sprint\'s scripts: commands P9 runs as the user at fixed points of the sprint, each given the sprint\'s state as JSON on its input. Returns the points (' + POINTS.join(', ') + '), '

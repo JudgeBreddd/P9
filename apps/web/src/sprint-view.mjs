@@ -17,7 +17,7 @@ export function statusHtml(s, esc) {
     ['time', 'Running', s.running_ms === null ? 'Not started' : span(s.running_ms)],
     ['ticked', 'Ticked in the plan', `${d.ticked} of ${d.total}`],
     ['chats', 'Chats', String(s.workers.length)],
-    ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running + s.scripts.additional} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running + s.scripts.additional)]];
+    ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running)]]; // running already counts the additional ones
   return `<section class="sec sv" data-sv aria-label="Sprint View: ${esc(s.sprint.title ?? '')}">
     <div class="sv-top">${ring(d.passed, d.total, `${d.passed} of ${d.total} items passed review`, 'big')}
       <div class="sv-say"><b data-sv-done>${d.total ? `${d.passed} of ${n(d.total, 'item', 'items')} passed review` : 'The plan has no items yet'}</b>

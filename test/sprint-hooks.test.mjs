@@ -639,5 +639,16 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(true));
   ({ tool, page } = await both());
   assert.deepEqual([tool.done, page.done], [{ passed: 0, ticked: 2, total: 3 }, { passed: 0, ticked: 2, total: 3 }]);
-  console.log('PASS Sprint status: before Start the route gave the plan and no clock; after it the tool and the route agreed, with the plan\'s three items, 1 then 2 ticked, the lead and w1 with w1\'s 0 of 2, the time since Start, and unknown-sprint for a sprint that is not there');
+  // Scripts: running is every script that runs (Start's and the ones approved after), additional is the part of it
+  // approved after Start, waiting is apart. One of each kind: 2, 1, 1, from the tool and the route.
+  const row = (name) => ({ name, command: `/usr/bin/touch ${name}.txt`, point: 'after-close', blocking: false });
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [row('base')] }));
+  got = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await call(instance, '/sprint-scripts?sprint=' + sprint)).body.hash }); assert.equal(got.status, 200, JSON.stringify(got.body));
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [row('base'), row('later'), row('unseen')] }));
+  const shown = (await call(instance, '/sprint-scripts?sprint=' + sprint)).body;
+  got = await call(instance, `/sprints/${sprint}/approve-scripts`, 'POST', { hash: shown.hash, names: ['later'] });
+  assert.deepEqual([got.status, got.body.approved?.map((r) => r.name)], [200, ['later']], JSON.stringify(got.body));
+  ({ tool, page } = await both());
+  assert.deepEqual([tool.scripts, page.scripts], [{ running: 2, additional: 1, waiting: 1 }, { running: 2, additional: 1, waiting: 1 }]);
+  console.log('PASS Sprint status: scripts 2 running (1 of them additional), 1 waiting; before Start the route gave the plan and no clock; after it the tool and the route agreed, with the plan\'s three items, 1 then 2 ticked, the lead and w1 with w1\'s 0 of 2, the time since Start, and unknown-sprint for a sprint that is not there');
 });
