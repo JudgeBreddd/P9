@@ -49,10 +49,10 @@ export function installProjects(o, api) {
       + (file === null ? '<p class="hint" data-sp-scripts="unread" role="alert">hooks.json is not a scripts list: Start will refuse it and say why.</p>'
         : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
         : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
-  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
+  const startBtn = sp => (!sp.prep && !sp.started) || sp.closed ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
   // S13 (SECURITY.md § Pause sprint): Pause or Resume on a started sprint's row. ponytail: here until the Sprint View
   // (Window's row) takes them.
-  const pauseBtn = sp => sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="${sp.paused ? 'spresume' : 'sppause'}" data-lead="${esc(sp.lead)}" title="${sp.paused ? 'Sends every message kept while it was paused, in order.' : 'Its workers start no new turn; what agents and P9 send them is kept until Resume. Turns already running finish.'}">${sp.paused ? 'Resume sprint' : 'Pause sprint'}</button>`;
+  const pauseBtn = sp => sp.prep || sp.closed ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="${sp.paused ? 'spresume' : 'sppause'}" data-lead="${esc(sp.lead)}" title="${sp.paused ? 'Sends every message kept while it was paused, in order.' : 'Its workers start no new turn; what agents and P9 send them is kept until Resume. Turns already running finish.'}">${sp.paused ? 'Resume sprint' : 'Pause sprint'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
@@ -60,8 +60,11 @@ export function installProjects(o, api) {
   // The sprint whose own page is open (its lead's id), '' for the project page. Each sprint is one button on the project
   // page; the button opens the sprint's page: Sprint Setup until it is started.
   let spPage = '';
-  let sv = null, svFor = '', svN = 0; // Sprint View (loadView): the status drawn { lead, html }, the sprint being read, the read's number
+  let sv = null, svFor = '', svN = 0; // Sprint View (loadView): the status drawn { lead, draw(opts) }, the sprint being read, the read's number
+  let svClosing = '', svSaid = ''; // Close sprint: the sprint whose press is out, and why the last press was refused
   const say = (txt, level = 'ok') => o.toast({ kind: 'project', txt, level }, true);
+  // The project read again after a sprint press, kept only while it is still the one open.
+  const back = async (id, lead) => { const again = cur?.id === id && await call('project', { id }, { quiet: true }); if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead); };
   const failed = r => say(ERR[r.body?.error] || 'That did not work (' + (r.body?.error || r.status) + ').', 'warn');
 
   // ---- A folder from the native picker: a workspace path ('' is the workspace), the server's own list in server mode. ----
@@ -117,10 +120,10 @@ export function installProjects(o, api) {
       : p.instructions ? instrText(p.instructions) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
     const files = p.files ?? [], open = spPage && (p.sprints ?? []).find(x => x.lead === spPage);
     if (open) return `<div class="wrap" data-page="${esc(p.id)}" data-sp-page="${esc(open.lead)}">
-      <div class="ph"><div class="grow"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spback" title="Back to the project's page">‹ ${esc(p.name)}</button><h1 data-sp-title>${open.prep ? 'Sprint Setup' : 'Sprint View'}</h1>
-        <p class="about">${open.prep ? 'Everything before Start: the plan, the roles and each role\'s files, the rules and the scripts. Each is a file in the sprint\'s folder, so an agent can fill in the same things. Nothing runs until Start sprint.' : 'This sprint is started. Where it stands is first, read again every few seconds; an agent reads the same with sprint_status. Its roles and files are below.'}</p></div></div>
-      ${sv?.lead === open.lead && !open.prep ? sv.html : ''}${sprintHtml(open)}</div>`;
-    const stamp = sp => sp.prep ? '<span class="tag">Not started</span>' : `<span class="when">Started${sp.started ? ' ' + esc(new Date(sp.started.at).toLocaleDateString([], { month: 'short', day: 'numeric' })) : ''}</span>`;
+      <div class="ph"><div class="grow"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spback" title="Back to the project's page">‹ ${esc(p.name)}</button><h1 data-sp-title>${open.prep ? 'Sprint Setup' : open.closed ? 'Closed sprint' : 'Sprint View'}</h1>
+        <p class="about">${open.prep ? 'Everything before Start: the plan, the roles and each role\'s files, the rules and the scripts. Each is a file in the sprint\'s folder, so an agent can fill in the same things. Nothing runs until Start sprint.' : open.closed ? svMod?.closedAbout ?? '' : 'This sprint is started. Where it stands is first, read again every few seconds; an agent reads the same with sprint_status. Its roles and files are below.'}</p></div></div>
+      ${sv?.lead === open.lead && !open.prep ? sv.draw({ closing: svClosing === open.lead, said: svSaid }) : ''}${sprintHtml(open)}</div>`;
+    const stamp = sp => sp.prep ? '<span class="tag">Not started</span>' : sp.closed ? `<span class="when" data-sp-closed>Closed ${esc(new Date(sp.closed.at).toLocaleDateString([], { month: 'short', day: 'numeric' }))}</span>` : `<span class="when">Started${sp.started ? ' ' + esc(new Date(sp.started.at).toLocaleDateString([], { month: 'short', day: 'numeric' })) : ''}</span>`;
     const sprintRows = (p.sprints ?? []).map(sp => `<button class="crow" data-pj="spopen" data-lead="${esc(sp.lead)}" title="${sp.prep ? 'Open its Sprint Setup' : 'Open this sprint'}">${svg.files}<span class="t">${esc(sp.title)}</span>${stamp(sp)}</button>`).join('');
     return `<div class="wrap" data-page="${esc(p.id)}">
       <div class="ph"><div class="grow"><h1 contenteditable="plaintext-only" spellcheck="false" id="pjName" title="Click to rename" aria-label="Project name">${esc(p.name)}</h1><p class="about" contenteditable="plaintext-only" id="pjAbout" title="Click to edit" aria-label="What it is about" data-ph="Add a line about what this project is for">${esc(p.about || '')}</p></div>
@@ -249,7 +252,7 @@ export function installProjects(o, api) {
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
       const [m, r] = await Promise.all([loadSv(), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
-      if (m && r.status === 200) { sv = { lead, html: m.statusHtml(r.body, esc) }; renderPage(); }
+      if (m && r.status === 200) { sv = { lead, draw: opts => m.statusHtml(r.body, esc, opts) }; renderPage(); if (r.body.closed) return; } // a closed sprint's record does not change: read once
     }
     setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
   }
@@ -335,14 +338,18 @@ export function installProjects(o, api) {
       pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
       const r = await call('startSprint', { sprint: lead, ...(shown && { hooks: shown }) }, { quiet: true }).finally(() => starting.delete(lead));
       startSaid.set(lead, startText(r));
-      const again = cur?.id === id && await call('project', { id }, { quiet: true });
-      if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);
+      await back(id, lead);
       o.loadProjects(); renderPage(); return fillBox(false); }
+    // Close sprint (sprint-view.mjs, closePress): asked once, then the daemon stops the sprint's chats and keeps its record.
+    // The page is read again after, so the sprint shows as closed everywhere; a refusal is said beside the button.
+    if (k === 'spclose') { const lead = b.dataset.lead, id = cur.id; if (svClosing || !svMod) return;
+      const said = await svMod.closePress(lead, confirmIt, call, () => { svClosing = lead; svSaid = ''; renderPage(); });
+      svClosing = ''; if (said === null) return; svSaid = said;
+      await back(id, lead); o.loadProjects(); renderPage(); if (spPage === lead) loadView(); return; }
     if (k === 'spscripts') return openScripts(b.dataset.lead);
     if (k === 'sppause' || k === 'spresume') { b.disabled = true; const id = cur.id, r = await call(k === 'sppause' ? 'pauseSprint' : 'resumeSprint', { sprint: b.dataset.lead }, { quiet: true });
       if (r.status !== 200) failed(r);
-      const again = cur?.id === id && await call('project', { id }, { quiet: true });
-      if (again?.status === 200 && cur?.id === id) adopt(again.body.project, b.dataset.lead);
+      await back(id, b.dataset.lead);
       renderPage(); return fillBox(false); }
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }

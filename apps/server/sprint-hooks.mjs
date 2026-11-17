@@ -13,7 +13,7 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const BLOCKING = ['before-start', 'before-new-worker', 'before-merge', 'before-close'];
 export const POINTS = [...BLOCKING, 'sprint-start', 'worker-folder-made', 'before-ready', 'ci-red', 'gate-passed', 'pause', 'resume', 'after-close'];
 // The points P9 has an action for today; the rest are accepted, approved and never run (SECURITY.md says so).
-export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'worker-folder-made', 'before-ready'];
+export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'worker-folder-made', 'before-ready', 'before-close', 'after-close'];
 export const MAX_SCRIPTS = 12, MAX_LIBRARY = 100, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
 const TIMEOUT = { blocking: 60_000, notice: 300_000 }; // ponytail: fixed, no per-script setting; add one when a real script needs longer
 const KEEP = 64 * 1024;
@@ -90,7 +90,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // text: the hooks.json a caller has already read (and hashed), so its rows and its hash are of the same bytes;
   // left out, the file is read here.
   function standing(sprint, text) {
-    if (!chat.projects.started(sprint)) return { running: [], additional: [], waiting: [] };
+    // A closed sprint runs nothing (Close sprint turns its scripts off; its own two points are given their list by closeSprint).
+    if (!chat.projects.started(sprint) || chat.projects.closed(sprint)) return { running: [], additional: [], waiting: [] };
     const base = approved(sprint), file = parse(text === undefined ? chat.sprintFiles.read(sprint, 'hooks.json') : text).scripts ?? [];
     const over = chat.allowScripts() ? file.filter((f) => !base.some((b) => same(b, f))) : extras(sprint);
     const running = [...base.map((b) => over.find((o) => o.name === b.name) ?? b), ...over.filter((o) => !base.some((b) => b.name === o.name))];
@@ -204,10 +205,14 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     const current = phases.findIndex((p) => p.passed < p.total);
     return { phases, phase_now: current < 0 ? null : current };
   }
+  // A closed sprint answers with its record: this same answer as it was at Close (delegate.mjs, closeSprint), so the
+  // closed page's numbers do not move, plus closed { at, by }. An open one has closed null.
   async function view(sprint) {
+    const end = chat.projects.closed(sprint);
+    if (end?.record) return { ...end.record, closed: { at: iso(end.at), by: end.by } };
     const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status');
     const st = standing(sprint), start = chat.projects.started(sprint);
-    return { ...s,
+    return { ...s, closed: null,
       // passed: by P9's own review record; ticked: the box in the plan, a model's say-so.
       done: { passed: s.items.filter((i) => i.review?.state === 'passed').length, ticked: s.items.filter((i) => i.ticked).length, total: s.items.length },
       running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
@@ -277,6 +282,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // Which script may be run on request: one the owner approved at Start, by name, and that copy. The one place that
   // decides it (S20 puts the owner's "Allow additional scripts" switch here).
   function runnable(sprint, name) {
+    if (chat.projects.closed(sprint)) return { error: 'sprint-closed', detail: 'This sprint is closed: its scripts are off.' };
     const found = standing(sprint).running.find((s) => s.name === name);
     if (found) return found;
     const inFile = parse(chat.sprintFiles.read(sprint, 'hooks.json')).scripts?.some((s) => s.name === name), inLibrary = library().some((s) => s.name === name);
@@ -306,6 +312,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       if (signal?.aborted) return { error: 'cancelled' };
       const late = locked(caller); if (late) return late;
       const now = runnable(at.sprint, args.name);
+      if (now.error === 'sprint-closed') return now;
       return now.error || JSON.stringify(now) !== JSON.stringify(script) ? { error: 'scripts-changed', detail: 'The approved scripts changed while the user was asked. Read sprint_scripts and ask again.' } : null;
     };
     return still() ?? runNow(at.sprint, script, caller, still);
@@ -368,8 +375,10 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     run(sprint, name) {
       if (!known(sprint)) return { error: 'unknown-sprint' };
       const script = runnable(sprint, name);
-      return script.error ? script : runNow(sprint, script, 'owner');
+      // Asked again after the state is gathered (it waits): a Close or a changed script meanwhile runs nothing.
+      const still = () => { const now = runnable(sprint, name); return now.error ? now : JSON.stringify(now) !== JSON.stringify(script) ? { error: 'scripts-changed', detail: 'The approved scripts changed. Press Run now again.' } : null; };
+      return script.error ? script : runNow(sprint, script, 'owner', still);
     },
   };
-  return { fire, read, status, approved, save, remove, add, run: runAsked, request, owner, where };
+  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where };
 }

@@ -275,6 +275,14 @@ export function setupRoutes(outer) {
       : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off', 'scripts-refused', 'script-refused'].includes(result.error) ? 400 : 500;
     return c.json(result, status);
   });
+  // Desktop only (SECURITY.md § Close sprint): the Sprint View's Close sprint button, the owner's press. An agent's
+  // close_sprint asks the user in its chat. No phone route.
+  outer.app.post('/sprints/:id/close', async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp.ownerClose(c.req.param('id'));
+    return c.json(result, !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : ['sprint-closed', 'sprint-not-started', 'sprint-starting'].includes(result.error) ? 409 : ['request-refused', 'script-refused'].includes(result.error) ? 400 : 500);
+  });
   // Desktop only (SECURITY.md § Sprint scripts, "The library"): the owner's script library and a run of one approved
   // script. No phone route. An agent has the tools instead (sprint_script_save, _remove, _add, run_sprint_script).
   const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed', 'scripts-changed', 'sprint-not-started', 'too-many-scripts'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);

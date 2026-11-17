@@ -1217,6 +1217,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     list: (plans = new Map()) => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent, key,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
+        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'renamed') AS named,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
           AND a.cursor > COALESCE((SELECT cursor FROM events WHERE conversation = c.id AND type IN ('turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error') ORDER BY cursor DESC LIMIT 1), 0)
           AND NOT EXISTS (SELECT 1 FROM events b WHERE b.conversation = c.id AND b.type = 'answered' AND b.cursor > a.cursor
@@ -1224,7 +1225,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1448,7 +1449,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     // close: the tab's x (owner, 2026-10-25: closing a chat stops it, running or idle); 'closed' takes its tab out of
     // every window, and History opens it again.
-    async stop(id, body = {}) {
+    // spare: one chat below id left running, it and the chats under it (Close sprint's calling worker). Not from the route.
+    async stop(id, body = {}, spare = null) {
       // Startup recovery settles every row first, so it never overwrites a Stop that began meanwhile.
       await recovered;
       if (!ID.test(id) || !row(id)) return refused(404, 'unknown-conversation');
@@ -1458,7 +1460,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // A7: the chats it started go first, deepest first, so none works on with nobody to report to.
       const started = [];
       for (let level = [id]; level.length && started.length < 1000;) {
-        level = level.flatMap((parent) => db.prepare('SELECT id FROM conversations WHERE parent = ?').all(parent).map((c) => c.id)).filter((c) => !started.includes(c));
+        level = level.flatMap((parent) => db.prepare('SELECT id FROM conversations WHERE parent = ?').all(parent).map((c) => c.id)).filter((c) => c !== spare && !started.includes(c));
         started.push(...level);
       }
       for (const child of started.reverse()) if (!['stopped', 'moving', 'moved'].includes(row(child).state)) await stopConversation(child);
