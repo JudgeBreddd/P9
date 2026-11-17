@@ -3,7 +3,7 @@
 // the hooks panel.mjs asks for (o.openProject, o.newProject, o.chatMenuItems, o.renderPage). The page lives in #projPage
 // beside #chats; o.S.view says which shows ({ kind: 'project', id }, { kind: 'archived' } or null for the chats).
 // Every change goes through the daemon's project routes (p9:chat); nothing here reads or writes a folder.
-import { svg, esc, runnerPicks } from './helpers.mjs';
+import { svg, esc, runnerPicks, modes, LOOSE } from './helpers.mjs';
 import { PANEL_ICONS, LABEL, listedChats, stateOf } from './panel.mjs';
 
 const ERR = { 'folder-exists': 'A folder with that name is already there. Change the name or the parent.', 'folder-refused': 'P9 can\'t use that folder. Pick another.',
@@ -82,7 +82,7 @@ export function installProjects(o, api) {
   // ---- The page ----
   async function openProject(id, sprintLead) {
     if (o.S.focus !== 'chat' && !o.focusOn('chat')) return;
-    api.closeMenu(); api.setOpen(id, true); edit = false; spPage = sprintLead || '';
+    flushInstr(); api.closeMenu(); api.setOpen(id, true); edit = false; spPage = sprintLead || '';
     o.S.view = { kind: 'project', id }; if (o.S.focus !== 'chat') o.setFocus('chat');
     if (cur?.id !== id) cur = null; // shown once the full record is in: the list's copy has no instructions or files
     o.renderTabs(); if (o.S.files) o.renderTree();
@@ -206,8 +206,12 @@ export function installProjects(o, api) {
     if (!roles) return '<p class="hint" data-sp-roles-bad role="status">roles.json is not a list of roles P9 can read. Fix it in its file below; the rows show again when it reads.</p>';
     const row = r => { const worker = r.key !== 'lead' && r.key !== 'review', p = runnerPicks(o, { agent: String(r.provider ?? ''), model: String(r.model ?? ''), effort: String(r.effort ?? '') },
       { first: ['', 'Not set'], attr: k => `data-spr="${k}" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}"`, aria: k => `${r.key} ${k}` });
+      // H3: its permissions (the mode Start opens it in; Not set: P9's usual one) and what it owns, for the lead to send work by.
+      const mode = String(r.mode ?? ''), ms = modes[p.a] ?? [], mo = [['', 'Not set'], ...ms.map(m => [m, m]), ...(mode && !ms.includes(mode) ? [[mode, mode]] : [])];
+      const pick = r.provider ? `<label class="set-pick">Mode<select data-slot="input" data-spr="mode" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}" aria-label="${esc(r.key)} mode"${LOOSE[mode] ? ` title="${esc(LOOSE[mode])}"` : ''}>${mo.map(([v, n]) => `<option value="${esc(v)}"${v === mode ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '';
       return `<div class="set-row sp-role" data-role-row="${esc(r.key)}"><span><strong class="mono">${esc(r.key)}</strong><span class="muted sm">${ROLE[r.key] ?? `Worker: its own folder on branch sprint/…/${esc(r.key)}`}${p.empty ? `. Start one ${esc(o.names[p.a] ?? p.a)} chat first: its models and efforts are listed here after that.` : ''}</span></span>${p.html}`
-        + (worker ? `<button class="rm" data-pj="sprole-rm" data-lead="${esc(sp.lead)}" data-role="${esc(r.key)}" title="Remove the role ${esc(r.key)}" aria-label="Remove the role ${esc(r.key)}">${svg.x}</button>` : '') + '</div>'; };
+        + (worker ? `<button class="rm" data-pj="sprole-rm" data-lead="${esc(sp.lead)}" data-role="${esc(r.key)}" title="Remove the role ${esc(r.key)}" aria-label="Remove the role ${esc(r.key)}">${svg.x}</button>` : '')
+        + `<span class="sp-role2"><label class="set-pick sp-owns">Owns<input data-slot="input" data-sp-owns data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}" maxlength="500" spellcheck="false" autocomplete="off" placeholder="for example: the window, Settings" aria-label="${esc(r.key)} owns" value="${esc(String(r.owns ?? ''))}"></label>${pick}</span></div>`; };
     return `<div class="sp-roles" data-sp-roles><h3>Roles</h3>${roles.map(row).join('')}`
       + `<div class="sp-add"><input data-slot="input" class="mono" data-sp-newkey data-lead="${esc(sp.lead)}" maxlength="64" spellcheck="false" autocomplete="off" placeholder="worker name, for example docs" aria-label="New worker's name"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sprole-add" data-lead="${esc(sp.lead)}">${svg.plus}Add worker</button></div></div>`;
   }
@@ -228,12 +232,13 @@ export function installProjects(o, api) {
   function renderPage() {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
     page.hidden = !on; chats.hidden = on;
-    if (!on) { if (v?.kind === 'project' && !cur) return; page.innerHTML = ''; return; }
+    if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
     if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());
     // morph changes an option's selected attribute only; a pick the user changed keeps showing their choice, so each role
     // pick is set to what roles.json says (after a refused save it says the lead's value).
     page.querySelectorAll('select[data-spr]').forEach(s => { s.value = s.querySelector('option[selected]')?.value ?? ''; });
+    page.querySelectorAll('[data-sp-owns]').forEach(i => { i.value = i.getAttribute('value') ?? ''; }); // the same for what a role owns
     if (spPage && svFor !== spPage) loadView();
   }
   // ---- Sprint View: the shown sprint's status, drawn by sprint-view.mjs (loaded on first use) from the answer
@@ -388,10 +393,17 @@ export function installProjects(o, api) {
   page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-spr]')) return;
     const { lead, role, spr } = x.dataset, value = x.value;
     saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r) return false;
-      if (spr === 'agent') Object.assign(r, { provider: value, model: '', effort: '' }); else r[spr] = value; }); });
+      if (spr === 'agent') { Object.assign(r, { provider: value, model: '', effort: '' }); delete r.mode; } else if (spr === 'mode' && !value) delete r.mode; else r[spr] = value; }); });
+  // What a role owns: saved when the box is left or Enter is pressed, emptied = the key removed.
+  page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-sp-owns]')) return;
+    const { lead, role } = x.dataset, value = x.value.trim();
+    saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r || (r.owns ?? '') === value) return false; if (value) r.owns = value; else delete r.owns; }); });
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
-    const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) { failed(r); return false; }
-    cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
+    const id = cur.id, r = await call('updateProject', { id, instructions: box.value }); if (r.status !== 200) { failed(r); return false; }
+    if (cur?.id === id) cur = { ...cur, instructions: r.body.project.instructions }; /* the page may have moved on meanwhile */ const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
+  // Leaving the page by the side panel (a chat, another project, Archived): Instructions typed and not yet saved are sent
+  // now, while the box is still there to read; the 600 ms timer would find it gone.
+  const flushInstr = () => { if ($('#pjInstr') && cur) { clearTimeout(saveT); saveInstr(); } };
   // The open file's box shows its draft, or the file: set as a value, since morph may keep a box another file typed in.
   const fillBox = (focus = true) => { const box = page.querySelector('[data-sp-box]'); if (!box) return;
     box.value = drafts.get(sprintOpen)?.text ?? cur.sprints?.find(x => x.lead === box.dataset.lead)?.files.find(x => x.name === box.dataset.name)?.text ?? box.value; if (focus) box.focus(); };

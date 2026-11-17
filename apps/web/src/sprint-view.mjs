@@ -11,6 +11,13 @@ const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Fa
 const stands = w => w.verdict?.result === 'fix' ? ['fix', 'Fix asked'] : w.waiting ? ['asked', 'Waiting for you'] : w.ready && !w.verdict ? ['ready', 'Ready for review'] : [w.state, WORD[w.state] ?? w.state];
 const REVIEW = { passed: 'Passed', fix: 'Fix asked', ready: 'In review' };
 
+// I1: "N of N steps in phase X, N of N phases", from the plan's "## Phase" headings. A plan with none has no line.
+function phaseLine(s, esc) {
+  const ps = s.phases ?? [], now = ps[s.phase_now];
+  if (!ps.length) return '';
+  const done = ps.filter(p => p.passed >= p.total).length;
+  return `<span class="sv-phase" data-sv-phase>${now ? `${now.passed} of ${now.total} steps in ${esc(now.title)}, ` : 'Every phase passed its review: '}${done} of ${ps.length} phases</span>`;
+}
 export function statusHtml(s, esc) {
   const d = s.done, open = s.items.filter(i => i.review?.state !== 'passed'), n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
   const facts = [
@@ -21,7 +28,7 @@ export function statusHtml(s, esc) {
   return `<section class="sec sv" data-sv aria-label="Sprint View: ${esc(s.sprint.title ?? '')}">
     <div class="sv-top">${ring(d.passed, d.total, `${d.passed} of ${d.total} items passed review`, 'big')}
       <div class="sv-say"><b data-sv-done>${d.total ? `${d.passed} of ${n(d.total, 'item', 'items')} passed review` : 'The plan has no items yet'}</b>
-        <span class="muted">${d.total ? (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its review passes, not when its box is ticked.` : 'Every item passed its review.') : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}</span></div>
+        <span class="muted">${d.total ? (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its review passes, not when its box is ticked.` : 'Every item passed its review.') : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}</span>${phaseLine(s, esc)}</div>
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;

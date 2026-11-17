@@ -1132,6 +1132,13 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
   await until(async () => (await fact('ticked')) === '2 of 3', async () => 'the page never followed the plan: ' + await fact('ticked'), 12000);
   assert.equal(await page.locator('[data-sv-item="A2"] .tag').textContent(), 'Ticked, not reviewed');
+  // I1's plan line: no "## Phase" heading so far, so no line; headings give "N of N steps in <phase>, N of N phases".
+  assert.equal(await page.locator('[data-sv-phase]').count(), 0, 'a plan with no phase heading has no phase line');
+  await writeFile(path.join(run.folder, 'sprint.md'), '# Plan\n\n## Phase 1: the page\n- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead\n\n## Phase 2: the docs\n- [ ] B1: write it up; role docs\n');
+  await until(async () => (await page.locator('[data-sv-phase]').textContent().catch(() => '')) === '0 of 2 steps in Phase 1: the page, 0 of 2 phases', async () => 'phase line: ' + await page.locator('[data-sv-phase]').textContent().catch(() => 'none'), 12000);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-phases ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
+  await until(async () => (await page.locator('[data-sv-phase]').count()) === 0, 'the phase line left with the headings', 12000);
   // Scripts are counted once each: one approved at Start, one approved after it, one still waiting is "2 running, 1 waiting".
   const hash = (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash;
   const ok = await call(instance, `/sprints/${run.sprint}/approve-scripts`, 'POST', { hash, names: ['later'] });
@@ -1144,4 +1151,60 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await until(async () => await page.locator('#projPage').isHidden(), 'the lead\'s row never opened its chat');
   assert.deepEqual(errors, []);
   console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items passed, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
+});
+
+// Row 697 A: Instructions typed and then left by the side panel (a chat, another project) inside the 600 ms were dropped:
+// the timer ran after the page was emptied and found no box. They are sent as the page is left. B, C: a role's row on
+// Sprint Setup sets what it owns and its mode (permissions), both kept in roles.json with the rest of the file.
+test('projects: Instructions left by the side panel are saved; Sprint Setup sets a role\'s owns and mode', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Leaving', work: { kind: 'new', parent: '', name: 'leaving' } })).project;
+  const other = (await call(instance, '/projects', 'POST', { name: 'Elsewhere', work: { kind: 'new', parent: '', name: 'elsewhere' } })).project;
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Owned prep' });
+  await writeFile(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'leaving', roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: 'codex', model: '', effort: '', mode: 'Read-only' }] }, null, 2));
+  const { page, app } = await launch(t, instance);
+  const saved = async () => (await call(instance, '/projects/' + p.id)).project.instructions ?? '';
+  const typeThenLeave = async (text, leave) => {
+    await page.locator(`#navList [data-proj="${p.id}"]`).click();
+    await page.locator('#pjName').waitFor({ timeout: 10000 });
+    if (!await page.locator('#pjInstr').count()) await page.locator('#projPage [data-pj=edit]').click();
+    await page.locator('#pjInstr').fill(text);
+    await leave(); // no wait: the 600 ms save has not run
+    await new Promise((go) => setTimeout(go, 1500));
+    return saved();
+  };
+  assert.equal(await typeThenLeave('Left by a chat.', () => page.locator(`#navList .row[data-chat="${chat}"]`).click()), 'Left by a chat.', 'Instructions typed then a chat clicked in the side panel were lost');
+  assert.equal(await typeThenLeave('Left by a project.', () => page.locator(`#navList [data-proj="${other.id}"]`).click()), 'Left by a project.', 'Instructions typed then another project clicked were lost');
+  assert.equal((await call(instance, '/projects/' + other.id)).project.instructions ?? '', '', 'the text went to the project it was typed in, not the one opened');
+
+  // B, C on the sprint's page.
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click();
+  const owns = page.locator(`[data-sp-owns][data-role="lead"][data-lead="${prep.sprint}"]`), mode = (role) => page.locator(`select[data-spr="mode"][data-role="${role}"][data-lead="${prep.sprint}"]`);
+  await owns.waitFor({ timeout: 10000 });
+  assert.equal(await mode('review').inputValue(), 'Read-only', 'the review row shows the mode roles.json has');
+  assert.deepEqual(await mode('review').locator('option').allTextContents(), ['Not set', 'Read-only', 'Workspace access', 'Auto review', 'Full access'], 'a codex row lists codex\'s modes');
+  const rolesNow = async () => { for (;;) { try { return JSON.parse(await readFile(path.join(prep.folder, 'roles.json'), 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; await new Promise((go) => setTimeout(go, 50)); } } }; // the hash-checked save moves the old file aside for a moment
+  await owns.fill('the window, Settings'); await owns.press('Enter');
+  await until(async () => (await rolesNow()).roles[0].owns === 'the window, Settings', 'owns saved to roles.json');
+  await mode('lead').selectOption('Plan');
+  await until(async () => (await rolesNow()).roles[0].mode === 'Plan', 'mode saved to roles.json');
+  await mode('review').selectOption('');
+  await until(async () => !('mode' in (await rolesNow()).roles[1]), 'Not set removes the mode');
+  const r = await rolesNow();
+  assert.deepEqual([r.folder, r.roles.map((x) => x.key), r.roles[0].owns, r.roles[0].mode], ['leaving', ['lead', 'review'], 'the window, Settings', 'Plan'], 'the rest of roles.json is kept');
+  await owns.fill(''); await owns.press('Enter');
+  await until(async () => !('owns' in (await rolesNow()).roles[0]), 'an emptied owns removes the key');
+  await owns.fill('the window, Settings'); await owns.press('Enter');
+  await until(async () => (await rolesNow()).roles[0].owns === 'the window, Settings', 'owns saved again');
+  const shot = async (name) => { if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); };
+  await shot('row697-roles');
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.7)); // about 820 px of page in the test's 1400 px window
+  await new Promise((go) => setTimeout(go, 400));
+  await shot('row697-roles-820');
+  const [over, wide] = await page.evaluate(() => [[...document.querySelectorAll('.sp-role')].filter((el) => el.scrollWidth > el.clientWidth + 1).length, innerWidth]);
+  assert.ok(wide < 900, 'the zoom did not narrow the page: ' + wide);
+  assert.equal(over, 0, 'a role row runs past its box at 820 px');
+  console.log('PASS Instructions left by the side panel: saved after a chat click and after another project click, to the project typed in; Sprint Setup role rows: owns and mode saved to roles.json, Not set / empty remove the key, folder and rows kept, no row overflows at 820 px');
 });

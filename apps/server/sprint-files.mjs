@@ -36,6 +36,17 @@ export function planItems(plan) {
   }
   return items;
 }
+// I1's plan line: the plan's phases, a "## Phase ..." heading (any level from ## down) each, in order, with how many item
+// lines are under it. Items above the first such heading belong to no phase; a plan with no such heading has none ([]).
+export function phasesOf(plan) {
+  const phases = [];
+  for (const line of typeof plan === 'string' ? plan.split('\n') : []) {
+    const head = /^\s*#{2,6}\s+(phase\b.*)$/i.exec(line);
+    if (head) phases.push({ title: head[1].trim().slice(0, 200), items: 0 });
+    else if (phases.length && /^\s*- \[[ xX]\] (.+)$/.exec(line)?.[1].trim()) phases.at(-1).items++; // as planItems counts them
+  }
+  return phases;
+}
 export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.role === key).map(({ id, text }) => ({ id, text }));
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
