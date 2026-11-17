@@ -408,6 +408,25 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 /* O109: the text box stays on screen whatever is pinned or waiting: what sits above it (.pinned, .queue) scrolls inside its
    own cap, and the bottom never takes more than 70% of the window, so the history keeps the rest. */
 .bottom .col{max-height:70vh}.bottom .col>*{flex:none}.bottom .col>.pinned{flex:0 1 auto;min-height:0}
+/* window-4 (row 730): the worker report floats on the chat from the top of the bottom, out of the flow, so the history
+   never moves when it comes, opens or closes. Folded, only its title tab shows; opened, its body slides up over the chat. */
+.bottom .col{position:relative}
+.tuck{position:absolute;left:0;right:0;bottom:calc(100% + 6px);z-index:3;display:flex;flex-direction:column;justify-content:flex-end;pointer-events:none}
+.tuck>.card-pin{pointer-events:auto;background:var(--card);box-shadow:0 -6px 18px color-mix(in oklch,var(--background) 70%,transparent);padding:4px 14px}
+.tuck .tab{display:flex;align-items:center}
+/* FIX1: the title and its x sit together at the left, clear of what floats over the pane's top right (the cards stack, the
+   sprint card): on a short window with tall pins there is no free height above the bottom to move the row into. */
+.tuck .tab .eyebrow{flex:none;margin:0;padding:4px 0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.tuck .tab .eyebrow::after{content:' ▴';opacity:.6}.tuck[data-tuck-open=true] .tab .eyebrow::after{content:' ▾'}
+.tuck .tab .card-close{position:static;margin-left:6px}
+.tuck .tb{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s ease}
+.tuck .tb>.msg{min-height:0;overflow:hidden}
+.tuck[data-tuck-open=true] .tb{grid-template-rows:1fr}
+.tuck[data-tuck-open=true] .tb>.msg{overflow:auto;max-height:min(45vh,var(--tuck-body,45vh));padding:4px 0 8px}
+@media (prefers-reduced-motion:reduce){.tuck .tb{transition:none}}
+/* The folded title would cover the chat's last line: while a report floats, the history has room for it below its end (its
+   box keeps its size; only the scroll gets one tab longer). */
+.pane:has(.tuck) .hist{padding-bottom:56px}
 .meters{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:14px;align-items:center;font-size:11px;color:var(--muted-foreground)}
 .meter{display:grid;gap:4px}
 .meter .l{display:flex;justify-content:space-between}
@@ -659,7 +678,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
    renderChats). Dev Focus full keeps its box inside the side. */
 .stage[data-side-mode=full]>.focuses>#fChat.on{visibility:visible}
 .stage[data-side-mode=full]>.focuses>#fChat.on :is(.files,.pane>:not(.bottom)){visibility:hidden}
-.stage[data-side-mode=full]>.focuses>#fChat.on .bottom :is(.pinned,.meters){display:none}
+.stage[data-side-mode=full]>.focuses>#fChat.on .bottom :is(.pinned,.tuck,.meters){display:none}
 .stage[data-side-mode=full]:has(#fChat.on)>.side{margin-bottom:var(--chat-bottom,0px)}
 /* D20: connecting to a remote. The P9 black hole (black-hole.css), the window's own words under it. */
 dialog.connecting{inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;border:0;padding:0;background:radial-gradient(90% 70% at 50% 42%,oklch(0.18 0.06 275),#000 70%);color:oklch(0.96 0.01 255);flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center}
