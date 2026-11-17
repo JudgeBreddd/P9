@@ -18,17 +18,18 @@ export function openReport(s, shut, gone) {
   const top = [...(s.cards?.values() ?? [])].filter(c => isReport(c.id)).sort((a, b) => s.cardAt.get(b.id) - s.cardAt.get(a.id))[0];
   return top && !shut.has(reportKey(s, top)) && !gone?.(top.id) ? top : null;
 }
-// window-4 (row 730): with tuck (the desktop), the open report is drawn apart from the strip, folded to its title above the
-// bottom (tuck.mjs). TUCK: tuck.mjs's exports once chat-view has loaded it; want: a report waits for it (chat-view loads it then).
+// window-4 (row 730): the phone passes close (its report's x) and keeps the open report in the strip; the desktop passes none and
+// the open report is drawn apart, folded to its title above the bottom (tuck.mjs, which draws its own x). TUCK: tuck.mjs's
+// exports once loaded; want: a report waits for it (chat-view loads it then). Both keep the desktop's startup JS in its budget.
 export const TUCK = {};
-export function pinned(s, mdOf, shut, gone, tuck) {
+export function pinned(s, mdOf, shut, gone, close) {
   const plan = s.events.find(e => e.t === 'plan'), all = [...(s.cards?.values() ?? [])];
   const open = shut && openReport(s, shut, gone);
-  const cards = shut ? all.filter(c => !isReport(c.id) || (c === open && !tuck)) : all;
-  const folded = tuck && open ? TUCK.tab?.(s, open, mdOf) ?? (TUCK.want = 1, '') : '';
+  const cards = shut ? all.filter(c => !isReport(c.id) || (c === open && close)) : all;
+  const folded = !close && open ? TUCK.tab?.(s, open, mdOf) ?? (TUCK.want = 1, '') : '';
   if (!plan?.entries.length && !cards.length) return folded;
   return folded + `<div class="pinned" aria-label="Pinned">${plan?.entries.length ? `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan <button type="button" class="open-plan" data-open-plan="entries" title="Open the plan to comment on it">Open</button></div><ul style="margin:0;padding:0">${plan.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${mark(st)}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>` : ''}`
-    + cards.map(c => `<div class="card-pin" data-card="${esc(c.id)}">${shut && isReport(c.id) ? `<button type="button" class="card-close" data-card-close="${esc(c.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button>` : ''}<div class="eyebrow">${isReport(c.id) ? 'Worker report' : `${esc(c.id)} · ${esc(c.kind)}`}</div><div class="msg agent">${mdOf(c)}</div></div>`).join('') + '</div>';
+    + cards.map(c => `<div class="card-pin" data-card="${esc(c.id)}">${close && isReport(c.id) ? close(c) : ''}<div class="eyebrow">${isReport(c.id) ? 'Worker report' : `${esc(c.id)} · ${esc(c.kind)}`}</div><div class="msg agent">${mdOf(c)}</div></div>`).join('') + '</div>';
 }
 
 // The ledger's card events, applied in order: the same ID replaces that card in place, unpin removes it.

@@ -670,7 +670,8 @@ function render() {
   const plan = (strip.events[0]?.entries ?? []) as string[][], chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   // O712: the desktop's rule: only the newest worker report not closed is pinned, with a × (the sheet's click handler below).
-  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get(), shelved); pinStrip = strip;
+  // window-4: the phone keeps its open report in the strip, with this x (the desktop folds it into tuck.mjs's tab instead).
+  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get(), shelved, (card: { id: string }) => `<button type="button" class="card-close" data-card-close="${esc(card.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button>`); pinStrip = strip;
   const cards = one('#pinned').querySelectorAll('[data-card]').length;
   // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
   pinSig = cards ? JSON.stringify([...strip.cards!.values()]) : '';

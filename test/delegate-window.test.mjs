@@ -671,11 +671,13 @@ test('window-4: the worker report floats folded to its title above the box, slid
   await until(async () => await title.getAttribute('aria-expanded') === 'true', 'the report opened on the short window');
   await page.waitForTimeout(600);
   const top = (await box(pane.locator('.hist'))).top, close = card.locator('[data-card-close]');
-  const hit = (l) => l.evaluate((el) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el; });
+  // What a click at each one's centre lands on: '' when it is the button itself, else the covering element.
+  const hit = (l) => l.evaluate((el) => { const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, h = document.elementFromPoint(x, y);
+    return h === el ? '' : `${Math.round(x)},${Math.round(y)} hits ${h ? h.outerHTML.slice(0, 160) : 'nothing'}`; });
   const [tb, cb] = [await box(title), await box(close)];
-  assert.ok(tb.top >= top - 1 && cb.top >= top - 1, 'opened on a short window, the title and close sit under the history top: ' + JSON.stringify({ top, tb, cb }));
-  assert.ok(await hit(title) && await hit(close), 'a click on the title and on the close reaches them');
   await shot(page, 'window4-short-open');
+  assert.ok(tb.top >= top - 1 && cb.top >= top - 1, 'opened on a short window, the title and close sit under the history top: ' + JSON.stringify({ top, tb, cb }));
+  assert.deepEqual([await hit(title), await hit(close)], ['', ''], 'a click on the title and on the close reaches them');
   await close.click();
   await until(async () => await card.count() === 0, 'closed from its x on the short window');
   assert.deepEqual(errors, []);
