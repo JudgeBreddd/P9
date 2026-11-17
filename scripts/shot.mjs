@@ -6,7 +6,8 @@
 // printed or written); P9_SHOT_CHROMIUM a browser binary (Playwright's own when unset); P9_SHOT_OUT the folder that gets one
 // dated folder per day (default <tmp>/p9-shots); P9_SHOT_WAIT ms to let the page settle (default 2000).
 // It only looks. Nothing is clicked or typed. Every request that is not GET or HEAD is stopped in the browser before it leaves,
-// WebSockets never reach the server, and service workers are blocked (a request through one would skip that check). The browser
+// WebSockets connect, so the page shows live data, but every frame the page sends is dropped before it leaves (frames from the
+// server still reach the page). Service workers are blocked (a request through one would skip that check). The browser
 // runs with its own throwaway profile, which Playwright deletes on close; the cookie lives only in that profile's memory.
 import { chromium } from '@playwright/test';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -39,6 +40,7 @@ const now = new Date(), stamp = now.toISOString().replace(/[-:]/g, '').slice(9, 
 const folder = path.join(env.P9_SHOT_OUT || path.join(os.tmpdir(), 'p9-shots'), now.toISOString().slice(0, 10));
 await mkdir(folder, { recursive: true });
 const blocked = [];
+let dropped = 0;
 const browser = await chromium.launch({ executablePath: env.P9_SHOT_CHROMIUM || undefined });
 const made = [];
 try {
@@ -56,7 +58,8 @@ try {
         blocked.push(request.method() + ' ' + new URL(request.url()).pathname);
         return route.abort('blockedbyclient');
       });
-      await context.routeWebSocket(/.*/, (socket) => { blocked.push('WebSocket ' + new URL(socket.url()).pathname); socket.close(); });
+      // Setting onMessage on the page side stops Playwright forwarding the page's frames; the server's are forwarded as they come.
+      await context.routeWebSocket(/.*/, (socket) => { socket.connectToServer(); socket.onMessage(() => { dropped += 1; }); });
       const page = await context.newPage();
       await page.goto(new URL(shot.path, base).href, { waitUntil: 'load', timeout: 30000 });
       await page.waitForTimeout(wait);
@@ -68,6 +71,7 @@ try {
   }
 } finally { await browser.close(); }
 
+if (dropped) console.error(`shot: dropped ${dropped} WebSocket frame(s) the page tried to send`);
 if (blocked.length) console.error(`shot: stopped ${blocked.length} request(s) that would have changed something: ${[...new Set(blocked)].join(', ')}`);
 if (args[0] !== '--list') console.log(made[0].file);
 else {
