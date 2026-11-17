@@ -745,5 +745,18 @@ test('Close sprint: a before-close script refuses it, the close_sprint tool asks
   assert.notEqual(got.status, 200, JSON.stringify(got.body));
   await new Promise((r) => setTimeout(r, 300));
   assert.deepEqual([ran('gate'), ran('tidy')], [2, 1]);
-  console.log('PASS Close sprint: not started 409; a before-close exit 1 refused the press with its last line and changed nothing; the tool was unknown outside the project, refused by the lock, asked first and closed nothing on no; on yes the worker then the lead were stopped, after-close ran once, the tool and the route gave the same kept record, a later plan edit did not move it, and a second close, Start and Run now were refused');
+  // The lead, written to again after Close, starts no more chats.
+  const chatsBefore = (await rows(instance)).length;
+  const mcps = async () => (await events(instance, sprint)).filter((e) => e.data?.content?.text?.startsWith('mcp:'));
+  // A role row added after Close (the closed page still edits roles): only the closed sprint stands in the new worker's way.
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'w2', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const had = (await mcps()).length;
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  const [entry] = JSON.parse((await eventually(async () => { const all = await mcps(); return all.length > had && all.at(-1); }, 'the reopened lead never said its tools')).data.content.text.slice(4));
+  const again = new Client({ name: 'p9-test', version: '1' });
+  await again.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => again.close());
+  got = JSON.parse((await again.callTool({ name: 'open_chat', arguments: { text: 'config', key: 'w2' } })).content[0].text);
+  assert.deepEqual([got.error, got.chat, (await rows(instance)).length], ['sprint-closed', undefined, chatsBefore], JSON.stringify(got));
+  console.log('PASS Close sprint: the reopened lead\'s open_chat was refused sprint-closed;not started 409; a before-close exit 1 refused the press with its last line and changed nothing; the tool was unknown outside the project, refused by the lock, asked first and closed nothing on no; on yes the worker then the lead were stopped, after-close ran once, the tool and the route gave the same kept record, a later plan edit did not move it, and a second close, Start and Run now were refused');
 });

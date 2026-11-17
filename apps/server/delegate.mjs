@@ -172,6 +172,8 @@ export function createDelegate({ chat, allowed, usage }) {
   const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
   // opts (Start sprint only, never from a tool's arguments): approved, the press already was the user's yes; profile, the
   // provider profile the role names.
+  // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
+  const shutFor = (caller) => { for (let id = caller, n = 0; id && n < 8; id = chat.info(id)?.parent, n += 1) if (chat.projects.closed(id)) return { error: 'sprint-closed', detail: 'This sprint is closed: it starts no more chats.' }; return null; };
   async function openChat(caller, args, signal, opts = {}) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const me = chat.info(caller);
@@ -287,6 +289,8 @@ export function createDelegate({ chat, allowed, usage }) {
     // Ask me first (the default): the first worker of a chat the user started is a sprint's start, so the user is asked
     // in every mode, Unrestricted too. Later ones, and Agent decides, follow the same check as every acting P9 tool.
     const starts = set.start === 'ask' && depth === 0 && !family.some((c) => c.parent === caller);
+    const shut = () => shutFor(caller);
+    if (shut()) return shut();
     const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This starts a sprint (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
     if (!approved && !await (starts ? chat.approve(caller, request, signal) : allowed(caller, request, signal))) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     // Checked again after the user was asked, and again after a worker folder's clone and setup (which can take
@@ -294,6 +298,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const still = () => {
       if (signal?.aborted) return { error: 'cancelled' };
       if (chat.lock(caller).on) return { error: 'agent-lock-on' };
+      if (shut()) return shut();
       const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
       if (now.start === 'off') return OFF;
       if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
