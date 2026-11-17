@@ -840,8 +840,8 @@ fs.appendFileSync(${JSON.stringify(held)}, '1'); const t = setInterval(() => { i
   console.log('PASS Close held: the lock turned on during a blocking before-close refused agent-lock-on with nothing stopped or recorded; the worker\'s own close stopped only the lead and left the worker running');
 });
 
-// Sprint Setup as tools (row 697; Tyler: "Every metric, control and piece of information is usable by both the user and
-// the agent"): sprint_setup reads every Setup field with its file's hash; sprint_setup_save writes one file or one role row
+// Sprint Setup as tools (row 697: every metric, control and piece of information is usable by both the user and the
+// agent): sprint_setup reads every Setup field with its file's hash; sprint_setup_save writes one file or one role row
 // through the page's guarded save, so a stale hash is refused and nothing is written. A role's owns and mode are kept,
 // and Start takes a row with owns. Sprint View's phases come from the plan's "## Phase" headings.
 test('Sprint Setup tools: every field read with its hash, a file and a role row saved, a stale hash refused for each, owns taken at Start, the plan\'s phases counted', { timeout: 300000 }, async (t) => {

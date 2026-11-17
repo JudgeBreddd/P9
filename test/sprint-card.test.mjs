@@ -219,7 +219,7 @@ test('Sprint card: a new worker, its ready, its verdict and its next turn reach 
   assert.equal(await row('w-1').locator('.sp-st time').textContent(), '12 min');
   await send([lead, w()], [{ type: 'note', conversation: 'lead-1', data: { text: 'busy' } }]);
   await is('w-1', 'working', 'idleSince dropped');
-  // 709 (Tyler, 2026-11-15): a queue worker's ring counts its role's items in the plan, done as P9's review record counts
+  // 709: a queue worker's ring counts its role's items in the plan, done as P9's review record counts
   // them: the daemon's queue field on the list (chat.mjs queueOf), not one item per task.
   const q = (done) => ({ done, total: 3, items: ['d1', 'd2', 'd3'].map((id, i) => ({ id, text: id + ': x. Role: daemon.', state: i < done ? 'passed' : 'todo', fixes: 0 })) });
   const ringIs = async (want, why) => { const r = row('w-1').locator('.sp-ring'); let got;

@@ -754,7 +754,7 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   const third = await a.tool('open_chat', { text: 'config', title: 'Third' });
   assert.equal(third.worker, 3, JSON.stringify(third));
   assert.match((await a.done(third.chat)).last, /config:model=opus,effort=high,/, 'Worker 3 did not start on its row');
-  // Settings > Delegation decides what a worker is (Tyler, 2026-11-16: "the parent cannot create an unapproved worker"): a
+  // Settings > Delegation decides what a worker is (the parent cannot create a worker Settings did not approve): a
   // provider, model or effort no free row starts is refused by field, and nothing is made.
   const count = (await rows(instance)).length;
   const haiku = await a.tool('open_chat', { text: 'config', title: 'Fourth', model: 'haiku', effort: 'low' });

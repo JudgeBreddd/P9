@@ -978,7 +978,7 @@ test('resume: a chat keeps its model, effort and mode across a daemon restart', 
   console.log('PASS resume: opus, high effort and Plan kept across a daemon restart; resumed names Opus');
 });
 
-// O130 (Tyler, 2026-11-16: "P9 needs to only change models when its deliberate by the user or the parent chat"): a helper
+// O130 (P9 changes a model only when the user or the parent chat means to): a helper
 // agent's settings (claude-agent-acp sends them as the chat's, ledger 596371/596374) never become the chat's model. The
 // night this was found, a Haiku web-fetch helper made a resume start the chat on Haiku.
 test('O130: a helper agent\'s model never becomes the chat\'s, live or after a resume', async (t) => {

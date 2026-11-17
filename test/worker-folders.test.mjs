@@ -148,7 +148,7 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   console.log('PASS Worker folders A6');
 });
 
-// daemon-6 (Tyler, 2026-11-13, nightly 8: three squash-merged folders kept "not in the main line"): a later PR changes a
+// daemon-6 (nightly 8: three squash-merged folders were kept as "not in the main line"): a later PR changes a
 // file the worker's merged PR also changed. The work is still in the main line, so its folder goes; a worker whose lines
 // the main line later rewrote, and one not merged, are kept.
 test('Worker folders daemon-6: clean-up removes a squash-merged folder after the main line changed the same file again; it keeps unmerged and rewritten work', { timeout: 60000 }, async (t) => {

@@ -1,4 +1,4 @@
-// O126 (Tyler, 2026-11-17): "when a session resumes, it changes the chat name i set for it." The daemon already kept the
+// O126: a resumed session changed the chat name the user had set. The daemon already kept the
 // user's name (conversations.title); the window took the agent's later session_info_update title over it. Real Electron,
 // the real daemon and the fake agent ("title <text>" sends a session_info_update title).
 import test from 'node:test';

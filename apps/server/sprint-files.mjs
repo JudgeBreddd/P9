@@ -21,7 +21,7 @@ const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done
 export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
 // What a worker is told about its notes file, at its start and again after each compaction.
 export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
-// The work queue (sprint method rule 4; Tyler, 2026-11-13: "The item list is the chunks assigned to the worker"): the
+// The work queue (sprint method rule 4: the item list is the chunks assigned to the worker): the
 // plan's item lines whose role is this key, in order. The role is the word after "role" at the start of a clause
 // ("; role daemon;" or ". Role: daemon."); an item's id is its text before the first colon. A tick in the plan is a
 // model's say-so: P9 counts an item done from its own review record, never from the box. planItems: every item line

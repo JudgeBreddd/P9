@@ -1,5 +1,5 @@
 // Sending while a turn runs (CP1; the 2026-10-24 decision: a chip with Steer / Queue / Cancel, as in the agents' own
-// terminals; O-702, Tyler 2026-11-15: desktop and phone show the same three, Steer / Queue / Interrupt, with the same
+// terminals; O-702: desktop and phone show the same three, Steer / Queue / Interrupt, with the same
 // titles as the phone's card, phone.astro #midTurn). Steer (Enter) goes into the turn when its current tool call ends;
 // Queue (Tab) goes after the turn; Interrupt (Ctrl Enter) stops the turn and sends now; Cancel (Esc) ends the turn and the
 // text stays in the box. The daemon holds Steer and Queue (chat.mjs hold), so they survive a window restart; the window

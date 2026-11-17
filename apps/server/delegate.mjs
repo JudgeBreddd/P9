@@ -249,8 +249,8 @@ export function createDelegate({ chat, allowed, usage }) {
     // A sprint's workers come only from its role rows, never from Settings > Delegation (OPEN-ITEMS 0.1.9: "the parent
     // cannot create an unapproved worker"). A sprint lead is a chat whose sprint New sprint made (P9 keeps prep:<id>) or
     // whose sprint folder has a roles.json; open_chat writes neither, so a plain chat's workers stay Delegate's. Its
-    // worker names the key of a valid roles.json row and starts as that row, named for it (Tyler, 2026-11-16: "the role
-    // becomes the chat name so its easy to see which worker is which"); anything else is refused before a chat or a slot
+    // worker names the key of a valid roles.json row and starts as that row, named for it (the role is the chat
+    // name, so each worker is easy to tell apart); anything else is refused before a chat or a slot
     // is taken. A provider, model or effort named that the row does not start is refused by field.
     const roles = opts.profile === undefined && chat.sprintFiles.exists(caller) ? chat.sprintFiles.read(caller, 'roles.json') : undefined;
     if (opts.profile === undefined && (chat.projects.prepOf(caller) || (roles !== undefined && roles !== null))) {
@@ -961,8 +961,8 @@ export function createDelegate({ chat, allowed, usage }) {
     return { rules: args.rules, sentTo: chat.family().filter((c) => c.parent === caller).length };
   }
 
-  // Sprint Setup as tools (H2, H3; Tyler: "Every metric, control and piece of information is usable by both the user and
-  // the agent"): every field the page shows, read with its file's hash, and one file or one role row saved through the
+  // Sprint Setup as tools (H2, H3: every metric, control and piece of information is usable by both the user and the
+  // agent): every field the page shows, read with its file's hash, and one file or one role row saved through the
   // page's own guarded save (sprintFiles.write with that hash, O97): a file changed since is refused, never replaced, with
   // the files as they are now. Who may: the chats the script tools let (hooks.where). hooks.json has its own tools.
   const SETUP = /^(?:sprint\.md|rules\.md|roles\.json|roles\/[a-z0-9][a-z0-9._-]{0,63}\.(?:instructions|rules|work)\.md)$/;
