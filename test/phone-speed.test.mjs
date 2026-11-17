@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { remoteDaemon } from './helpers.mjs';
 import { phone } from './phone-c16-helpers.mjs';
 
-// Phone open speed (owner, 2026-10-29: about 2 min to open after Face ID on a work network). Opens the phone on Chrome's
+// Phone open speed (about 2 min to open after Face ID on a work network). Opens the phone on Chrome's
 // Fast 3G profile with six open chats of long history and logs, as "P9_TIME <case> <json>": the time to the first chat
 // screen ('p9-chat-painted', phone.ts), the bytes the page and the service worker fetched, and each request.
 const FAST3G = { offline: false, latency: 563, downloadThroughput: 180000, uploadThroughput: 84375 };

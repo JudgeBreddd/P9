@@ -65,7 +65,7 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
   const health = await http({ socketPath: started.credentials.socketPath, headers: authenticated(started.credentials) });
   assert.equal(health.status, 200, JSON.stringify(health));
   assert.equal(JSON.parse(health.text).version, JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
-  // Builder, 2026-11-02: the desktop's agents fetch after connecting (no network here): a body that picks none or is not
+  // The desktop's agents fetch after connecting (no network here): a body that picks none or is not
   // booleans is refused; a checkout's daemon, with no agents.json, says it is not a bundle.
   const fetchAgents = (d, body) => http({ socketPath: d.credentials.socketPath, method: 'POST', route: '/setup/agents-fetch',
     headers: { ...authenticated(d.credentials), 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -151,7 +151,7 @@ test('U8 packaged: the AppImage\'s resources/daemon, laid out as electron-builde
   const names = (m) => [...m.keys()].sort();
   assert.deepEqual(names(packaged), names(checkout), 'the same files as the checkout\'s slim P9');
   for (const [name, hash] of checkout) assert.equal(packaged.get(name), hash, name + ' differs');
-  // Only what runs (the owner, 2026-11-02): no package README, changelog or other notes; licences and notices stay.
+  // Only what runs: no package README, changelog or other notes; licences and notices stay.
   const notes = names(packaged).filter((n) => /(^|\/)(readme|changelog|history)[^/]*$|\.(md|markdown)$/i.test(n) && !/(^|\/)(licen[cs]e|notice)[^/]*$/i.test(n));
   assert.deepEqual(notes, [], 'notes were sent');
   console.log('P9_SLIM files:\n' + names(packaged).join('\n'));
@@ -196,7 +196,7 @@ test('U8 agents.mjs: a package that does not match its pin installs nothing and 
   assert.deepEqual((await readdir(s.modules)).filter((n) => n.startsWith('.agents-')), []);
 });
 
-// Builder, 2026-11-02: the slim install keeps the agents the old one had (install.sh --slim runs --keep), and the desktop
+// The slim install keeps the agents the old one had (install.sh --slim runs --keep), and the desktop
 // fetches only the ones the owner picked once connected (POST /setup/agents-fetch runs agents.mjs claude and/or codex).
 test('agents.mjs: fetches only the agents named, skips one already there, and --keep links the old install\'s instead of downloading', { skip, timeout: 30000 }, async () => {
   const s = await agentsStage(false, ['claude']), script = path.join(s.p9, 'scripts', 'agents.mjs');

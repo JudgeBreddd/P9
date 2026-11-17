@@ -1,4 +1,4 @@
-/* Test-only sample data for the UI tests; it never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
+/* Test-only sample data for the UI tests; it never ships (sample data stays out of the app).
    The desktop hands it to the page only unpackaged with P9_SAMPLE_DATA=1 (apps/desktop/main.mjs). Mirrors the real apps' shapes
    (ACP typed events, hub registry.json). */
 export const M = (() => {

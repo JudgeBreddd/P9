@@ -242,7 +242,7 @@ test('projects: delete leaves the folder, Locate, archive and back, a chat\'s Re
   assert.deepEqual(errors, []);
 });
 
-// Nightly 3 (Builder, 2026-11-09): "new prject gets cut off". A long linked path must not widen the New project dialog:
+// Nightly 3: the New project dialog was cut off. A long linked path must not widen the New project dialog:
 // nothing scrolls sideways and Create stays inside the dialog, in a small window and a desktop one.
 test('projects: the New project dialog fits a long folder path', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));

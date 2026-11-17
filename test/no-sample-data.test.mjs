@@ -1,6 +1,6 @@
 // GitHub issue #4: a fresh Windows install showed the sample data (personal-looking _tyler/ items, chats, files), and so did
-// every launch with the daemon down. the owner, 2026-10-20: "sample data should not be in the app at all ... we can keep the sample
-// data for our own tests. not the shipped app". The data lives in test/sample-data.mjs; these checks keep it there.
+// every launch with the daemon down. Sample data stays out of the shipped app
+// and is kept only for our own tests. The data lives in test/sample-data.mjs; these checks keep it there.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';

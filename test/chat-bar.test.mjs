@@ -33,7 +33,7 @@ const pickDefaults = async (page, instance, agent, want) => {
   }
   await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
 };
-// The pills (chat-view.mjs pillMenu): a pill's value is in its aria-label; its menu is #pillMenu (no submenus, Builder, 2026-11-05).
+// The pills (chat-view.mjs pillMenu): a pill's value is in its aria-label; its menu is #pillMenu (no submenus).
 const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
 const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
 const menuItem = (page, label) => page.locator('#pillMenu .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
@@ -102,7 +102,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   assert.deepEqual(await menuState(page), [true, 'Mode: Manual'], 'Escape: closed, focus back on the pill');
   assert.equal(await pillOf(pane, 'Mode').getAttribute('aria-expanded'), 'false');
   await send('mode'); await said('mode:default'); await idle();
-  // The Model menu: the agent's name as heading, its models listed directly (Builder, 2026-11-05: no "More" submenu), then Fast
+  // The Model menu: the agent's name as heading, its models listed directly (no "More" submenu), then Fast
   // mode's choices under their own heading.
   await pillOf(pane, 'Model').click(); await menu.waitFor();
   assert.equal(await heading(page), 'Claude');
@@ -360,7 +360,7 @@ test('resume shows settings that could not be restored', { timeout: 180000 }, as
   assert.deepEqual(again.errors, []);
 });
 
-// O29 (Builder, 2026-11-08): the chat that appears next in the list, made by this window; its pane, once shown.
+// O29: the chat that appears next in the list, made by this window; its pane, once shown.
 const madeNext = async (page, had) => {
   await page.waitForFunction((had) => [...document.querySelectorAll('#navList .row[data-chat]')].some((x) => !had.includes(x.dataset.chat)), had, { timeout: 15000 });
   const id = await page.locator('#navList .row[data-chat]').evaluateAll((l, had) => l.map((x) => x.dataset.chat).find((x) => !had.includes(x)), had);

@@ -102,7 +102,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   tmux(socket, ['new-window', '-d', '-t', '=' + sessionName, 'nohup sleep ' + marker + ' >/dev/null 2>&1 & sleep 1']);
   const detached = () => run('pgrep', ['-f', '^sleep ' + marker + '$'], { stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   await waitFor(() => detached(), 'detached pane job');
-  // O43 (Builder, 2026-11-09): tmux moves each new pane into its own tmux-spawn-*.scope just after starting it. The job
+  // O43: tmux moves each new pane into its own tmux-spawn-*.scope just after starting it. The job
   // above usually forks before that move and so sits in the server's unit; this one waits for the move, so it is in the
   // pane's scope, which stopping the unit alone did not end (one CI failure at the check after Stop All below).
   const lateMarker = String(Number(marker) + 1), oldMarker = String(Number(marker) + 2);
@@ -204,7 +204,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   assert.match(tmux(unrelated, ['list-sessions']), /someone-unrelated/);
   assert.deepEqual((await call(credentials, '/terminals')).body.terminals.map((item) => item.state), ['stopped']);
 
-  // O43 review (Builder, 2026-11-09): a tmux server an older P9 started is kept across the upgrade, in p9.slice, and its
+  // O43 review: a tmux server an older P9 started is kept across the upgrade, in p9.slice, and its
   // panes' scopes are made beside it, not in this socket's slice. Start one the way the older daemon did; Stop All must
   // still end a job detached in one of its pane scopes.
   run('systemd-run', ['--user', '--quiet', '--collect', '--slice=p9.slice', '--unit', tmuxUnit, '--property=KillMode=control-group',

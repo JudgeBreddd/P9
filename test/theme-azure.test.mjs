@@ -1,5 +1,5 @@
 // O17: the Event Horizon Azure theme (p9-event-horizon-azure). Its colours are the contract from the theme's spec
-// (Builder, 2026-11-07: "The HEX values and mappings in this file are the implementation contract"). This file checks
+// (the spec's hex values and mappings are the implementation contract). This file checks
 // the shipped files against that contract; dev.test.mjs "Event Horizon Azure" checks the real rendering.
 import test from 'node:test';
 import assert from 'node:assert/strict';

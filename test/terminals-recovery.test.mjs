@@ -185,7 +185,7 @@ test('a missing tmux binary says tmux-not-found on list and create, and works on
   assert.deepEqual(JSON.parse(result.stdout), { first: 'tmux-not-found', made: { status: 503, error: 'tmux-not-found' }, later: 'rows:0' });
 });
 
-// O43 re-check (Builder, 2026-11-09): Stop All with a fake user bus. The fake systemctl logs every call and answers the
+// O43 re-check: Stop All with a fake user bus. The fake systemctl logs every call and answers the
 // owner query (MainPID, Slice, start time) and the pane-scope list as given; tmux has no sessions left.
 async function stopAllWith(owner) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-fakebus-')), runtime = path.join(dir, 'runtime'), calls = path.join(dir, 'calls');

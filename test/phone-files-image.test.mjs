@@ -1,4 +1,4 @@
-// Phone Files pane images (threat model rows 23/26/27 adds; the owner, 2026-10-29: build it in v0.1.6): the phone's file view
+// Phone Files pane images (threat model rows 23/26/27 adds; built in v0.1.6): the phone's file view
 // shows a workspace image read-only, through GET /files/image under the phone's own root, with the desktop's checks and words.
 // The dev space keeps no files: pictures go out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
 import test from 'node:test';

@@ -214,7 +214,7 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   assert.match(stop, /Stop-ScheduledTask -TaskName \$taskName[^]*\(-not \$dev -and \$_\.ExecutablePath -eq \$bundled\)[^]*Stop-Process[^]*Wait-Process/, 'the script ends the bundled daemon before it registers');
   // Finding 2: a payload it cannot read threw, so every reinstall and the app's repair failed.
   assert.match(ps1, /try \{\s*\$old = [^\n]*FromBase64String[^]*\} catch \{[^\n]*\$Workspace = \$null \}\s*\}\s*if \(-not \$Workspace\)/, 'an unreadable payload falls to the default folder');
-  // the owner 2026-10-22, Fable review finding 1: a saved folder not there now (an unplugged drive) failed every reinstall with
+  // Review finding 1: a saved folder not there now (an unplugged drive) failed every reinstall with
   // workspace-not-found; replacing it with the default lost it for good. The task keeps it, logged; the daemon falls back.
   assert.match(ps1, /\$Workspace = \$old\.argv\[\$i \+ 1\][^]*if \(\$Workspace -and -not \(Test-Path -LiteralPath \$Workspace -PathType Container\)\) \{\s*Say \('saved workspace ' \+ \$Workspace \+ ' is not there now; the task keeps it[^\n]*\s*\$away = \$true\s*\}\s*\} catch/, 'a missing saved folder stays in the task and is logged');
   assert.match(ps1, /if \(-not \$away -and -not \(Test-Path -LiteralPath \$Workspace -PathType Container\)\) \{ throw 'workspace-not-found' \}/, 'only an explicit -Workspace must exist');
