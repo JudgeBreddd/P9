@@ -597,6 +597,31 @@ test('Delegate: after a restart the top chat of a sprint that was cut mid-turn g
   console.log('PASS Delegate restart wake: one line to the working sprint\'s top chat after a SIGTERM restart, no chat of the idle sprint started, none on the third start');
 });
 
+// daemon-5: a note waiting for a chat's next prompt survives a P9 restart, keeps its sender, and goes once.
+test('Delegate: a waiting note survives a P9 restart and goes with the chat\'s next prompt, once, as a note from its sender', { timeout: 180000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'hello', title: 'Kid' });
+  await a.done(made.chat);
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'for after the restart', when: 'note' })).sent, 'as a note: it reads it with its next message');
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  instance = await restart(t, instance, 'state-2');
+  const mark = (await call(instance, '/chat/events?after=0')).body.cursor;
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'hello again' });
+  const got = await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', mark);
+  const said = (await events(instance, made.chat)).filter((e) => e.cursor > mark && typeof e.data?.content?.text === 'string').map((e) => e.data.content.text);
+  assert.ok(said.includes('note:for after the restart'), 'the waiting note was lost in the restart: ' + JSON.stringify(said));
+  const sent = (await events(instance, made.chat)).filter((e) => e.cursor > mark && e.type === 'user');
+  assert.equal(sent.length, 1);
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'and again' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', got.cursor);
+  const all = (await events(instance, made.chat)).map((e) => e.data?.content?.text).filter((x) => typeof x === 'string');
+  assert.equal(all.filter((x) => x === 'note:for after the restart').length, 1, 'the waiting note went twice');
+  console.log('PASS daemon-5: a waiting note went with the first prompt after a SIGTERM restart, as a note from its sender, and only once');
+});
+
 test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first worker even in Unrestricted; Off refuses; each worker starts on its own Settings row; a provider, model or effort open_chat names that no free row starts is refused by field; no more workers than Workers per chat', { timeout: 180000 }, async (t) => {
   const instance = await boot(t);
   const set = (body) => call(instance, '/delegation', 'POST', body);
