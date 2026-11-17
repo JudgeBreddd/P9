@@ -9,12 +9,18 @@ const ALLOW = new Set(['HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LANG
   'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME', 'LC_ADDRESS',
   'LC_IDENTIFICATION', 'LC_MEASUREMENT', 'LC_NAME', 'LC_PAPER', 'LC_TELEPHONE']);
 
-export const allowed = (key, platform = process.platform) => platform === 'win32'
-  ? [...ALLOW].some((name) => name.toLowerCase() === key.toLowerCase())
-  : ALLOW.has(key);
+// PD-2: what the package-manager and download starts (server.mjs build, update.mjs update, setup-routes.mjs agents fetch)
+// need on top: the owner's proxy and extra CA certificates, and where pnpm and corepack keep themselves. By name, never
+// npm_config_*: that would pass npm_config__authToken. Registry logins stay in the home folder's .npmrc.
+export const TOOL_NAMES = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'PNPM_HOME', 'COREPACK_HOME'];
 
-export function childEnv(source = process.env, platform = process.platform) {
-  const env = Object.fromEntries(Object.entries(source).filter(([key]) => allowed(key, platform)));
+export const allowed = (key, platform = process.platform, extra = []) => platform === 'win32'
+  ? [...ALLOW, ...extra].some((name) => name.toLowerCase() === key.toLowerCase())
+  : ALLOW.has(key) || extra.includes(key);
+
+// extra: more names to pass when set (only TOOL_NAMES, from the three starts above).
+export function childEnv(source = process.env, platform = process.platform, extra = []) {
+  const env = Object.fromEntries(Object.entries(source).filter(([key]) => allowed(key, platform, extra)));
   // A unit from before install-service recorded the installer's PATH starts with systemd's bare PATH after a reboot,
   // so tmux and agent CLIs in ~/.local/bin (systemd's user-binaries directory) went missing. Appended, so it never
   // shadows a system binary.

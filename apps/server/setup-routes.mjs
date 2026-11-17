@@ -10,6 +10,7 @@ import { createDirectory, createFile } from '../../packages/files/index.mjs';
 import { SETTINGS } from './mission-fields.mjs';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import { childEnv, TOOL_NAMES } from './child-env.mjs';
 
 export function setupRoutes(outer) {
   // The wizard's own paths, checked as settings.json would be: only the four keys, each workspace-relative.
@@ -181,7 +182,7 @@ export function setupRoutes(outer) {
     outer.agentsFetching = true;
     let done;
     try {
-      done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: outer.AGENTS_FETCH_MS, maxBuffer: 1024 * 1024 },
+      done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: outer.AGENTS_FETCH_MS, maxBuffer: 1024 * 1024, env: childEnv(process.env, process.platform, TOOL_NAMES) },
         (error, stdout, stderr) => resolve(error ? (String(stderr).trim().split('\n').pop() || error.message) : null)));
     } finally { outer.agentsFetching = false; }
     return outer.reply(c, done ? { status: 500, error: 'agents-not-fetched', detail: done.slice(0, 300) } : { status: 200, fetched: names });

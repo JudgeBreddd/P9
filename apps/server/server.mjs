@@ -14,6 +14,7 @@ import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS
 import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
+import { childEnv, TOOL_NAMES } from './child-env.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
 import { SETTINGS, SPACES_DIR, TEMPLATES } from './mission-fields.mjs';
 import { GUIDE, buildPrompt } from './templates/guide.mjs';
@@ -150,7 +151,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const [command, args] = stand ? [stand, []] : ['pnpm', ['build']];
     const started = Date.now();
     console.error(JSON.stringify({ event: 'P9_REBUILD_STARTED', device, command: [path.basename(command), ...args].join(' ') }));
-    execFile(command, args, { cwd: checkout, timeout: 600_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, PATH: toolPath() } }, (error, _stdout, stderr) => {
+    execFile(command, args, { cwd: checkout, timeout: 600_000, maxBuffer: 16 * 1024 * 1024, env: { ...childEnv(process.env, process.platform, TOOL_NAMES), PATH: toolPath() } }, (error, _stdout, stderr) => {
       console.error(JSON.stringify({ event: 'P9_REBUILD_DONE', device, ok: !error, ms: Date.now() - started }));
       resolve(error ? { status: 500, error: 'build-failed', detail: String(stderr).trim().split('\n').slice(-3).join('\n').slice(0, 300) } : { status: 200, rebuilt: true });
     });

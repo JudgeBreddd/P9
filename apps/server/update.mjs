@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendPiece, checkStaged, validPiece } from './pieces.mjs';
 import { unitOf } from './windows.mjs';
+import { childEnv, TOOL_NAMES } from './child-env.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, HASH = /^[0-9a-f]{64}$/, COMMIT = /^[0-9a-f]{40}$/;
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
@@ -75,7 +76,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
 
   async function log(text) { if (job) { job.log = (job.log + text).slice(-LOG_TAIL); await writeFile(path.join(folder, job.id + '.log'), job.log, { mode: 0o600 }).catch(() => {}); } }
   function run(command, args, cwd, timeout = BUILD_MS) {
-    return new Promise((resolve) => execFile(command, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PATH: toolPath(), CI: '1' } },
+    return new Promise((resolve) => execFile(command, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...childEnv(process.env, process.platform, TOOL_NAMES), PATH: toolPath(), CI: '1' } },
       async (error, stdout, stderr) => { await log('$ ' + [command, ...args].join(' ') + '\n' + stdout + stderr); resolve({ ok: !error, stdout }); }));
   }
 

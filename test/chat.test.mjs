@@ -507,27 +507,27 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
 
 // PD-1 (b): every process the server starts is given childEnv() as its environment, read from the source. On top of it
 // only launchTree (process-tree.mjs) adds names it is handed for one child (O48: a profile chat's model names); any other
-// start may add only the fixed flags below. The starts listed in KNOWN do not use childEnv yet: an open question
-// (OPEN-ITEMS-0.1.9 PD-2), kept here by file with their exact shape, so a new one fails, a changed one fails, and a fixed one must leave the list.
+// start may add only the fixed flags below. PD-2: the build, the update and the agents fetch (TOOLS below) alone may pass
+// child-env.mjs's TOOL_NAMES too (proxy, CA certificates, pnpm's and corepack's homes). KNOWN is empty: a start that
+// cannot follow the rule yet goes there by file with its exact shape, so a new one fails, a changed one fails, and a fixed one must leave the list.
 test('every process the server starts gets childEnv(); only launchTree adds names to it, others only fixed flags', async () => {
   const FIXED = { P9_PHONE: 'terminal opened from the phone', P9_NO_GREETING: 'terminal welcome hidden',
-    GIT_TERMINAL_PROMPT: 'git never asks', GIT_OPTIONAL_LOCKS: 'git status takes no lock', SSH_ASKPASS_REQUIRE: 'git never asks', GIT_PAGER: 'git never pages' };
-  const KNOWN = [ // [file, words in the start's line, what is wrong with it exactly]: open question, held to that shape
-    ['server.mjs', 'execFile(command, args, { cwd: checkout', 'not childEnv(): { ...process.env, PATH: toolPath() }'],
-    ['update.mjs', 'execFile(command, args, { cwd, timeout', "not childEnv(): { ...process.env, PATH: toolPath(), CI: '1' }"],
-    ['setup-routes.mjs', 'execFile(process.execPath, [script', "no env: it inherits the daemon's"],
-  ];
-  // The text of the value after `key:` (a balanced { } or one token), or null.
+    GIT_TERMINAL_PROMPT: 'git never asks', GIT_OPTIONAL_LOCKS: 'git status takes no lock', SSH_ASKPASS_REQUIRE: 'git never asks', GIT_PAGER: 'git never pages',
+    PATH: 'toolPath(): the daemon\'s own node folder too, for pnpm', CI: 'the update\'s pnpm runs non-interactive' };
+  const TOOLS = ['server.mjs', 'update.mjs', 'setup-routes.mjs'], WITH_TOOLS = 'childEnv(process.env, process.platform, TOOL_NAMES)';
+  const KNOWN = []; // [file, words in the start's line, what is wrong with it exactly]: open question, held to that shape
+  // The text of the value after `key:` (a balanced { }, a call with flat arguments, or one token), or null.
   const value = (text, at) => {
-    if (text[at] !== '{') return /^[^,}\n]*/.exec(text.slice(at))[0].trim();
+    if (text[at] !== '{') return /^[\w.]+\([^()]*\)|^[^,}\n]*/.exec(text.slice(at))[0].trim();
     for (let depth = 0, i = at; i < text.length; i += 1) { depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0; if (!depth) return text.slice(at, i + 1); }
     return null;
   };
   // What is wrong with one environment object's text, or ''.
   const judge = (object, file) => {
-    if (object === 'childEnv()') return '';
-    if (!object.startsWith('{ ...childEnv(),')) return 'not childEnv(): ' + object.slice(0, 80);
-    const rest = object.slice('{ ...childEnv(),'.length, -1);
+    const base = TOOLS.includes(file) && object.includes(WITH_TOOLS) ? WITH_TOOLS : 'childEnv()';
+    if (object === base) return '';
+    if (!object.startsWith('{ ...' + base + ',')) return 'not childEnv(): ' + object.slice(0, 80);
+    const rest = object.slice(('{ ...' + base + ',').length, -1);
     for (const spread of rest.matchAll(/\.\.\.\s*([\w.]+|\()/g)) {
       if (spread[1] === '(') { // only `...(test ? { NAME: 'x' } : {})`, both sides written out
         if (!/^\.\.\.\s*\([^?{}]*\?\s*\{[^{}]*\}\s*:\s*\{[^{}]*\}\s*\)/.test(rest.slice(spread.index))) return 'adds names it was handed: ' + rest.slice(spread.index, spread.index + 60);
