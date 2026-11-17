@@ -1144,6 +1144,13 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
   await until(async () => (await fact('ticked')) === '2 of 3', async () => 'the page never followed the plan: ' + await fact('ticked'), 12000);
   assert.equal(await page.locator('[data-sv-item="A2"] .tag').textContent(), 'Ticked, not reviewed');
+  // I1's plan line: no "## Phase" heading so far, so no line; headings give "N of N steps in <phase>, N of N phases".
+  assert.equal(await page.locator('[data-sv-phase]').count(), 0, 'a plan with no phase heading has no phase line');
+  await writeFile(path.join(run.folder, 'sprint.md'), '# Plan\n\n## Phase 1: the page\n- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead\n\n## Phase 2: the docs\n- [ ] B1: write it up; role docs\n');
+  await until(async () => (await page.locator('[data-sv-phase]').textContent().catch(() => '')) === '0 of 2 steps in Phase 1: the page, 0 of 2 phases', async () => 'phase line: ' + await page.locator('[data-sv-phase]').textContent().catch(() => 'none'), 12000);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-phases ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
+  await until(async () => (await page.locator('[data-sv-phase]').count()) === 0, 'the phase line left with the headings', 12000);
   // Scripts are counted once each: one approved at Start, one approved after it, one still waiting is "2 running, 1 waiting".
   const hash = (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash;
   const ok = await call(instance, `/sprints/${run.sprint}/approve-scripts`, 'POST', { hash, names: ['later'] });
@@ -1218,6 +1225,89 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   console.log('PASS Close sprint page: the press asked first and Cancel closed nothing; a before-close exit 1 was said beside the button and the sprint stayed open; the next press closed it: Closed sprint, by you, Ran, the lead Stopped, no Close and no Start, equal to the status route; a box ticked after Close changed nothing; the project page\'s button says Closed');
 });
 
+// Row 697 A: Instructions typed and then left by the side panel (a chat, another project) inside the 600 ms were dropped:
+// the timer ran after the page was emptied and found no box. They are sent as the page is left. B, C: a role's row on
+// Sprint Setup sets what it owns and its mode (permissions), both kept in roles.json with the rest of the file.
+test('projects: Instructions left by the side panel are saved; Sprint Setup sets a role\'s owns and mode', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Leaving', work: { kind: 'new', parent: '', name: 'leaving' } })).project;
+  const other = (await call(instance, '/projects', 'POST', { name: 'Elsewhere', work: { kind: 'new', parent: '', name: 'elsewhere' } })).project;
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Owned prep' });
+  await writeFile(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'leaving', roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: 'codex', model: '', effort: '', mode: 'Read-only' }] }, null, 2));
+  const { page, app } = await launch(t, instance);
+  const saved = async () => (await call(instance, '/projects/' + p.id)).project.instructions ?? '';
+  const typeThenLeave = async (text, leave) => {
+    await page.locator(`#navList [data-proj="${p.id}"]`).click();
+    await page.locator('#pjName').waitFor({ timeout: 10000 });
+    if (!await page.locator('#pjInstr').count()) await page.locator('#projPage [data-pj=edit]').click();
+    await page.locator('#pjInstr').fill(text);
+    await leave(); // no wait: the 600 ms save has not run
+    await new Promise((go) => setTimeout(go, 1500));
+    return saved();
+  };
+  assert.equal(await typeThenLeave('Left by a chat.', () => page.locator(`#navList .row[data-chat="${chat}"]`).click()), 'Left by a chat.', 'Instructions typed then a chat clicked in the side panel were lost');
+  assert.equal(await typeThenLeave('Left by a project.', () => page.locator(`#navList [data-proj="${other.id}"]`).click()), 'Left by a project.', 'Instructions typed then another project clicked were lost');
+  assert.equal((await call(instance, '/projects/' + other.id)).project.instructions ?? '', '', 'the text went to the project it was typed in, not the one opened');
+  // A refused save on a side-panel leave: the exact text is kept for its project, shown again when that project opens, and
+  // sent to that project only, not to the one opened meanwhile. A rename onto a folder that has a file in it fails, also as root.
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const base = (await Promise.all(bases.map((b) => stat(path.join(b, 'projects', p.id)).then(() => b, () => null)))).find(Boolean);
+  assert.ok(base, 'found P9\'s projects folder');
+  const instrFile = path.join(base, 'projects', p.id, 'instructions.md');
+  const otherSaved = async () => (await call(instance, '/projects/' + other.id)).project.instructions ?? '';
+  let before = 'Left by a project.';
+  for (const [text, leave] of [['Refused, then a chat.\nSecond line kept.', () => page.locator(`#navList .row[data-chat="${chat}"]`).click()], ['Refused, then a project.', () => page.locator(`#navList [data-proj="${other.id}"]`).click()]]) {
+    await page.locator(`#navList [data-proj="${p.id}"]`).click();
+    await page.locator('#pjName').waitFor({ timeout: 10000 });
+    if (!await page.locator('#pjInstr').count()) await page.locator('#projPage [data-pj=edit]').click();
+    await rm(instrFile, { force: true }); await mkdir(path.join(instrFile, 'blocked'), { recursive: true });
+    await page.locator('#pjInstr').fill(text);
+    await leave();
+    await page.locator('#pjInstr').waitFor({ state: 'detached', timeout: 5000 });
+    await new Promise((go) => setTimeout(go, 1500));
+    assert.ok(existsSync(path.join(instrFile, 'blocked')), 'the save could not have landed: the block is still there');
+    await rm(instrFile, { recursive: true, force: true }); await writeFile(instrFile, before); // the cause is gone, the saved text back; nothing has sent the new text again yet
+    assert.deepEqual([await saved(), await otherSaved()], [before, ''], 'the save was refused, and nothing went to the project opened instead');
+    await page.locator(`#navList [data-proj="${p.id}"]`).click();
+    await until(async () => (await page.locator('#pjInstr').inputValue().catch(() => '')) === text, async () => 'the refused text was not shown again: ' + JSON.stringify(await page.locator('#pjInstr').inputValue().catch(() => 'no box')));
+    await until(async () => (await saved()) === text, async () => 'the kept text was not sent again to its project: ' + JSON.stringify(await saved()));
+    await until(async () => (await page.locator('[data-pj-draft]').count()) === 0, 'the not-saved line left after the save');
+    assert.equal(await otherSaved(), '', 'the other project still has none');
+    before = text;
+  }
+
+  // B, C on the sprint's page.
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click();
+  const owns = page.locator(`[data-sp-owns][data-role="lead"][data-lead="${prep.sprint}"]`), mode = (role) => page.locator(`select[data-spr="mode"][data-role="${role}"][data-lead="${prep.sprint}"]`);
+  await owns.waitFor({ timeout: 10000 });
+  assert.equal(await mode('review').inputValue(), 'Read-only', 'the review row shows the mode roles.json has');
+  assert.deepEqual(await mode('review').locator('option').allTextContents(), ['Not set', 'Read-only', 'Workspace access', 'Auto review', 'Full access'], 'a codex row lists codex\'s modes');
+  const rolesNow = async () => { for (;;) { try { return JSON.parse(await readFile(path.join(prep.folder, 'roles.json'), 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; await new Promise((go) => setTimeout(go, 50)); } } }; // the hash-checked save moves the old file aside for a moment
+  await owns.fill('the window, Settings'); await owns.press('Enter');
+  await until(async () => (await rolesNow()).roles[0].owns === 'the window, Settings', 'owns saved to roles.json');
+  await mode('lead').selectOption('Plan');
+  await until(async () => (await rolesNow()).roles[0].mode === 'Plan', 'mode saved to roles.json');
+  await mode('review').selectOption('');
+  await until(async () => !('mode' in (await rolesNow()).roles[1]), 'Not set removes the mode');
+  const r = await rolesNow();
+  assert.deepEqual([r.folder, r.roles.map((x) => x.key), r.roles[0].owns, r.roles[0].mode], ['leaving', ['lead', 'review'], 'the window, Settings', 'Plan'], 'the rest of roles.json is kept');
+  await owns.fill(''); await owns.press('Enter');
+  await until(async () => !('owns' in (await rolesNow()).roles[0]), 'an emptied owns removes the key');
+  await owns.fill('the window, Settings'); await owns.press('Enter');
+  await until(async () => (await rolesNow()).roles[0].owns === 'the window, Settings', 'owns saved again');
+  const shot = async (name) => { if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); };
+  await shot('row697-roles');
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.7)); // about 820 px of page in the test's 1400 px window
+  await new Promise((go) => setTimeout(go, 400));
+  await shot('row697-roles-820');
+  const [over, wide] = await page.evaluate(() => [[...document.querySelectorAll('.sp-role')].filter((el) => el.scrollWidth > el.clientWidth + 1).length, innerWidth]);
+  assert.ok(wide < 900, 'the zoom did not narrow the page: ' + wide);
+  assert.equal(over, 0, 'a role row runs past its box at 820 px');
+  console.log('PASS Instructions left by the side panel: saved after a chat click and after another project click, to the project typed in; a refused save on a chat leave and a project leave kept the exact text, showed it again on reopening and saved it to its own project only; Sprint Setup role rows: owns and mode saved to roles.json, Not set / empty remove the key, folder and rows kept, no row overflows at 820 px');
+});
+
 test('projects: a sprint page shows why its roles.json does not read, and follows the file when it changes', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const p = (await call(instance, '/projects', 'POST', { name: 'Broken roles', work: { kind: 'new', parent: '', name: 'broken' } })).project;
@@ -1255,4 +1345,35 @@ test('projects: a sprint page shows why its roles.json does not read, and follow
   await until(async () => (await row('docs').count()) === 1 && (await why.count()) === 0, 'the rows after the file was made again', 20000);
   if (!process.env.GITHUB_ACTIONS) { await writeFile(file, broken); await why.waitFor({ timeout: 20000 }); console.log('P9_SHOT o138-roles-error ' + (await page.screenshot({ type: 'png' })).toString('base64')); }
   console.log('PASS roles.json that does not read: opened from its button after a break, the parse error shown with no rows; fixed on disk, the rows back with no click; cut off while open and not a roles list, each reason shown; fixed again, the rows; deleted, it says missing and stays listed; written back, the rows');
+});
+
+// #235 review: the Roles rows load with sprint-view.mjs. With that chunk held while the owner types in a sprint file, the
+// rows still come in when it lands, and the file box keeps its focus and its text.
+test('projects: Sprint Setup roles come in when their late chunk lands, a focused file box kept as it was', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Held', work: { kind: 'new', parent: '', name: 'held' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Held prep' });
+  await writeFile(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'held', roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: 'codex', model: '', effort: '' }] }, null, 2));
+  const { page, app } = await launch(t, instance);
+  // The chunk is held until the test lets it go (the way sprint-copy-late.test.mjs holds its own); everything else loads.
+  await app.evaluate(({ session }) => {
+    globalThis.held = []; globalThis.release = () => { globalThis.held.splice(0).forEach((go) => go({})); };
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => { if (/\/sprint-view[.-]/.test(details.url)) globalThis.held.push(callback); else callback({}); });
+  });
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click();
+  await page.locator('[data-sp-roles-wait]').waitFor({ timeout: 10000 });
+  await page.locator(`[data-pj="spfile"][data-lead="${prep.sprint}"][data-name="sprint.md"]`).click();
+  const box = page.locator(`[data-sp-box][data-lead="${prep.sprint}"]`);
+  await box.waitFor({ timeout: 5000 });
+  await box.press('End'); await box.pressSequentially(' typed while held');
+  const typed = await box.inputValue();
+  assert.ok(await app.evaluate(() => globalThis.held.length) >= 1, 'the chunk was requested and held');
+  assert.equal(await page.locator('[data-sp-roles] [data-role-row]').count(), 0, 'no role rows before the chunk lands');
+  await app.evaluate(() => globalThis.release());
+  await until(async () => (await page.locator('[data-sp-roles] [data-role-row="lead"]').count()) === 1, async () => 'the role rows did not come in after the chunk landed: ' + JSON.stringify(await page.locator('[data-sprint]').innerText().catch(() => 'no section')));
+  assert.equal(await page.locator('[data-sp-roles-wait]').count(), 0, 'the waiting heading is gone');
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sp-box]') ?? false), true, 'the file box kept the focus');
+  assert.equal(await box.inputValue(), typed, 'the file box kept the text typed while the chunk was held');
+  console.log('PASS Sprint Setup late roles: with sprint-view.mjs held and sprint.md focused and typed in, the role rows came in when it landed; the box kept its focus and its text');
 });

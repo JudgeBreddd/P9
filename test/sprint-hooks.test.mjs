@@ -209,7 +209,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.deepEqual(bs.sprint, { id: sprint, title: 'Scripts', folder: s.folder, started: null });
   assert.equal(bs.cwd, fs.realpathSync(s.folder), 'a script runs in the sprint folder');
   assert.deepEqual(bs.project, { id: project, name: 'Fresh' });
-  assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null }]);
+  assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null, owns: null }]);
   assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, review: null }]);
   assert.deepEqual([bs.workers, bs.verdicts], [[], []]);
   assert.equal(bs.log.length, 5, 'the earlier refusal and the four held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
@@ -829,4 +829,95 @@ test('Close sprint held: a lock during before-close stops nothing; a worker that
   assert.deepEqual([await stateOf(sprint), await stateOf(w1.chat) === 'stopped'], ['stopped', false], 'the calling worker was stopped with its lead');
   assert.equal((await status()).closed.by, w1.chat);
   console.log('PASS Close held: the lock turned on during a blocking before-close refused agent-lock-on with nothing stopped or recorded; the worker\'s own close stopped only the lead and left the worker running');
+});
+
+// Sprint Setup as tools (row 697; Tyler: "Every metric, control and piece of information is usable by both the user and
+// the agent"): sprint_setup reads every Setup field with its file's hash; sprint_setup_save writes one file or one role row
+// through the page's guarded save, so a stale hash is refused and nothing is written. A role's owns and mode are kept,
+// and Start takes a row with owns. Sprint View's phases come from the plan's "## Phase" headings.
+test('Sprint Setup tools: every field read with its hash, a file and a role row saved, a stale hash refused for each, owns taken at Start, the plan\'s phases counted', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  const project = (await call(instance, '/projects', 'POST', { name: 'Setup', work: { kind: 'new', parent: '', name: 'setup' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Tooled' })).body, sprint = s.sprint;
+  // owns and mode on a row: Start takes them (main refused any key but key, provider, model, effort, mode).
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: 'Auto', owns: 'the plan and the merges' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  let got = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
+  assert.equal(got.status, 200, 'Start with owns on the lead\'s row: ' + JSON.stringify(got.body));
+  const L = await attach(t, instance, sprint);
+  const file = (name) => fs.readFileSync(path.join(s.folder, name), 'utf8');
+
+  // Read: every Setup file with its hash, the missing ones, the rows.
+  let setup = await L.tool('sprint_setup');
+  assert.equal(setup.error, undefined, JSON.stringify(setup).slice(0, 300));
+  const hashIn = (name) => setup.files.find((f) => f.name === name)?.hash;
+  assert.equal(hashIn('roles.json'), hashOf(file('roles.json')));
+  assert.ok(setup.files.every((f) => !f.name.startsWith('notes/') && f.name !== 'hooks.json'), 'only Setup files: ' + setup.files.map((f) => f.name));
+  assert.deepEqual([setup.roles[0].owns, setup.roles[0].mode, setup.started, setup.missing.includes('rules.md')], ['the plan and the merges', 'Auto', true, true], JSON.stringify(setup).slice(0, 400));
+
+  // A whole file: saved with its hash; a stale hash refused, the file as the other writer left it.
+  const plan0 = file('sprint.md');
+  got = await L.tool('sprint_setup_save', { name: 'sprint.md', text: '# Plan\n', hash: hashIn('sprint.md') });
+  assert.deepEqual([got.error, got.hash, file('sprint.md')], [undefined, hashOf('# Plan\n'), '# Plan\n'], JSON.stringify(got));
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Theirs\n'); // another writer, after the read
+  got = await L.tool('sprint_setup_save', { name: 'sprint.md', text: '# Mine\n', hash: hashOf('# Plan\n') });
+  assert.deepEqual([got.error, file('sprint.md'), got.files?.find((f) => f.name === 'sprint.md')?.text], ['sprint-file-changed', '# Theirs\n', '# Theirs\n'], 'stale hash, file: ' + JSON.stringify(got).slice(0, 300));
+  assert.notEqual(plan0, '# Theirs\n');
+  // A file not made yet: "" makes it, and "" again is refused (it is there now).
+  got = await L.tool('sprint_setup_save', { name: 'rules.md', text: 'Be brief.', hash: '' });
+  assert.deepEqual([got.error, file('rules.md')], [undefined, 'Be brief.']);
+  assert.equal((await L.tool('sprint_setup_save', { name: 'rules.md', text: 'x', hash: '' })).error, 'sprint-file-changed');
+  // Names outside Setup are refused: hooks.json, notes, the review trail, a way out of the folder.
+  for (const name of ['hooks.json', 'notes/lead.md', 'review-trail.md', '../x.md', 'roles/../../x.instructions.md'])
+    assert.equal((await L.tool('sprint_setup_save', { name, text: 'x', hash: '' })).error, 'request-refused', name);
+
+  // One role row: a new worker added, owns and mode set, then a stale roles.json hash refused with nothing written.
+  setup = await L.tool('sprint_setup');
+  got = await L.tool('sprint_setup_save', { role: { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low', owns: 'the window' }, hash: hashIn('roles.json') });
+  assert.equal(got.error, undefined, JSON.stringify(got));
+  let rows = JSON.parse(file('roles.json')).roles;
+  assert.deepEqual(rows.map((r) => [r.key, r.owns ?? null]), [['lead', 'the plan and the merges'], ['w1', 'the window']]);
+  assert.equal(JSON.parse(file('roles.json')).folder, 'repo', 'the rest of roles.json is kept');
+  got = await L.tool('sprint_setup_save', { role: { key: 'w1', mode: 'Plan', owns: '' }, hash: got.hash });
+  rows = JSON.parse(file('roles.json')).roles;
+  assert.deepEqual([got.error, rows[1].mode, 'owns' in rows[1], rows[1].model], [undefined, 'Plan', false, 'haiku'], JSON.stringify(rows));
+  const before = file('roles.json');
+  got = await L.tool('sprint_setup_save', { role: { key: 'w1', owns: 'stale' }, hash: hashIn('roles.json') }); // the hash of the first read
+  assert.deepEqual([got.error, file('roles.json')], ['sprint-file-changed', before], 'stale hash, role row');
+  got = await L.tool('sprint_setup_save', { remove_role: 'w1', hash: hashIn('roles.json') });
+  assert.deepEqual([got.error, file('roles.json')], ['sprint-file-changed', before], 'stale hash, remove_role');
+  setup = await L.tool('sprint_setup');
+  assert.ok(setup.missing.includes('roles/w1.instructions.md'), 'a new role\'s three files are listed as missing: ' + setup.missing);
+  assert.equal((await L.tool('sprint_setup_save', { remove_role: 'lead', hash: hashIn('roles.json') })).error, 'request-refused');
+  assert.equal((await L.tool('sprint_setup_save', { role: { key: 'w1', shell: 'yes' }, hash: hashIn('roles.json') })).error, 'request-refused');
+  assert.equal((await L.tool('sprint_setup_save', { role: { key: 'w1', owns: 'x'.repeat(501) }, hash: hashIn('roles.json') })).error, 'request-refused');
+  got = await L.tool('sprint_setup_save', { remove_role: 'w1', hash: hashIn('roles.json') });
+  assert.deepEqual([got.error, JSON.parse(file('roles.json')).roles.map((r) => r.key)], [undefined, ['lead']]);
+  // A roles.json that does not parse: the read says why; a row save is refused; the whole file can still be saved.
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), '{ "roles": [');
+  setup = await L.tool('sprint_setup');
+  assert.match(setup.roles_error ?? '', /does not parse/);
+  assert.equal((await L.tool('sprint_setup_save', { role: { key: 'w2' }, hash: hashIn('roles.json') })).error, 'request-refused');
+  // The agent lock refuses a save and leaves the read.
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).status, 200);
+  assert.equal((await L.tool('sprint_setup_save', { name: 'rules.md', text: 'locked', hash: hashOf('Be brief.') })).error, 'agent-lock-on');
+  assert.equal(file('rules.md'), 'Be brief.');
+  assert.equal((await L.tool('sprint_setup')).error, undefined);
+  await call(instance, '/agent-lock', 'POST', { on: false });
+
+  // Phases: the plan's "## Phase" headings, each with its items passed and total; none: [] and no current phase.
+  const status = async () => (await call(instance, `/sprints/${sprint}/status`)).body;
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] Z0: above any phase\n\n## Phase 1: install\n- [x] A1: one; role w1\n- [ ] A2: two\n\n### Phase 2 — ship\n- [ ] B1: three\n');
+  let st = await status();
+  assert.deepEqual([st.phases, st.phase_now], [[{ title: 'Phase 1: install', passed: 0, total: 2 }, { title: 'Phase 2 — ship', passed: 0, total: 1 }], 0], JSON.stringify([st.phases, st.phase_now]));
+  assert.deepEqual((await L.tool('sprint_status')).phases, st.phases, 'the tool gives the same phases');
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: one\n');
+  st = await status();
+  assert.deepEqual([st.phases, st.phase_now], [[], null]);
+  console.log('PASS Sprint Setup tools: read every Setup file with its hash and the rows (owns, mode); a file, a new file ("") and a role row saved; a stale hash refused for a file, a row and a removal with nothing written; names outside Setup refused; lock refuses the save; Start took owns; phases 2 from the headings (0 of 2, 0 of 1, current 0), none = [] / null');
 });
