@@ -80,7 +80,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
       + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
     input({ chat, after: { type: 'integer', minimum: 0 }, view: { type: 'string', enum: ['messages', 'activity'] } }, ['chat'])],
-    ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether, which frees their places. A chat the user stops takes the chats it started with it.',
+    ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether, which frees their places, and archived (archive_chat with archived: false brings one back). A chat the user stops takes the chats it started with it.',
       input({ chat, close: { type: 'boolean' } }, ['chat'])],
     ['archive_chat', 'Move a chat you started to Archived when its work is done (archived: false brings it back). Nothing is deleted: the user can open or unarchive it. A chat that is working or waiting on an answer is refused: stop it first.',
       input({ chat, archived: { type: 'boolean' } }, ['chat'])],
@@ -157,6 +157,8 @@ export function createDelegate({ chat, allowed, usage }) {
   const tierOf = (provider, mode) => TIER[provider]?.[mode];
   // The widest mode of provider at or under tier.
   const under = (provider, tier) => Object.entries(TIER[provider]).filter(([, t]) => t <= tier).sort((a, b) => b[1] - a[1])[0]?.[0];
+  // Archives each chat the way archive_chat does (no state check: the caller has just stopped them); the ids it archived.
+  const shelve = (ids) => ids.filter((id) => chat.projects.chats.archive(id, { archived: true }).status === 200);
   // The chats a caller started, directly or through one of them.
   const below = (family, id) => {
     const found = [];
@@ -857,7 +859,11 @@ export function createDelegate({ chat, allowed, usage }) {
       if (result.status === 200) stopped.push(id);
       else if (args.close) return { error: 'stop-failed', chat: id, stopped };
     }
-    return { chat: args.chat, action: args.close ? 'stopped' : 'interrupted', chats: stopped };
+    if (!args.close) return { chat: args.chat, action: 'interrupted', chats: stopped };
+    // O132 / row 721: a close also archives what it stopped, so it leaves the card, the sidebar and the pinned report and
+    // stays gone after a reload. archive_chat with archived: false brings one back. A locked agent may still stop, not archive.
+    if (chat.lock(caller).on) return { chat: args.chat, action: 'stopped', chats: stopped, archived: [], note: 'The agent lock is on: stopped, not archived.' };
+    return { chat: args.chat, action: 'stopped', chats: stopped, archived: shelve(stopped) };
   }
 
   // F2 (SECURITY.md § Delegate, "Archiving"): the sidebar's Archive for a chat the caller started. Never a delete.
@@ -877,6 +883,7 @@ export function createDelegate({ chat, allowed, usage }) {
   async function compactChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!reach(caller, args.chat, true)) return { error: reach(caller, args.chat) ? 'not-a-descendant' : 'chat-not-found' };
+    if (shelved(args.chat)) return SHELVED; // O132: a closed worker is archived; as send_chat and ask_chat, nothing starts it
     // A stopped worker starts again to compact, so it takes a place under Workers per chat like send_chat (daemon-7),
     // held until the start is through and released on every outcome.
     const target = chat.info(args.chat);
