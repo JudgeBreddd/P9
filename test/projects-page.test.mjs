@@ -1286,3 +1286,34 @@ test('projects: a sprint page shows why its roles.json does not read, and follow
   if (!process.env.GITHUB_ACTIONS) { await writeFile(file, broken); await why.waitFor({ timeout: 20000 }); console.log('P9_SHOT o138-roles-error ' + (await page.screenshot({ type: 'png' })).toString('base64')); }
   console.log('PASS roles.json that does not read: opened from its button after a break, the parse error shown with no rows; fixed on disk, the rows back with no click; cut off while open and not a roles list, each reason shown; fixed again, the rows; deleted, it says missing and stays listed; written back, the rows');
 });
+
+// #235 review: the Roles rows load with sprint-view.mjs. With that chunk held while the owner types in a sprint file, the
+// rows still come in when it lands, and the file box keeps its focus and its text.
+test('projects: Sprint Setup roles come in when their late chunk lands, a focused file box kept as it was', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Held', work: { kind: 'new', parent: '', name: 'held' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Held prep' });
+  await writeFile(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'held', roles: [{ key: 'lead', provider: 'claude', model: '', effort: '' }, { key: 'review', provider: 'codex', model: '', effort: '' }] }, null, 2));
+  const { page, app } = await launch(t, instance);
+  // The chunk is held until the test lets it go (the way sprint-copy-late.test.mjs holds its own); everything else loads.
+  await app.evaluate(({ session }) => {
+    globalThis.held = []; globalThis.release = () => { globalThis.held.splice(0).forEach((go) => go({})); };
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => { if (/\/sprint-view[.-]/.test(details.url)) globalThis.held.push(callback); else callback({}); });
+  });
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click();
+  await page.locator('[data-sp-roles-wait]').waitFor({ timeout: 10000 });
+  await page.locator(`[data-pj="spfile"][data-lead="${prep.sprint}"][data-name="sprint.md"]`).click();
+  const box = page.locator(`[data-sp-box][data-lead="${prep.sprint}"]`);
+  await box.waitFor({ timeout: 5000 });
+  await box.press('End'); await box.pressSequentially(' typed while held');
+  const typed = await box.inputValue();
+  assert.ok(await app.evaluate(() => globalThis.held.length) >= 1, 'the chunk was requested and held');
+  assert.equal(await page.locator('[data-sp-roles] [data-role-row]').count(), 0, 'no role rows before the chunk lands');
+  await app.evaluate(() => globalThis.release());
+  await until(async () => (await page.locator('[data-sp-roles] [data-role-row="lead"]').count()) === 1, async () => 'the role rows did not come in after the chunk landed: ' + JSON.stringify(await page.locator('[data-sprint]').innerText().catch(() => 'no section')));
+  assert.equal(await page.locator('[data-sp-roles-wait]').count(), 0, 'the waiting heading is gone');
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sp-box]') ?? false), true, 'the file box kept the focus');
+  assert.equal(await box.inputValue(), typed, 'the file box kept the text typed while the chunk was held');
+  console.log('PASS Sprint Setup late roles: with sprint-view.mjs held and sprint.md focused and typed in, the role rows came in when it landed; the box kept its focus and its text');
+});

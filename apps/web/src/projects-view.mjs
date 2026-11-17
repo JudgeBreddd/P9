@@ -208,9 +208,12 @@ export function installProjects(o, api) {
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
   const roleFiles = sp => (sp.prep ? ['rules.md', 'roles.json'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
-  // The Roles rows are drawn by sprint-view.mjs, loaded on first use: until it is in, the heading alone, then a redraw.
+  // The Roles rows are drawn by sprint-view.mjs, loaded on first use: until it is in, the heading alone. Then each waiting
+  // heading is swapped for its rows on its own, since renderPage leaves the page alone while a file box has the focus.
   let svMod = null, svP = null;
-  const loadSv = () => (svP ??= import('./sprint-view.mjs').then(m => { svMod = m; renderPage(); return m; }, () => (svP = null)));
+  const fillRoles = () => page.querySelectorAll('[data-sp-roles-wait]').forEach(w => {
+    const sp = cur?.sprints?.find(x => x.lead === w.closest('[data-sprint]')?.dataset.sprint); if (sp) w.outerHTML = rolesHtml(sp, rolesOf(sp)); });
+  const loadSv = () => (svP ??= import('./sprint-view.mjs').then(m => { svMod = m; fillRoles(); renderPage(); return m; }, () => (svP = null)));
   const rolesHtml = (sp, roles) => svMod ? svMod.rolesHtml(sp, roles, o, esc) : (loadSv(), '<div class="sp-roles" data-sp-roles-wait><h3>Roles</h3></div>');
   // A draft whose file was deleted since (a worker, the lead): still listed, with its text, until saved again or discarded.
   const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
