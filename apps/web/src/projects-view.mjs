@@ -20,6 +20,9 @@ export function installProjects(o, api) {
   const call = (action, body, opts) => o.liveChat.call(action, body, opts);
   const find = id => o.S.sessions.find(s => s.id === id);
   // cur: the shown project as GET /projects/<id> gives it (instructions, files, agentFiles, sharedWith).
+  // instrDrafts: project id -> Instructions typed and not yet saved there. Kept through a refused save (the box may be gone,
+  // left by the side panel), shown again when that project opens, and sent again to that project only.
+  const instrDrafts = new Map();
   let cur = null, edit = false, saveT = 0, sprintOpen = ''; // sprintOpen: '<lead> <name>' of the sprint file shown in its box
   // Sprint file drafts, '<lead> <name>' -> { text, hash }: typed and not saved yet; hash is the file as it was when typing
   // began. spNote: a draft's save that was refused ('changed': someone else's edit came first; 'failed'). spSaving: saves
@@ -87,7 +90,9 @@ export function installProjects(o, api) {
     if (cur?.id !== id) cur = null; // shown once the full record is in: the list's copy has no instructions or files
     o.renderTabs(); if (o.S.files) o.renderTree();
     const r = await call('project', { id });
-    if (r.status === 200 && o.S.view?.id === id) { cur = r.body.project; renderPage(); }
+    if (r.status === 200 && o.S.view?.id === id) { cur = r.body.project;
+      if (instrDrafts.get(id) === (cur.instructions ?? '')) instrDrafts.delete(id);
+      if (instrDrafts.has(id)) { edit = true; renderPage(); saveInstr(); } else renderPage(); }
     else if (r.status === 404) { o.S.view = null; o.loadProjects(); o.renderTabs(); }
     if (sprintLead && o.S.view?.id === id) page.querySelector(`[data-sprint="${CSS.escape(sprintLead)}"]`)?.scrollIntoView({ block: 'start' });
     page.focus({ preventScroll: true }); // the page, not the editable name: a stray key must not rename the project
@@ -105,7 +110,7 @@ export function installProjects(o, api) {
       : `<div class="wf">${I.folder}<span>Work folder</span>${mine ? `<span class="plain">P9's folder for this project</span><span class="tag">In P9</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`
         : `<span class="mono" title="Chats in this project start here">${esc(where(f))}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`}</div>`;
     const own = !mine && p.agentFiles?.length ? `<p class="ownfile">${svg.files}This folder has its own instructions (${p.agentFiles.map(esc).join(', ')}). Agents read them on their own.</p>` : '';
-    const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(p.instructions ?? '')}</textarea>`
+    const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(instrDrafts.get(p.id) ?? p.instructions ?? '')}</textarea>${instrDrafts.has(p.id) ? '<p class="hint" data-pj-draft>Not saved yet: P9 refused it last time. Kept here and sent again.</p>' : ''}`
       : p.instructions ? instrText(p.instructions) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
     const files = p.files ?? [], open = spPage && (p.sprints ?? []).find(x => x.lead === spPage);
     if (open) return `<div class="wrap" data-page="${esc(p.id)}" data-sp-page="${esc(open.lead)}">
@@ -398,9 +403,11 @@ export function installProjects(o, api) {
   page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-sp-owns]')) return;
     const { lead, role } = x.dataset, value = x.value.trim();
     saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r || (r.owns ?? '') === value) return false; if (value) r.owns = value; else delete r.owns; }); });
-  const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
-    const id = cur.id, r = await call('updateProject', { id, instructions: box.value }); if (r.status !== 200) { failed(r); return false; }
-    if (cur?.id === id) cur = { ...cur, instructions: r.body.project.instructions }; /* the page may have moved on meanwhile */ const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
+  const saveInstr = async () => { const box = $('#pjInstr'); if (!box || !cur) return;
+    const id = cur.id, text = box.value; if (text === (cur.instructions ?? '')) { instrDrafts.delete(id); return; }
+    instrDrafts.set(id, text); const r = await call('updateProject', { id, instructions: text }); if (r.status !== 200) { failed(r); return false; }
+    if (instrDrafts.get(id) === text) instrDrafts.delete(id); /* typed on meanwhile: that newer text stays a draft */
+    if (cur?.id === id) { cur = { ...cur, instructions: r.body.project.instructions }; if (!instrDrafts.has(id)) $('[data-pj-draft]')?.remove(); } /* the page may have moved on meanwhile */ const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
   // Leaving the page by the side panel (a chat, another project, Archived): Instructions typed and not yet saved are sent
   // now, while the box is still there to read; the 600 ms timer would find it gone.
   const flushInstr = () => { if ($('#pjInstr') && cur) { clearTimeout(saveT); saveInstr(); } };
@@ -431,7 +438,7 @@ export function installProjects(o, api) {
     const note = shown && page.querySelector('[data-sp-note]'); if (note) note.innerHTML = spNoteHtml(id);
     return r.status === 200;
   }
-  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); }
+  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { if (cur) instrDrafts.set(cur.id, e.target.value); clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); }
     if (e.target.matches('[data-sp-box]')) { const id = e.target.dataset.lead + ' ' + e.target.dataset.name, f = cur?.sprints?.find(x => x.lead === e.target.dataset.lead)?.files.find(x => x.name === e.target.dataset.name);
       drafts.set(id, { text: e.target.value, hash: drafts.get(id)?.hash ?? f?.hash ?? '' }); clearTimeout(saveT); saveT = setTimeout(saveSprint, 600); } });
   page.addEventListener('focusout', e => { if (e.target.matches?.('[data-sp-box]')) { clearTimeout(saveT); saveSprint(); } });

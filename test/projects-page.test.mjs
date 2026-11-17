@@ -1177,6 +1177,33 @@ test('projects: Instructions left by the side panel are saved; Sprint Setup sets
   assert.equal(await typeThenLeave('Left by a chat.', () => page.locator(`#navList .row[data-chat="${chat}"]`).click()), 'Left by a chat.', 'Instructions typed then a chat clicked in the side panel were lost');
   assert.equal(await typeThenLeave('Left by a project.', () => page.locator(`#navList [data-proj="${other.id}"]`).click()), 'Left by a project.', 'Instructions typed then another project clicked were lost');
   assert.equal((await call(instance, '/projects/' + other.id)).project.instructions ?? '', '', 'the text went to the project it was typed in, not the one opened');
+  // A refused save on a side-panel leave: the exact text is kept for its project, shown again when that project opens, and
+  // sent to that project only, not to the one opened meanwhile. A rename onto a folder that has a file in it fails, also as root.
+  const bases = [path.join(path.dirname(instance.workspace), '.local', 'state', 'p9-foundation'), instance.state];
+  const base = (await Promise.all(bases.map((b) => stat(path.join(b, 'projects', p.id)).then(() => b, () => null)))).find(Boolean);
+  assert.ok(base, 'found P9\'s projects folder');
+  const instrFile = path.join(base, 'projects', p.id, 'instructions.md');
+  const otherSaved = async () => (await call(instance, '/projects/' + other.id)).project.instructions ?? '';
+  let before = 'Left by a project.';
+  for (const [text, leave] of [['Refused, then a chat.\nSecond line kept.', () => page.locator(`#navList .row[data-chat="${chat}"]`).click()], ['Refused, then a project.', () => page.locator(`#navList [data-proj="${other.id}"]`).click()]]) {
+    await page.locator(`#navList [data-proj="${p.id}"]`).click();
+    await page.locator('#pjName').waitFor({ timeout: 10000 });
+    if (!await page.locator('#pjInstr').count()) await page.locator('#projPage [data-pj=edit]').click();
+    await rm(instrFile, { force: true }); await mkdir(path.join(instrFile, 'blocked'), { recursive: true });
+    await page.locator('#pjInstr').fill(text);
+    await leave();
+    await page.locator('#pjInstr').waitFor({ state: 'detached', timeout: 5000 });
+    await new Promise((go) => setTimeout(go, 1500));
+    assert.ok(existsSync(path.join(instrFile, 'blocked')), 'the save could not have landed: the block is still there');
+    await rm(instrFile, { recursive: true, force: true }); await writeFile(instrFile, before); // the cause is gone, the saved text back; nothing has sent the new text again yet
+    assert.deepEqual([await saved(), await otherSaved()], [before, ''], 'the save was refused, and nothing went to the project opened instead');
+    await page.locator(`#navList [data-proj="${p.id}"]`).click();
+    await until(async () => (await page.locator('#pjInstr').inputValue().catch(() => '')) === text, async () => 'the refused text was not shown again: ' + JSON.stringify(await page.locator('#pjInstr').inputValue().catch(() => 'no box')));
+    await until(async () => (await saved()) === text, async () => 'the kept text was not sent again to its project: ' + JSON.stringify(await saved()));
+    await until(async () => (await page.locator('[data-pj-draft]').count()) === 0, 'the not-saved line left after the save');
+    assert.equal(await otherSaved(), '', 'the other project still has none');
+    before = text;
+  }
 
   // B, C on the sprint's page.
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
@@ -1206,5 +1233,5 @@ test('projects: Instructions left by the side panel are saved; Sprint Setup sets
   const [over, wide] = await page.evaluate(() => [[...document.querySelectorAll('.sp-role')].filter((el) => el.scrollWidth > el.clientWidth + 1).length, innerWidth]);
   assert.ok(wide < 900, 'the zoom did not narrow the page: ' + wide);
   assert.equal(over, 0, 'a role row runs past its box at 820 px');
-  console.log('PASS Instructions left by the side panel: saved after a chat click and after another project click, to the project typed in; Sprint Setup role rows: owns and mode saved to roles.json, Not set / empty remove the key, folder and rows kept, no row overflows at 820 px');
+  console.log('PASS Instructions left by the side panel: saved after a chat click and after another project click, to the project typed in; a refused save on a chat leave and a project leave kept the exact text, showed it again on reopening and saved it to its own project only; Sprint Setup role rows: owns and mode saved to roles.json, Not set / empty remove the key, folder and rows kept, no row overflows at 820 px');
 });
