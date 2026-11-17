@@ -25,9 +25,16 @@ test('Startup speed: time to the first window, its first paint and the chat list
       const page = await app.firstWindow({ timeout: 20000 });
       const window = Date.now() - t0;
       await page.waitForURL(/^p9:\/\/app\//, { timeout: 20000 });
-      // O76: read on the page's own clock. The test tool's first lookup in a page takes 0.75 to 1.5 s since the shell lost
+      // O76: read on the page's own clock. The test tool's first lookup in a page takes 0.55 to 0.9 s since the shell lost
       // React (#116), while the page shows the chat button about 100 ms after it loads (8 launches, 2026-11-15), so a
-      // tool-side wait timed the tool. ponytail: why that first lookup is slow is not known.
+      // tool-side wait timed the tool. Why the lookup is slow (probes, 2026-11-17, n=3 launches; hypothesis, not
+      // proven): module-graph contention — the shell's JS is one dynamically imported module graph (~1.1 MB:
+      // shell-start.js, terminal.js and imports), and its parse and evaluation probably keep the renderer's main
+      // thread busy for roughly the first half-second after load, so the tool's first lookup, which injects its own
+      // script on that same thread, queues behind the module work. Measured facts: the first lookup takes 0.55 to
+      // 0.9 s; every later lookup is milliseconds; a parallel CDP ping stalls 463 ms mid-wait; terminal.js
+      // (339 KB) has its parse notification arrive when the wait ends (notification arrival, not
+      // a timing of its evaluation). What is not measured: the breakdown inside the graph; evaluation duration and task breakdown were not measured.
       // Shown = both sides of its box above zero and visible; gives up after 20 s, as the tool-side wait did.
       const shell = Math.round(await page.evaluate(() => new Promise((resolve, reject) => { const end = performance.now() + 20000; const look = () => {
         const e = document.querySelector('#rChat'), box = e?.getBoundingClientRect();
