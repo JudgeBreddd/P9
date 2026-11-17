@@ -6,10 +6,12 @@ import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WebSocketServer } from 'ws';
 import { remoteDaemon } from './helpers.mjs';
 import { phone } from './phone-c16-helpers.mjs';
 
-// O146: scripts/shot.mjs only looks. Every request it lets out is a GET or a HEAD, no WebSocket reaches the server, and the
+// O146: scripts/shot.mjs only looks. Every request it lets out is a GET or a HEAD, a WebSocket connects but none of the page's
+// frames reach the server (the server's frames reach the page), a terminal socket never reaches the server at all, and the
 // session token is never printed or written. It runs against a real daemon, signed in, through a proxy that records every
 // method it sees; a probe page served by the proxy tries every way a page can send something.
 const script = fileURLToPath(new URL('../scripts/shot.mjs', import.meta.url));
@@ -17,7 +19,10 @@ const PROBE = `<!doctype html><title>probe</title><body><h1>probe</h1><form id=f
 for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) fetch('/chat/x/prompt', { method, body: '{}' }).catch(() => {});
 navigator.sendBeacon('/chat/x/prompt', 'beacon');
 const xhr = new XMLHttpRequest(); xhr.open('POST', '/chat/x/prompt'); xhr.send('xhr');
-try { new WebSocket(location.origin.replace('http', 'ws') + '/socket'); } catch {}
+const ws = new WebSocket(location.origin.replace('http', 'ws') + '/probe-socket');
+ws.onopen = () => ws.send('from-page-on-open');
+ws.onmessage = (event) => { ws.send('from-page-reply'); fetch('/got/' + event.data); };
+new WebSocket(location.origin.replace('http', 'ws') + '/terminals/x/socket');
 setTimeout(() => document.getElementById('f').submit(), 200);
 </script>`;
 
@@ -42,7 +47,17 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
     forward.on('error', () => response.destroy());
     request.pipe(forward);
   });
-  proxy.on('upgrade', (request, socket) => { upgrades.push(request.url); socket.destroy(); });
+  // Every upgrade lands on a counting socket server: it sends the probe one frame of live data and counts each frame it gets.
+  const sockets = new WebSocketServer({ noServer: true });
+  let framesFromPage = 0;
+  proxy.on('upgrade', (request, socket, head) => {
+    upgrades.push(request.url);
+    sockets.handleUpgrade(request, socket, head, (ws) => {
+      ws.on('message', () => { framesFromPage += 1; });
+      if (request.url === '/probe-socket') ws.send('live');
+    });
+  });
+  t.after(() => { for (const ws of sockets.clients) ws.terminate(); sockets.close(); });
   await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => { proxy.closeAllConnections(); proxy.close(resolve); }));
   const out = await mkdtemp(path.join(os.tmpdir(), 'p9-shot-'));
@@ -57,10 +72,15 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
   const many = await run(['--list', list], env);
   assert.equal(many.code, 0, 'the list run failed: ' + many.stderr);
 
-  // Only looked: nothing but GET and HEAD reached the server, no socket was opened, and the probe's attempts were stopped.
+  // Only looked: nothing but GET and HEAD reached the server, the socket connected and carried the server's frame to the page
+  // (the probe then asked for /got/live), no frame from the page reached the server, and the probe's attempts were stopped.
   const changing = seen.filter((line) => !/^(GET|HEAD) /.test(line));
   assert.deepEqual(changing, [], 'a request that is not GET or HEAD reached the server');
-  assert.deepEqual(upgrades, [], 'a WebSocket reached the server');
+  assert.ok(upgrades.includes('/probe-socket'), 'the probe page\'s WebSocket never connected');
+  assert.ok(!upgrades.some((url) => url.startsWith('/terminals/')), 'a terminal socket reached the server: ' + JSON.stringify(upgrades));
+  assert.ok(seen.includes('GET /got/live'), 'the server\'s frame never reached the page');
+  assert.equal(framesFromPage, 0, 'a WebSocket frame from the page reached the server');
+  assert.ok(Number(probe.stderr.match(/dropped (\d+) WebSocket frame/)?.[1] ?? 0) >= 2, 'the script did not drop the probe page\'s two frames: ' + probe.stderr);
   assert.match(probe.stderr, /stopped \d+ request/, 'the probe page sent nothing for the script to stop');
   assert.ok(seen.includes('GET /phone/'), 'the phone page was never asked for');
   // Signed in: the phone page's own chat list call was answered, not refused.
@@ -80,5 +100,5 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
   // The token is never printed and never written to the output folder.
   for (const result of [probe, phoneShot, many]) assert.ok(!(result.stdout + result.stderr).includes(session.token), 'the token was printed');
   for (const name of await readdir(day)) assert.ok(!(await readFile(path.join(day, name))).includes(session.token), 'the token was written to ' + name);
-  console.log('PASS O146: GET/HEAD only, no socket, token never shown; ' + JSON.stringify({ requests: seen.length, answered: answered.length, stopped: probe.stderr.trim(), files: (await readdir(day)).length }));
+  console.log('PASS O146: GET/HEAD only, socket live with 0 page frames out, terminal socket never upgraded, token never shown; ' + JSON.stringify({ upgrades, framesFromPage, requests: seen.length, answered: answered.length, stopped: probe.stderr.trim(), files: (await readdir(day)).length }));
 });
