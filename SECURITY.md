@@ -720,8 +720,11 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   - **Size and reach.** At most 20,000 characters. It reaches the chats `send_chat` reaches and the
     sender's own parent, nothing else. The agent lock refuses it like any `send_chat`.
   - **What is kept.** A waiting note is in the chat's history at once. The copy that waits for the
-    agent is in memory, the newest 20 for each chat: after P9 restarts, a note not yet read stays in
-    the history but is not sent to the agent.
+    agent, the newest 20 for each chat, is also kept in P9's own database beside the chat (its text,
+    the sender P9 recorded and whether its one resend is spent; never a field a client sent), so
+    the twice-at-most bound below holds across restarts, and after P9 restarts it still goes to
+    the agent with the chat's next message, marked as a note from that sender. It is removed once
+    sent, and with the chat when the chat is deleted.
   - **How often the agent reads a note.** Once in the normal case, twice at most, and sometimes
     never. P9 sends a note again once only, after either of two failures where it cannot tell
     whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
@@ -1055,6 +1058,12 @@ Written before the code (sprint spec D1, D3, D4).
   and Codex adapters send a client that did not ask for those updates, as P9 does not), a worker's notes-path line is put
   back in that database block, once per compaction (by the compaction's id, kept in memory), and rides with the next
   message from its lead like the first one; a chat that was not started by another chat never gets it.
+  A compaction that comes while no turn is running (Claude Code compacts just after a turn ends, then works on with no
+  prompt) marks the chat compacting until that run ends: a cost update above the compaction's own, 60 s with no update,
+  or the chat's next prompt. The worker's end line to its lead waits 3 s; a worker compacting by then sends the lead the
+  note "<title> is compacting and will continue" (it starts no turn) and its end line when the run ends. `list_chats`
+  and `wait_chat` show such a chat as working, with `compacting: true`. This only delays and labels a line P9 already
+  sends; nothing new is read or run.
 - **Reading a worker's notes in its chat.** `GET /chat/<id>/notes` returns the text of that chat's own notes file, for
   a chat that has a parent: P9 builds the name `notes/<key>.md` (or `notes/<chat id>.md`) from the chat's stored parent
   and key, never from the request, and reads it by the same rules as above (that name only, no links, whole file). The

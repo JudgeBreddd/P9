@@ -329,18 +329,39 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   // Notes (SECURITY.md § Delegate, "Notes"; delegate.mjs send_chat when: 'note'): information another chat's agent passes
   // on. A note never starts a turn: it goes into the running one at its next step, or waits in parked for the chat's
-  // next prompt. ponytail: waiting notes are in memory, the newest 20 a chat; after a restart they are in the chat's
-  // history (the 'note' event) but are not sent to its agent.
+  // next prompt. Waiting notes are kept in prefs under parked:<chat> (text, the sender P9 recorded and whether its one
+  // resend is spent; never a field a client sent), so they survive a P9 restart and still go with the chat's next prompt.
   // notes: each note's place in the order they were sent, so one parked late (a steer that failed) keeps its place.
   // quiet: already in the chat's history (shown as steered in), so parked without a second line.
   // ponytail: a chat's waiting notes are its newest 20 and at most 60,000 characters together (the newest always
   // waits), so one prompt can carry them; older ones stay in the chat's history only.
   const notes = new WeakMap(), parked = new Map(), resent = new WeakSet();
   let noteCount = 0;
+  // A chat's waiting notes: from memory, or after a restart from prefs, each rebuilt as a note from its sender.
+  const waitingFor = (id) => {
+    if (!parked.has(id)) {
+      let kept = [];
+      try { kept = JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('parked:' + id)?.value ?? '[]'); } catch {}
+      parked.set(id, (Array.isArray(kept) ? kept : []).filter((n) => typeof n?.text === 'string').map((n) => {
+        const body = { text: n.text };
+        notes.set(body, noteCount += 1);
+        if (typeof n.from === 'string') senders.set(body, n.from);
+        if (n.resent === true) resent.add(body); // its one resend is spent, restart or not
+        return body;
+      }));
+    }
+    return parked.get(id);
+  };
+  const keepWaiting = (id) => {
+    const list = parked.get(id) ?? [];
+    if (list.length) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('parked:' + id, JSON.stringify(list.map((n) => ({ text: n.text, ...sender(n), ...(resent.has(n) && { resent: true }) }))));
+    else db.prepare('DELETE FROM prefs WHERE key = ?').run('parked:' + id);
+  };
   const park = (id, body, quiet) => {
-    const list = [...(parked.get(id) ?? []), body].sort((a, b) => notes.get(a) - notes.get(b)).slice(-20);
+    const list = [...waitingFor(id), body].sort((a, b) => notes.get(a) - notes.get(b)).slice(-20);
     while (list.length > 1 && list.reduce((n, x) => n + x.text.length, 0) > 60000) list.shift();
     parked.set(id, list);
+    keepWaiting(id);
     if (!quiet) emit(id, 'note', { text: body.text, ...sender(body) });
     return { status: 202, noted: true };
   };
@@ -496,8 +517,37 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const seen = session.compactions ??= new Set();
     if (seen.has(key)) return;
     seen.add(key);
+    if (!session.turn) compacting(session, id);
     const at = notesOf(id), file = at && sprintFiles.fileOf(at.lead, at.name);
     if (file) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, notesLine(file));
+  };
+  // O139 (Tyler, 2026-11-16: label a compaction, do not hide it): Claude Code compacts just after a prompted turn ends
+  // (p50 0.5 s in P9's own history) and then works on with no prompt open. Until that unprompted run ends the chat
+  // counts as compacting (delegate.mjs: the parent is told so, wait_chat waits on). Its end is the first usage_update
+  // whose cost is above the one sent with the compaction; or 60 s with no update from the agent (a failed compaction
+  // sends no more); or the chat's next prompt, whose own end comes. At the first two the turn's end hooks run again.
+  // ponytail: a silent tool call longer than 60 s in that run counts as its end.
+  const COMPACT_QUIET_MS = 60000;
+  const compacting = (session, id) => {
+    if (session.compacting) return;
+    const timer = setTimeout(() => compacted.end(session, id, true), COMPACT_QUIET_MS);
+    timer.unref?.();
+    session.compacting = { cost: null, timer };
+  };
+  compacted.seen = (session, id, update) => {
+    const run = session.compacting;
+    if (!run) return;
+    run.timer.refresh();
+    const cost = update?.sessionUpdate === 'usage_update' ? update.cost?.amount : undefined;
+    if (typeof cost !== 'number') return;
+    if (run.cost === null) run.cost = cost; else if (cost > run.cost) compacted.end(session, id, true);
+  };
+  compacted.end = (session, id, ran) => {
+    const run = session.compacting;
+    if (!run) return;
+    clearTimeout(run.timer);
+    session.compacting = null;
+    if (ran && live.get(id) === session && !session.turn && !session.stopping && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true); } catch {} }
   };
   const rulesFor = (conversation, body) => {
     const mine = conversation?.parent && (senders.get(body) === conversation.parent || Boolean(mixed.get(body)?.includes(conversation.parent)));
@@ -878,6 +928,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A name the user gave (N1, the rename route's 'renamed' event) is kept.
           if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
+        compacted.seen(session, conversation.id, update);
         compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
         emit(conversation.id, 'update', trim(agentImages(update)));
@@ -1144,7 +1195,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id); // O48, A7
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id); // O48, A7, daemon-5
       gauges.delete(id); parked.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1371,10 +1422,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
+      compacted.end(session, id, false);
       let ended;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
       // answers another chat: they wait for the chat's own next message.
-      const told = solo ? [] : parked.get(id)?.splice(0) ?? [];
+      const told = solo ? [] : waitingFor(id).splice(0);
+      if (told.length) keepWaiting(id);
       // With notes in front, the message itself says who sent it too (O109): the user's is not left to read as the last note's.
       const shared = told.length > 0 && !mixed.has(body);
       const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
@@ -1495,7 +1548,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // session.back: during and after a turn that answered another chat, the chat's own mode is the one it returns to.
         mode: (session?.back ?? session?.mode) ? Object.keys(MODES[c.provider]).find((k) => MODES[c.provider][k] === (session.back ?? session.mode)) ?? null : null,
         model: session?.models?.current ?? null, effort: effort ? { id: effort.id, value: effort.current } : null,
-        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)),
+        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)), compacting: Boolean(session?.compacting),
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
@@ -1542,6 +1595,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // A note for chat id from the chat `from` (notes, above). A running turn that cannot take it now leaves it parked.
     async note(id, text, from) {
       const body = { text };
+      waitingFor(id); // FIX1 (#241): notes kept over a restart are numbered first, so a new one sorts after them
       notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);
       return result.status === 409 && !['moving', 'moved'].includes(result.error) ? park(id, body) : result;
@@ -1621,6 +1675,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       listeners.add(done);
     }),
     settled: (hook) => { settledHooks.add(hook); },
+    compacting: (id) => Boolean(live.get(id)?.compacting),
     stopAll,
     projects,
     ...(() => {
