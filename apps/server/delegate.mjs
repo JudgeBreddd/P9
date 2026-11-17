@@ -633,7 +633,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // Ready-report tokens: input counts only uncached tokens (ACP PromptResponse.usage), so cached input is listed beside it,
     // or said to be missing: "Input 24" alone hid a 64,508-token context.
     const cached = !tokens ? '' : tokens.cachedRead === undefined && tokens.cachedWrite === undefined ? ' (cached input not reported)'
-      : `; cached input read ${tokens.cachedRead ?? 0}, written ${tokens.cachedWrite ?? 0}`;
+      : `; cached input read ${tokens.cachedRead ?? 'not reported'}, written ${tokens.cachedWrite ?? 'not reported'}`; // a missing or invalid count is never shown as 0
     const usage = tokens ? `Input ${tokens.input}${cached}; output ${tokens.output}` : 'Not reported';
     const files = ready.claimed ? 'Unavailable until Git facts can be read' : ready.files.length ? ready.files.map((file) => `- ${file}`).join('\n') : 'None';
     return `### ${task.item}\n\nCommit: ${ready.commit}${ready.claimed ? ' (claim)' : ''}\n\nChanged files:\n${files}\n\nChecks:\n${ready.results.map(({ check, result }) => `- ${check}: ${result}`).join('\n')}\n\nTokens used: ${usage}\n\nWeakest part: ${ready.weakest}`;

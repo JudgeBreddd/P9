@@ -95,6 +95,14 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   endTurn(worker, 'turn-1', false, { inputTokens: 24, outputTokens: 5065, cachedReadTokens: 64484, cachedWriteTokens: 310 });
   assert.equal(cards.length, 2);
   assert.match(cards[1].text, /Tokens used: Input 24; cached input read 64484, written 310; output 5065/);
+  // Each count stands alone: one missing (or invalid) reads "not reported", never 0; a reported 0 stays 0.
+  const line = async (usage) => { await tools.ready(valid, worker); endTurn(worker, 'turn-1', false, { inputTokens: 1, outputTokens: 2, ...usage }); return /Tokens used: [^\n]*/.exec(cards.at(-1).text)[0]; };
+  assert.equal(await line({ cachedReadTokens: 64484 }), 'Tokens used: Input 1; cached input read 64484, written not reported; output 2');
+  assert.equal(await line({ cachedWriteTokens: 310 }), 'Tokens used: Input 1; cached input read not reported, written 310; output 2');
+  assert.equal(await line({ cachedReadTokens: 0, cachedWriteTokens: 0 }), 'Tokens used: Input 1; cached input read 0, written 0; output 2');
+  assert.equal(await line({ cachedReadTokens: -5, cachedWriteTokens: 7 }), 'Tokens used: Input 1; cached input read not reported, written 7; output 2');
+  assert.equal(await line({ cachedReadTokens: 'x', cachedWriteTokens: 1.5 }), 'Tokens used: Input 1 (cached input not reported); output 2');
+  assert.equal(cards.length, 7);
   let release, locked = false;
   const pendingFolder = new Promise((resolve) => { release = resolve; });
   const racing = createDelegate({ chat: { ...chat, lock: () => ({ on: locked }), startFolder: () => pendingFolder } });
