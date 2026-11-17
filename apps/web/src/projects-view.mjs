@@ -163,6 +163,8 @@ export function installProjects(o, api) {
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
+  const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;
+    if (t == null) return 'it is missing'; if (!t.trim()) return 'it is empty'; try { const d = JSON.parse(t); return Array.isArray(d?.roles) ? 'a row has no "key"' : 'it has no "roles" list'; } catch (e) { return e.message; } };
   const rolesOf = sp => { try { const d = JSON.parse(sp.files.find(f => f.name === 'roles.json')?.text ?? ''); return Array.isArray(d?.roles) && d.roles.every(r => r && typeof r.key === 'string') ? d.roles : null; } catch { return null; } };
   // O110: a roles.json read between an outside writer's truncate and its write comes back empty or cut short. The page
   // keeps the last good one it had (its hash too, so a pick made meanwhile is refused as changed) and reads the project
@@ -207,11 +209,13 @@ export function installProjects(o, api) {
   }
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
-  const roleFiles = sp => (sp.prep ? ['rules.md'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
+  const roleFiles = sp => (sp.prep ? ['rules.md', 'roles.json'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
   const ROLE = { lead: 'Lead: runs the sprint, merges what passed review', review: 'Reviewer: reviews each piece, gets no worker folder' };
   function rolesHtml(sp, roles) {
-    if (!sp.files.some(f => f.name === 'roles.json')) return '';
-    if (!roles) return '<p class="hint" data-sp-roles-bad role="status">roles.json is not a list of roles P9 can read. Fix it in its file below; the rows show again when it reads.</p>';
+    // A prep is made with its roles.json, so one gone was deleted: it says so, and the file is listed to make again
+    // (FIX1). Any other sprint folder (a chat's notes, made without one) shows no roles.
+    if (!sp.prep && !sp.files.some(f => f.name === 'roles.json')) return '';
+    if (!roles) return `<p class="hint" data-sp-roles-bad role="status">roles.json does not read: <span class="mono" data-sp-roles-why>${esc(rolesWhy(sp))}</span>. Fix it in its file below; the rows show again when it reads.</p>`;
     const row = r => { const worker = r.key !== 'lead' && r.key !== 'review', p = runnerPicks(o, { agent: String(r.provider ?? ''), model: String(r.model ?? ''), effort: String(r.effort ?? '') },
       { first: ['', 'Not set'], attr: k => `data-spr="${k}" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}"`, aria: k => `${r.key} ${k}` });
       // H3: its permissions (the mode Start opens it in; Not set: P9's usual one) and what it owns, for the lead to send work by.
@@ -253,12 +257,23 @@ export function installProjects(o, api) {
   // sprint_status gives an agent. ponytail: read again every 5 s while its page shows; no push from the daemon.
   async function loadView() {
     const lead = svFor = spPage, n = ++svN;
+    rereadFiles(lead);
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
       const [m, r] = await Promise.all([import('./sprint-view.mjs').catch(() => null), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
       if (m && r.status === 200) { sv = { lead, html: m.statusHtml(r.body, esc) }; renderPage(); }
     }
     setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
+  }
+  // O138: the shown sprint's files are read again with it (on opening, then every 5 s), so a roles.json changed on disk
+  // shows: a torn or broken one through takeFiles (last good rows, then the file as written and why it does not read),
+  // a fixed one as its rows. Drawn again only when a file of that sprint changed.
+  const filesSeen = sp => (sp?.files ?? []).map(f => f.name + ' ' + f.hash).join('\n');
+  async function rereadFiles(lead) {
+    const id = cur?.id, r = id && await call('project', { id }, { quiet: true }).catch(() => null);
+    if (r?.status !== 200 || cur?.id !== id || spPage !== lead) return;
+    if (filesSeen(cur.sprints?.find(x => x.lead === lead)) === filesSeen(r.body.project.sprints?.find(x => x.lead === lead))) return;
+    adopt(r.body.project, ''); renderPage(); fillBox(false);
   }
   const refresh = p => { if (p) cur = p; o.loadProjects(); renderPage(); };
   async function update(body) { const r = await call('updateProject', { id: cur.id, ...body }); if (r.status !== 200) { failed(r); return false; } refresh(r.body.project); return true; }

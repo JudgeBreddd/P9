@@ -615,6 +615,12 @@ export async function createDesktop({ state, open } = {}) {
     // Sprint tracker: the connected machine's status file, and a terminal attached to its sprint tmux session (no body).
     sprint: () => ['GET', '/mission/sprint'],
     sprintTmux: () => ['POST', '/mission/sprint/tmux', {}],
+    // Folder sprints (SECURITY.md "Applying to your folder is a yes"): the copies, one copy's change to show, its close view,
+    // and the owner's yes for exactly the change shown (the daemon checks yes and the digest again).
+    sprintCopies: () => ['GET', '/sprints'],
+    sprintPreview: ({ id }) => uuid(id) && ['GET', '/sprints/' + id + '/apply'],
+    sprintClose: ({ id }) => uuid(id) && ['GET', '/sprints/' + id + '/close'],
+    sprintApply: ({ id, shown, ...rest }) => uuid(id) && typeof shown === 'string' && !Object.keys(rest).length && ['POST', '/sprints/' + id + '/apply', { yes: true, shown }],
     idea: ({ name, text, needs_done }) =>[name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],

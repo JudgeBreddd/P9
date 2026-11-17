@@ -228,14 +228,40 @@ export function setupRoutes(outer) {
   // Desktop only (SECURITY.md § Worker folders, "Who cleans up"): one sprint's worker folders, by the store's own rules
   // (worker-folders.mjs clean). Refused while a worker the lead started is not stopped, and while the lead is in a turn or
   // has a message waiting: it may be making a worker folder, which has nothing of its own yet and would read as merged.
-  outer.app.post('/sprints/:id/clean', async (c) => {
-    const id = c.req.param('id'), lead = outer.chat.info(id);
+  // Same refusal for apply (SECURITY.md § Sprint from a folder with no remote): nothing runs while a worker or the lead is busy.
+  const idle = (id) => {
+    const lead = outer.chat.info(id);
     const running = outer.chat.family().filter((x) => x.parent === id && !['stopped', 'moved'].includes(x.state)).map((x) => x.title || x.id);
     if (running.length || lead?.state === 'turn' || lead?.busy) {
-      return c.json({ error: 'sprint-running', running, detail: running.length ? 'Stop its workers first: ' + running.join(', ') + '.' : 'Its lead is working; wait for its turn to end.' }, 409);
+      return { error: 'sprint-running', running, detail: running.length ? 'Stop its workers first: ' + running.join(', ') + '.' : 'Its lead is working; wait for its turn to end.' };
     }
+    return null;
+  };
+  outer.app.post('/sprints/:id/clean', async (c) => {
+    const id = c.req.param('id'), busy = idle(id);
+    if (busy) return c.json(busy, 409);
     const result = await outer.chat.workers.clean(id);
     return c.json(result, result.error === 'request-refused' ? 400 : result.error ? 500 : 200);
+  });
+  // Desktop only (SECURITY.md § Sprint from a folder with no remote, "Applying to your folder is a yes"): the change the
+  // owner is shown, then the owner's yes for exactly that change. Not on the phone routes, and no agent tool calls these.
+  outer.app.get('/sprints/:id/apply', async (c) => c.json(await outer.chat.workers.preview(c.req.param('id'))));
+  outer.app.get('/sprints', async (c) => c.json(await outer.chat.workers.copies()));
+  outer.app.get('/sprints/:id/close', async (c) => {
+    const result = await outer.chat.workers.close(c.req.param('id'));
+    return c.json(result, result.error === 'request-refused' ? 400 : result.error === 'not-applied' ? 404 : 200);
+  });
+  outer.app.post('/sprints/:id/apply', async (c) => {
+    const id = c.req.param('id'), body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join() !== 'shown,yes' || body.yes !== true || typeof body.shown !== 'string') {
+      return c.json({ error: 'request-refused' }, 400);
+    }
+    const busy = idle(id);
+    if (busy) return c.json(busy, 409);
+    const result = await outer.chat.workers.apply(id, { yes: body.yes, shown: body.shown });
+    // A change that landed whose result could not be recorded is not a success: 500, and the close view reads it as unknown.
+    const status = result.recordError ? 500 : !result.refused ? 200 : result.refused === 'no-owner-yes' ? 400 : result.refused === 'already-applied' || result.refused === 'changed-since-shown' ? 409 : result.refused === 'no-copy' ? 404 : 422;
+    return c.json(result, status);
   });
   // Desktop only (SECURITY.md § Start sprint): a sprint to prepare, and the owner's Start press, which is the approval
   // record of its plan. No phone route and no agent reaches these; an agent's start_sprint asks the user in its chat.

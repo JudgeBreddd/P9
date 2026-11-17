@@ -217,7 +217,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   const ss = await ran('sprint-start');
   assert.deepEqual([ss.blocking, ss.script.name, ss.sprint.started.by, ss.sprint.started.plan], [false, 'started', 'owner', listed.started.plan]);
   assert.deepEqual(ss.workers.map((w) => [w.chat, w.key, w.provider, w.folder === null || typeof w.folder === 'string']), [[sprint, 'lead', 'claude', true]]);
-  assert.deepEqual(Object.keys(ss.workers[0]).sort(), ['active', 'chat', 'context', 'effort', 'folder', 'key', 'mode', 'model', 'profile', 'provider', 'ready', 'state', 'task', 'title', 'verdict', 'waiting'].sort());
+  assert.deepEqual(Object.keys(ss.workers[0]).sort(), ['active', 'chat', 'context', 'effort', 'folder', 'key', 'mode', 'model', 'profile', 'provider', 'ready', 'spent', 'state', 'task', 'title', 'verdict', 'waiting'].sort());
 
   // hooks.json edited after Start (any agent can write it): P9 still runs the approved copy, never the file.
   const L = await attach(t, instance, sprint);
