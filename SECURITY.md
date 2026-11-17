@@ -1139,6 +1139,32 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   `after-close` are accepted in the file and approved like the rest, but P9 has no such action yet, so their scripts
   do not run.
 
+## Pause sprint
+
+Pause stops a sprint from starting new work; Resume lets it go on. Written before the code (0.1.9 phase 4.5, phone;
+migration spec S13).
+
+- **Who can press it.** You, with Pause and Resume on the project page's sprint row (a desktop-only route; the phone
+  has none), or the sprint's lead with `pause_sprint` and `resume_sprint`. A worker, a reviewer or a chat outside the
+  sprint is refused, and so is the lead's call while the agent lock is on (`agent-lock-on`; your press still works).
+  Neither asks you first: Pause only holds work back, and Resume sends only what agents and P9 had already sent.
+- **What Pause holds.** While a sprint is paused, every message an agent or P9 sends one of the lead's chats (the
+  lead's `send_chat`, a reviewer's wake, the messages that waited for a turn's end) is kept, in order, and starts no
+  turn. A running turn finishes; nothing is stopped. A note still arrives, since it starts nothing. Another chat's
+  question (`ask_chat`) is refused `sprint-paused`, so its asker is not left waiting. A message you type into a paused
+  worker yourself goes through. `open_chat` and `start_sprint` make no chat for a paused sprint, also when the Pause
+  comes while you are asked, while a script runs or while a worker folder is made.
+- **Where it is kept.** In P9's ledger, never in a file an agent can edit, so a P9 restart keeps the pause and every
+  message it holds. At most 100 messages are held per sprint; the next one is refused `sprint-paused-full`.
+- **Resume.** Every held message goes out in the order it was sent, each as if its sender sent it now: with that
+  sender's rules, and no wider than that sender's mode at Resume (read then, not when it was kept; a sender with no
+  known mode, or gone, gets its message refused, shown on the worker's window). Until each one reaches its agent or is
+  refused (one waiting in a running turn's queue included) it stays in the ledger, so a P9 restart during Resume sends the rest after the restart, and one already recorded is not
+  sent twice (its turn, cut by the restart, is like any turn a restart cuts). A held message that carries a line you sent from a
+  phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
+  Pause and Resume each send the lead one note.
+- **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's

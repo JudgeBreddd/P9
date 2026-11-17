@@ -281,6 +281,13 @@ export function setupRoutes(outer) {
     const result = await outer.mcp.ownerScripts.run(c.req.param('id'), body.name);
     return c.json(result, scriptStatus(result));
   });
+  // Desktop only (SECURITY.md § Pause sprint): the project page's Pause and Resume, the owner's press. No body.
+  for (const [verb, call] of [['pause', 'ownerPause'], ['resume', 'ownerResume']]) outer.app.post(`/sprints/:id/${verb}`, async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp[call](c.req.param('id'));
+    return c.json(result, result.error ? 404 : 200);
+  });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
   outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));

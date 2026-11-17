@@ -445,7 +445,8 @@ function blockHtml(block: Block) {
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
 let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
 function itemsOf(blocks: Block[]) {
-  const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size; // O712: a closed report shows its chat row // F4 item 9: a poll that changed no block signs none again
+  // O712: a closed report shows its chat row; window-3: so does one whose worker was archived (same blocks, same SHUT), so the pinned one is in the key
+  const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
   const out: Entry[] = [];
   for (let i = 0; i < blocks.length; i++) {
@@ -623,7 +624,7 @@ function render() {
   const { blocks, strip } = build(picked), events = one<HTMLElement>('#events');
   // O712: the report pinned above the box is not drawn a second time in the chat; every other report row is.
   strip.id = picked; // reportKey names the chat
-  const open = openReport(strip, SHUT.get()), lastReport = blocks.findLast((block) => block.kind === 'report');
+  const open = openReport(strip, SHUT.get(), shelved), lastReport = blocks.findLast((block) => block.kind === 'report');
   for (const block of blocks) if (block.kind === 'report') block.pinned = block === lastReport && !!open && open.id === block.id && open.text === block.text;
   const all = itemsOf(blocks);
   if (!stuck && seenItems) windowSize += Math.max(0, all.length - seenItems); // a reader part way up keeps their top; the window slides only at the bottom
@@ -669,7 +670,7 @@ function render() {
   const plan = (strip.events[0]?.entries ?? []) as string[][], chips = one<HTMLElement>('#chips');
   artEntries = plan; // item 19: the plan view reads the entries shown
   // O712: the desktop's rule: only the newest worker report not closed is pinned, with a × (the sheet's click handler below).
-  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get()); pinStrip = strip;
+  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string, SHUT.get(), shelved); pinStrip = strip;
   const cards = one('#pinned').querySelectorAll('[data-card]').length;
   // O109: the pinned cards' chip can be closed; it stays closed for this chat until a card is added, changed or removed.
   pinSig = cards ? JSON.stringify([...strip.cards!.values()]) : '';
@@ -687,6 +688,9 @@ function render() {
 // The same empty-only swap as the desktop: the daemon refuses deletion if a message raced the picker.
 let pinSig = ''; // O109: the open chat's pinned cards as last drawn
 let pinStrip: Strip = { events: [] }; // O712: the strip last drawn, for the report close
+// window-3 on the phone: a worker report ('ready-' + worker id) whose worker is archived is not pinned, wherever it was archived
+// (the desktop's rule; the list holds archived chats too). A closed but not archived worker keeps its report.
+function shelved(id: string) { return state.conversations.some((c) => c.archived && 'ready-' + c.id === id); } // hoisted: render may run before this line
 one('#sheetBody').addEventListener('click', (event) => {
   const card = pinStrip.cards?.get((event.target as Element).closest<HTMLElement>('[data-card-close]')?.dataset.cardClose ?? '');
   if (!card) return;
