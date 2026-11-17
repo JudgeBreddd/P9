@@ -35,8 +35,28 @@ test('Chat Focus file modal: edit and Save through the guarded PUT /files, a cha
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
+  const pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push('pageerror: ' + e.message));
+  page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text()); });
   await page.setViewportSize({ width: 1300, height: 860 }).catch(() => {});
-  await page.locator('#rBell b', { hasText: '1' }).waitFor({ timeout: 15000 });
+  // The bell '1' is the _tyler item already on disk, quieted by the first Mission overview. A timeout here used to say
+  // only "waiting for #rBell b", so a one-off stall stayed unexplained: when the wait fails, dump the page state (bell
+  // text and title, the Mission note — a retry shows as its text and its restart button — the cards stack, a fresh
+  // overview probe that tells the daemon's answer apart from the page's, and page errors), so the next stall names
+  // its cause itself. The probe can take the daemon's 10 s answer wait; the race keeps a stalled page from hanging it.
+  const bellDump = () => page.evaluate(async () => {
+    const $ = (s) => document.querySelector(s);
+    const state = { bell: $('#rBell')?.innerHTML ?? null, bellTitle: $('#rBell')?.title ?? null, bellItems: $('#rBell')?.dataset?.items ?? null,
+      note: $('[data-mission-note]')?.textContent ?? null, retry: Boolean(document.querySelector('[data-mission-note] [data-restart-btn]')),
+      cards: [...document.querySelectorAll('#cards .card')].map((c) => c.dataset.key).join(',') || null };
+    try { const r = await window.p9.mission('overview'); state.probe = { status: r.status, queue: r.body?.queue?.length ?? null, error: r.body?.error ?? null }; }
+    catch (e) { state.probe = { error: String(e?.message ?? e) }; }
+    return state;
+  }).catch((e) => 'dump failed: ' + (e?.message ?? e));
+  await page.locator('#rBell b', { hasText: '1' }).waitFor({ timeout: 15000 }).catch(async (error) => {
+    const state = await Promise.race([bellDump(), new Promise((resolve) => setTimeout(() => resolve('dump timed out: the page never answered'), 12000))]);
+    throw new Error('rBell 1 stall: ' + JSON.stringify(state) + (pageErrors.length ? ' errors: ' + pageErrors.slice(-5).join(' | ') : ''), { cause: error });
+  });
   const disk = (name) => readFile(path.join(instance.workspace, name), 'utf8');
   const shot = async (name) => {
     const png = await page.screenshot({ animations: 'disabled' });
