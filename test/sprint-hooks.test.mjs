@@ -442,7 +442,7 @@ test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lo
     const chat = { lock: () => ({ on: lock }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
       sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false,
       sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
-      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts }), prepOf: () => null, record: async () => null } };
+      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts }), closed: () => null, prepOf: () => null, record: async () => null } };
     const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
     const going = hooks.run(id, { name: 'mark' }, ac.signal);
     await at; // the user said yes, every first check passed, and the run now waits for the state
@@ -471,7 +471,7 @@ test('Sprint scripts S20 one read: the owner\'s Approve approves the rows of the
     const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id }], list: () => [{ id }],
       sprint: () => ({}), gauge: () => null, scriptLibrary: () => [], allowScripts: () => false,
       sprintFiles: { exists: (c) => c === id, read: (c, name) => (name === 'hooks.json' ? texts[Math.min(n++, texts.length - 1)] : null), log: () => {} },
-      projects: { started: () => record, prepOf: () => null, recordStart: (c, next) => { record = next; } } };
+      projects: { started: () => record, closed: () => null, prepOf: () => null, recordStart: (c, next) => { record = next; } } };
     return { owner: createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true }).owner, extra: () => record.extra ?? [] };
   };
   const shown = made([A, B]), lib = shown.owner.library(id);
