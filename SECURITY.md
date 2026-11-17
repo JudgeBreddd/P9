@@ -720,8 +720,9 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   - **Size and reach.** At most 20,000 characters. It reaches the chats `send_chat` reaches and the
     sender's own parent, nothing else. The agent lock refuses it like any `send_chat`.
   - **What is kept.** A waiting note is in the chat's history at once. The copy that waits for the
-    agent, the newest 20 for each chat, is also kept in P9's own database beside the chat (its text
-    and the sender P9 recorded, never a field a client sent), so after P9 restarts it still goes to
+    agent, the newest 20 for each chat, is also kept in P9's own database beside the chat (its text,
+    the sender P9 recorded and whether its one resend is spent; never a field a client sent), so
+    the twice-at-most bound below holds across restarts, and after P9 restarts it still goes to
     the agent with the chat's next message, marked as a note from that sender. It is removed once
     sent, and with the chat when the chat is deleted.
   - **How often the agent reads a note.** Once in the normal case, twice at most, and sometimes

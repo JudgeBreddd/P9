@@ -329,8 +329,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   // Notes (SECURITY.md § Delegate, "Notes"; delegate.mjs send_chat when: 'note'): information another chat's agent passes
   // on. A note never starts a turn: it goes into the running one at its next step, or waits in parked for the chat's
-  // next prompt. Waiting notes are kept in prefs under parked:<chat> (text and the sender P9 recorded, never a field a
-  // client sent), so they survive a P9 restart and still go with the chat's next prompt.
+  // next prompt. Waiting notes are kept in prefs under parked:<chat> (text, the sender P9 recorded and whether its one
+  // resend is spent; never a field a client sent), so they survive a P9 restart and still go with the chat's next prompt.
   // notes: each note's place in the order they were sent, so one parked late (a steer that failed) keeps its place.
   // quiet: already in the chat's history (shown as steered in), so parked without a second line.
   // ponytail: a chat's waiting notes are its newest 20 and at most 60,000 characters together (the newest always
@@ -346,6 +346,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         const body = { text: n.text };
         notes.set(body, noteCount += 1);
         if (typeof n.from === 'string') senders.set(body, n.from);
+        if (n.resent === true) resent.add(body); // its one resend is spent, restart or not
         return body;
       }));
     }
@@ -353,7 +354,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const keepWaiting = (id) => {
     const list = parked.get(id) ?? [];
-    if (list.length) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('parked:' + id, JSON.stringify(list.map((n) => ({ text: n.text, ...sender(n) }))));
+    if (list.length) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('parked:' + id, JSON.stringify(list.map((n) => ({ text: n.text, ...sender(n), ...(resent.has(n) && { resent: true }) }))));
     else db.prepare('DELETE FROM prefs WHERE key = ?').run('parked:' + id);
   };
   const park = (id, body, quiet) => {
@@ -1562,6 +1563,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // A note for chat id from the chat `from` (notes, above). A running turn that cannot take it now leaves it parked.
     async note(id, text, from) {
       const body = { text };
+      waitingFor(id); // FIX1 (#241): notes kept over a restart are numbered first, so a new one sorts after them
       notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);
       return result.status === 409 && !['moving', 'moved'].includes(result.error) ? park(id, body) : result;
