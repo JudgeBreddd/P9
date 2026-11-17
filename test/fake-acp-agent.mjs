@@ -302,6 +302,16 @@ const connection = acp.connectAgent(stream, {
       await say('detach:' + child.pid);
       return { stopReason: 'end_turn' };
     }
+    // daemon-10: both adapters run a slash command only from the prompt's first text block (claude-agent-acp
+    // promptToClaude, codex-acp parseCommand). "/compact" alone compacts: context 600 -> 10. Behind a label it is words.
+    if (params.prompt.length === 1 && params.prompt[0].type === 'text' && params.prompt[0].text.trim() === '/compact') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-cmd', title: 'Compact conversation', kind: 'think', status: 'completed' } });
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000 } });
+      return { stopReason: 'end_turn' };
+    }
+    if (text === '/compact') { await say('words:/compact'); return { stopReason: 'end_turn' }; }
+    // "fill <n>": the context grows to n tokens.
+    if (/^fill \d+$/.test(text)) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: Number(text.slice(5)), size: 1000 } }); await say('filled'); return { stopReason: 'end_turn' }; }
     // Claude Code after a compaction: the prompt ends, then the agent works on with no prompt open, and only that turn's
     // usage_update with a cost says it stopped.
     if (text === 'compact') {
