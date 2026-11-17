@@ -961,9 +961,9 @@ export function createDelegate({ chat, allowed, usage }) {
     return { rules: args.rules, sentTo: chat.family().filter((c) => c.parent === caller).length };
   }
 
-  // Sprint Setup as tools (H2, H3: every metric, control and piece of information is usable by both the user and the
-  // agent): every field the page shows, read with its file's hash, and one file or one role row saved through the
-  // page's own guarded save (sprintFiles.write with that hash, O97): a file changed since is refused, never replaced, with
+  // Sprint Setup as tools (H2, H3, row 697: an agent can read and change Setup the same way the page does): every
+  // field the page shows, read with its file's hash, and one file or one role row saved through the page's own
+  // guarded save (sprintFiles.write with that hash, O97): a file changed since is refused, never replaced, with
   // the files as they are now. Who may: the chats the script tools let (hooks.where). hooks.json has its own tools.
   const SETUP = /^(?:sprint\.md|rules\.md|roles\.json|roles\/[a-z0-9][a-z0-9._-]{0,63}\.(?:instructions|rules|work)\.md)$/;
   const ROLE_KEY = (k) => typeof k === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(k) && !/^[0-9a-f]{8}-/.test(k);
