@@ -870,7 +870,7 @@ export function createDelegate({ chat, allowed, usage }) {
   function listChats(caller) {
     const family = chat.family(), me = family.find((c) => c.id === caller), mine = below(family, caller);
     const rows = chat.list().filter((c) => c.id !== caller && !c.archived && (mine.includes(c.id) || (me?.project && c.project === me.project)));
-    return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting(c.id) }), ...(chat.compacting(c.id) && { compacting: true }), waiting: c.waiting,
+    return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
       ...chat.gauge(c.id), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
       askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview })), ...(rows.length > 200 && { more: rows.length - 200 }) };
@@ -987,7 +987,11 @@ export function createDelegate({ chat, allowed, usage }) {
   const END_HOLD_MS = 3000;
   // FIX1 (Reviewer): each end takes the chat's next number and only the newest one's timer sends, so a turn or a
   // compaction run that ends within END_HOLD_MS of the last end leaves one line, its own.
+  // FIX2 (Reviewer): a prompted turn's end also takes a number (turnEnded runs for a cancelled one too, which runs no
+  // settled hook), so a cancelled second turn drops the held line. A turn answering ask_chat takes none: the held line
+  // keeps its own text (read at the end, not 3 s later) and goes, and only a prompted turn still running at 3 s drops it.
   const endGen = new Map(); // chat -> number of its latest end
+  chat.turnEnded?.((id, turn, solo) => { if (!solo) endGen.set(id, (endGen.get(id) ?? 0) + 1); });
   chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
@@ -996,13 +1000,12 @@ export function createDelegate({ chat, allowed, usage }) {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
     if (endGen.get(id) !== gen) return;
     if (!child) return void endGen.delete(id);
-    if (chat.sprint(id).ready || child.state === 'turn') return;
+    if (chat.sprint(id).ready || chat.activeTaskTurn(id)) return;
     if (child.compacting) {
       if (parent && !shelved(parent.id) && ['running', 'turn'].includes(parent.state)) chat.note(parent.id, '[p9] ' + child.title + ' is compacting and will continue.', 'p9').catch(() => {});
       return;
     }
-    const last = ok ? lastLine(chat.reply(id)).slice(0, 400) : null;
-    if (parent && last !== null && NOTHING_FOR.test(last)) return void chat.setSprint(id, { endNote: { at: Date.now(), text: last } });
+    const last = first;
     if (!parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + last : ' failed; read_chat shows why.');
     // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
