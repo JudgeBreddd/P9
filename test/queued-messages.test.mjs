@@ -99,7 +99,7 @@ test('A message sent mid-turn goes into the turn (steered); one sent past an app
   console.log('PASS steering: a message mid-turn went into the turn, not behind it; one sent past an approval declined it and reached the agent');
 });
 
-// phone-3 (Tyler's desktop screenshot, 2026-11-13: "You chose: reject", "You chose: exit-plan-bypass"): the line after an
+// phone-3 (the desktop showed "You chose: reject", "You chose: exit-plan-bypass"): the line after an
 // answer holds the button's own words, as the phone does, never its internal id.
 test('phone-3: after an approval the desktop says the button the user chose, in its own words', { timeout: 120000 }, async (t) => {
   const { launch, open, agentSaid, ends } = await setup(t, 'chose');

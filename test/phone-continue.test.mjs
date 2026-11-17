@@ -261,7 +261,7 @@ for (const agent of ['claude', 'codex']) {
 }
 
 // O37 (threat model row 18): the phone colours a reply's complete code blocks too, and leaves an unknown language plain.
-// phone-2 (Tyler, 2026-11-13: "I never got to see the actual plan. Only ... the approval buttons"): Claude's plan call arrives
+// phone-2 (the plan itself never showed, only the approval buttons): Claude's plan call arrives
 // empty and its plan comes after it, in the update and in the approval. The phone shows the plan before any choice is tapped.
 test('phone-2: the plan approval shows the plan above its choices, and the tool row opens it after', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);

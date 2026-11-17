@@ -289,11 +289,11 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
   assert.equal(order[order.indexOf('lead') + 5], 'toggle');
 });
 
-// O109 (Tyler, 2026-11-15: "I cant see what the lead is doing or find the composer"): a busy lead chat, with a worker (the
+// O109 (what the lead is doing and its composer could not be found): a busy lead chat, with a worker (the
 // sprint card), the worker's report pinned and 30 messages waiting for its turn, keeps its text box on screen and usable
 // at his window's size. Then the turn ends: the waiting messages go, and every one leaves the strip.
 // The O109 setup: a lead with one worker whose long report is pinned, working through a 66 s turn, with `queued` messages
-// waiting for its end; the window at Tyler's size with the lead open.
+// waiting for its end; the window at the size O109 was seen at, with the lead open.
 async function busyLead(t, queued) {
   const { writeFileSync } = await import('node:fs');
   const { execFileSync } = await import('node:child_process');
@@ -360,7 +360,7 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
     await box.click({ timeout: 5000 });
     assert.equal(await box.evaluate((el) => document.activeElement === el), true, name + ': the text box takes focus');
   };
-  // Folded: the box first (what Tyler could not find), then the strip says how many wait.
+  // Folded: the box first (what could not be found in O109), then the strip says how many wait.
   await onScreen('folded');
   assert.equal(await pane.locator('.queue > summary').innerText(), waiting + ' queued');
   assert.equal(await pane.locator('.queue').evaluate((el) => el.open), false);
@@ -415,7 +415,7 @@ test('O109: a worker report closes into the chat and only a new one comes back; 
   console.log('PASS O109 report+step: step named on screen; report closed into the chat, stayed closed after a reload, a new one pinned again');
 });
 
-// 712 (Tyler, 2026-11-14: "we cannot clear old workers out of the sprint box top right"): an archived worker leaves the card,
+// 712 (old workers could not be cleared out of the sprint box top right): an archived worker leaves the card,
 // as it leaves the sidebar; a stopped worker can be cleared from the card itself (one, or all stopped at once), and stays
 // cleared after a reload. The card held every child chat whatever its archive (kin() in the card had no archived filter).
 test('712: old workers clear out of the sprint box: archived ones leave it, a stopped one clears from the card, all stopped clear at once, ready ones too', { timeout: 240000 }, async (t) => {
@@ -451,7 +451,7 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
     assert.equal((await a.tool('archive_chat', { chat: id, archived: false })).action, 'unarchived');
   } // kids[4] stays: a live worker keeps its row and has no clear
   console.log('O712 stopped 5');
-  // The way archive_chat clears one, before the window opens (Tyler's try on 2026-11-14).
+  // The way archive_chat clears one, before the window opens (as tried for 712).
   await call(instance, `/chat/${kids[0]}/archive`, 'POST', { archived: true });
   const { app, page, errors } = await launch(t, instance);
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
@@ -501,7 +501,7 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   console.log('PASS 712: archived worker off the card; one stopped cleared by its x; a stopped ready row has an x; Clear 3 stopped took two plain and one ready; archived in the daemon; still gone after a reload; clearing another worker left the pinned report, clearing its own worker closed it; text box on screen');
 });
 
-// window-3 (row "A sprint never ends", Tyler 2026-11-13: the closed probe worker's report "is also still drawn above the message box"):
+// window-3 (row "A sprint never ends": the closed probe worker's report was still drawn above the message box):
 // a worker archived anywhere but its own card row (archive_chat, the sidebar, another window) left its report pinned above the box,
 // because the pinned report looked only at this browser's closed list. Archived is the daemon's word, so every window drops it.
 test('window-3: an archived worker\'s report leaves the box above the message box, and stays gone after a reload and the lead\'s next turn', { timeout: 180000 }, async (t) => {
@@ -561,7 +561,7 @@ test('window-3: an archived worker\'s report leaves the box above the message bo
   console.log('PASS window-3: a stopped worker\'s report stays pinned; archived by archive_chat it leaves the box and the card and scrolls with the chat; still gone after a reload and after the lead\'s next turn');
 });
 
-// O133 (Tyler, 2026-11-16: Settings set to "sol medium", "it keeps changing back to agent default"): Settings > New chats
+// O133 (Settings set to "sol medium" kept going back to the agent default): Settings > New chats
 // start in was kept only in the window, so a chat an agent opens never got it. A Codex default effort picked in Settings
 // survives a P9 restart, and a Codex worker a Claude chat opens with no effort runs on it, not Codex's own (medium here).
 test('O133: a Settings default effort applies to a worker an agent opens, after a restart, and Settings still shows it', { timeout: 150000 }, async (t) => {
@@ -607,8 +607,8 @@ test('O133: a Settings default effort applies to a worker an agent opens, after 
   console.log('PASS O133: a Codex default effort set in Settings survives a restart and a Codex worker opened by a Claude chat runs on it');
 });
 
-// window-4 (row 730, Tyler: "the card above the chat box labeled Worker Report, that is what goes behind the chat box showing
-// the title and clicking the title slides it up, click title again slides it down. that way its not permanently in the way").
+// window-4 (row 730: the Worker Report card above the chat box goes behind it showing its title; clicking the title slides it
+// up, clicking again slides it down, so it is never permanently in the way).
 test('window-4: the worker report floats folded to its title above the box, slides up and down from it, and the chat never moves', { timeout: 240000 }, async (t) => {
   const { instance, parent, made, a, kid, head, page, errors, pane } = await busyLead(t, 0);
   const card = pane.locator(`.card-pin[data-card="ready-${made.chat}"]`), title = card.locator('[data-card-tab]'), body = card.locator('.tb');

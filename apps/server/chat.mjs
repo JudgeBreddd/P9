@@ -63,8 +63,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // number here and P9_ACP_VERSION=1 in the daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
 // Claude asks for 1 (0.1.9 phase 4.5, OPEN-ITEMS "A message cannot be sent while a turn runs"): its adapter (0.106.0)
 // has `_session/steering` only on 1, and without it a message sent mid-turn waited for the turn's end instead of going
-// in at the next tool-call boundary (session.steering, hold() and toolStep() below). Tyler, 2026-11-15: "steer should
-// send to the agent betwen turns (tool calls) but not cancel a running tool call". Back to 2 once the adapter
+// in at the next tool-call boundary (session.steering, hold() and toolStep() below). Steer goes to the agent
+// between tool calls and never cancels a running tool call. Back to 2 once the adapter
 // advertises steering there: the ACP 2 case in test/real-adapter-steering.test.mjs goes red once it does.
 const ACP_ASK = { claude: 1, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
@@ -488,7 +488,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // it), and with no other sender's message. A keyed worker's roles/<key>.rules.md follows it.
   const sprintFiles = createSprintFiles({ home: (ownership || state) && path.join(ownership || state, 'sprints') });
   // The work queue of a keyed worker (sprint method rule 4): its role's items in the lead's plan, each with P9's own
-  // review record (ready = queued, verdict = fix or passed). The card's ring is done/total (window-8, Tyler 2026-11-15:
+  // review record (ready = queued, verdict = fix or passed). The card's ring is done/total (window-8:
   // done is counted by P9 from the chat's state, not from a model's report). plans: one read of each plan per list.
   const queueOf = (parent, key, state, plans = new Map()) => {
     if (!parent || !key) return null;
@@ -524,7 +524,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const at = notesOf(id), file = at && sprintFiles.fileOf(at.lead, at.name);
     if (file) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, notesLine(file));
   };
-  // O139 (Tyler, 2026-11-16: label a compaction, do not hide it): Claude Code compacts just after a prompted turn ends
+  // O139 (a compaction is labelled, not hidden): Claude Code compacts just after a prompted turn ends
   // (p50 0.5 s in P9's own history) and then works on with no prompt open. Until that unprompted run ends the chat
   // counts as compacting (delegate.mjs: the parent is told so, wait_chat waits on). Its end is the first usage_update
   // whose cost is above the one sent with the compaction; or 60 s with no update from the agent (a failed compaction
@@ -925,7 +925,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         let update = session.window && raw?.sessionUpdate === 'usage_update' && raw.size > session.window ? { ...raw, size: Math.max(session.window, Number(raw.used) || 0) } : raw;
         // O48: a profile chat does not spend the Claude plan, so nothing it reports may reach the plan's usage rows.
         if (session.profile && update?.sessionUpdate === 'usage_update' && update._meta?.['_claude/rateLimit']) { const { '_claude/rateLimit': _, ...rest } = update._meta; update = { ...update, _meta: rest }; }
-        // O130 (Tyler, 2026-11-16: only the user or the parent chat changes a model): a helper agent's settings come through
+        // O130 (only the user or the parent chat changes a model): a helper agent's settings come through
         // here too, the first tagged with its tool call, the rest not, each listing only the helper's one model. Neither is the
         // chat's: nothing is set, saved or sent, so a resume puts back what the chat was on. ponytail: an agent that really
         // drops models mid-session is read again at its next start.
@@ -1370,7 +1370,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // No steering: 409 as before, and the window keeps the message queued itself.
           // During a turn that answers another chat, everything waits for its end.
           // O133: a steer joins the running turn, which keeps its model and effort, so a message that picks another one waits
-          // for the turn's end and goes as the next prompt, which sets them first (Tyler, 2026-11-16: an Opus pick sent
+          // for the turn's end and goes as the next prompt, which sets them first (O133: an Opus pick sent
           // mid-turn was steered in and the chat stayed on Sonnet, with no config event). A mode other than the session's too.
           // O133 mode half: a mode is set by the next prompt too (want below), so one other than the session's waits the same
           // way. Under the agent lock every prompt runs narrow whatever it picks, so there a mode pick changes nothing.
@@ -1666,7 +1666,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // setup: the owner's command run in each new worker folder before its worker starts; left out when empty (A4).
       return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max, ...(typeof v?.setup === 'string' && v.setup && v.setup.length <= 2000 && { setup: v.setup }),
         workers: Array.from({ length: max }, (_, i) => { const x = Array.isArray(v?.workers) ? v.workers[i] : null, a = agent(x?.agent); return { agent: a, model: a ? str(x?.model) : '', effort: a ? str(x?.effort) : '' }; }) }; },
-    // O133 (Tyler, 2026-11-16: the Settings defaults "keep changing back to agent default"): Settings > New chats start in,
+    // O133 (the Settings defaults kept going back to the agent default): Settings > New chats start in,
     // each agent's Default model and Default effort ('' the agent's own), kept here so a chat an agent opens starts on them
     // too, not only one the window makes. Kept in prefs under 'start-defaults'.
     newChatDefaults: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'start-defaults'").get()?.value ?? '{}'); } catch { v = {}; }

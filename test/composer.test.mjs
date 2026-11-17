@@ -150,7 +150,7 @@ test('CP7: Esc on a turn the daemon has no handle on leaves the chat idle, with 
   console.log('PASS CP7: Esc with no daemon turn left the chat idle and showed no error');
 });
 
-// O-702 (Tyler, 2026-11-15: desktop said Steer and Queue, the phone Steer and Interrupt): the desktop chip shows the
+// O-702 (desktop said Steer and Queue, the phone Steer and Interrupt): the desktop chip shows the
 // phone card's three words in its order, each with the phone's title, and its Interrupt stops the turn and sends the text
 // as the next prompt, as Ctrl Enter does. The phone card is read from phone.astro, so a word changed on one screen fails here.
 test('CP11: the chip shows Steer, Queue, Interrupt as the phone does; Interrupt stops the turn and sends', { timeout: 120000 }, async (t) => {

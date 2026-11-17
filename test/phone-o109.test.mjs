@@ -8,7 +8,7 @@ import { phone } from './phone-c16-helpers.mjs';
 const BUSY = '00000000-0000-4000-8000-000000010901', QUEUED = 30;
 const shot = async (page, name) => { const png = await page.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 
-// A busy coordinated chat, as Tyler's lead chat on 2026-11-15: a turn running a long tool step, 30 messages waiting for
+// A busy coordinated chat, as the lead chat in O109: a turn running a long tool step, 30 messages waiting for
 // it (plus one already delivered), a sprint card and a worker report pinned.
 function seed(server) {
   const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));

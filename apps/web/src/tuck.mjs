@@ -1,5 +1,5 @@
-// window-4 (row 730, Tyler: "goes behind the chat box showing the title and clicking the title slides it up, click title
-// again slides it down"): the open worker report drawn as a tab that floats on the chat just above the bottom. Only its title
+// window-4 (row 730: it sits behind the chat box showing its title; clicking the title slides it up, clicking again slides
+// it down): the open worker report drawn as a tab that floats on the chat just above the bottom. Only its title
 // shows until it is clicked, so it never pushes the history up; its body stays in the page (inert, no height) while folded.
 // Loaded by pinned.mjs only once a report is open, so the shell's startup JS stays inside its budget (shell-bundle.test.mjs).
 import { esc } from './helpers.mjs';
