@@ -82,6 +82,19 @@ export function missingLibrary(text) {
   return file ? LIBRARY_PACKAGES[file] ?? file : null;
 }
 
+// O72: some chats' Claude engines hold one inotify watch per folder under the chat's git root (O46: about 5,400 in a
+// large workspace), so on a machine with a small limit (8,192 on some setups) two chats use it up and other programs
+// that watch files fail with "no space left". Linux only; the file is a parameter so a test can stand one in.
+export const WATCH_LIMIT_MIN = 65536;
+export async function watchLimit(platform = process.platform, file = '/proc/sys/fs/inotify/max_user_watches') {
+  if (platform !== 'linux') return null;
+  const limit = Number.parseInt(await readFile(file, 'utf8').catch(() => ''), 10);
+  if (!Number.isSafeInteger(limit)) return null;
+  return { limit, warning: limit < WATCH_LIMIT_MIN ? `inotify watch limit ${limit} is below ${WATCH_LIMIT_MIN}: each chat can hold about `
+    + `5,400 watches, so a few chats can use it up. Raise it: echo fs.inotify.max_user_watches=524288 | sudo tee `
+    + `/etc/sysctl.d/60-p9-watches.conf && sudo sysctl --system` : null };
+}
+
 // install: the Linux service-install.log (appImageService), read only for a missing library.
 export function collectBundle({ status, journal, daemon, install = '' }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
@@ -331,6 +344,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     journal: command('journalctl', ['--user', '-u', unitFor(values.state), '-n', '100', '-o', 'json', '--no-pager']),
     install: await readFile(path.join(os.homedir(), '.local', 'share', 'p9', 'service-install.log'), 'utf8').then((text) => text.slice(-4000), () => ''),
   }) });
+  const watches = await watchLimit();
+  if (watches) bundle.watchLimit = watches.limit;
+  if (watches?.warning) process.stderr.write('warning: ' + watches.warning + '\n');
   const text = JSON.stringify(bundle, null, 2) + '\n';
   if (values.bundle) await writeFile(values.bundle, text, { flag: 'wx', mode: 0o600 });
   else process.stdout.write(text);
