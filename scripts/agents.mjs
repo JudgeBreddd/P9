@@ -3,7 +3,7 @@
 // Each comes from registry.npmjs.org by exact version and must match the sha512 integrity this app's pnpm-lock.yaml pins
 // (bundle-daemon.mjs wrote both into agents.json); a mismatch installs nothing and exits 1.
 // P9_AGENTS_FROM=folder: take the .tgz files from that folder instead of the registry (the tests; the same check applies).
-// Builder, 2026-11-02 (the install spent 55 of its 70 s here): arguments claude and/or codex fetch only those; --keep FOLDER
+// The install spent 55 of its 70 s here: arguments claude and/or codex fetch only those; --keep FOLDER
 // first takes each pinned package the old install there already has (hard links, no download), and alone fetches nothing,
 // so install.sh --slim keeps the owner's agents through an update and the desktop fetches the rest once connected. No
 // arguments: every agent, as before. A package already here at its pinned version is left as it is.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stands alone (Builder, 2026-11-07): nothing shipped in P9 may need the builder's ICM workspace to work, and no optional setting
+# Stands alone: nothing shipped in P9 may need a developer's own ICM workspace to work, and no optional setting
 # shaped like an ICM thing may be added either. This greps the shipped source for the strings those leaks are made of and
 # compares the count per file and pattern against scripts/stands-alone-baseline.txt (the leaks that already shipped, kept
 # only until each is made P9-native or removed). New hits fail; a smaller count passes and is printed so the baseline

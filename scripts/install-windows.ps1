@@ -41,7 +41,7 @@ if (-not $Workspace) {
       if ($i -ge 0) { $Workspace = $old.argv[$i + 1] }
       # A saved folder that is not there now (an unplugged drive, a locked or offline share) failed every reinstall with
       # workspace-not-found. The task keeps it; the daemon runs on the default folder until it is back and /health says so
-      # (the owner 2026-10-22, Fable review finding 1). An explicit -Workspace that does not exist still fails below.
+      # (Fable review finding 1). An explicit -Workspace that does not exist still fails below.
       if ($Workspace -and -not (Test-Path -LiteralPath $Workspace -PathType Container)) {
         Say ('saved workspace ' + $Workspace + ' is not there now; the task keeps it and the daemon uses the default ' + (Join-Path $env:USERPROFILE 'P9') + ' until it is back')
         $away = $true
