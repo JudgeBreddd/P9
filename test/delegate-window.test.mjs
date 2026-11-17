@@ -291,7 +291,7 @@ test('project cut keeps an opened worker group together', { timeout: 60000 }, as
 
 // O109 (what the lead is doing and its composer could not be found): a busy lead chat, with a worker (the
 // sprint card), the worker's report pinned and 30 messages waiting for its turn, keeps its text box on screen and usable
-// at his window's size. Then the turn ends: the waiting messages go, and every one leaves the strip.
+// at the window size O109 was seen at. Then the turn ends: the waiting messages go, and every one leaves the strip.
 // The O109 setup: a lead with one worker whose long report is pinned, working through a 66 s turn, with `queued` messages
 // waiting for its end; the window at the size O109 was seen at, with the lead open.
 async function busyLead(t, queued) {

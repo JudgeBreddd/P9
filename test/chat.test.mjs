@@ -81,7 +81,7 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   assert.ok(next.hit);
 });
 
-// phone-1 (2026-11-15): "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
+// phone-1: "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
 // desktop. The decline ends the turn as cancelled; an approve followed by the same failure still shows it.
 test('declining the plan ends the turn as cancelled, not as an error', async (t) => {
   const instance = await start(t);
@@ -236,7 +236,7 @@ test('agent lock: no-write mode for new and running sessions, permission request
   const before = await create(instance, 'codex');
   await call(instance, `/chat/${before}/prompt`, 'POST', { text: 'mode' });
   let at = (await until(instance, said(before, 'mode:agent'))).cursor;
-  // An approval already waiting when the lock turns on is rejected, not left for Builder.
+  // An approval already waiting when the lock turns on is rejected, not left for the user.
   const waiting = await create(instance);
   await call(instance, `/chat/${waiting}/prompt`, 'POST', { text: 'permission' });
   at = (await until(instance, (event) => event.type === 'approval' && event.conversation === waiting, at)).cursor;
@@ -275,7 +275,7 @@ test('agent lock: no-write mode for new and running sessions, permission request
   console.log('PASS agent lock: bad bodies 400; running codex read-only, new claude plan, waiting and new approvals rejected unseen; kept across restart; off restores default and approvals');
 });
 
-// Builder, 2026-10-17: the chat said Auto but Claude asked before every command; the picker never reached the agent.
+// The chat said Auto but Claude asked before every command; the picker never reached the agent.
 test('mode picker: each prompt sets the picked mode, unknown modes refused, the lock still wins', async (t) => {
   const instance = await start(t);
   let at = 0;
@@ -341,7 +341,7 @@ test('agent images from disk: an opened image file named only by its path is rea
   console.log('PASS agent images from disk: path and file:// read as PNG, reply link read, fake.png, 6 MiB+, folder, FIFO and relative path left as links');
 });
 
-// Builder, 2026-10-19: "When creating a new chat, a dropdown with what folder i want to open the chat in would be great."
+// A new chat gets a dropdown of the folder to open it in.
 // Threat model row 24: the folder is checked like a file path, kept, and checked again at every start.
 test('chat folder: the agent starts and resumes in it; outside, linked, locked or file paths are refused', async (t) => {
   const instance = await start(t);
@@ -396,7 +396,7 @@ test('model picker and slash commands: the agent\'s own models and commands reac
 });
 
 test('chat name: the title the agent sends is tidied, listed and kept across a restart', async (t) => {
-  // Builder, 2026-10-19: "have the tabs at the top for each chat show the chats name."
+  // The tabs at the top show each chat's name.
   const instance = await start(t);
   const id = await create(instance);
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'title   Fix the\n  login bug ' })).status, 202);
@@ -605,7 +605,7 @@ test('Stop ends everything the session started, setsid children included, inside
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'detach' });
   const pid = Number((await until(instance, said(id, 'detach:'))).hit.data.content.text.slice(7));
   assert.ok(alive(pid), 'setsid child running');
-  // Only scopes this test started count: the live daemon may be running a chat of Builder's at the same time.
+  // Only scopes this test started count: the live daemon may be running the user's own chat at the same time.
   const ours = () => units().split('\n').filter((row) => / loaded active/.test(row)).map((row) => row.split(' ')[0]).filter((name) => !before.has(name));
   assert.ok(ours().length > 0, 'the chat runs in its own scope');
   const began = Date.now();
@@ -921,7 +921,7 @@ test('U4: a chat starts in a folder outside the workspace only in Unrestricted m
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside })).status, 400, 'mode off: refused as before');
   assert.equal((await call(instance, '/files/folders?path=')).status, 403, 'mode off: no walk past the workspace');
   assert.equal(JSON.parse((await call(instance, '/file-protection', 'POST', { on: false })).text).on, false);
-  // The picker's walk (Builder, 2026-11-02: "click in and out of folders"): '' is the workspace, '..' is its parent, folders only.
+  // The picker's walk (click in and out of folders): '' is the workspace, '..' is its parent, folders only.
   await writeFile(path.join(instance.directory, 'loose.txt'), 'x');
   const home = await json(call(instance, '/files/folders?path='));
   assert.equal(home.body.path, home.body.workspace);
@@ -936,7 +936,7 @@ test('U4: a chat starts in a folder outside the workspace only in Unrestricted m
     assert.equal((await call(instance, '/files/folders?' + new URLSearchParams({ path: bad }))).status, status, bad);
   for (const folder of [path.join(instance.directory, 'missing'), path.join(instance.directory, 'workspace', 'note.txt'), instance.state])
     assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder })).status, 400, folder);
-  // Typed with a trailing slash (Builder, 2026-11-02: "Chat create: request-refused"): the same folder.
+  // Typed with a trailing slash (it was refused with "Chat create: request-refused"): the same folder.
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside + '/' })).status, 201, 'trailing slash');
   const made = await json(call(instance, '/chat', 'POST', { provider: 'claude', folder: outside }));
   assert.equal(made.status, 201, made.text);

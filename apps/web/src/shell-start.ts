@@ -100,7 +100,7 @@ const keepLine = (host: string, background?: boolean, k?: Keeping, slim?: boolea
   if (k?.phase === 'failed') return ['Could not change how P9 runs on ' + host, 'Try again'];
   return background ? ['P9 on ' + host + ' is temporary' + (slim ? ' (no Mission Control)' : '') + ': it stops when you disconnect', 'Make it always on'] : null;
 };
-// Builder, 2026-11-02: the agents downloading on the slim Temporary P9 there after connecting (desktop main.mjs fetchAgents).
+// The agents downloading on the slim Temporary P9 there after connecting (desktop main.mjs fetchAgents).
 type Agent = 'claude' | 'codex';
 type Agents = { phase: 'running' | 'done' | 'failed'; names: Agent[]; error?: string };
 const agentNames = (names: Agent[]) => names.map(n => n === 'claude' ? 'Claude' : 'Codex').join(' and ');
@@ -232,7 +232,7 @@ export function startShell() {
         const dialog = document.getElementById('keepDlg') as HTMLDialogElement | null;
         const askKeep = ok && !!result.ask && !keepAsked && !!window.p9?.remoteKeep;
         const offer = ok && !!result.keyOffer && result.keyOffer.id !== keyAsked && !!window.p9?.sshKey;
-        // Builder, 2026-11-02: which agents to download there, on the first connect to a slim Temporary P9 (or the machine menu's
+        // Which agents to download there, on the first connect to a slim Temporary P9 (or the machine menu's
         // AI agents asked again). Answered, main stops asking, so the next ask is due again only after another ask from the menu.
         if (!result.agentsAsk) agentsAsked = false;
         const askAgents = ok && !!result.agentsAsk && !agentsAsked && !!window.p9?.remoteAgents;
