@@ -155,15 +155,19 @@ test('Item 4: Paste wraps in the bracketed-paste markers only when the program t
     await clip(text);
     const mark = (await sent(page)).length;
     await page.click('[data-key="paste"]');
-    await page.waitForTimeout(400);
+    // xterm hands a paste to the socket as one frame: wait for it (bounded), not a fixed time.
+    await page.waitForFunction((n) => window.p9sent.join('').length > n, mark, { timeout: 5000 });
     return (await sent(page)).slice(mark);
   };
   // What a program does: sets bracketed paste (DEC mode 2004) on or off and keeps the terminal (cat just echoes, so nothing
   // pasted here runs). A shell is no good for "off": its line editor turns the mode back on at every prompt.
   const program = async (mode) => {
     await page.click('#screen'); await page.keyboard.press('Control+c');
-    await page.keyboard.type("printf '\\033[?2004" + mode + "'; cat"); await page.keyboard.press('Enter');
-    await page.waitForTimeout(500);
+    // PD-1 (c): the mode is on only once the screen has read the printf; a fixed wait lost that race in CI (the paste came
+    // back whole but plain). The marker is printed after the mode and is not in the typed line (%s), so seeing it means
+    // the terminal has the mode.
+    await page.keyboard.type("printf '\\033[?2004" + mode + "p9%s\\n' mode-" + mode + "; cat"); await page.keyboard.press('Enter');
+    await page.waitForFunction((m) => document.querySelector('#screen .xterm-rows')?.textContent.includes('p9mode-' + m), mode, { timeout: 10000 });
   };
   const two = 'first line\nsecond line';
   await program('l');
