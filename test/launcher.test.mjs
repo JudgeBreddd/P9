@@ -127,7 +127,7 @@ test('O22: a staged node missing libatomic names libatomic1 and installs no unit
 test('O135: a drop-in that runs a source copy is not restarted; its path is logged and returned', { skip: process.platform === 'win32', timeout: 30_000 }, async () => {
   const source = await daemon('5.0.0');
   const teh = new URL('../scripts/teh.mjs', import.meta.url).href;
-  const once = async (shows) => {
+  const once = async (shows, fails = false) => {
     const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-home-')));
     const resources = await mkdtemp(path.join(os.tmpdir(), 'p9-resources-')), bin = await mkdtemp(path.join(os.tmpdir(), 'p9-bin-'));
     await execFileAsync('cp', ['-r', source, path.join(resources, 'daemon')]);
@@ -135,7 +135,7 @@ test('O135: a drop-in that runs a source copy is not restarted; its path is logg
     await mkdir(units, { recursive: true });
     await writeFile(path.join(units, 'p9-foundation.service'), `[Service]\nExecStart=${launcher}\n`);
     await writeFile(path.join(bin, 'shows'), shows(launcher));
-    await writeFile(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${bin}/calls"\n[ "$2" = show ] && cat "${bin}/shows"\nexit 0\n`, { mode: 0o755 });
+    await writeFile(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${bin}/calls"\n[ "$2" = show ] && ${fails ? 'exit 1' : `cat "${bin}/shows"`}\nexit 0\n`, { mode: 0o755 });
     const { stdout } = await execFileAsync(process.execPath, ['--input-type=module', '-e',
       `const m = await import(${JSON.stringify(teh)}); console.log(JSON.stringify(await m.appImageService(process.argv[1], '/nonexistent.AppImage') ?? null))`, resources],
     { env: { ...process.env, HOME: home, PATH: bin + ':' + process.env.PATH }, timeout: 20_000 });
@@ -147,7 +147,17 @@ test('O135: a drop-in that runs a source copy is not restarted; its path is logg
   assert.deepEqual(dropIn.result, { checkout: `/usr/bin/node ${checkout}` }, 'returned for the window');
   assert.deepEqual(dropIn.calls.filter((c) => !c.includes(' show ')), [], 'the drop-in\'s service was restarted: ' + JSON.stringify(dropIn.calls));
   assert.match(dropIn.log, new RegExp(`a source checkout's unit; left as it is: /usr/bin/node ${checkout}`));
-  const own = await once((launcher) => `{ path=${launcher} ; argv[]=${launcher} ; ignore_errors=no }\n`);
+  // FIX1 (Reviewer): no restart without a read, parsed ExecStart whose program is the launcher.
+  const named = await once((launcher) => `{ path=/usr/bin/bash ; argv[]=/usr/bin/bash -c ${launcher} ; ignore_errors=no ; pid=0 }\n`);
+  assert.deepEqual(named.calls.filter((c) => !c.includes(' show ')), [], 'another program naming the launcher was restarted');
+  assert.match(named.result.checkout, /^\/usr\/bin\/bash -c /);
+  for (const [why, shows] of [['empty', () => ''], ['unparseable', (launcher) => launcher + '\n'], ['failed', null]]) {
+    const unknown = await once(shows ?? (() => ''), !shows);
+    assert.deepEqual(unknown.result, { checkout: null }, why);
+    assert.deepEqual(unknown.calls.filter((c) => !c.includes(' show ')), [], why + ': restarted without knowing what runs');
+    assert.match(unknown.log, /what the service runs could not be read; left as it is/, why);
+  }
+  const own = await once((launcher) => `{ path=${launcher} ; argv[]=${launcher} ; ignore_errors=no ; pid=0 }\n`);
   assert.ok(own.calls.includes('--user restart p9-foundation.service'), 'a launcher service is still restarted onto the new version: ' + JSON.stringify(own.calls));
   console.log('PASS O135: a drop-in running a source copy is left, logged and returned; a launcher service is restarted');
 });
