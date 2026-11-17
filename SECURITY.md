@@ -1098,7 +1098,8 @@ worker folder is made. Written before the code (sprint spec S19; threat model ro
   the question, except in Unrestricted mode (agent lock and File protection both off), where it runs without asking,
   as `run_script` does. Either way only the copy approved at Start runs, found by name; a row that is only in
   `hooks.json` or only in the library is refused, with the reason. If the approved copy changed while you were
-  asked, nothing runs. The run is not blocking, has the 60-second limit, gets the same state on its input with
+  asked, nothing runs. For the agent's run, the cancel, the agent lock and the approved copy are checked once more
+  right before the program is started, after its input is gathered. The run is not blocking, has the 60-second limit, gets the same state on its input with
   `subject: { manual: true, by }`, and adds its line to `hooks.log` with the point marked "(run now)". A manual run
   carries the limit of the approval above: it runs whatever the named program holds at that moment.
 - **Where the owner's routes are.** `GET` and `POST /sprint-scripts` and `POST /sprints/:id/run-script` exist on the

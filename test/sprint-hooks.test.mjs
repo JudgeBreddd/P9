@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { parse, run, said, clean, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
+import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
 import { planItems } from '../apps/server/sprint-files.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -428,4 +428,33 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { fs.ap
   assert.equal((await B.tool('run_sprint_script', { name: 'mine', sprint: B.sprint })).error, 'script-not-approved');
   noEvil('a script nobody approved ran');
   console.log('PASS S18: library saved in A, added in B, approved at Start and run there; a library edit changed no sprint; run_sprint_script asked, ran the approved copy, ran nothing when the approved copy changed while it asked, refused unapproved and library-only scripts; the lock refused every write and run');
+});
+
+// The state a run is given is gathered with waits (the usage reading among them). A lock, a cancel or a new Start that
+// lands in that wait must still stop the run: the checks are repeated right before the start. The hooks are built here
+// on a stand-in chat service whose usage reading is held open, so the test decides what happens during the wait.
+test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lock and the approved copy again right before it starts the script', { timeout: 60000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-held-')), mark = path.join(dir, 'ran'), prog = path.join(dir, 'mark.mjs');
+  fs.writeFileSync(prog, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(mark)}, 'x');\n`);
+  const id = '11111111-1111-4111-8111-111111111111', script = { name: 'mark', command: `${process.execPath} ${prog}`, point: 'sprint-start', blocking: false };
+  const held = async (during) => {
+    let lock = false, scripts = [script], reached, release; const at = new Promise((r) => { reached = r; }), ac = new AbortController();
+    const chat = { lock: () => ({ on: lock }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
+      sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [],
+      sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
+      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts }), prepOf: () => null, record: async () => null } };
+    const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
+    const going = hooks.run(id, { name: 'mark' }, ac.signal);
+    await at; // the user said yes, every first check passed, and the run now waits for the state
+    during({ lockOn: () => { lock = true; }, cancel: () => ac.abort(), restart: () => { scripts = [{ ...script, command: script.command + ' changed' }]; } });
+    release(null);
+    return going;
+  };
+  assert.equal((await held((d) => d.cancel())).error, 'cancelled');
+  assert.equal((await held((d) => d.lockOn())).error, 'agent-lock-on');
+  assert.equal((await held((d) => d.restart())).error, 'scripts-changed');
+  assert.equal(fs.existsSync(mark), false, 'a script ran after a cancel, the lock or a new Start landed while its state was gathered');
+  const ran = await held(() => {});
+  assert.deepEqual([ran.exit, ran.script, fs.readFileSync(mark, 'utf8')], [0, 'mark', 'x'], JSON.stringify(ran));
+  console.log('PASS S18 held: a cancel, the agent lock and a changed approval during the wait for the state each ran nothing; with none of them the script ran once');
 });

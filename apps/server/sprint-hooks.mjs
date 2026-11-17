@@ -238,9 +238,11 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       : inLibrary ? `"${name}" is only in the library. Add it to the sprint (sprint_script_add); it runs after the user starts the sprint again.` : `This sprint has no approved script named "${name}".` };
   }
   // One approved script, now, waited for. Its input is the same state, with subject { manual: true, by } (by: 'owner' or
-  // the asking chat). It refuses nothing: its result is returned and logged.
-  async function runNow(sprint, script, by) {
+  // the asking chat). It refuses nothing: its result is returned and logged. still: asked after the state is gathered
+  // (which waits), right before the start; what it answers is returned instead and nothing runs.
+  async function runNow(sprint, script, by, still) {
     let base; try { base = await state(sprint, script.point, { manual: true, by }); } catch { base = { contract: 1, point: script.point, error: 'state-unavailable' }; }
+    const no = still?.(); if (no) return no;
     const r = await run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking });
     record(sprint, { ...script, point: script.point + ' (run now)' }, r);
     return { sprint, script: script.name, point: script.point, exit: r.exit, reason: r.reason, ms: r.ms, line: r.line };
@@ -253,11 +255,14 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     const script = runnable(at.sprint, args.name);
     if (script.error) return script;
     if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title: 'P9 sprint script: run now, as you, outside every agent\'s mode: ' + said(script), kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
-    if (signal?.aborted) return { error: 'cancelled' };
-    const late = locked(caller); if (late) return late;
-    const now = runnable(at.sprint, args.name);
-    if (now.error || JSON.stringify(now) !== JSON.stringify(script)) return { error: 'scripts-changed', detail: 'The approved scripts changed while the user was asked. Read sprint_scripts and ask again.' };
-    return runNow(at.sprint, script, caller);
+    // Checked after the yes and again right before the start: a cancel, the lock or a new Start in between runs nothing.
+    const still = () => {
+      if (signal?.aborted) return { error: 'cancelled' };
+      const late = locked(caller); if (late) return late;
+      const now = runnable(at.sprint, args.name);
+      return now.error || JSON.stringify(now) !== JSON.stringify(script) ? { error: 'scripts-changed', detail: 'The approved scripts changed while the user was asked. Read sprint_scripts and ask again.' } : null;
+    };
+    return still() ?? runNow(at.sprint, script, caller, still);
   }
   // The owner's own (the project page, desktop only): the library, and a run of one approved script.
   // sprint named: that sprint's hooks.json (checked and saved as the tools do); left out: the library.
