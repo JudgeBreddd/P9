@@ -667,7 +667,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `compact_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `compact_chat`, `rename_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -685,6 +685,10 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   sending chat. It is refused while the chat is in a turn or waiting on an answer, while its sprint is
   paused, and while a moved-chat note waits to go in with the next message; notes, rules and the
   project text that wait go in with the next ordinary message. Reach is that of `archive_chat`.
+- **Renaming.** `rename_chat` renames the caller's own chat or a chat it started, as the sidebar's
+  rename does (one line, 1 to 120 characters); P9 then stops naming it from its messages. It reaches
+  no further than `archive_chat`, so an agent cannot rename its parent, a chat beside it or any chat
+  of yours, and you can rename the chat again.
 - **Archiving.** `archive_chat` moves a chat the caller started to Archived, or back. It is the
   sidebar's Archive and nothing more: the chat, its messages and its files stay, and you can
   open it or unarchive it from the Archived page. Like `stop_chat` it reaches only the chats the
@@ -739,7 +743,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
-- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat`, `compact_chat` and `answer_chat` are refused while it
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat`, `compact_chat`, `rename_chat` and `answer_chat` are refused while it
   is on, as are `ready`, `verdict` and `close_sprint`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
@@ -940,8 +944,16 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   the permission, in every mode except while the agent lock is on, which refuses `open_chat` first.
 - **Clean-up removes a whole worker folder, and keeps one only for work git can see.** Cleaning a sprint's folders removes a worker folder only when it has nothing
   unsaved, it is still on its own sprint branch, and that branch's newest commit is in the main line (or, after a
-  squash merge, every file it changed is the same in the main line, compared by exact file name, a rename as both its old and new
-  name). "Nothing unsaved" looks only at what git tracks or would track: a changed tracked file, or a new file git
+  squash merge, merging that commit into the main line would change nothing there: git's own three-way merge, `git
+  merge-tree`, ends on the main line's exact tree, also after later PRs changed the same files elsewhere). A conflict,
+  for example when the main line later rewrote the very lines the worker wrote, or a git too old for `merge-tree
+  --write-tree` (before 2.38), keeps the folder. The sprint's clone, which holds every worker's branch, goes only after its
+  last worker folder, with nothing stashed, and with every local branch either landed in the same sense or held by a branch
+  or tag that exists at that moment in the folder the clone was made from, or in its remote when that is on this disk (P9
+  runs a read-only `git for-each-ref` there; the folder's path is kept in the clone's own git config).
+  The clone's own remote-tracking refs do not count, since the outside branch may have been reset or deleted after the
+  last fetch. A remote at an address cannot be asked, so a branch only there and not landed keeps the clone, and so does anything
+  git cannot answer. A clone kept this way is not named in the button's kept list. "Nothing unsaved" looks only at what git tracks or would track: a changed tracked file, or a new file git
   does not ignore. Removing a folder removes everything in it, including files git ignores (build output, a local env
   file or database, anything not committed and not tracked); P9 does not look for them and does not keep a folder for
   them, and the "Clean up worker folders" button says so beside it. Its branch is
