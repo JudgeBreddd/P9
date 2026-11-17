@@ -808,3 +808,33 @@ test('O48 on the phone: New chat lists each provider profile\'s models; the chat
   assert.deepEqual([row.provider, row.profile?.id, row.profile?.model], ['claude', id, 'kimi-k3:cloud'], 'the chat the phone started is not on the profile and model picked');
   console.log('PASS O48 on the phone: names read as id, name, models only (no base URL, key or key kind; 401 with no session; /profiles still 404); the sheet listed both models with the name as text; the chat started on the profile and model picked; an unlisted model was refused with no chat');
 });
+
+// O59: the chat header names the model the chat's Model sheet shows. A Claude chat next to a Codex chat on another
+// model (as a chat that started a child chat on another agent): back on the Claude chat, no header it draws names the
+// other chat's model. Every header text is recorded as it is drawn, so a wrong first draw fails even if a later one fixes it.
+test('O59: back on a chat, its header names its own model, never the model of the chat shown before', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
+  const parent = await newChat(page, 'claude');
+  await send(page, 'model'); await replied('model:default');
+  await newChat(page, 'codex');
+  await send(page, 'model'); await replied('model:default');
+  await page.click('#modelBtn'); await page.click('#sheet[open] [data-model="opus"]');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 });
+  await send(page, 'model'); await replied('model:opus');
+  await page.waitForFunction(() => document.querySelector('#modelBtn').textContent.trim() === 'Codex · Opus', null, { timeout: 10000 });
+  await page.evaluate(() => {
+    const seen = window.o59 = [];
+    new MutationObserver(() => { const b = document.querySelector('[data-bar="chat"] #modelBtn'); if (b) seen.push([document.querySelector('#conversation').value, b.textContent.trim()]); })
+      .observe(document.querySelector('[data-bar="chat"]'), { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  await page.click('[data-bar="chat"] [data-back]');
+  await page.click(`#chatList [data-chat="${parent}"]`);
+  // Drawn: the chat's own model list is in the Model select (the sheet reads it); the header is drawn in the same pass.
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#model').value === 'default' && !document.querySelector('#events').textContent.includes('Loading'), parent, { timeout: 10000 });
+  assert.equal(await page.locator('#modelBtn').innerText(), 'Claude · Default (recommended)', 'the header does not name the model the Model sheet shows');
+  const drawn = await page.evaluate((id) => window.o59.filter(([chat]) => chat === id).map(([, text]) => text), parent);
+  assert.deepEqual(drawn.filter((text) => text !== 'Claude · Default (recommended)'), [], 'the Claude chat\'s header named another model: ' + String(JSON.stringify(drawn)));
+  await page.click('#modelBtn');
+  assert.equal(await page.locator('#sheet[open] [data-model][aria-checked="true"]').innerText(), 'Default (recommended)');
+});
