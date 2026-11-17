@@ -279,7 +279,8 @@ const connection = acp.connectAgent(stream, {
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }
     if (text === 'cwd') { await say('cwd:' + cwd); return { stopReason: 'end_turn' }; }
-    if (text === 'mcp') { await say('mcp:' + JSON.stringify(mcpServers)); return { stopReason: 'end_turn' }; }
+    // A chat's notes kept for its next message go in front of it (chat.mjs parked): 'mcp' as the last block still answers.
+    if (text === 'mcp' || params.prompt.at(-1)?.text === 'mcp') { await say('mcp:' + JSON.stringify(mcpServers)); return { stopReason: 'end_turn' }; }
     if (text.startsWith('probe ')) {
       // Phase 10: try whatever credentials this agent can see against the remote port (test/credential-probe.mjs).
       const [, port, host, probe, ...rest] = text.split(' ');

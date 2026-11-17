@@ -1066,7 +1066,9 @@ export function createDelegate({ chat, allowed, usage }) {
   // keeps its own text (read at the end, not 3 s later) and goes, and only a prompted turn still running at 3 s drops it.
   const endGen = new Map(); // chat -> number of its latest end
   chat.turnEnded?.((id, turn, solo) => { if (!solo) endGen.set(id, (endGen.get(id) ?? 0) + 1); });
-  chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
+  // FIX3 (CI, sprint-pause): whether the parent was running at the end is read at the end, like waited. A parent that was
+  // stopped then (after a restart, say) and started within END_HOLD_MS gets no end line steered into its new turn.
+  chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), live = Boolean(at && ['running', 'turn'].includes(chat.info(at)?.state)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
     if (first !== null && NOTHING_FOR.test(first) && !chat.sprint(id).ready) return void chat.setSprint(id, { endNote: { at: Date.now(), text: first } });
@@ -1080,7 +1082,7 @@ export function createDelegate({ chat, allowed, usage }) {
       return;
     }
     const last = first;
-    if (!parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
+    if (!live || !parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + last : ' failed; read_chat shows why.');
     // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
     const replacing = waitingNote.has(id) ? { replaces: waitingNote.get(id) } : {};
