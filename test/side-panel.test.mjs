@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron, chromium } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const near = (a, b, why) => assert.ok(Math.abs(a - b) <= 1.5, why + ': ' + a + ' vs ' + b);
@@ -21,10 +22,10 @@ async function launch(t) {
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env });
   t.after(() => app.close());
   const page = await app.firstWindow();
-  await page.locator('#cards .card').first().waitFor();
+  await shellReady(page);
   const size = (w, h) => app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), [w, h]);
   await size(1400, 900);
-  const reset = async () => { await size(1400, 900); await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1)); await page.evaluate(() => localStorage.clear()); await page.goto('p9://app/'); await page.locator('#cards .card').first().waitFor(); await page.waitForFunction(() => !!window.__side); };
+  const reset = async () => { await size(1400, 900); await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1)); await page.evaluate(() => localStorage.clear()); await page.goto('p9://app/'); await shellReady(page); await page.waitForFunction(() => !!window.__side); };
   // The window's native children (Dev Focus's editor view, then the cards overlay), in window pixels.
   const native = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.map(c => ({ ...c.getBounds(), visible: c.getVisible(), url: c.webContents.getURL() })));
   const box = async sel => page.locator(sel).boundingBox();

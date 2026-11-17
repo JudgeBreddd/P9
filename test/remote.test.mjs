@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, restart, http, authenticated, root, openFiles } from './helpers.mjs';
+import { daemon, restart, http, authenticated, root, openFiles, shellReady } from './helpers.mjs';
 import { execFile, execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
@@ -1191,7 +1191,7 @@ test('Dev Focus\'s page when the editor server cannot start: no systemd user ses
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor();
+  await shellReady(shell);
   const opened = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   await shell.keyboard.press('Control+2');
   const dev = await opened;

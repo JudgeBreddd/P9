@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated } from './helpers.mjs';
+import { daemon, http, authenticated, shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 test('Phase 4: real sandboxed Electron, bridge boundary and approved shell acceptance', { timeout: 90000 }, async () => {
@@ -15,7 +15,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
   try {
     const page = await application.firstWindow({ timeout: 15000 });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await page.locator('#cards .card').first().waitFor();
+    await shellReady(page);
     const preferences = await application.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
       return { preferences: window.webContents.getLastWebPreferences(), args: process.argv, pid: window.webContents.getOSProcessId() };
@@ -75,7 +75,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.deepEqual(await page.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.hasAttribute('data-amoled')]), ['event-horizon-prime', true]);
     await page.click('#themeBtn'); await page.click('[data-theme-pick="redline"]');
     assert.equal(await page.locator('html').getAttribute('data-theme'), 'redline');
-    await page.reload(); await page.locator('#cards .card').first().waitFor();
+    await page.reload(); await shellReady(page);
     assert.equal(await page.locator('html').getAttribute('data-theme'), 'redline');
     await page.click('#themeBtn'); await page.click('[data-theme-pick="event-horizon-prime"]'); await page.click('#themeBtn');
     console.log('PASS phase4 DUWOP: fresh Prime AMOLED, actual theme switch, saved look survives reload');

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 }, async t => {
@@ -13,13 +14,13 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, chromiumSandbox: true });
   try {
     const page = await app.firstWindow();
-    await page.locator('#cards .card').first().waitFor();
+    await shellReady(page);
     const screenshot = async name => {
       if (!process.env.P9_SCREENSHOTS) return;
       await mkdir(process.env.P9_SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: path.join(process.env.P9_SCREENSHOTS, name + '.png'), animations: 'disabled' });
     };
-    const reset = async () => { await page.goto('p9://app/'); await page.locator('#cards .card').first().waitFor(); };
+    const reset = async () => { await page.goto('p9://app/'); await shellReady(page); };
     await t.test('reviews resume survives an unrelated explorer modal', async () => {
       await reset();
       const reviews = page.locator('#cards [data-key^="reviews:"] .open');

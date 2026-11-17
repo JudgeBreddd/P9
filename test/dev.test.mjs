@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { root, daemon } from './helpers.mjs';
+import { root, daemon, shellReady } from './helpers.mjs';
 import { sddl, userSid } from './win-acl.mjs';
 import { editorFor } from './editor-fixture.mjs';
 import { AZURE, FIXTURE, OTHERS, RGB, contrast } from './azure-fixture.mjs';
@@ -212,7 +212,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
   stage('const shell = await app.firstW'); const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor();
+  await shellReady(shell);
   const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   await shell.keyboard.press('Control+2');
   stage('const dev = await devWindow;'); const dev = await devWindow;
@@ -590,7 +590,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   const ready = async page => { await page.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
     assert.equal(await page.locator('#status').textContent(), ''); return page; };
   const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor();
+  await shellReady(shell);
   let page = nextPage();
   await shell.keyboard.press('Control+2');
   let dev = await ready(await page);
@@ -666,7 +666,7 @@ async function openDevFocus(t, editor, extra = {}) {
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor();
+  await shellReady(shell);
   const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   await shell.keyboard.press('Control+2');
   const dev = await devWindow;

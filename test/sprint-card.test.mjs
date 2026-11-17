@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const MIN = 60000;
@@ -19,7 +20,7 @@ const launch = async (t, sample) => {
   t.after(() => app.close());
   const page = await app.firstWindow({ timeout: 15000 });
   page.on('pageerror', e => console.log('PAGEERROR ' + e.message));
-  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await shellReady(page, { timeout: 15000 });
   return { app, page };
 };
 const shotAt = async (page, app, name) => { await page.waitForTimeout(500); const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png); };

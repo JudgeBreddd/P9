@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { _electron } from '@playwright/test';
-import { root, remoteDaemon } from './helpers.mjs';
+import { root, remoteDaemon, shellReady } from './helpers.mjs';
 import { EDITOR_DIR } from '../apps/desktop/editor-host.mjs';
 
 const MARKER = 'P9FAKESENTINEL7f3a';
@@ -148,7 +148,7 @@ test('Phase 12: a hostile repository runs nothing when Dev Focus opens it', { sk
   const canary = path.join(server.directory, 'pwned');
   const app = await launch(t, server, { P9_EDITOR_HOST: editorHost, P9_FAKE_SENTINEL_KEY: FAKE_KEY });
   const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor();
+  await shellReady(shell);
   const devWindow = app.waitForEvent('window', { predicate: (page) => page.url().startsWith('p9://dev/'), timeout: 60000 });
   await shell.keyboard.press('Control+2');
   const dev = await devWindow;

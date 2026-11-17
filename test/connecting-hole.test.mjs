@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -16,7 +17,7 @@ test('D20: the connecting screen draws the P9 black hole inline, moving, and sti
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
   t.after(() => app.close());
   const page = await app.firstWindow({ timeout: 15000 });
-  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await shellReady(page, { timeout: 15000 });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   const shot = async (name) => {
     await page.waitForTimeout(300); // the dialog painted

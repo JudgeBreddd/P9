@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { root, daemon } from './helpers.mjs';
+import { root, daemon, shellReady } from './helpers.mjs';
 import { EDITOR_DIR } from '../apps/desktop/editor-host.mjs';
 
 const host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
@@ -37,7 +37,7 @@ test('Phase 18: p9 edit and p9 diff open workspace files in the running app, and
   proc.stderr.on('data', chunk => { mainErr += chunk; });
   t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor();
+  await shellReady(shell);
   const p9 = (...args) => run(process.execPath, [path.join(root, 'scripts/p9.mjs'), '--state', instance.state, ...args], { cwd: w, env });
 
   // 1. p9 edit with the app on Chat Focus: the app switches to Dev Focus, starts the editor and opens the file at the line.

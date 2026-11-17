@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -15,7 +16,7 @@ test('D7: a toast is on top of Settings and the connecting screen opened after i
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
   t.after(() => app.close());
   const page = await app.firstWindow({ timeout: 15000 });
-  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await shellReady(page, { timeout: 15000 });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   await page.evaluate(() => document.documentElement.style.setProperty('--toast-life', '600s'));
   // The point a person would click: the toast's middle, as the page hit-tests it (an inert or covered toast is not hit).

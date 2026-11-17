@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron, chromium } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -20,7 +21,7 @@ async function launch(t, files = {}) {
   // 0.1.9 O4b: D1, the file's first launch, drew its first card in 3.4-16.7 s over 48 CI passes and failed twice at the
   // old 15 s; the start is slow on a busy runner, not stuck. 30 s, and the split is printed so a failure says which part.
   const t2 = Date.now();
-  await page.locator('#cards .card').first().waitFor({ timeout: 30000 })
+  await shellReady(page, { timeout: 30000 })
     .finally(() => console.log(`c23 launch ${t.name.split(':')[0]}: electron ${t1 - t0} ms, window ${t2 - t1} ms, first card ${Date.now() - t2} ms`));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   // The window's native children (Dev Focus's editor view first), in window pixels (zoom 1).

@@ -12,7 +12,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { root, daemon } from './helpers.mjs';
+import { root, daemon, shellReady } from './helpers.mjs';
 import { installEditorHost, editorDownload, EDITOR_DOWNLOADS, EDITOR_COMMIT } from '../apps/desktop/editor-host.mjs';
 
 const linux = process.platform === 'linux';
@@ -122,7 +122,7 @@ test('D5: Dev Focus without the editor server names it and installs it with one 
   };
   const nextPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: left() });
   const shell = await app.firstWindow();
-  await shell.locator('#cards .card').first().waitFor({ timeout: left() });
+  await shellReady(shell, { timeout: left() });
   let page = nextPage();
   await shell.keyboard.press('Control+2');
   let dev = await page;

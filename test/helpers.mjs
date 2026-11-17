@@ -11,6 +11,11 @@ import { request } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
+// The shell has drawn what waits on you: a visible card in the top-right stack, or a count on a visible bell. One render
+// (renderCards) writes both from the loaded chats and waiting items, so this is no earlier than the old card wait; it
+// still holds once those notices go to the bell instead of a staying card (OPEN-ITEMS 733).
+export const shellReady = (page, opts) => page.waitForFunction(() => [...document.querySelectorAll('#cards .card')].some((c) => c.checkVisibility({ visibilityProperty: true }))
+  || (Number(document.querySelector('#rBell b')?.textContent) > 0 && document.querySelector('#rBell').checkVisibility({ visibilityProperty: true })), null, opts);
 // D13: a profile seeded with a desktop's files (p9-settings.json) looks updated from an older P9, and the what's-new popup
 // would cover the window. Tests that seed one mark this version as already run.
 export const versionSeen = async (profile) => writeFile(path.join(profile, 'p9-version.txt'), JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
