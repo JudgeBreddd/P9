@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const NOTES = ['## Now', 'Doing: part 2, the Notes button', 'Next: tests', 'Blocked on: nothing', 'Not yet checked: CI', '', '## Log', '- read the adapters; both send a tool call, not compaction_update'];
@@ -18,7 +19,7 @@ test('Worker notes: the header of a worker chat has a Notes button that reads it
   t.after(() => app.close());
   const page = await app.firstWindow({ timeout: 15000 });
   page.on('pageerror', e => console.log('PAGEERROR ' + e.message));
-  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await shellReady(page, { timeout: 15000 });
   await page.addStyleTag({ content: '#toasts{display:none!important}' }); // the sample notifications sit where the notes open
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   await app.evaluate(({ ipcMain }) => {

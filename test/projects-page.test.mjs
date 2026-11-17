@@ -12,7 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, http, authenticated, root, shellReady } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -442,7 +442,7 @@ test('project New chat stays clickable with notification cards at narrow widths'
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const id = (await call(instance, '/projects', 'POST', { name: 'Garden', work: { kind: 'p9' } })).project.id;
   const { page, errors } = await launch(t, instance);
-  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await shellReady(page, { timeout: 15000 });
   await page.locator(`#navList [data-proj="${id}"]`).click();
   await page.locator('#projPage h1', { hasText: 'Garden' }).waitFor({ timeout: 10000 });
   for (const width of [960, 720]) {

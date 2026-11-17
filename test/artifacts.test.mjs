@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron, chromium } from '@playwright/test';
-import { remoteDaemon, passkeyDevice, enrollDevice, daemon, http, authenticated } from './helpers.mjs';
+import { remoteDaemon, passkeyDevice, enrollDevice, daemon, http, authenticated, shellReady } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const F = '```';
@@ -24,7 +24,7 @@ async function launch(t) {
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 30000 });
   t.after(() => app.close());
   const page = await app.firstWindow();
-  await page.locator('#cards .card').first().waitFor({ timeout: 20000 });
+  await shellReady(page, { timeout: 20000 });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   await page.waitForFunction(() => !!window.__artifact, null, { timeout: 10000 });
   const shot = async name => {

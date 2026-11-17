@@ -11,6 +11,13 @@ import { request } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
+// The shell has drawn what waits on you: a visible card in the top-right stack, or bell items from loaded data on a visible
+// bell. One render (renderCards) writes both from the loaded chats and waiting items, so this is no earlier than the old
+// card wait; it still holds once those notices go to the bell instead of a staying card (OPEN-ITEMS 733). data-items leaves
+// out kept alerts (a remote-update alert can come before the data has loaded), so an alert alone never passes this.
+export const shellReadyCheck = () => [...document.querySelectorAll('#cards .card')].some((c) => c.checkVisibility({ visibilityProperty: true }))
+  || (Number(document.querySelector('#rBell')?.dataset.items) > 0 && document.querySelector('#rBell').checkVisibility({ visibilityProperty: true }));
+export const shellReady = (page, opts) => page.waitForFunction(shellReadyCheck, null, opts);
 // D13: a profile seeded with a desktop's files (p9-settings.json) looks updated from an older P9, and the what's-new popup
 // would cover the window. Tests that seed one mark this version as already run.
 export const versionSeen = async (profile) => writeFile(path.join(profile, 'p9-version.txt'), JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
