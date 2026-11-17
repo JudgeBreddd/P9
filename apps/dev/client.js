@@ -203,7 +203,7 @@ await initialize({ ...getAuthentication(), ...getTesting(), ...getTask(), ...get
   // Extension pages (webviews) load from p9://webview, an origin walled off from this page and window.p9dev (threat model row 5).
   ...getExplorer(), ...getWorkbench(undefined, 'p9://webview') }, document.querySelector('#workbench'), {
   remoteAuthority: authority, connectionToken: config.token,
-  // The Extensions view browses Open VSX, the same gallery the editor host installs from (installing extensions from it was approved).
+  // The Extensions view browses Open VSX, the same gallery the editor host installs from.
   productConfiguration: { commit: config.commit, quality: 'stable', nameShort: 'P9', nameLong: 'P9 Event Horizon',
     extensionsGallery: { serviceUrl: 'https://open-vsx.org/vscode/gallery', itemUrl: 'https://open-vsx.org/vscode/item',
       resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}' } },
