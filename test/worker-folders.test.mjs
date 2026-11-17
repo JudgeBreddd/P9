@@ -371,6 +371,35 @@ test('Worker folders A1: a sprint clones from an address the owner set, without 
   console.log('PASS Worker folders A1 address');
 });
 
+// daemon-4: the owner clears the project's address mid-sprint. The sprint's later workers still get the address clone,
+// whatever the folder's own origin says (here the plain path, the address its file:// spelling); a folder sprint keeps
+// its one-repository check.
+test('Worker folders daemon-4: a sprint cloned from an address keeps its clone after the owner clears the address; a folder sprint, also one whose address clone was removed, still has one repository', { timeout: 60000 }, async (t) => {
+  const { remote, owner, home, dir } = repos(t);
+  const address = 'file://' + remote.split(path.sep).join('/').replace(/^(?!\/)/, '/');
+  const folders = createWorkerFolders({ home, protocols: ['file'] });
+  const a = await folders.make(ID, 'item-a', null, '', address);
+  assert.equal(a.error, undefined, a.detail);
+  const before = ownerState(owner);
+  const b = await folders.make(ID, 'item-b', owner, '', '');
+  assert.equal(b.error, undefined, 'address cleared: ' + JSON.stringify(b));
+  assert.equal(g(b.folder, 'remote', 'get-url', 'origin'), address, 'the address clone, not one from the folder');
+  assert.equal(ownerState(owner), before, 'the owner\'s folder was not touched');
+  const other = path.join(dir, 'other'); fs.mkdirSync(other); g(other, 'init', '-q', '-b', 'main'); write(path.join(other, 'o.txt'), 'o\n'); g(other, 'add', '.'); g(other, 'commit', '-qm', 'o');
+  // A folder sprint: no mark, and a folder of another repository is still refused.
+  const sprint = ID.replace('1', '4');
+  assert.equal((await folders.make(sprint, 'x', owner, '', '')).error, undefined);
+  assert.equal(fs.readdirSync(path.join(home, sprint, 'clone', '.git')).includes('p9-from-address'), false, 'a folder clone is not marked as an address clone');
+  assert.equal((await folders.make(sprint, 'y', other, '', '')).error, 'other-repository');
+  // Reviewer on #245: the address clone goes (an interrupted Clean up removes only the clone) and the address is cleared.
+  // The next worker builds a folder clone; nothing of the address clone's mark is left to skip its check.
+  fs.rmSync(path.join(home, ID, 'clone'), { recursive: true, force: true });
+  assert.equal((await folders.make(ID, 'item-c', owner, '', '')).error, undefined);
+  assert.equal(g(path.join(home, ID, 'clone'), 'remote', 'get-url', 'origin'), g(owner, 'remote', 'get-url', 'origin'), 'a folder clone now');
+  assert.equal((await folders.make(ID, 'item-d', other, '', '')).error, 'other-repository', 'the removed address clone left nothing that skips the check');
+  console.log('PASS Worker folders daemon-4');
+});
+
 test('Worker folders A1 A4: a project\'s sprint source and setup command are set on the desktop route only, checked there, and used by open_chat', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const repo = path.join(instance.workspace, 'repo');

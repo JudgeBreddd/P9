@@ -13,6 +13,7 @@ const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
 const HEX = /^[0-9a-f]{4,64}$/i;
 export const WORKER = ':worker-folder'; // a chat's folder value: found again from its parent and key at every start
 const SETUP_MS = 15 * 60_000; // ponytail: one cap for every setup command; a project whose install takes longer needs a setting
+const ADDRESS_MARK = 'p9-from-address'; // inside an address clone's .git (daemon-4): lives and goes with the clone
 const TAIL = 2000;
 const SETUP_FROM = 'the project\'s, else Settings > Delegation';
 
@@ -148,7 +149,10 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     if (await realDir(clone, 2)) {
       // One repository per sprint (dogfood 3.5): a folder of another one is refused, never handed this clone. Its
       // origin is the folder's own origin, else the folder itself, as the clone below was made.
+      // daemon-4: a clone made from an address stays this sprint's after the owner clears or respells it (SECURITY.md
+      // § A sprint from an address): no folder is read for it, as while the address was set.
       if (address || typeof source !== 'string' || !path.isAbsolute(source)) return { clone };
+      if (await lstat(path.join(clone, '.git', ADDRESS_MARK)).then((s) => s.isFile(), () => false)) return { clone };
       const top = await one(source, ['rev-parse', '--show-toplevel']);
       const from = top && ((await one(top, ['remote', 'get-url', 'origin'])) || top);
       if (from && from === await one(clone, ['remote', 'get-url', 'origin'])) return { clone };
@@ -163,6 +167,9 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
       const made = await git(dirOf(sprint), [...only, 'clone', '--quiet', '--no-checkout', '--', address, part], { timeout: 10 * 60_000 });
       if (made.code !== 0) { await rm(part, { recursive: true, force: true }); return { error: 'clone-failed', detail: made.err.slice(-TAIL) }; }
       if ((await git(part, ['remote', 'set-head', 'origin', '--auto'])).code !== 0) await git(part, ['remote', 'set-head', 'origin', '--delete']);
+      // The mark lives inside the clone's own .git, written before the rename: it exists exactly when this clone does,
+      // so a removed or interrupted clone never leaves it for a later folder clone (Reviewer on #245).
+      await writeFile(path.join(part, '.git', ADDRESS_MARK), 'address\n', { mode: 0o600 });
       await rename(part, clone);
       return { clone };
     }
