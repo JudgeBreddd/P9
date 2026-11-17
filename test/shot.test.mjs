@@ -53,7 +53,7 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
   const phoneShot = await run(['/phone/', 'phone'], env);
   assert.equal(phoneShot.code, 0, 'the phone shot failed: ' + phoneShot.stderr);
   const list = path.join(out, 'list.json');
-  await writeFile(list, JSON.stringify([{ row: 'O146', claim: 'the chat list draws', path: '/phone/', size: 'phone' }, { row: 'O146', claim: 'the desktop page draws', path: '/', size: 'desktop' }]));
+  await writeFile(list, JSON.stringify([{ row: 'O146', claim: 'the chat list draws', path: '/phone/', size: 'phone' }, { row: 'O146', claim: 'the phone page at desktop size (/ redirects to /phone/)', path: '/', size: 'desktop' }]));
   const many = await run(['--list', list], env);
   assert.equal(many.code, 0, 'the list run failed: ' + many.stderr);
 
@@ -74,7 +74,7 @@ test('O146: the screenshot script sends only GET and HEAD and never shows the to
     assert.deepEqual([...(await readFile(file)).subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], 'not a PNG');
   }
   const page = await readFile(many.stdout.trim(), 'utf8');
-  assert.match(page, /the chat list draws/); assert.match(page, /the desktop page draws/);
+  assert.match(page, /the chat list draws/); assert.match(page, /the phone page at desktop size/);
   assert.equal((page.match(/<img /g) ?? []).length, 2, 'the page does not show both shots');
 
   // The token is never printed and never written to the output folder.
