@@ -19,6 +19,16 @@ function phaseLine(s, esc) {
   const done = ps.filter(p => p.passed >= p.total).length;
   return `<span class="sv-phase" data-sv-phase>${now ? `${now.passed} of ${now.total} steps in ${esc(now.title)}, ` : 'Every phase passed its review: '}${done} of ${ps.length} phases</span>`;
 }
+// Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
+// shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
+// out() is called once the press is going out.
+export const closedAbout = 'This sprint is closed. Its record is first: what it built and its numbers, as they stood at Close; an agent reads the same with sprint_status. Its roles and files are below.';
+export async function closePress(lead, confirmIt, call, out) {
+  if (!await confirmIt({ title: 'Close this sprint?', body: 'Every chat of this sprint is stopped, its record is kept and its scripts are turned off. Nothing is deleted. A closed sprint is not started again.', ok: 'Close sprint', danger: true })) return null;
+  out();
+  const r = await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({}));
+  return r.status === 200 ? '' : 'Not closed: ' + (r.body?.detail || r.body?.error || r.status || 'no answer');
+}
 export function statusHtml(s, esc, opts = {}) {
   const d = s.done, open = s.items.filter(i => i.review?.state !== 'passed'), n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
   // closed: the answer is the sprint's record, as it stood at Close. opts.closing: a Close press is out; opts.said: why the last one was refused.
