@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
 import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
-import { appliedCleanly, applySprint, closeOf, previewSprint, startCopy } from './folder-copy.mjs';
+import { applySprint, closeOf, copyKeptBecause, previewSprint, startCopy } from './folder-copy.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -246,9 +246,11 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     return queued(sprint, () => cleanNow(sprint));
   }
   async function cleanNow(sprint) {
-    const copy = path.join(dirOf(sprint), 'copy'), clone = await realDir(copy, 2) ? copy : path.join(dirOf(sprint), 'clone'), root = path.join(dirOf(sprint), 'workers');
+    const copy = path.join(dirOf(sprint), 'copy'), hasCopy = await realDir(copy, 2), root = path.join(dirOf(sprint), 'workers');
+    const clone = hasCopy ? copy : path.join(dirOf(sprint), 'clone');
     if (!await realDir(clone, 2)) return { removed: [], kept: [] };
-    await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 }); // best effort: offline, the main line known so far
+    // Best effort: offline, the main line known so far. A copy has no origin of its own (SECURITY.md): it is never fetched.
+    if (!hasCopy) await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 });
     const removed = [], kept = [];
     for (const item of (await readdir(root).catch(() => [])).sort()) {
       const folder = path.join(root, item), branch = branchOf(sprint, item);
@@ -269,9 +271,9 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it. The
     // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
     if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) {
-      // The copy (folder-copy.mjs) goes only once its work is applied cleanly (appliedCleanly); its apply record stays.
+      // The copy (folder-copy.mjs) goes only once its work is provably applied (copyKeptBecause); its apply record stays.
       const parts = ['workers', 'ready', 'clone'];
-      if (await appliedCleanly(dirOf(sprint))) parts.push('copy');
+      if (await copyKeptBecause(dirOf(sprint)) === null) parts.push('copy');
       for (const part of parts) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
       await rmdir(dirOf(sprint)).catch(() => {});
     }

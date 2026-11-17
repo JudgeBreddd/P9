@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorkerFolders } from '../apps/server/worker-folders.mjs';
+import { setProtection } from '../packages/files/index.mjs';
 
 const ID = '0123abcd-0000-4000-8000-000000000004';
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -20,7 +21,18 @@ async function copied(t) {
   g(dir, 'init', '-q', '-b', 'main', source);
   write(path.join(source, 'a.txt'), 'one\n'); g(source, 'add', 'a.txt'); g(source, 'commit', '-qm', 'first');
   assert.equal((await createWorkerFolders({ home }).make(ID, 'item-f', source, '')).error, undefined);
-  return { home, sprint, copy: path.join(sprint, 'copy') };
+  return { home, sprint, source, copy: path.join(sprint, 'copy') };
+}
+// Protection is on by default; a real apply runs with it off, restored after.
+function unprotected(t) { setProtection(false); t.after(() => setProtection(true)); }
+// A copy applied through the owner's yes (the real apply path, not a written record): one edit, shown, applied, clean.
+async function appliedClean(t) {
+  unprotected(t);
+  const c = await copied(t), workers = createWorkerFolders({ home: c.home });
+  write(path.join(c.copy, 'a.txt'), 'two\n'); g(c.copy, 'add', 'a.txt'); g(c.copy, 'commit', '-qm', 'edit');
+  const shown = (await workers.preview(ID)).shown;
+  assert.deepEqual((await workers.apply(ID, { yes: true, shown })).left, []);
+  return { ...c, workers };
 }
 const record = (sprint, result) => fs.writeFileSync(path.join(sprint, 'apply-result.json'), JSON.stringify({ source: 'x', at: 'x', ...result }));
 
@@ -31,11 +43,35 @@ test('Sprint copy clean-up: a copy whose work is not applied is kept, however cl
 });
 
 test('Sprint copy clean-up: a copy applied cleanly is removed, its apply record kept', { timeout: 60000 }, async (t) => {
-  const { home, sprint, copy } = await copied(t);
-  record(sprint, { written: ['a.txt'], rolledBack: [], left: [] });
-  await createWorkerFolders({ home }).clean(ID);
-  assert.equal(fs.existsSync(copy), false, 'applied cleanly: the copy goes');
+  const { sprint, copy, workers } = await appliedClean(t);
+  await workers.clean(ID);
+  assert.equal(fs.existsSync(copy), false, 'applied cleanly, no edit after: the copy goes');
   assert.equal(fs.existsSync(path.join(sprint, 'apply-result.json')), true, 'the apply record stays');
+});
+
+test('Sprint copy clean-up: an edit to the copy after its clean apply is kept, with its bytes', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await appliedClean(t);
+  write(path.join(copy, 'a.txt'), 'three\n'); // not committed: the copy is not what was applied
+  await workers.clean(ID);
+  assert.equal(fs.readFileSync(path.join(copy, 'a.txt'), 'utf8'), 'three\n', 'the newer edit is still there');
+});
+
+test('Sprint copy clean-up: a commit made in the copy after its clean apply is kept', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await appliedClean(t);
+  write(path.join(copy, 'later.txt'), 'later\n'); g(copy, 'add', 'later.txt'); g(copy, 'commit', '-qm', 'later');
+  await workers.clean(ID);
+  assert.equal(fs.existsSync(path.join(copy, 'later.txt')), true, 'the commit made after the apply is still there');
+});
+
+test('Sprint copy clean-up: a copy with an origin is never fetched, so no remote ref appears', { timeout: 60000 }, async (t) => {
+  const { home, copy, source } = await copied(t);
+  const bare = path.join(path.dirname(source), 'remote.git'), work = path.join(path.dirname(source), 'work');
+  g(path.dirname(source), 'init', '-q', '--bare', bare);
+  g(path.dirname(source), 'clone', '-q', bare, work);
+  write(path.join(work, 'r.txt'), 'remote\n'); g(work, 'add', 'r.txt'); g(work, 'commit', '-qm', 'remote'); g(work, 'push', '-q', 'origin', 'HEAD:main');
+  g(copy, 'remote', 'add', 'origin', bare);
+  await createWorkerFolders({ home }).clean(ID);
+  assert.throws(() => g(copy, 'rev-parse', '-q', '--verify', 'refs/remotes/origin/main'), 'clean-up fetched the copy\'s origin');
 });
 
 test('Sprint copy clean-up: a partial apply (something left) keeps the copy', { timeout: 60000 }, async (t) => {

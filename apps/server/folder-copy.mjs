@@ -126,15 +126,17 @@ const result = (written = [], rolledBack = [], left = [], cause = null) => ({ wr
 // Apply (sprint spec daemon-3; SECURITY.md). record: P9's apply record folder (0700), kept until the sprint closes.
 // Seams for tests: between(path) runs after the preflight and staging, before each write; afterWrite(path) runs after each
 // write returns, and may throw, which is a failure after the write landed.
-export async function applyCopy({ folder, copy, baseline, record, tag = new Date().toISOString().replace(/[:.]/g, '-'), between, afterWrite }) {
+// pinned: { head, changes } from applySprint, the commit the owner was shown and its change. Without it (tests of the bare
+// apply), the head is read here, once. Either way the apply uses that one commit: a HEAD that moves later is not applied.
+export async function applyCopy({ folder, copy, baseline, record, tag = new Date().toISOString().replace(/[:.]/g, '-'), between, afterWrite, pinned }) {
   if (protection() || isGuarded(folder)) return { refused: 'protected-folder' };
   // The copy is applied as committed: a worktree that differs from its commit is refused, not silently applied.
   const dirty = await git(copy, ['status', '--porcelain', '-z', '--untracked-files=all']);
   if (dirty.code !== 0 || dirty.out !== '') return { refused: 'copy-dirty' };
-  // Pinned: the head is read once here; what is applied is that commit's blobs, whatever the worktree does afterwards.
-  const head = (await git(copy, ['rev-parse', '-q', '--verify', 'HEAD^{commit}'])).out.trim();
+  // Pinned: what is applied is that commit's blobs, whatever the worktree or HEAD does afterwards.
+  const head = pinned ? pinned.head : await copyHead(copy);
   if (!/^[0-9a-f]{40,64}$/.test(head)) return { refused: 'copy-unreadable' };
-  const changes = await changesOf(copy, baseline.commit, head);
+  const changes = pinned ? pinned.changes : await changesOf(copy, baseline.commit, head);
   if (!changes) return { refused: 'copy-unreadable' };
 
   // 1. Preflight: nothing is written if any path is not in the state the baseline says.
@@ -231,42 +233,78 @@ export async function previewSprint(sprintDir) {
 
 // Applies only on the owner's explicit yes, for the change shown (shown is the digest from previewSprint). One apply per
 // copy: its result is kept in apply-result.json (0600), written after the apply, and the copy is not removed without it.
-export async function applySprint(sprintDir, { yes, shown, tag, between, afterWrite } = {}) {
+// onVerified(head) and beforeFinalize() are test seams: after the owner's yes is checked, before the apply; and after the
+// apply, before its result is recorded.
+export async function applySprint(sprintDir, { yes, shown, tag, between, afterWrite, onVerified, beforeFinalize } = {}) {
   if (yes !== true) return { refused: 'no-owner-yes' };
   if (await exists(path.join(sprintDir, 'apply-result.json'))) return { refused: 'already-applied' };
   const record = await readRecord(sprintDir);
   if (!record) return { refused: 'no-copy' };
   const copy = path.join(sprintDir, 'copy');
-  const changes = await changesOf(copy, record.baseline.commit, await copyHead(copy));
+  // One read of HEAD: the commit whose change the owner is shown is the commit applied (applyCopy gets this pin, no re-read).
+  const head = await copyHead(copy);
+  const changes = /^[0-9a-f]{40,64}$/.test(head) ? await changesOf(copy, record.baseline.commit, head) : null;
   if (!changes) return { refused: 'copy-unreadable' };
   if (shown !== digestOf(changes)) return { refused: 'changed-since-shown' };
-  const done = await applyCopy({ folder: record.source, copy, baseline: record.baseline, record: path.join(sprintDir, 'apply-record'), tag, between, afterWrite });
-  if (done.refused) return done;
-  const part = path.join(sprintDir, 'apply-result.json.part');
-  await writeFile(part, JSON.stringify({ source: record.source, at: new Date().toISOString(), ...done }, null, 1), { mode: 0o600 });
-  await rename(part, path.join(sprintDir, 'apply-result.json'));
+  await onVerified?.(head);
+  // The outcome is written as pending before the owner's files change. If the final result cannot be written after they
+  // change, it reads as unknown and still blocks another apply; if even pending cannot be written, nothing is changed.
+  const at = new Date().toISOString(), resultFile = path.join(sprintDir, 'apply-result.json');
+  try { await writeResult(sprintDir, { source: record.source, at, head, pending: true }); }
+  catch (error) { return { refused: 'record-failed', detail: error.code ?? error.message }; }
+  const done = await applyCopy({ folder: record.source, copy, baseline: record.baseline, record: path.join(sprintDir, 'apply-record'), tag, between, afterWrite, pinned: { head, changes } });
+  if (done.refused) { await rm(resultFile, { force: true }); return done; }
+  await beforeFinalize?.();
+  try { await writeResult(sprintDir, { source: record.source, at, head, ...done }); }
+  catch (error) { return { ...done, recordError: 'result-not-recorded: ' + (error.code ?? error.message) }; }
   return done;
 }
-
-// Clean-up may remove the copy only once its work is applied: apply-result.json with no cause and nothing left. A partial
-// or refused apply keeps the copy (the owner's changes are still in it).
-export async function appliedCleanly(sprintDir) {
-  const done = await readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then(JSON.parse, () => null);
-  return !!done && !done.cause && Array.isArray(done.left) && done.left.length === 0;
+async function writeResult(sprintDir, body) {
+  const part = path.join(sprintDir, 'apply-result.json.part');
+  await writeFile(part, JSON.stringify(body, null, 1), { mode: 0o600 });
+  await rename(part, path.join(sprintDir, 'apply-result.json'));
 }
 
-// The close view (SECURITY.md "The result, always three lists"): the apply's written, rolled back and left lists as
-// recorded, and whether it is partial (below). Null until the owner has applied.
+// Clean-up may remove the copy only when its work is provably applied: the apply result is recorded, clean (no cause, nothing
+// left, not pending), and the copy has no edit and no commit after the applied one. Returns null when it may go, else the
+// reason it stays (the close view shows it). When in doubt the copy stays.
+export async function copyKeptBecause(sprintDir) {
+  const copy = path.join(sprintDir, 'copy');
+  const done = await resultOf(sprintDir);
+  if (!done) return 'not applied';
+  if (done.pending) return 'apply unknown: its result was not recorded';
+  if (done.cause) return 'apply did not finish cleanly: ' + done.cause;
+  if ((done.left ?? []).length) return 'something left in your folder';
+  if (!done.head) return 'the applied commit is not recorded';
+  const dirty = await git(copy, ['status', '--porcelain', '-z', '--untracked-files=all']);
+  if (dirty.code !== 0) return 'the copy cannot be read';
+  if (dirty.out !== '') return 'edited after the apply';
+  if (await copyHead(copy) !== done.head) return 'a commit was made after the apply';
+  return null;
+}
+
+// The close view (SECURITY.md "The result, always three lists"): the apply's three lists as recorded, and every sentence
+// derived from them. A pending result reads as unknown; partial means P9's content is still in the owner's folder (a restore
+// that failed, or a write P9 made that someone changed since). No sentence says "nothing was written" here.
 export async function closeOf(sprintDir) {
-  const done = await readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then(JSON.parse, () => null);
+  const done = await resultOf(sprintDir);
   if (!done) return null;
+  const pending = done.pending === true;
   const written = done.written ?? [], rolledBack = done.rolledBack ?? [], left = done.left ?? [];
-  // Partial: something is left AND the owner's folder has P9 content in it (a write kept, or a restore that failed). A conflict
-  // lists its paths as left but writes nothing, so it is refused, not partial.
-  const changed = written.length > 0 || rolledBack.length > 0 || left.some(l => /^rollback-failed/.test(l.reason));
-  return { source: done.source, at: done.at, cause: done.cause ?? null, written, rolledBack, left, partial: left.length > 0 && changed };
+  const partial = !pending && left.some((l) => /^(rollback-failed|newer-than-p9-write)/.test(l.reason));
+  const copyKept = await exists(path.join(sprintDir, 'copy')) ? await copyKeptBecause(sprintDir) : null;
+  const lines = pending
+    ? ['Unknown: the apply started and its result was not recorded. Check the files in your folder before you apply again.']
+    : [done.cause ? `Not applied as a whole: ${done.cause}.` : left.length ? 'Stopped with something left.' : 'Applied.',
+      `Written ${written.length}, rolled back ${rolledBack.length}, left ${left.length}.`];
+  if (partial) lines.push('Partial: some changes are in your folder and some are not. P9\'s backup stays in its apply record.');
+  if (copyKept) lines.push(`Copy kept: ${copyKept}.`);
+  return { source: done.source, at: done.at, cause: pending ? 'unknown' : done.cause ?? null, pending, written, rolledBack, left, partial, copyKept, lines };
 }
 
+async function resultOf(sprintDir) {
+  return readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then(JSON.parse, () => null);
+}
 async function readRecord(sprintDir) {
   return readFile(path.join(sprintDir, 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
 }

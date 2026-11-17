@@ -955,8 +955,10 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
     P9's write. Rollback restores the backup bytes, or removes an added path, and only for files that still match.
   - **The result, always three lists.** Every apply names: written (P9's version is in place), rolled back (restored to
     the backup, or removed for an added path), and left or failed (with the reason: a conflict, a newer edit, a failed
-    write or rename). The close view shows a partial result as partial. The backup stays in the apply record until the
-    sprint closes, so every file P9 touched can be recovered by hand from it.
+    write or rename). The close view shows a partial result as partial. The outcome is recorded as pending before any
+    of your files change; if the final result cannot be written, the close view reads it as unknown, says to check your
+    files, and blocks another apply. The close view's sentences are derived from those three lists. The backup stays in
+    the apply record until the sprint closes, so every file P9 touched can be recovered by hand from it.
   - **The route refuses without the yes.** `POST /sprints/:id/apply` (desktop socket only) accepts exactly `{yes, shown}` with
     `yes: true`; any other body is refused by the route before the worker runs. `shown` is the digest of the change the owner
     was shown, and apply refuses if the change now differs. The copy is kept after a partial or conflicted apply, so
@@ -969,7 +971,8 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
   so it sees the folder as it is then. P9 reads it as a folder the lead chat may use (the same check as a worker folder). A folder inside the sprint's own state,
   or one that holds the workspace, P9's state or the home folder, is refused before anything is copied.
 - **A sprint's copy is kept until clean-up.** Like a clone, it is removed only by clean-up, from the desktop, with the rule
-  for worker folders: nothing unsaved in it, and its work applied. Clean-up never deletes your original folder.
+  for worker folders, and for the copy only when its apply is recorded clean and the copy has no edit and no commit made
+  after the applied one; otherwise it is kept, and the close view says why. Clean-up never deletes your original folder.
 - **Disk.** One copy per sprint plus one working folder per worker, in P9's own folder, until cleaned up, plus the saved
   originals for an apply. The copy is the size of the tracked files at the time it was made.
 - **What remains.** The copy is a snapshot taken when the sprint starts: a change you make to a tracked file during the

@@ -249,7 +249,8 @@ export function setupRoutes(outer) {
     const busy = idle(id);
     if (busy) return c.json(busy, 409);
     const result = await outer.chat.workers.apply(id, { yes: body.yes, shown: body.shown });
-    const status = !result.refused ? 200 : result.refused === 'no-owner-yes' ? 400 : result.refused === 'already-applied' || result.refused === 'changed-since-shown' ? 409 : result.refused === 'no-copy' ? 404 : 422;
+    // A change that landed whose result could not be recorded is not a success: 500, and the close view reads it as unknown.
+    const status = result.recordError ? 500 : !result.refused ? 200 : result.refused === 'no-owner-yes' ? 400 : result.refused === 'already-applied' || result.refused === 'changed-since-shown' ? 409 : result.refused === 'no-copy' ? 404 : 422;
     return c.json(result, status);
   });
   // Desktop only (SECURITY.md § Start sprint): a sprint to prepare, and the owner's Start press, which is the approval

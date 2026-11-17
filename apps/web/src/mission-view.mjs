@@ -898,8 +898,9 @@ function missionModal(m, body, row) {
       const [view, pre] = await Promise.all([window.p9.mission('sprintClose', { id: m.id }), window.p9.mission('sprintPreview', { id: m.id })]);
       if (view.status === 200) {
         const v = view.body;
-        paint(`${v.partial ? '<p class="sm" role="status"><b>Partial.</b> Some changes are in your folder and some are not. The backup stays in P9\'s apply record.</p>' : ''}${v.cause && !v.partial ? `<p class="sm" role="status">Not applied: ${esc(v.cause)}. Nothing was written.</p>` : ''}`
-          + `${list('Written', v.written)}${list('Rolled back', v.rolledBack)}${reasons('Left or failed', v.left)}`);
+        // The sentences come from the server, derived from the three lists; a pending apply shows no lists (they are unknown).
+        paint(`${(v.lines ?? []).map(l => `<p class="sm" role="status">${esc(l)}</p>`).join('')}`
+          + (v.pending ? '' : `${list('Written', v.written)}${list('Rolled back', v.rolledBack)}${reasons('Left or failed', v.left)}`));
         return;
       }
       if (pre.status !== 200) return paint(`<p class="sm" role="status">Cannot show this copy: ${refusal(pre.body)}.</p>`);

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { applySprint, previewSprint, startCopy } from '../apps/server/folder-copy.mjs';
+import { applySprint, closeOf, previewSprint, startCopy } from '../apps/server/folder-copy.mjs';
 import { setProtection } from '../packages/files/index.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -81,4 +81,40 @@ test('Sprint apply: with file protection on (the default), a yes for the change 
   assert.equal((await applySprint(sprint, { yes: true, shown })).refused, 'protected-folder');
   assert.equal(read(path.join(source, 'a.txt')), 'one\n');
   assert.equal(fs.existsSync(path.join(sprint, 'apply-result.json')), false, 'nothing is recorded as applied');
+});
+
+test('Sprint apply: a commit made to the copy after the owner\'s yes is checked is not applied; only the change shown is', { timeout: 60000 }, async (t) => {
+  unprotected(t);
+  const { source, sprint, copy } = await setup(t);
+  write(path.join(copy, 'a.txt'), 'two\n'); g(copy, 'add', 'a.txt'); g(copy, 'commit', '-qm', 'edit');
+  const shown = (await previewSprint(sprint)).shown;
+  let moved = false;
+  const done = await applySprint(sprint, { yes: true, shown, onVerified: () => {
+    write(path.join(copy, 'late.txt'), 'late\n'); g(copy, 'add', 'late.txt'); g(copy, 'commit', '-qm', 'late');
+    moved = true;
+  } });
+  assert.equal(moved, true, 'the commit landed between the yes and the apply');
+  assert.deepEqual(done.written, ['a.txt'], 'only the change shown is written');
+  assert.equal(read(path.join(source, 'a.txt')), 'two\n');
+  assert.equal(fs.existsSync(path.join(source, 'late.txt')), false, 'a commit made after the yes is not applied');
+});
+
+test('Sprint apply: a result that cannot be recorded after the owner\'s files change reads as unknown, and blocks a second apply', { timeout: 60000 }, async (t) => {
+  unprotected(t);
+  const { source, sprint, copy } = await setup(t);
+  write(path.join(copy, 'a.txt'), 'two\n'); g(copy, 'add', 'a.txt'); g(copy, 'commit', '-qm', 'edit');
+  const shown = (await previewSprint(sprint)).shown;
+  // A real write failure: the sprint folder goes read-only after the owner's file changed, so the final result cannot be written.
+  // Teardown: the test restores the folder only if it still exists (the temp root may already be gone).
+  t.after(() => { if (fs.existsSync(sprint)) fs.chmodSync(sprint, 0o700); });
+  const done = await applySprint(sprint, { yes: true, shown, beforeFinalize: () => fs.chmodSync(sprint, 0o500) });
+  assert.equal(read(path.join(source, 'a.txt')), 'two\n', 'the owner\'s file did change');
+  assert.match(done.recordError ?? '', /^result-not-recorded: /);
+  const view = await closeOf(sprint);
+  assert.equal(view.pending, true, 'the outcome reads as pending, not as not-applied');
+  assert.equal(view.partial, false);
+  assert.match(view.lines[0], /^Unknown: /);
+  assert.equal(view.lines.some((l) => /not applied/i.test(l)), false, 'an unknown apply never says not applied');
+  fs.chmodSync(sprint, 0o700);
+  assert.equal((await applySprint(sprint, { yes: true, shown })).refused, 'already-applied', 'a pending apply blocks another');
 });
