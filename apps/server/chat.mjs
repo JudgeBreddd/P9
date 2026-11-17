@@ -679,8 +679,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // model (the model in its settings.json outranks the transcript's), so a chat on another model came back on that one.
   // The one place for this: resume calls it, and so must any new session started for an existing chat. A value the agent
   // no longer offers, or one it refuses, is left; the config event after it says what the session is really on.
+  // O134: a config event written before O130 from a helper agent's settings lists only the helper's one model and no pickers
+  // (ledger 596370, 66468657: Haiku; all 18 such events in 4 chats); it is skipped, never rewritten. Every chat's own config
+  // has a picker, so a real one-model list (a profile chat, O48, or a shorter list at a later start, O130) is kept.
+  // ponytail: a chat's own one-model, no-picker config after a longer list would be skipped too; no agent reports one today.
+  const helperConfig = " AND NOT (json_array_length(data, '$.model.options') = 1 AND json_array_length(data, '$.pickers') = 0 AND EXISTS (SELECT 1 FROM events x WHERE x.conversation = events.conversation AND x.type = 'config' AND json_array_length(x.data, '$.model.options') > 1))";
   const lastOf = (id, type) => {
-    const found = db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ?${type === 'mode' ? " AND COALESCE(json_extract(data, '$.lock'), 0) = 0" : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type);
+    const found = db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ?${type === 'mode' ? " AND COALESCE(json_extract(data, '$.lock'), 0) = 0" : type === 'config' ? helperConfig : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type);
     try { return found ? JSON.parse(found.data) : null; } catch { return null; }
   };
   // was: read before anything is set on the new session (resume sets Codex's and the lock's mode first, which is an event too).
