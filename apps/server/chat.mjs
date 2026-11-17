@@ -496,8 +496,37 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const seen = session.compactions ??= new Set();
     if (seen.has(key)) return;
     seen.add(key);
+    if (!session.turn) compacting(session, id);
     const at = notesOf(id), file = at && sprintFiles.fileOf(at.lead, at.name);
     if (file) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, notesLine(file));
+  };
+  // O139 (Tyler, 2026-11-16: label a compaction, do not hide it): Claude Code compacts just after a prompted turn ends
+  // (p50 0.5 s in P9's own history) and then works on with no prompt open. Until that unprompted run ends the chat
+  // counts as compacting (delegate.mjs: the parent is told so, wait_chat waits on). Its end is the first usage_update
+  // whose cost is above the one sent with the compaction; or 60 s with no update from the agent (a failed compaction
+  // sends no more); or the chat's next prompt, whose own end comes. At the first two the turn's end hooks run again.
+  // ponytail: a silent tool call longer than 60 s in that run counts as its end.
+  const COMPACT_QUIET_MS = 60000;
+  const compacting = (session, id) => {
+    if (session.compacting) return;
+    const timer = setTimeout(() => compacted.end(session, id, true), COMPACT_QUIET_MS);
+    timer.unref?.();
+    session.compacting = { cost: null, timer };
+  };
+  compacted.seen = (session, id, update) => {
+    const run = session.compacting;
+    if (!run) return;
+    run.timer.refresh();
+    const cost = update?.sessionUpdate === 'usage_update' ? update.cost?.amount : undefined;
+    if (typeof cost !== 'number') return;
+    if (run.cost === null) run.cost = cost; else if (cost > run.cost) compacted.end(session, id, true);
+  };
+  compacted.end = (session, id, ran) => {
+    const run = session.compacting;
+    if (!run) return;
+    clearTimeout(run.timer);
+    session.compacting = null;
+    if (ran && live.get(id) === session && !session.turn && !session.stopping && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true); } catch {} }
   };
   const rulesFor = (conversation, body) => {
     const mine = conversation?.parent && (senders.get(body) === conversation.parent || Boolean(mixed.get(body)?.includes(conversation.parent)));
@@ -878,6 +907,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A name the user gave (N1, the rename route's 'renamed' event) is kept.
           if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
+        compacted.seen(session, conversation.id, update);
         compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
         emit(conversation.id, 'update', trim(agentImages(update)));
@@ -1217,6 +1247,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     list: (plans = new Map()) => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent, key,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
+        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'renamed') AS named,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
           AND a.cursor > COALESCE((SELECT cursor FROM events WHERE conversation = c.id AND type IN ('turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error') ORDER BY cursor DESC LIMIT 1), 0)
           AND NOT EXISTS (SELECT 1 FROM events b WHERE b.conversation = c.id AND b.type = 'answered' AND b.cursor > a.cursor
@@ -1224,7 +1255,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1, waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1370,6 +1401,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
+      compacted.end(session, id, false);
       let ended;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
       // answers another chat: they wait for the chat's own next message.
@@ -1494,7 +1526,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // session.back: during and after a turn that answered another chat, the chat's own mode is the one it returns to.
         mode: (session?.back ?? session?.mode) ? Object.keys(MODES[c.provider]).find((k) => MODES[c.provider][k] === (session.back ?? session.mode)) ?? null : null,
         model: session?.models?.current ?? null, effort: effort ? { id: effort.id, value: effort.current } : null,
-        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)),
+        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)), compacting: Boolean(session?.compacting),
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
@@ -1620,6 +1652,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       listeners.add(done);
     }),
     settled: (hook) => { settledHooks.add(hook); },
+    compacting: (id) => Boolean(live.get(id)?.compacting),
     stopAll,
     projects,
     ...(() => {

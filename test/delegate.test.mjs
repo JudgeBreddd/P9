@@ -718,6 +718,39 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   console.log('PASS Delegate Settings: Ask me first asked once in Unrestricted (reject made nothing), Off gave delegate-off, Worker 3 ran on its row (opus/high), haiku, opus/low and codex from the call were refused by field with nothing made, opus/high from the call opened on Worker 4, an unlisted pick was passed over, a sixth worker was refused at 5, a stopped worker freed its row for a Codex worker, a profile row gave its worker the profile');
 });
 
+// daemon-7: a stopped worker gave up its place (F8). Starting it again takes one, and holds it until the start is through.
+const sevenSetup = async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), kids = [];
+  for (const title of ['One', 'Two', 'Three']) { const k = await a.tool('open_chat', { text: 'hello', title }); await a.done(k.chat); kids.push(k.chat); }
+  for (const id of kids.slice(0, 2)) assert.equal((await a.tool('stop_chat', { chat: id, close: true })).action, 'stopped');
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: [] }); // One place free: Three runs
+  return { instance, a, b, kids };
+};
+test('Delegate daemon-7: two messages sent at once to two stopped workers with one place free start one; the other is too-many-chats', { timeout: 180000 }, async (t) => {
+  const { a, b, kids } = await sevenSetup(t);
+  // From two chats (each agent's MCP client sends its calls one at a time): the parent and a chat in its project.
+  const both = await Promise.all([a.tool('send_chat', { chat: kids[0], text: 'hello' }), b.tool('send_chat', { chat: kids[1], text: 'hello' })]);
+  assert.deepEqual(both.map((r) => r.sent ?? r.error).sort(), ['started a turn', 'too-many-chats'], 'both stopped workers started past Workers per chat: ' + JSON.stringify(both));
+  const listed = (await a.tool('list_chats')).chats.filter((c) => kids.includes(c.id) && !['stopped', 'moved'].includes(c.state));
+  assert.equal(listed.length, 2, JSON.stringify(listed.map((c) => c.state)));
+  console.log('PASS daemon-7 send_chat: two sends at once to two stopped workers with one place free: ' + JSON.stringify(both.map((r) => r.sent ?? r.error)));
+});
+test('Delegate daemon-7: ask_chat to a stopped worker whose parent is at Workers per chat is too-many-chats and starts nothing', { timeout: 180000 }, async (t) => {
+  const { instance, a, b, kids } = await sevenSetup(t);
+  assert.equal((await a.tool('send_chat', { chat: kids[0], text: 'hello' })).sent, 'started a turn'); // the last place
+  await a.done(kids[0]);
+  assert.equal((await call(instance, `/chat/${kids[1]}/askable`, 'POST', { on: true })).status, 200);
+  const at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  const asked = await b.tool('ask_chat', { chat: kids[1], text: 'mode' });
+  assert.equal(asked.error, 'too-many-chats', 'a question started a stopped worker past its parent\'s limit: ' + JSON.stringify(asked));
+  await pause(500);
+  assert.equal((await events(instance, kids[1])).filter((e) => e.cursor > at && e.type === 'user').length, 0, 'the refused question reached the worker');
+  console.log('PASS daemon-7 ask_chat: a question to a stopped worker over its parent\'s limit was refused: ' + asked.error);
+});
+
 test('Delegate peer help: ask_chat asks a chat the user opened to questions; its turn is alone, read-only and its own; the helper\'s mode comes back; no chains, no parent or worker', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
@@ -1182,6 +1215,8 @@ test('O125 point 2: two notes from one worker waiting for a parent in a turn: th
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first note is held.
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid ended its turn'));
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
   const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
@@ -1191,6 +1226,37 @@ test('O125 point 2: two notes from one worker waiting for a parent in a turn: th
   for (let i = 0; i < 100 && (await notices(instance, a.conversation)).length < 1; i += 1) await pause(100);
   const kid = await notices(instance, a.conversation);
   assert.equal(kid.filter((text) => text.includes('Kid ended its turn')).length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
+});
+
+// O139 FIX2: the end line is held 3 s. A turn after it that runs no end hook must not send it with the wrong text: an
+// ask_chat answer leaves the held line its own text, and a cancelled prompted turn drops it.
+test('O139 FIX2: a held end line keeps its text across an ask_chat answer; a cancelled second turn drops it', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project });
+  const ends = async () => (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
+  const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
+  const made = await a.tool('open_chat', { text: 'first', title: 'Kid' });
+  await call(instance, `/chat/${made.chat}/askable`, 'POST', { on: true });
+  for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(50);
+  let endedAt = Date.now();
+  const got = await b.tool('ask_chat', { chat: made.chat, text: 'peer question' });
+  assert.equal(got.answered, true, JSON.stringify(got));
+  assert.ok(Date.now() - endedAt < 2500, 'the answer came after the hold: ' + (Date.now() - endedAt));
+  await pause(5000);
+  assert.deepEqual(await ends(), ['[p9] Kid ended its turn: echo:first'], 'an ask_chat answer inside the hold');
+
+  await a.tool('send_chat', { chat: made.chat, text: 'second' });
+  for (let i = 0; (await turnEnds(made.chat)) < 3 && i < 300; i += 1) await pause(50);
+  endedAt = Date.now();
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'working');
+  assert.equal((await a.tool('stop_chat', { chat: made.chat })).action, 'interrupted');
+  for (let i = 0; (await turnEnds(made.chat)) < 4 && i < 300; i += 1) await pause(50);
+  assert.ok(Date.now() - endedAt < 2500, 'the cancel came after the hold: ' + (Date.now() - endedAt));
+  await pause(5000);
+  assert.deepEqual(await ends(), ['[p9] Kid ended its turn: echo:first'], 'a cancelled turn inside the hold');
 });
 
 // O125 point 2 FIX1: a steerable parent running a tool holds the worker's first note (202), so the second must replace it too.
@@ -1204,6 +1270,8 @@ test('O125 point 2: two notes from one worker while the steerable parent runs a 
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first note is held.
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid ended its turn'));
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
   const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');

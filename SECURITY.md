@@ -809,8 +809,10 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   one of your provider profiles), a model and an effort. A chat's new worker takes the first row
   no running worker of that chat holds, and keeps it until it is stopped. Past the limit
   `open_chat` is refused (`too-many-chats`); lowering the limit stops nothing. A stopped worker
-  has given up its place: `send_chat` to it starts it again only while its parent is under the
-  limit, and is refused the same way otherwise (a note is still taken). A worker that is idle
+  has given up its place: `send_chat` to it, or another chat's `ask_chat`, starts it again only
+  while its parent is under the limit, and is refused the same way otherwise (a note is still
+  taken). The place is held from that check until the start is through, so two starts at once
+  never pass the limit together. A worker that is idle
   or waiting on an answer keeps its place, so a message to it is never refused for the limit.
   What the call
   names still wins over the row, then the row, then the parent's own: the rows are your
@@ -1053,6 +1055,12 @@ Written before the code (sprint spec D1, D3, D4).
   and Codex adapters send a client that did not ask for those updates, as P9 does not), a worker's notes-path line is put
   back in that database block, once per compaction (by the compaction's id, kept in memory), and rides with the next
   message from its lead like the first one; a chat that was not started by another chat never gets it.
+  A compaction that comes while no turn is running (Claude Code compacts just after a turn ends, then works on with no
+  prompt) marks the chat compacting until that run ends: a cost update above the compaction's own, 60 s with no update,
+  or the chat's next prompt. The worker's end line to its lead waits 3 s; a worker compacting by then sends the lead the
+  note "<title> is compacting and will continue" (it starts no turn) and its end line when the run ends. `list_chats`
+  and `wait_chat` show such a chat as working, with `compacting: true`. This only delays and labels a line P9 already
+  sends; nothing new is read or run.
 - **Reading a worker's notes in its chat.** `GET /chat/<id>/notes` returns the text of that chat's own notes file, for
   a chat that has a parent: P9 builds the name `notes/<key>.md` (or `notes/<chat id>.md`) from the chat's stored parent
   and key, never from the request, and reads it by the same rules as above (that name only, no links, whole file). The

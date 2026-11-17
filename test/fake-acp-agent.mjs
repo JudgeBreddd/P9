@@ -279,7 +279,8 @@ const connection = acp.connectAgent(stream, {
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }
     if (text === 'cwd') { await say('cwd:' + cwd); return { stopReason: 'end_turn' }; }
-    if (text === 'mcp') { await say('mcp:' + JSON.stringify(mcpServers)); return { stopReason: 'end_turn' }; }
+    // A chat's notes kept for its next message go in front of it (chat.mjs parked): 'mcp' as the last block still answers.
+    if (text === 'mcp' || params.prompt.at(-1)?.text === 'mcp') { await say('mcp:' + JSON.stringify(mcpServers)); return { stopReason: 'end_turn' }; }
     if (text.startsWith('probe ')) {
       // Phase 10: try whatever credentials this agent can see against the remote port (test/credential-probe.mjs).
       const [, port, host, probe, ...rest] = text.split(' ');
@@ -310,6 +311,23 @@ const connection = acp.connectAgent(stream, {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.01, currency: 'USD' } } });
       }, 1500);
+      return { stopReason: 'end_turn' };
+    }
+    // O139, as P9's history shows Claude Code after a turn: the prompt ends, 0.5 s later the compaction (tool call, then a
+    // usage_update with the cost so far), then "compactgo" works on unprompted and ends on a usage_update with a higher
+    // cost; "compactstop" is a compaction that failed: nothing more comes.
+    // "compactquick": the run after the compaction ends 1 s later, inside P9's 3 s hold of the end line.
+    if (text === 'compactgo' || text === 'compactstop' || text === 'compactquick') {
+      setTimeout(async () => {
+        const cost = (amount) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount, currency: 'USD' } } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-' + text, title: 'Compact conversation', kind: 'think', status: 'completed' } });
+        await cost(1);
+        if (text === 'compactstop') return;
+        await say('working after the compaction');
+        await new Promise((resolve) => setTimeout(resolve, text === 'compactquick' ? 1000 : 6000));
+        await say(', then done');
+        await cost(2);
+      }, 500);
       return { stopReason: 'end_turn' };
     }
     // "squeeze": a compaction inside the turn, as P9 sees it from the real adapters (the "Compact conversation" tool call and its
