@@ -192,8 +192,8 @@ export async function stageDaemon(source, share) {
 }
 
 // The AppImage's start: copies its daemon (stageDaemon), then installs the p9-foundation unit with ~/P9 as the workspace
-// if there is none, or restarts a launcher unit onto a new version. A unit without the launcher is a source checkout's,
-// never touched. Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
+// if there is none, or restarts a launcher unit onto a new version. A unit (or drop-in) that does not run the launcher is a
+// source checkout's, never touched; its command is returned as { checkout }, null when systemd's answer could not be read (O135). Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
 // ponytail: tmux missing means no unit (install-service.mjs refuses); the log says so, the page says daemon-unreachable.
 // AU5: the AppImage itself is kept as appimage/<version>.AppImage, with the one before it, for a rollback (p9-launch.sh).
 export async function appImageService(resources, image = process.env.APPIMAGE) {
@@ -235,7 +235,18 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
       await mkdir(workspace, { recursive: true });
       return await run(path.join(dir, 'node'), [path.join(dir, 'scripts', 'install-service.mjs'), workspace]);
     }
-    if (!unit.includes(path.join(share, 'launcher', 'p9-launch.sh'))) return await say("a source checkout's unit; left as it is");
+    // O135: a drop-in can point the service somewhere else (override.conf on the laptop, 2026-11-16, kept the source copy under
+    // a launcher unit), so this reads what systemd runs, drop-ins included. Restarted only when the program it runs is the
+    // launcher itself; another program (even one whose arguments name the launcher), or an answer that cannot be read
+    // (systemctl failed, empty, not `path=...`), is left as it is: logged and returned, never rewritten or restarted here.
+    const runs = await new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'ExecStart', '--value'], { env, timeout: 30_000 },
+      (error, stdout) => resolve(error ? '' : stdout)));
+    const program = runs.match(/\bpath=(.*?) ; argv\[\]=/)?.[1];
+    if (program !== path.join(share, 'launcher', 'p9-launch.sh')) {
+      const checkout = program ? (runs.match(/argv\[\]=(.*?) ; /)?.[1] ?? program).slice(0, 300) : null;
+      await say(checkout ? "a source checkout's unit; left as it is: " + checkout : 'what the service runs could not be read; left as it is');
+      return { checkout };
+    }
     if (previous !== version) return await run('systemctl', ['--user', 'restart', 'p9-foundation.service']);
   } catch (error) { await say('failed: ' + error.message); }
 }

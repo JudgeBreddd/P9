@@ -126,5 +126,6 @@ test('a saved workspace that is not there at start: this run uses the default fo
   const after = await health(back);
   assert.equal(after.workspace, await realpath(first.workspace));
   assert.equal(after.savedWorkspace, undefined);
+  assert.equal(after.from, root.replace(/[\\/]$/, ''), 'O135: /health names the folder the daemon runs from');
   console.log('PASS missing saved workspace: default for this run, named in /health; the saved folder again once it is back');
 });
