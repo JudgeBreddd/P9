@@ -44,9 +44,20 @@ async function mainOf(folder) {
   return null;
 }
 
+// landed(dir, main, commit): the commit's work is in the main line. The commit is in it, or (daemon-6) after a squash merge, which makes a new commit,
+// merging it in changes nothing, also when later PRs changed its files again: git's own three-way merge ends on the
+// main line's exact tree. Work the main line later reverted or rewrote merges back in or conflicts, so it is kept. A conflict, an old git without merge-tree
+// --write-tree (before 2.38), or any other failure reads as not landed (fail closed: kept, never lost). merge-tree
+// writes loose objects where it runs: only Clean up asks, in the sprint's own clone, never the owner's repository.
+async function landed(dir, main, commit) {
+  if ((await git(dir, ['merge-base', '--is-ancestor', commit, main])).code === 0) return true;
+  const merged = await git(dir, ['merge-tree', '--write-tree', '--no-messages', main, commit]);
+  return merged.code === 0 && merged.out.trim() === await one(dir, ['rev-parse', '-q', '--verify', main + '^{tree}']);
+}
+
 // A7, the contract chunk 2 calls: null when folder is not a git repository. changed is null and inMain answers null when
 // P9 cannot find a main line (unknown is open, never a guess). inMain(commit): the commit is in the main line, or, after a
-// squash merge (which makes a new commit), every file it changed against the main line is the same there now.
+// squash merge (which makes a new commit), merging it into the main line would change nothing there.
 export async function gitFacts(folder) {
   if (await one(folder, ['rev-parse', '--is-inside-work-tree']) !== 'true') return null;
   const commit = await one(folder, ['rev-parse', '-q', '--verify', 'HEAD^{commit}']);
@@ -58,15 +69,7 @@ export async function gitFacts(folder) {
     async inMain(asked) {
       if (!main) return null;
       if (typeof asked !== 'string' || !HEX.test(asked) || !await one(folder, ['rev-parse', '-q', '--verify', asked + '^{commit}'])) return false;
-      if ((await git(folder, ['merge-base', '--is-ancestor', asked, main])).code === 0) return true;
-      const base = await one(folder, ['merge-base', asked, main]);
-      // --no-renames: a rename is its old name and its new name, so an unmerged rename (the main line still has the old
-      // name) never reads as merged.
-      const files = base && await names(folder, ['diff', '--no-ext-diff', '--no-renames', '--name-only', base, asked]);
-      // No pathspecs: the files that differ between the commit and the main line, compared by exact name. Any git
-      // failure reads as not merged (fail closed). ponytail: a file the main line changed again after the merge reads as not merged (kept, never lost).
-      const differ = files?.length ? await names(folder, ['diff', '--no-ext-diff', '--no-renames', '--name-only', asked, main]) : null;
-      return Boolean(differ) && !files.some((file) => differ.includes(file));
+      return landed(folder, main, asked);
     },
   };
 }
@@ -195,6 +198,8 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     const part = path.join(dirOf(sprint), 'clone.part-' + randomBytes(4).toString('hex'));
     const made = await git(dirOf(sprint), ['clone', '--quiet', '--no-checkout', '--', top, part], { timeout: 10 * 60_000 });
     if (made.code !== 0) { await rm(part, { recursive: true, force: true }); return { error: 'clone-failed', detail: made.err.slice(-TAIL) }; }
+    // Which folder the clone came from, inside the clone's own config, for clear(): origin is changed to the real remote below.
+    await git(part, ['config', 'p9.from', top]);
     const remote = await one(top, ['remote', 'get-url', 'origin']);
     if (remote) {
       await git(part, ['remote', 'set-url', 'origin', remote]);
@@ -269,7 +274,7 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     }
     // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it. The
     // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
-    if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/'])) {
+    if (!kept.length && !await one(clone, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/sprint/']) && await clear(clone)) {
       // The copy (folder-copy.mjs) goes only once its work is provably applied (copyKeptBecause); its apply record stays.
       const parts = ['workers', 'ready', 'clone'];
       if (await copyKeptBecause(dirOf(sprint)) === null) parts.push('copy');
@@ -277,6 +282,27 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
       await rmdir(dirOf(sprint)).catch(() => {});
     }
     return { removed, kept };
+  }
+
+  // daemon-6 (lead): the clone holds every worker's branches and stashes, not only the sprint branches. It goes only when
+  // nothing is stashed and every local branch's work is in the main line or held outside the clone: a remote-tracking
+  // ref contains its tip (pushed, or, in a folder clone, the owner's own branch as cloned from the owner's folder, which
+  // still has it). A git failure keeps it.
+  // A local branch may go with the clone only when its tip has landed, or a branch or tag that exists now in the folder the
+  // clone was made from (p9.from) or in a remote on this disk holds it. The clone's own remote-tracking refs are not asked:
+  // they date from the clone or the last fetch, and the outside branch may since be reset or deleted (Reviewer #246). A
+  // remote at an address cannot be asked, and a git that cannot answer (the commit is not there, the folder is gone)
+  // leaves the branch unproven: the clone stays.
+  async function clear(clone) {
+    const main = await mainOf(clone);
+    const heads = main && await git(clone, ['for-each-ref', '--format=%(objectname)', 'refs/heads/']);
+    if (!heads || heads.code !== 0 || await one(clone, ['rev-parse', '-q', '--verify', 'refs/stash'])) return false;
+    const outside = [await one(clone, ['config', '--get', 'p9.from']), await one(clone, ['remote', 'get-url', 'origin'])].filter((d) => d && path.isAbsolute(d));
+    next: for (const tip of heads.out.split('\n').filter(Boolean)) {
+      for (const dir of outside) if (await one(dir, ['for-each-ref', '--count=1', '--contains', tip, '--format=%(refname)', 'refs/heads/', 'refs/tags/'])) continue next;
+      if (!await landed(clone, main, tip)) return false;
+    }
+    return true;
   }
 
   // The owner's consent (folder-copy.mjs): preview is read-only; apply runs in the sprint's queue, so it never races a clean.
