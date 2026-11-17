@@ -1234,11 +1234,11 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   await page.evaluate(() => document.documentElement.style.setProperty('--toast-life', '600s'));
   await writeFile(path.join(instance.workspace, '_tyler/new-question.md'), '# Made by the chat\n\nA.\n');
   await turn(id, 'make one');
-  // 733 (Tyler, 2026-11-14): the item shows once as a notice at the bottom right and is a row in the bell, not a staying card.
+  // 733: the item shows once as a notice at the bottom right and is a row in the bell, not a staying card.
   const notice = page.locator('#toasts .toast', { hasText: '1 item needs you' });
   await notice.waitFor({ timeout: 10000 });
   assert.equal(await page.locator(`#navList .rowwrap[data-live] .row[data-chat="${id}"] .dot`).getAttribute('data-agent'), 'claude', 'the running chat is a live row in the panel');
-  // Replied (Builder: the chat card never went away): nothing stays on the stack for the chat or the item.
+  // Replied: nothing stays on the stack for the chat or the item.
   assert.equal(await page.locator('#cards .card:not([data-key="welcome"])').count(), 0, 'a new item made a staying card');
   await shot('cards-new-item.png');
   assert.match(await center(), /1 item needs you\n_tyler\/ · /, 'the new item is a bell row');
@@ -1781,7 +1781,7 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   // and rightly makes no card, so prompting before it raced the window's start.
   await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
-  // 733 (Tyler, 2026-11-14): the finish shows once as a notice at the bottom right and is a row in the bell, not a staying card.
+  // 733: the finish shows once as a notice at the bottom right and is a row in the bell, not a staying card.
   const notice = page.locator('#toasts .toast', { hasText: 'Claude finished' });
   const bell = async () => { await page.click('#rBell'); const text = await page.locator('#mdlBody').innerText(); await page.keyboard.press('Escape'); return text; };
   await notice.waitFor({ timeout: 15000 });

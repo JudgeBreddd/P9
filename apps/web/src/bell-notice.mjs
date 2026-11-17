@@ -1,4 +1,4 @@
-// 733 (Tyler, 2026-11-14: "show up as a normal notification and go to the bell like all the other notifications"): an agent
+// 733: an agent
 // asking, an item waiting on you and a finished agent are bell rows (controller.mjs cardList marks them quiet). Each one new
 // since the chats loaded shows once as a notice at the bottom right; a click opens it as its card did. The ones there when
 // the window opened go to the bell with no notice. Loaded by renderCards (cards-modal.mjs) with the first such item, so the

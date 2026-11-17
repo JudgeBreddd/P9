@@ -1,5 +1,5 @@
-// OPEN-ITEMS 733 (Tyler, 2026-11-14: the notices that stay in the top right "show up as a normal notification and go to the
-// bell like all the other notifications"). The three that made a staying card: an agent finished, an item that needs you
+// 733: the notices that stayed in the top right now go to the bell like the other notifications. The three that made a
+// staying card: an agent finished, an item that needs you
 // (a new file in the waiting folder), an agent asking. Each now shows once as a notice at the bottom right and is listed in
 // the bell; none makes a card. An item already waiting when the window opens goes to the bell with no notice.
 import test from 'node:test';

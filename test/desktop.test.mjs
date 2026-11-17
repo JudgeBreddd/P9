@@ -83,7 +83,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     const ta = page.locator('#chats .pane textarea').first(), hist = page.locator('#chats .hist').first();
     const focus = mode => page.click('#r' + ({ chat: 'Chat', dev: 'Dev', mission: 'Mission' })[mode]);
     const card = prefix => page.locator(`#cards .card[data-key^="${prefix}"]`);
-    // 733 (Tyler, 2026-11-14): asks and items that need you are bell rows, not top-right cards; these steps open them there.
+    // 733: asks and items that need you are bell rows, not top-right cards; these steps open them there.
     const asks = /(agents need|[A-Z]\w* needs) you/, items = /items? needs? you/;
     const bellRow = text => page.locator('#mdlBody .mlist [data-i]', { hasText: text });
     const fromBell = async text => { await page.click('#rBell'); await bellRow(text).click(); };

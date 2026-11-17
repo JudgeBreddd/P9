@@ -21,7 +21,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       await page.screenshot({ path: path.join(process.env.P9_SCREENSHOTS, name + '.png'), animations: 'disabled' });
     };
     const reset = async () => { await page.goto('p9://app/'); await shellReady(page); };
-    // 733 (Tyler, 2026-11-14): asks and items that need you are bell rows, not top-right cards; these steps open them there.
+    // 733: asks and items that need you are bell rows, not top-right cards; these steps open them there.
     const bellRow = (text) => page.locator('#mdlBody .mlist [data-i]', { hasText: text });
     const asks = /(agents need|[A-Z]\w* needs) you/, items = /items? needs? you/;
     const fromBell = async (text) => { await page.click('#rBell'); await bellRow(text).click(); };
