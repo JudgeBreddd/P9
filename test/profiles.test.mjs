@@ -149,6 +149,25 @@ test('profile: what is refused; a removed profile\'s chat can be read, not conti
   console.log('PASS profile: bad input refused, Codex and unlisted models refused, send-away refused, a wrong key named, a removed profile stops the chat');
 });
 
+// PD-1 (a): a hand-off types `claude --resume` into a terminal, which runs on the Claude sign-in. A profile chat refuses it.
+test('profile: a profile chat is not handed off to a terminal, and says why; a plain Claude chat still is', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  fs.writeFileSync(path.join(instance.workspace, 'uuid-sessions'), ''); // a hand-off needs a UUID session
+  const { profile } = await call(instance, '/profiles', 'POST', { ...PROFILE, key: KEY });
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude', profile: profile.id, model: 'glm-5.3' })).conversation;
+  await said(instance, id, 'hello');
+  const handed = await call(instance, '/chat/' + id + '/handoff', 'POST');
+  assert.deepEqual([handed.status, handed.error], [409, 'handoff-unavailable'], handed.text);
+  assert.match(handed.message, /provider profile .* Claude sign-in/);
+  assert.match((await events(instance, id)).at(-1).data.message, /cannot be handed to a terminal/);
+  assert.equal((await events(instance, id)).some((e) => e.type === 'handed-off'), false, 'the profile chat was stopped for a hand-off');
+  const own = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await said(instance, own, 'hello');
+  assert.equal((await call(instance, '/chat/' + own + '/handoff', 'POST')).error, undefined, 'a plain Claude chat was refused too');
+  assert.ok((await events(instance, own)).some((e) => e.type === 'handed-off'));
+  console.log('PASS PD-1 (a): profile chat hand-off refused with its reason, in the reply and the chat; a plain Claude chat handed off');
+});
+
 test('profile: a key command is run with no shell at each chat start and its first line is the key; a failing one starts no agent', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   const script = path.join(instance.directory, 'print-key.mjs'), marker = path.join(instance.directory, 'shell-ran');

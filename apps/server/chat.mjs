@@ -1556,6 +1556,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const conversation = ID.test(id) && row(id);
       if (!conversation) return refused(404, 'unknown-conversation');
       if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '') || ['moving', 'moved'].includes(conversation.state)) return refused(409, 'handoff-unavailable');
+      // PD-1 (a): the terminal's claude runs on this computer's own sign-in, not the profile's service and key, so a
+      // profile chat stays in P9. Said in the chat too, as the page shows no reason for a refused hand-off.
+      if (profileOf(id)) {
+        const message = 'A chat on a provider profile cannot be handed to a terminal: there it would run on the Claude sign-in, not the profile.';
+        emit(id, 'error', { message });
+        return { status: 409, error: 'handoff-unavailable', message };
+      }
       const cwd = await startOf(conversation).catch(() => null);
       if (!cwd) return refused(409, 'folder-unavailable');
       const result = await stopConversation(id);
