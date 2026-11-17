@@ -679,12 +679,14 @@ function render() {
   chips.hidden = !plan.length && !showCards;
   chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (showCards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button><button type="button" class="chip close" data-chip-close aria-label="Close the pinned cards until a new one comes">×</button>` : '');
   const run = digest().get(picked)?.run ?? 'idle';
+  // O59: the header names the model in #model, so this chat's picks are drawn first (else it names the last chat's model).
+  renderPicks(picked);
   chatBar(picked, run);
   // O109: while a turn runs, its latest step stays in view over the box, wherever the chat is scrolled.
   const step = run === 'idle' ? undefined : blocks.findLast((block) => block.kind === 'tool'), nowStep = one<HTMLElement>('#nowStep');
   nowStep.hidden = !step || !['pending', 'in_progress'].includes(String(step.status));
   nowStep.textContent = step?.text ?? '';
-  renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
+  renderQueue(); renderAttached(); label(); void drain();
 }
 // The same empty-only swap as the desktop: the daemon refuses deletion if a message raced the picker.
 let pinSig = ''; // O109: the open chat's pinned cards as last drawn
