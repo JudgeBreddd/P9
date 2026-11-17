@@ -1370,9 +1370,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // During a turn that answers another chat, everything waits for its end.
           // O133: a steer joins the running turn, which keeps its model and effort, so a message that picks another one waits
           // for the turn's end and goes as the next prompt, which sets them first (Tyler, 2026-11-16: an Opus pick sent
-          // mid-turn was steered in and the chat stayed on Sonnet, with no config event).
+          // mid-turn was steered in and the chat stayed on Sonnet, with no config event). A mode other than the session's too.
+          // O133 mode half: a mode is set by the next prompt too (want below), so one other than the session's waits the same
+          // way. Under the agent lock every prompt runs narrow whatever it picks, so there a mode pick changes nothing.
           const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
-            || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v)));
+            || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v))
+            || (!locked && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks);
           if (solo) return refused(409, 'turn-running');
           return await steer(id, body, images);
