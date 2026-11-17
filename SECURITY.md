@@ -1071,7 +1071,7 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
 - **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
   sprint: its id, title and folder, the approval record, the project's id and name, the role rows, the plan's items
   with P9's review record, each chat of the sprint (key, title, agent, model, effort, mode, state, context use,
-  folder, its ready and verdict records), plan usage and limits as the usage page shows them, and the last 20 lines
+  what it has spent (token counts and reported cost, as `list_chats` shows them), folder, its ready and verdict records), plan usage and limits as the usage page shows them, and the last 20 lines
   of the script log. No key, no provider profile's address, no chat text.
 - **The log.** Every run adds one line to `hooks.log` in the sprint folder: time, point, name, exit or reason,
   duration, last output line. P9 keeps the last 100 lines. The project page and `set_rules` cannot write it, but it
