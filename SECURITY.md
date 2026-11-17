@@ -749,7 +749,8 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 - **Approvals.** An agent may answer an approval or a question asked by a chat it started,
   directly or through a worker, and by no other chat. For an approval, P9 first asks you in
   the parent's chat, naming the worker, what it asked and the answer the parent wants to give;
-  only your Allow sends it. In Unrestricted mode (agent lock and File protection both off) it does
+  only your Allow sends it. An answer that names none of the approval's own options is refused before you
+  are asked, so you are never asked about an answer that cannot be sent. In Unrestricted mode (agent lock and File protection both off) it does
   not ask, like `run_script`. The tool tells the parent to answer only what is within the task
   it gave; that is an instruction to the agent, not a check P9 makes. Every answer is recorded in
   the worker's chat with the chat that gave it. The approval also stays in the worker's own

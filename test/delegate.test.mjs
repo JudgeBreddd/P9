@@ -115,6 +115,15 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   await until(instance, (event) => event.conversation === made.chat && event.type === 'approval');
   const waits = (await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).waiting;
   assert.equal(waits?.kind, 'approval');
+  // daemon-9: waiting lists the approval's options, and an answer naming none of them (the question shape, as a lead
+  // sent to a Codex worker) is refused at once with those options, before the user is asked about it.
+  const options = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
+  assert.deepEqual(waits.options, options);
+  for (const wrong of [{ action: 'accept' }, { action: 'accept', content: { optionId: 'allow' } }, { optionId: 'allow_once' }]) {
+    const refused = await Promise.race([a.tool('answer_chat', { chat: made.chat, request: waits.request, answer: wrong }), pause(3000).then(() => ({ error: 'the user was asked' }))]);
+    assert.deepEqual([refused.error, refused.options], ['request-refused', options], JSON.stringify(wrong));
+  }
+  console.log('PASS Delegate daemon-9');
   pending = a.tool('answer_chat', { chat: made.chat, request: waits.request, answer: { optionId: 'allow' } });
   asked = await approval(asked.cursor);
   assert.match(asked.hit.data.toolCall.title, /^P9 Delegate: answer "allow" to the approval "Kid" waits on: Write marker$/);
