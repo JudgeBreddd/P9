@@ -1,7 +1,7 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
-import { pinned, applyCard, isReport, reportKey, SHUT, OPENED } from './pinned.mjs';
+import { pinned, applyCard, isReport, reportKey, SHUT } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, lineDiff } from './composer.mjs';
 import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
@@ -646,12 +646,8 @@ function renderChats(only) {
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
 // E2: with only, and the same panes still shown in the same order, just those panes are rebuilt and re-wired. Before,
 // each daemon batch rebuilt every pane shown, so a quiet 200-step chat beside a streaming one cost the same each time.
-// window-4 FIX1: the open report is capped by the room between the history's top and the bottom's top, not by 45vh alone,
-// so with tall pins or a queue on a short window its title and close stay inside the pane. Watched on both boxes, so a
-// window resize, a growing text box or a new pin refits it.
-const fitTuck = new ResizeObserver(es => new Set(es.map(e => e.target.closest('.pane'))).forEach(p => { const t = p?.querySelector('.tuck'), h = p?.querySelector('.hist'); if (!t || !h) return;
-  const c = t.firstElementChild, room = t.parentElement.getBoundingClientRect().top - 6 - h.getBoundingClientRect().top;
-  t.style.setProperty('--tuck-body', Math.max(0, Math.floor(room - (c.offsetHeight - c.querySelector('.tb').offsetHeight))) + 'px'); }));
+// window-4: tuck.mjs (the folded worker report) loaded on the first open report (pinned.mjs): draw it.
+addEventListener('p9:tuck', () => renderChats());
 function paint(root, ss, only) {
   const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
   const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
@@ -733,11 +729,8 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
     p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
-    p.querySelectorAll('.hist, .bottom > .col, .tuck').forEach(el => fitTuck.observe(el)); // a new .tuck is measured once on observe
-    // window-4: the folded report's title slides it up and down in place (no redraw, so the slide shows).
-    p.querySelectorAll('[data-card-tab]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardTab), t = b.closest('.tuck'); if (!c || !t) return;
-      const k = reportKey(s, c), on = !OPENED.has(k); on ? OPENED.add(k) : OPENED.delete(k);
-      t.dataset.tuckOpen = on; b.setAttribute('aria-expanded', on); b.title = on ? 'Slide the report down' : 'Slide the report up'; t.querySelector('.tb').inert = !on; });
+    // window-4: the folded report's title and its fit (tuck.mjs, already loaded when a .tuck is drawn).
+    if (p.querySelector('.tuck')) import('./tuck.mjs').then(m => m.wire(p, s));
     p.querySelectorAll('[data-card-close]').forEach(b => b.onclick = () => { const c = s.cards?.get(b.dataset.cardClose); if (c) SHUT.add(reportKey(s, c)); renderChats(); });
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.

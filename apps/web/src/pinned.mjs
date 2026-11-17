@@ -18,19 +18,15 @@ export function openReport(s, shut, gone) {
   const top = [...(s.cards?.values() ?? [])].filter(c => isReport(c.id)).sort((a, b) => s.cardAt.get(b.id) - s.cardAt.get(a.id))[0];
   return top && !shut.has(reportKey(s, top)) && !gone?.(top.id) ? top : null;
 }
-// window-4 (row 730, Tyler: "goes behind the chat box showing the title and clicking the title slides it up, click title
-// again slides it down"): with tuck (the desktop), the open report is drawn apart from the strip, as a tab that floats on
-// the chat just above the bottom: only its title shows until it is clicked, so it never pushes the history up. Its body
-// stays in the page (inert, no height) while folded. OPENED: the reports unfolded in this window, by reportKey, so a new
-// report arrives folded. ponytail: window memory only; a reload folds it again.
-export const OPENED = new Set();
-const tab = (s, c) => { const k = reportKey(s, c), on = OPENED.has(k);
-  return `<div class="tuck" data-tuck-open="${on}"><div class="card-pin" data-card="${esc(c.id)}"><div class="tab"><button type="button" class="eyebrow" data-card-tab="${esc(c.id)}" aria-expanded="${on}" title="${on ? 'Slide the report down' : 'Slide the report up'}">Worker report</button><button type="button" class="card-close" data-card-close="${esc(c.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button></div><div class="tb"${on ? '' : ' inert'}><div class="msg agent">${c.html}</div></div></div></div>`; };
+// window-4 (row 730): with tuck (the desktop), the open report is drawn apart from the strip, folded to its title above the
+// bottom (tuck.mjs). T: tuck.mjs, a promise while it loads; the first open report loads it, then 'p9:tuck' redraws the chats.
+let T;
 export function pinned(s, mdOf, shut, gone, tuck) {
   const plan = s.events.find(e => e.t === 'plan'), all = [...(s.cards?.values() ?? [])];
   const open = shut && openReport(s, shut, gone);
   const cards = shut ? all.filter(c => !isReport(c.id) || (c === open && !tuck)) : all;
-  const folded = tuck && open ? tab(s, { id: open.id, html: mdOf(open), text: open.text }) : '';
+  const folded = !(tuck && open) ? '' : T?.tab ? T.tab(s, { id: open.id, html: mdOf(open), text: open.text })
+    : (T ??= import('./tuck.mjs').then(m => { T = m; dispatchEvent(new Event('p9:tuck')); }), '');
   if (!plan?.entries.length && !cards.length) return folded;
   return folded + `<div class="pinned" aria-label="Pinned">${plan?.entries.length ? `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan <button type="button" class="open-plan" data-open-plan="entries" title="Open the plan to comment on it">Open</button></div><ul style="margin:0;padding:0">${plan.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${mark(st)}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>` : ''}`
     + cards.map(c => `<div class="card-pin" data-card="${esc(c.id)}">${shut && isReport(c.id) ? `<button type="button" class="card-close" data-card-close="${esc(c.id)}" title="Close this report: it stays in the chat, and the next one shows here" aria-label="Close the worker report">×</button>` : ''}<div class="eyebrow">${isReport(c.id) ? 'Worker report' : `${esc(c.id)} · ${esc(c.kind)}`}</div><div class="msg agent">${mdOf(c)}</div></div>`).join('') + '</div>';
