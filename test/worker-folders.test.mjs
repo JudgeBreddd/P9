@@ -148,6 +148,83 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   console.log('PASS Worker folders A6');
 });
 
+// daemon-6 (Tyler, 2026-11-13, nightly 8: three squash-merged folders kept "not in the main line"): a later PR changes a
+// file the worker's merged PR also changed. The work is still in the main line, so its folder goes; a worker whose lines
+// the main line later rewrote, and one not merged, are kept.
+test('Worker folders daemon-6: clean-up removes a squash-merged folder after the main line changed the same file again; it keeps unmerged and rewritten work', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const lines = (edit = {}) => Array.from({ length: 9 }, (_, i) => edit[i + 1] ?? 'line ' + (i + 1)).join('\n') + '\n';
+  let n = 0;
+  const onMain = (text) => { const land = path.join(dir, 'main-' + (n += 1)); g(dir, 'clone', '-q', remote, land); write(path.join(land, 'shared.txt'), text); g(land, 'commit', '-qam', 'main ' + n); g(land, 'push', '-q', 'origin', 'main'); };
+  { const land = path.join(dir, 'main-0'); g(dir, 'clone', '-q', remote, land); write(path.join(land, 'shared.txt'), lines()); g(land, 'add', '.'); g(land, 'commit', '-qm', 'shared'); g(land, 'push', '-q', 'origin', 'main'); }
+  const folders = createWorkerFolders({ home });
+  const work = async (item, edit) => { const { folder } = await folders.make(ID, item, owner); write(path.join(folder, 'shared.txt'), lines(edit)); g(folder, 'commit', '-qam', item); g(folder, 'push', '-q', 'origin', 'HEAD'); return folder; };
+  await work('later', { 1: 'later' }); await work('rewritten', { 3: 'rewritten' }); await work('open', { 7: 'open' });
+  squash(dir, remote, 'sprint/0123abcd/later', 'later');
+  squash(dir, remote, 'sprint/0123abcd/rewritten', 'rewritten');
+  // Later PRs: one changes another line of the same file, one rewrites the line the 'rewritten' worker added.
+  onMain(lines({ 1: 'later', 3: 'rewritten', 9: 'another pr' }));
+  onMain(lines({ 1: 'later', 3: 'changed again', 9: 'another pr' }));
+  const result = await folders.clean(ID);
+  assert.deepEqual(result.removed, ['later'], JSON.stringify(result.kept.map((k) => [k.item, k.why])));
+  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['open', 'not in the main line'], ['rewritten', 'not in the main line']]);
+  assert.deepEqual(g(path.join(home, ID, 'clone'), 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n'), ['sprint/0123abcd/open', 'sprint/0123abcd/rewritten'], 'an unmerged or rewritten branch is never deleted');
+  console.log('PASS Worker folders daemon-6');
+});
+
+// daemon-6, the lead's three cases: each fails if Clean up deletes work that is not in the main line.
+test('Worker folders daemon-6 (1): a squash-merged folder with an uncommitted or untracked file is kept; merge-tree sees only the committed tip', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const folders = createWorkerFolders({ home });
+  for (const item of ['untracked', 'staged']) {
+    const { folder } = await folders.make(ID, item, owner);
+    write(path.join(folder, item + '.txt'), item + '\n'); g(folder, 'add', '.'); g(folder, 'commit', '-qm', item); g(folder, 'push', '-q', 'origin', 'HEAD');
+    squash(dir, remote, 'sprint/0123abcd/' + item, item);
+    write(path.join(folder, 'wip.txt'), 'not committed\n');
+    if (item === 'staged') g(folder, 'add', 'wip.txt');
+  }
+  const result = await folders.clean(ID);
+  assert.deepEqual(result.removed, []);
+  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['staged', 'unsaved changes'], ['untracked', 'unsaved changes']]);
+  for (const item of ['untracked', 'staged']) assert.equal(fs.readFileSync(path.join(home, ID, 'workers', item, 'wip.txt'), 'utf8'), 'not committed\n');
+  console.log('PASS Worker folders daemon-6 (1)');
+});
+
+test('Worker folders daemon-6 (2): a folder whose sprint branch is in the main line goes, but the clone keeps a local branch or a stash whose work is not', { timeout: 60000 }, async (t) => {
+  const { owner, home } = repos(t);
+  const folders = createWorkerFolders({ home });
+  const sprints = { side: ID, stash: ID.replace('1', '5') };
+  // 'side': nothing on its sprint branch (its tip is in the main line), an unpushed commit on another branch.
+  { const { folder } = await folders.make(sprints.side, 'w', owner);
+    g(folder, 'checkout', '-qb', 'side'); write(path.join(folder, 'side.txt'), 'unpushed\n'); g(folder, 'add', '.'); g(folder, 'commit', '-qm', 'side');
+    g(folder, 'checkout', '-q', 'sprint/0123abcd/w'); }
+  // 'stash': nothing committed, a change stashed.
+  { const { folder } = await folders.make(sprints.stash, 'w', owner);
+    write(path.join(folder, 'a.txt'), 'stashed\n'); g(folder, 'stash', '-q'); }
+  for (const [name, sprint] of Object.entries(sprints)) {
+    assert.deepEqual(await folders.clean(sprint), { removed: ['w'], kept: [] }, name);
+    const clone = path.join(home, sprint, 'clone');
+    assert.ok(fs.existsSync(clone), name + ': the clone that holds the work stays');
+  }
+  assert.equal(g(path.join(home, sprints.side, 'clone'), 'show', 'side:side.txt'), 'unpushed');
+  assert.match(g(path.join(home, sprints.stash, 'clone'), 'stash', 'list'), /stash@\{0\}/);
+  console.log('PASS Worker folders daemon-6 (2)');
+});
+
+test('Worker folders daemon-6 (3): work squash-merged and then reverted in the main line is kept; merging it back would change the main line', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const folders = createWorkerFolders({ home });
+  const { folder } = await folders.make(ID, 'reverted', owner);
+  write(path.join(folder, 'a.txt'), 'worker\n'); write(path.join(folder, 'new.txt'), 'worker\n'); g(folder, 'add', '.'); g(folder, 'commit', '-qm', 'w'); g(folder, 'push', '-q', 'origin', 'HEAD');
+  squash(dir, remote, 'sprint/0123abcd/reverted', 'reverted');
+  { const land = path.join(dir, 'revert'); g(dir, 'clone', '-q', remote, land); g(land, 'revert', '--no-edit', 'HEAD'); g(land, 'push', '-q', 'origin', 'main'); }
+  const result = await folders.clean(ID);
+  assert.deepEqual(result.removed, []);
+  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['reverted', 'not in the main line']]);
+  assert.equal(fs.readFileSync(path.join(folder, 'new.txt'), 'utf8'), 'worker\n');
+  console.log('PASS Worker folders daemon-6 (3)');
+});
+
 test('Worker folders A4: the setup shell on Windows without ComSpec is System32\\cmd.exe; with ComSpec, that shell; elsewhere /bin/sh', { timeout: 10000 }, () => {
   assert.deepEqual(setupShell('npm ci & echo ok', 'win32', { SystemRoot: 'D:\\Win' }), ['D:\\Win\\System32\\cmd.exe', '/d', '/s', '/c', '"npm ci & echo ok"']);
   assert.deepEqual(setupShell('x', 'win32', {}), ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', '"x"']);
