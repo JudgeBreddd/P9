@@ -39,7 +39,7 @@ export function petsIpc(outer) {
         || args.length) throw new Error('ipc-sender-refused');
     return addFolders(await importable());
   });
-  // Install (Builder, 2026-10-18: paste "the npm command from petdex.dev"): the page sends the pasted text; main keeps only the pet
+  // Install (paste the npm command petdex.dev shows): the page sends the pasted text; main keeps only the pet
   // names after "install", then does what petdex 1.4.0's install does (read 2026-10-18): petdex.dev's manifest, then the pet's
   // pet.json and sheet from assets.petdex.dev only. Nothing downloaded runs; each pet goes through Add's checks (threat model row 16).
   const getBytes = async (url, max) => {

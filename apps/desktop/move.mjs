@@ -19,8 +19,8 @@ const CANCELLED = 'You cancelled the move. The chat stays here.';
 // the server acknowledged, never what went into the socket. A phase that lasts repeats its last event every 5 s.
 // signal: Cancel. Checked between requests only, so a chat the server has taken is never cancelled half way.
 // files (item 23): { userData, plan, work }, the chat's folder as the Send files prompt planned and settled it before the freeze
-// (Builder, 2026-10-27: "Same prompt first"). It goes over P9's tunnel before the chat, so nothing waits for Syncthing. null: a
-// Syncthing folder, which keeps the wait (Builder: "Keep today's wait").
+// (the same prompt first). It goes over P9's tunnel before the chat, so nothing waits for Syncthing. null: a
+// Syncthing folder, which keeps today's wait.
 // to (U4): where a chat started outside the workspace lands on the remote, as planFolder settled it (a full path, or a
 // workspace folder there). The chat's edited files are named from its own folder, so they are checked from that one there.
 export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), syncWait = SYNC_WAIT,

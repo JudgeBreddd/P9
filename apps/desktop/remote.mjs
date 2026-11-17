@@ -73,7 +73,7 @@ const KEYLESS = /Permission denied|No more authentication methods/;
 export const sshFailure = (err, windows = WINDOWS || process.env.P9_SSH_KEYS_ONLY === '1') => CHANGED.test(err) ? changed(err)
   : new Error(!LOGIN.test(err) ? 'server-unreachable' : !windows ? 'ssh-login-needed' : KEYLESS.test(err) ? 'ssh-key-needed' : 'server-unreachable');
 // What the server runs over ssh: its runtime folder, then its desktop credentials. The server's login shell expands $XDG_RUNTIME_DIR;
-// a non-tty ssh session can come without it (a home server, 2026-10-26), so systemd's own default /run/user/<uid> stands in.
+// a non-tty ssh session can come without it (seen on a server), so systemd's own default /run/user/<uid> stands in.
 // exit 0: a server that answers always succeeds, so an ssh failure is server-unreachable and a missing file is server-no-p9.
 // Background mode (threat model row I1: no service there, by the person's choice or because linger was refused): with no
 // service's desktop.json and the background marker there, READ starts P9 with its start script first (it does nothing while
@@ -103,7 +103,7 @@ export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.t
 function readServer(host, ssh, signal) {
   // 60 s: a background start waits up to 30 s for its daemon.
   return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536, signal }, (error, out, err) => {
-    // No ssh program on this computer (owner, 2026-11-02): said as such, not as an unreachable remote.
+    // No ssh program on this computer: said as such, not as an unreachable remote.
     if (error) return reject(error.code === 'ENOENT' ? new Error('ssh-missing') : sshFailure(err));
     // U8: a slim line before the JSON marks the Temporary remote's small P9 (remote-install.mjs slimScript).
     let [runtime, ...rest] = out.split('\n');
