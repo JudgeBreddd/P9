@@ -943,7 +943,8 @@ function applyChat(ev, into) {
       } else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
       else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
-      else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
+      // O126: the agent's own title only on a chat the user never named.
+      else if (d.sessionUpdate === 'session_info_update' && !s.named && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
       else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) outer.usageNow(); }
       else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
       break;
@@ -969,7 +970,7 @@ function applyChat(ev, into) {
     case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
     // N1: the daemon's word on a chat's project, title, archive and removal, for every window (apps/server/projects.mjs).
     case 'project': s.project = d.project ?? null; s.folderAsked = false; break;
-    case 'renamed': s.title = d.title; break;
+    case 'renamed': s.title = d.title; s.named = true; break;
     case 'archived': s.archived = !!d.archived; break;
     case 'askable': s.askable = !!d.on; break;
     case 'deleted': if (!into) { outer.S.sessions = outer.S.sessions.filter(x => x !== s); outer.S.open = outer.S.open.filter(x => x !== s.id); } break;
@@ -1036,9 +1037,10 @@ async function loadChat() {
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
       // 712: a stub carries its archive too; without it, after a restart an archived chat came back to the card and the sidebar.
-      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
-      // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out).
-      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
+      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, named: c.named, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out). O126: so does a
+      // name the user gave (its renamed event may be out of the tail, and the agent's title in it).
+      for (const c of all) { const s = have.get(c.id); if (s) { if (c.named) { s.title = c.title; s.named = true; } s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
       outer.loadProjects?.();
       // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
       try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
