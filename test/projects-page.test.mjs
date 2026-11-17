@@ -1174,6 +1174,13 @@ test('projects: a sprint page shows why its roles.json does not read, and follow
   await until(async () => (await why.textContent().catch(() => '')) === 'it has no "roles" list', async () => 'the no-list reason: ' + await why.textContent().catch(() => 'no hint'), 20000);
   await writeFile(file, good(['lead']));
   await until(async () => (await row('lead').count()) === 1 && (await row('docs').count()) === 0 && (await why.count()) === 0, 'the rows again', 20000);
+  // FIX1: deleted, it says it is missing and stays listed as a file to make again; written back, the rows return.
+  await rm(file);
+  await until(async () => (await why.textContent().catch(() => '')) === 'it is missing', async () => 'the missing reason: ' + JSON.stringify([await why.textContent().catch(() => 'no hint'), await row('lead').count()]), 20000);
+  assert.equal(await row('lead').count(), 0, 'no rows from a deleted file');
+  assert.equal(await page.locator(`[data-sprint="${prep.sprint}"] [data-pj="spfile"]`, { hasText: /^roles\.json/ }).count(), 1, 'roles.json still listed while gone');
+  await writeFile(file, good(['lead', 'docs']));
+  await until(async () => (await row('docs').count()) === 1 && (await why.count()) === 0, 'the rows after the file was made again', 20000);
   if (!process.env.GITHUB_ACTIONS) { await writeFile(file, broken); await why.waitFor({ timeout: 20000 }); console.log('P9_SHOT o138-roles-error ' + (await page.screenshot({ type: 'png' })).toString('base64')); }
-  console.log('PASS roles.json that does not read: opened from its button after a break, the parse error shown with no rows; fixed on disk, the rows back with no click; cut off while open and not a roles list, each reason shown; fixed again, the rows');
+  console.log('PASS roles.json that does not read: opened from its button after a break, the parse error shown with no rows; fixed on disk, the rows back with no click; cut off while open and not a roles list, each reason shown; fixed again, the rows; deleted, it says missing and stays listed; written back, the rows');
 });
