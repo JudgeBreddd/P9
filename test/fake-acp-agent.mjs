@@ -312,6 +312,22 @@ const connection = acp.connectAgent(stream, {
       }, 1500);
       return { stopReason: 'end_turn' };
     }
+    // O139, as P9's history shows Claude Code after a turn: the prompt ends, 0.5 s later the compaction (tool call, then a
+    // usage_update with the cost so far), then "compactgo" works on unprompted and ends on a usage_update with a higher
+    // cost; "compactstop" is a compaction that failed: nothing more comes.
+    if (text === 'compactgo' || text === 'compactstop') {
+      setTimeout(async () => {
+        const cost = (amount) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount, currency: 'USD' } } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-' + text, title: 'Compact conversation', kind: 'think', status: 'completed' } });
+        await cost(1);
+        if (text === 'compactstop') return;
+        await say('working after the compaction');
+        await new Promise((resolve) => setTimeout(resolve, 6000));
+        await say(', then done');
+        await cost(2);
+      }, 500);
+      return { stopReason: 'end_turn' };
+    }
     // "squeeze": a compaction inside the turn, as P9 sees it from the real adapters (the "Compact conversation" tool call and its
     // update, one id) or, for "squeezeu", as a compaction_update (in progress, then completed); a number after it is the id.
     const squeeze = /^squeeze(u?)(\d*)/.exec(text);
