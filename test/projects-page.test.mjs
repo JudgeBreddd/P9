@@ -851,6 +851,18 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   console.log('PASS S19 page: the sprint section lists the scripts Start approves, the approved copy after it, and a file changed since');
   await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT start-again ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // S13 (SECURITY.md § Pause sprint): the started sprint's Pause and Resume, the owner's press.
+  const pause = section.locator('[data-pj="sppause"], [data-pj="spresume"]'), pausedTag = section.locator('[data-sp-paused]');
+  assert.equal((await pause.textContent()).trim(), 'Pause sprint'); assert.equal(await pausedTag.count(), 0);
+  await pause.click();
+  await pausedTag.waitFor({ timeout: 10000 });
+  assert.equal((await pause.textContent()).trim(), 'Resume sprint');
+  await section.evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT s13-paused ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await pause.click();
+  await until(async () => await pausedTag.count() === 0, 'Resume cleared the Paused mark');
+  assert.equal((await pause.textContent()).trim(), 'Pause sprint');
+  console.log('PASS S13 page: Pause sprint marks the started sprint Paused and turns into Resume sprint; Resume clears it');
   assert.deepEqual(errors, []);
   console.log('PASS window-10: Start sprint held shows Starting… and sends one press; halfway says what was made; Start again keeps the lead and makes w2; the record shows by you and the plan\'s sha256');
 });
