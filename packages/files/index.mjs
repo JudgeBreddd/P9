@@ -60,11 +60,11 @@ export const setProtection = (on) => { protect = on !== false; }; // anything bu
 export const protection = () => protect;
 const locked = (name) => protect && (/^(?:_private|\.git|secrets)$/i.test(name) || /^\.env/i.test(name) || /^\.p9-/i.test(name));
 export const lockedName = (name) => locked(name);
-// P11 (owner, 2026-11-02: "don't restrict access to people's machine or files"): Mission's own reads of the folders the
+// P11 (no restriction on access to a person's own machine or files): Mission's own reads of the folders the
 // person's space names ({ space: true }) see _private too. Keys (.env, secrets, .git) stay hidden, and writes keep the lock.
 const spaceLocked = (name) => locked(name) && !/^_private$/i.test(name);
 
-// Folders P9 never crawls (Builder, 2026-10-27: walking them must never run P9 out of memory): the file tree, Dev
+// Folders P9 never crawls (walking them must never run P9 out of memory): the file tree, Dev
 // Focus's tree, search and watcher, and a tunnel send of a folder that is not a git repo.
 export const HEAVY = Object.freeze(['node_modules', '.venv', 'venv', '__pycache__', '.cache', 'dist', 'build', '.astro']);
 // K14: the one list a workspace walk leaves out (Mission's plans list, the setup wizard's "Use what's here"): HEAVY plus
