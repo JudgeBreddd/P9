@@ -211,7 +211,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (mtimeMs !== recoveryCounted.mtime) recoveryCounted = { mtime: mtimeMs, count: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length };
     return recoveryCounted.count;
   };
-  // File protection off lifts these three read-only rules too: off turns off every protection, not only some.
+  // File protection off also lifts these three read-only file rules.
   const readOnly = (file, name = file.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
     // ponytail: Builder edits registry.json outside P9; a reviewed registry editor would need its own confirm step.
