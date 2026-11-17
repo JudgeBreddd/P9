@@ -4,7 +4,7 @@
 // the bell; none makes a card. An item already waiting when the window opens goes to the bell with no notice.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -73,6 +73,32 @@ test('733 top-right cards go to the bell: a finish, a new waiting item and a que
   const rows = await bellRows();
   for (const want of [/Claude needs you/, /1 item needs you/, /Claude finished/, /1 item in _tyler\//]) assert.ok(rows.some((r) => want.test(r)), want + ' in the bell: ' + JSON.stringify(rows));
   assert.ok(!rows.some((r) => /snoozed/.test(r)), 'nothing reads snoozed: ' + JSON.stringify(rows));
+  // Reviewer FIX1: a waiting-file notice opens its file even after rows moved, and the bell (never another file) once it is gone.
+  // The earlier row leaves and a newer one comes in that sorts first by name: a row number kept from the notice is another file now.
+  // The waiting list reloads when a turn ends (chat-view turn-end, queueSoon); the first chat is waiting on its question, so a
+  // second chat's turns do it.
+  const id2 = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await page.locator('#nav .row[data-chat="' + id2 + '"]').waitFor({ timeout: 15000 });
+  const waitRows = async (want) => { await call(instance, '/chat/' + id2 + '/prompt', 'POST', { text: 'hello' });
+    for (let n = 0; n < 15; n++) { const r = await bellRows(); if (want(r)) return r; await page.waitForTimeout(1000); } return bellRows(); };
+  await unlink(path.join(instance.workspace, '_tyler/old-question.md'));
+  await writeFile(path.join(instance.workspace, '_tyler/a-later.md'), '# Later one\n\nA.\n');
+  const moved = await waitRows((r) => r.some((x) => /2 items need you/.test(x)) && !r.some((x) => /in _tyler\//.test(x)));
+  assert.ok(moved.some((x) => /2 items need you/.test(x)) && !moved.some((x) => /in _tyler\//.test(x)), 'the queue moved: ' + JSON.stringify(moved));
+  await notice('1 item needs you').click();
+  const file = page.locator('#mdl[open] #mdlBody .fileview');
+  await file.waitFor({ timeout: 5000 });
+  assert.equal(await file.getAttribute('aria-label'), '_tyler/new-question.md', 'the notice opened its own file');
+  assert.match(await page.locator('#mdlBody').innerText(), /Made by the chat/);
+  await page.keyboard.press('Escape');
+  await unlink(path.join(instance.workspace, '_tyler/new-question.md'));
+  await waitRows((r) => r.some((x) => /1 item needs you/.test(x)));
+  await notice('1 item needs you').click();
+  await page.locator('#mdl[open] #mdlBody .mlist').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#mdlT').innerText(), 'Notification Center', 'a gone file opens the bell');
+  assert.equal(await page.locator('#mdl[open] .fileview').count(), 0, 'not another file');
+  await page.keyboard.press('Escape');
+  console.log('PASS 733 FIX1: a waiting-file notice opens its file after the queue moved, the bell once it is gone');
   // A notice opens its item: the question's notice opens the asking chat.
   await notice('Claude needs you').click();
   await page.locator('#mdl[open] #mdlBody [data-question]').waitFor({ timeout: 5000 });

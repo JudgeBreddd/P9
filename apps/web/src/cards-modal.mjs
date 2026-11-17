@@ -105,7 +105,7 @@ function renderCards() {
   const cards = outer.cardList();
   // 733 (Tyler, 2026-11-14): asks, waiting items and finished agents go quietly to the bell (controller.mjs cardList); one new
   // since the chats loaded also shows once as a notice (bell-notice.mjs, loaded with the first such item).
-  if (outer.S.loaded) { const b = began, all = outer.cardList(true); began = 1; if (notice || all.some(c => c.key.includes(':'))) (notice ||= import('./bell-notice.mjs')).then(m => m.notice(all, b, toast, cardAct)); }
+  if (outer.S.loaded) { const b = began, all = outer.cardList(true); began = 1; if (notice || all.some(c => c.key.includes(':'))) (notice ||= import('./bell-notice.mjs')).then(m => m.notice(all, b, toast, cardAct, outer)); }
   outer.morph(outer.$('#cards'), cards.map(c => `<article class="card" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
   outer.$('#cards').querySelectorAll('.card').forEach((el, i) => {
     el.querySelector('.x').onclick = () => cardAct(cards[i], 'x');
