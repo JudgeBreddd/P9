@@ -1042,3 +1042,32 @@ test('projects: Sprint Setup page opens from the sprint\'s button on the project
   assert.deepEqual(errors, []);
   console.log('PASS Sprint Setup page: the project page listed two sprints as buttons and no sprint files; the prep opened as Sprint Setup with its Start, roles and files; Back returned; the started one opened as Sprint; New sprint landed in its Sprint Setup');
 });
+
+// Instructions are saved 600 ms after the last key. A sprint's button pressed inside that time replaces the page, so the
+// typed text is saved first; a save the daemon refuses keeps the box, its text and the project page.
+test('projects: Instructions typed just before a sprint\'s button are saved first, and a refused save keeps the page', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Typed', work: { kind: 'new', parent: '', name: 'typed' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Docs prep' });
+  const { page } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const btn = page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`), saved = async () => (await call(instance, '/projects/' + p.id)).project.instructions ?? '';
+  await btn.waitFor({ timeout: 10000 });
+  await page.locator('#projPage [data-pj=edit]').click();
+  await page.locator('#pjInstr').fill('Typed and left at once.');
+  await btn.click(); // no wait: the 600 ms save has not run
+  await page.locator(`[data-sp-page="${prep.sprint}"]`).waitFor({ timeout: 5000 });
+  assert.equal(await saved(), 'Typed and left at once.', 'the text typed just before the sprint\'s button was lost');
+  await page.locator('[data-pj="spback"]').click();
+  await page.locator('#pjName').waitFor({ timeout: 5000 });
+  // Refused (longer than the daemon takes): the box and its text stay, no sprint page opens, the saved text is the old one.
+  if (!await page.locator('#pjInstr').count()) await page.locator('#projPage [data-pj=edit]').click();
+  const long = 'x'.repeat(32001);
+  await page.locator('#pjInstr').evaluate((box) => box.removeAttribute('maxlength')); // the box stops at what the daemon takes
+  await page.locator('#pjInstr').fill(long);
+  await btn.click();
+  await new Promise((go) => setTimeout(go, 1500));
+  assert.equal(await page.locator('#pjInstr').count(), 1, 'the box left the page after a refused save: ' + JSON.stringify([await page.locator('[data-sp-title]').count(), await page.locator('#projPage [data-pj=edit]').allTextContents(), await page.locator('#toasts').textContent(), (await saved()).length]));
+  assert.deepEqual([await page.locator('[data-sp-title]').count(), (await page.locator('#pjInstr').inputValue()).length, await saved()], [0, 32001, 'Typed and left at once.']);
+  console.log('PASS Instructions before a sprint button: the text typed just before the click was on the daemon when the sprint page opened; a refused save kept the box, its 32001 characters and the project page');
+});

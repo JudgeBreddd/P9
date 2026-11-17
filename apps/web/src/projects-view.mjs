@@ -280,12 +280,14 @@ export function installProjects(o, api) {
     if (!cur) return;
     if (k === 'new') return o.newSession(o.lastAgent(), '', cur.id);
     if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
-    if (k === 'edit') { if (edit) { clearTimeout(saveT); await saveInstr(); } edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
+    // Instructions typed and not yet saved are saved before the box leaves the page; a refused save keeps box and page.
+    const kept = async () => { if (!$('#pjInstr')) return true; clearTimeout(saveT); return await saveInstr() !== false; };
+    if (k === 'edit') { if (edit && !await kept()) return; edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
     if (k === 'add') return picker.click();
     if (k === 'spset') return saveSprintSet();
-    if (k === 'spopen' || k === 'spback') { spPage = b.dataset.lead ?? ''; renderPage(); page.scrollTop = 0; return page.focus({ preventScroll: true }); }
+    if (k === 'spopen' || k === 'spback') { if (!await kept()) return; spPage = b.dataset.lead ?? ''; renderPage(); page.scrollTop = 0; return page.focus({ preventScroll: true }); }
     if (k === 'spnew') { const title = await confirmIt({ title: 'New sprint', body: 'A sprint to prepare: its plan, its roles and each role\'s files. No chat starts until Start sprint.', input: '', ok: 'Make it' }); if (!title) return;
-      const r = await call('newSprint', { id: cur.id, title }); if (r.status !== 201) return failed(r); return openProject(cur.id, r.body.sprint); }
+      if (!await kept()) return; const r = await call('newSprint', { id: cur.id, title }); if (r.status !== 201) return failed(r); return openProject(cur.id, r.body.sprint); }
     if (k === 'sprole-add') { const box = page.querySelector(`[data-sp-newkey][data-lead="${CSS.escape(b.dataset.lead)}"]`), key = box?.value.trim() ?? '';
       if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(key) || /^[0-9a-f]{8}-/.test(key)) return say('A worker\'s name is 1 to 64 of a-z, 0-9, dot, dash and underscore, starting with a letter or digit.', 'warn');
       return saveRoles(b.dataset.lead, rs => rs.some(r => r.key === key) ? say(`There is a role named ${key} already.`, 'warn') : rs.push({ key, provider: '', model: '', effort: '' })); }
@@ -375,7 +377,7 @@ export function installProjects(o, api) {
     saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r) return false;
       if (spr === 'agent') Object.assign(r, { provider: value, model: '', effort: '' }); else r[spr] = value; }); });
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
-    const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) return failed(r);
+    const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) { failed(r); return false; }
     cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
   // The open file's box shows its draft, or the file: set as a value, since morph may keep a box another file typed in.
   const fillBox = (focus = true) => { const box = page.querySelector('[data-sp-box]'); if (!box) return;
