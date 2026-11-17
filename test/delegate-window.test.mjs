@@ -696,3 +696,51 @@ test('window-4: the worker report floats folded to its title above the box, slid
   assert.deepEqual(errors, []);
   console.log('PASS window-4: report arrives folded to its title above the box, the last chat row clear of it; its title slides it up (aria-expanded) and down (Enter); the chat box, scroll and last row stay put opened and closed; a new report arrives folded and takes no height from the history; a pinned card and the report show two titles; on a short window under a tall pin, the opened report keeps its title and close inside the pane and clickable');
 });
+
+// O131 (2026-11-16): the lead's open_chat for a Codex reviewer passed effort medium; the window's picker showed "low" (Codex's
+// start default) and Tyler set medium by hand. The ledger ends on medium. Here each window-side path that could keep another
+// value: another Codex chat on low (the window's last Codex list, chat-view.mjs pickers()), Settings' Default effort low for
+// Codex (controller.mjs startDefaults), the worker's pane open while its first config events arrive, and a window opened after
+// the worker was made. The fake starts on medium, so open_chat names high: the start default first, then the set, as with Codex.
+test('O131: a worker opened with an effort shows that effort with another Codex chat and the Default effort on low', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const seen = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Seen' })).conversation;
+  await call(instance, `/chat/${seen}/prompt`, 'POST', { text: 'hi', config: { effort: 'low' } });
+  await until(async () => (await events(instance, seen)).some((e) => e.type === 'config' && e.data.pickers?.find((p) => p.id === 'effort')?.current === 'low'), 'the Codex chat on low');
+  // A named provider and effort must be what a free Settings > Delegation row starts.
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [{ agent: 'codex', model: '', effort: 'high' }] });
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { codex: { effort: 'low' } } })).status, 200);
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList .row[data-chat="${seen}"]`).click();
+  await page.locator(`.pane[data-id="${seen}"] [data-pill="Effort"][aria-label="Effort: Low"]`).waitFor({ timeout: 20000 });
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  // Every value the worker's pill shows, from its first paint: a stale Low for a moment is kept too.
+  const watch = (pg) => pg.evaluate(() => { window.o131 = []; setInterval(() => { const v = [...document.querySelectorAll('.pane [data-pill="Effort"]')].map((b) => b.closest('.pane').dataset.id + '=' + b.getAttribute('aria-label')); if (v.join() !== window.o131.at(-1)) window.o131.push(v.join()); }, 10); });
+  await watch(page);
+  const made = await a.tool('open_chat', { text: 'config', provider: 'codex', effort: 'high', title: 'Review2' });
+  assert.ok(made.chat, JSON.stringify(made));
+  const row = (pg) => pg.locator(`#navList .row[data-chat="${made.chat}"]`), effort = (pg) => pg.locator(`.pane[data-id="${made.chat}"] [data-pill="Effort"]`);
+  await row(page).waitFor({ timeout: 20000 }); await row(page).click(); // its pane open while its config events arrive
+  await a.done(made.chat);
+  const said = (await events(instance, made.chat)).find((e) => e.data?.content?.text?.startsWith('config:'))?.data.content.text;
+  assert.match(said ?? '', /effort=high/, 'the first turn ran on the effort open_chat named');
+  const shown = async (pg) => { await effort(pg).waitFor({ timeout: 20000 }); await pg.waitForTimeout(500); return effort(pg).getAttribute('aria-label'); };
+  const live = await shown(page), seenA = (await page.evaluate(() => window.o131)).filter((v) => v.includes(made.chat));
+  await shot(page, 'o131-live');
+  // A second window opened after the worker was made.
+  const b = await launch(t, instance);
+  await watch(b.page);
+  await b.page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await row(b.page).waitFor({ timeout: 20000 }); await row(b.page).click();
+  const later = await shown(b.page), seenB = (await b.page.evaluate(() => window.o131)).filter((v) => v.includes(made.chat));
+  await shot(b.page, 'o131-later');
+  console.log('O131 pill values, window open at create: ' + JSON.stringify(seenA) + '; window opened after: ' + JSON.stringify(seenB));
+  if (live !== 'Effort: High' || later !== 'Effort: High') throw new Error(`O131 reproduced: open_chat effort high, the pill shows ${live} (window open at create) and ${later} (opened after); values seen ${JSON.stringify([seenA, seenB])}`);
+  assert.deepEqual([...errors, ...b.errors], []);
+  console.log('PASS O131: with another Codex chat and the Default effort on low, a worker opened with effort high shows High in a window open at create (its pane open as its config arrived) and in one opened after; its first turn ran on high');
+});
