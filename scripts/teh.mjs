@@ -192,8 +192,8 @@ export async function stageDaemon(source, share) {
 }
 
 // The AppImage's start: copies its daemon (stageDaemon), then installs the p9-foundation unit with ~/P9 as the workspace
-// if there is none, or restarts a launcher unit onto a new version. A unit without the launcher is a source checkout's,
-// never touched. Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
+// if there is none, or restarts a launcher unit onto a new version. A unit (or drop-in) without the launcher is a source
+// checkout's, never touched; its path is returned as { checkout } (O135). Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
 // ponytail: tmux missing means no unit (install-service.mjs refuses); the log says so, the page says daemon-unreachable.
 // AU5: the AppImage itself is kept as appimage/<version>.AppImage, with the one before it, for a rollback (p9-launch.sh).
 export async function appImageService(resources, image = process.env.APPIMAGE) {
@@ -235,7 +235,16 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
       await mkdir(workspace, { recursive: true });
       return await run(path.join(dir, 'node'), [path.join(dir, 'scripts', 'install-service.mjs'), workspace]);
     }
-    if (!unit.includes(path.join(share, 'launcher', 'p9-launch.sh'))) return await say("a source checkout's unit; left as it is");
+    // O135: a drop-in can point the service somewhere else (override.conf on the laptop, 2026-11-16, kept the source copy under
+    // a launcher unit), so this reads what systemd runs, drop-ins included; the unit file alone when systemctl cannot answer.
+    // Still never rewritten or restarted here: the path is logged and returned, for the window to say.
+    const runs = await new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'ExecStart', '--value'], { env, timeout: 30_000 },
+      (error, stdout) => resolve(error || !stdout.trim() ? unit : stdout)));
+    if (!runs.includes(path.join(share, 'launcher', 'p9-launch.sh'))) {
+      const checkout = (runs.match(/argv\[\]=([^;]*)/)?.[1] ?? runs.match(/^ExecStart=(.*)$/m)?.[1] ?? '').trim().slice(0, 300);
+      await say("a source checkout's unit; left as it is: " + checkout);
+      return { checkout };
+    }
     if (previous !== version) return await run('systemctl', ['--user', 'restart', 'p9-foundation.service']);
   } catch (error) { await say('failed: ' + error.message); }
 }

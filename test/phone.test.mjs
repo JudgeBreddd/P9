@@ -614,6 +614,7 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(workspace);
   const health = await server.remote('/health', { session: auth });
   assert.equal(health.body.workspace, undefined);
+  assert.equal(health.body.from, undefined, 'O135: the phone is not told where the daemon runs from');
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);

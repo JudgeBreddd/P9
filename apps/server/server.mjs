@@ -200,7 +200,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // F2: health hides the workspace path from phones. Row 24 separately exposes a chat's starting path to authenticated phones.
   // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
   // version: the daemon's own; the installed app counts a start healthy only when it matches its own (AU5, rollback.mjs).
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
+  // from (O135): the folder this daemon runs from, so a window whose version differs can say where the old one is.
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, from: checkout.replace(/[\\/]$/, ''), ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: await recoveryCount() }));
   // The recovery folder is read again only when its mtime moved (an entry added or removed), not on every poll (finding 18).
   // ponytail: on a file system with whole-second mtimes, a record written in the same second as the last read shows at the next change.
