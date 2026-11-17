@@ -1,14 +1,12 @@
 // Worker folders (sprint spec A1, A2, A4, A6, A7; SECURITY.md § Worker folders). One clone of the repository per sprint
 // in P9's own folder, one git worktree and branch per worker, made by P9 when the worker starts. The owner's folder is
 // only read. gitFacts is what P9 reads from git by itself, for the sprint's version stamp.
-import { execFile } from 'node:child_process';
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { childEnv } from './child-env.mjs';
 import { endTree, launchTree, lookup, system32 } from './process-tree.mjs';
-import { applySprint, closeOf, copyKeptBecause, previewSprint, startCopy } from './folder-copy.mjs';
+import { applySprint, closeOf, copyKeptBecause, git, previewSprint, startCopy } from './folder-copy.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/; // open_chat's key rule
@@ -29,14 +27,8 @@ export function remoteOk(address, protocols = ['https', 'ssh']) {
   return protocols.includes('ssh') && !address.includes('::') && /^[\w.][\w.-]*@[a-z0-9][\w.-]*:[^:-]/i.test(address);
 }
 
-// Every git P9 runs: allow-listed environment, never a prompt, no hooks, no file-system monitor, no external diff.
-// ponytail: a clean or smudge filter in the repository's own config still runs on status (SECURITY.md says so).
-export function git(cwd, args, { timeout = 60_000 } = {}) {
-  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', SSH_ASKPASS_REQUIRE: 'never', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
-  const safe = ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', '-c', 'core.pager=cat'];
-  return new Promise((resolve) => execFile('git', [...safe, ...args], { cwd, env, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
-    (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, out: String(stdout), err: String(stderr) })));
-}
+// git lives in folder-copy.mjs (imported here, not the other way round: a cycle between the two hangs the bundled daemon's start).
+export { git };
 const one = async (cwd, args) => { const r = await git(cwd, args); return r.code === 0 ? r.out.trim() : null; };
 // File names as git wrote them with -z: never trimmed or unquoted, so an odd name stays itself. null when git failed.
 const names = async (cwd, args) => { const r = await git(cwd, [...args.slice(0, 1), '-z', ...args.slice(1)]); return r.code === 0 ? r.out.split('\0').filter(Boolean) : null; };

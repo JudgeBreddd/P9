@@ -9,7 +9,17 @@ import { mkdir, open, readdir, readFile, readlink, realpath, rename, rm, stat, w
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { hash, isGuarded, openSafe, protection, replaceFile, removeFile } from '../../packages/files/index.mjs';
-import { git } from './worker-folders.mjs';
+import os from 'node:os';
+import { childEnv } from './child-env.mjs';
+
+// Every git P9 runs: allow-listed environment, never a prompt, no hooks, no file-system monitor, no external diff.
+// ponytail: a clean or smudge filter in the repository's own config still runs on status (SECURITY.md says so).
+export function git(cwd, args, { timeout = 60_000 } = {}) {
+  const env = { ...childEnv(), GIT_TERMINAL_PROMPT: '0', SSH_ASKPASS_REQUIRE: 'never', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
+  const safe = ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', '-c', 'core.pager=cat'];
+  return new Promise((resolve) => execFile('git', [...safe, ...args], { cwd, env, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+    (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, out: String(stdout), err: String(stderr) })));
+}
 
 const AUTHOR = ['-c', 'user.name=P9', '-c', 'user.email=p9@localhost'];
 const MODE_FILE = new Set(['100644', '100755']);
