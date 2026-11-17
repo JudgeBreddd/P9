@@ -230,7 +230,8 @@ pnpm teh doctor --state "$XDG_RUNTIME_DIR/p9-foundation"
 ```
 
 `teh doctor` exits 0 when the daemon answers. It prints a redacted bundle (no file contents, keys or
-paths) that you can attach to a bug report.
+paths) that you can attach to a bug report. On Linux it also warns, with the line that fixes it, when the inotify
+watch limit is below 65,536: each chat's Claude engine can hold about 5,400 watches.
 
 ### Mission Control settings
 
