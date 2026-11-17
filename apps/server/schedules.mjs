@@ -26,14 +26,17 @@ export function createSchedules({ db, fire, now = () => Date.now() }) {
     if (firing) return;
     firing = true;
     try {
-      for (const row of db.prepare('SELECT * FROM schedules WHERE paused = 0 AND next <= ? ORDER BY next').all(now())) {
+      // One due row at a time, read again after each send: one paused, changed or removed while an earlier one was being
+      // sent goes as it is now, or not at all. Due by the time the run began, so a row moved on is not taken again.
+      const due = db.prepare('SELECT * FROM schedules WHERE paused = 0 AND next <= ? ORDER BY next LIMIT 1'), cutoff = now();
+      for (let row = due.get(cutoff); row; row = due.get(cutoff)) {
         // Moved on (or gone) before it is sent, so a send that throws or a crash mid-send never sends it twice.
         if (row.every) {
           const step = row.every * MINUTE, missed = Math.floor((now() - row.next) / step) + 1;
           db.prepare('UPDATE schedules SET next = ? WHERE id = ?').run(row.next + missed * step, row.id);
         } else db.prepare('DELETE FROM schedules WHERE id = ?').run(row.id);
         const sent = await Promise.resolve(fire(row)).catch((error) => ({ error: error?.message ?? 'send-failed' }));
-        const last = new Date(now()).toISOString() + ' ' + (sent?.error ? 'not sent: ' + sent.error + (sent.reason ? ' (' + sent.reason + ')' : '') : 'sent');
+        const last = new Date(now()).toISOString() + ' ' + (sent?.error ? 'not sent: ' + sent.error + (sent.reason ? ' (' + sent.reason + ')' : '') : typeof sent?.sent === 'string' ? sent.sent : 'sent');
         db.prepare('UPDATE schedules SET last = ? WHERE id = ?').run(last, row.id);
       }
     } finally { firing = false; arm(); }

@@ -48,6 +48,7 @@ export const DELEGATE_TOOLS = (input) => {
     sprint_script_add: 'Do not take adding a script as approving it.', run_sprint_script: 'Do not run a script to get around a refusal.', request_sprint_scripts: 'Do not ask again for scripts the user refused.',
     pause_sprint: 'Do not pause to stop a turn already running; it finishes.',
     schedule_prompt: 'Do not schedule work the user did not ask for.', remove_schedule: 'Do not remove a schedule another chat relies on without saying so.',
+    list_schedules: 'Do not poll it to wait for a run; a scheduled prompt arrives as a message.',
     resume_sprint: 'Do not resume a sprint the user paused unless the user asked you to.',
   };
   return [
@@ -761,21 +762,27 @@ export function createDelegate({ chat, allowed, usage }) {
   const shelved = (id) => chat.list().some((c) => c.id === id && c.archived);
   const SHELVED = { error: 'chat-archived', detail: 'It is archived. Bring it back first: archive_chat with archived: false.' };
 
-  // O140: a chat's scheduled prompts. To itself one goes as a queued prompt marked as scheduled (its own wake-up, not the
-  // user's words); to another chat it goes as that chat's send_chat with when: queue, checked as send_chat checks it then.
-  const schedules = createSchedules({ db: chat.db, fire: async (s) => {
+  // O140: a chat's scheduled prompts. To itself one goes as a queued prompt from P9, marked as scheduled (its own wake-up,
+  // not the user's words), so a paused sprint keeps it for Resume (S13) and a stopped worker takes a place under Workers
+  // per chat as send_chat's start does. To another chat it goes as that chat's send_chat with when: queue, checked then.
+  // No database (a test's chat without the ledger): no schedules, and the three tools say so.
+  const schedules = chat.db ? createSchedules({ db: chat.db, fire: async (s) => {
     if (s.chat !== s.owner) return sendChat(s.owner, { chat: s.chat, text: s.text, when: 'queue' });
     if (chat.lock(s.owner).on) return { error: 'agent-lock-on' };
     if (shelved(s.owner)) return SHELVED;
-    const sent = await chat.prompt(s.owner, { text: '[P9: your scheduled prompt ' + s.id + ' (list_schedules). It is not a message from the user.]\n\n' + s.text, when: 'queue' });
-    return sent.status === 202 || sent.status === 200 ? { sent: true } : { error: sent.error ?? 'refused' };
-  } });
+    const me = chat.info(s.owner);
+    const place = me?.parent && ['stopped', 'moved'].includes(me.state) ? take(me.parent, s.owner) : null;
+    if (place?.error) return place;
+    const sent = await chat.prompt(s.owner, { text: '[P9: your scheduled prompt ' + s.id + ' (list_schedules). It is not a message from the user.]\n\n' + s.text, when: 'queue' }, undefined, 'p9').finally(() => place?.release());
+    return sent.status === 202 || sent.status === 200 ? { sent: sent.when === 'pause' ? 'kept for the sprint\'s resume' : true } : { error: sent.error ?? 'refused' };
+  } }) : null;
+  const NO_SCHEDULES = { error: 'schedules-unavailable' };
   function schedulePrompt(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const target = args.chat ?? caller;
     if (args.id === undefined && target !== caller && !reach(caller, target)) return { error: 'chat-not-found' };
     if (args.id !== undefined && args.chat !== undefined) return { error: 'request-refused', detail: 'A schedule keeps its chat: remove it and schedule a new one.' };
-    return schedules.save(caller, args, target);
+    return schedules ? schedules.save(caller, args, target) : NO_SCHEDULES;
   }
 
   async function sendChat(caller, args) {
@@ -1200,8 +1207,8 @@ export function createDelegate({ chat, allowed, usage }) {
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
     send_chat: (args, caller) => sendChat(caller, args),
     schedule_prompt: (args, caller) => schedulePrompt(caller, args),
-    list_schedules: (args, caller) => ({ schedules: schedules.list(caller) }),
-    remove_schedule: (args, caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : schedules.remove(caller, args.id)),
+    list_schedules: (args, caller) => (schedules ? { schedules: schedules.list(caller) } : NO_SCHEDULES),
+    remove_schedule: (args, caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : schedules ? schedules.remove(caller, args.id) : NO_SCHEDULES),
     wait_chat: (args, caller, signal) => waitChat(caller, args, signal),
     read_chat: (args, caller) => readChat(caller, args),
     stop_chat: (args, caller) => stopChat(caller, args),

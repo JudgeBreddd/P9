@@ -750,8 +750,10 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   the caller's own. One to another chat goes as the caller's `send_chat` with `when: queue` and is checked as that
   is at the time it goes (reach, archive, mode, the agent lock); refused, it is not sent and the refusal is its last
   result. One to the caller itself goes as a queued prompt marked as scheduled, not as the user's words, in the
-  chat's own mode; the agent lock or an archived chat stops it. A restart keeps them; runs missed while P9 was down
-  go once.
+  chat's own mode, sent by P9: a paused sprint keeps it for Resume, and a stopped worker it would wake takes a place
+  under Workers per chat (none free: it is not sent). The agent lock or an archived chat stops it. Each due prompt
+  is read again just before it goes, so one changed, paused or removed meanwhile goes as it is now, or not at all.
+  A restart keeps them; runs missed while P9 was down go once.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat`, `compact_chat`, `rename_chat`, `answer_chat`, `schedule_prompt` and `remove_schedule` are refused while it
   is on, as are `ready`, `verdict` and `close_sprint`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started. A close under the lock stops and archives nothing.

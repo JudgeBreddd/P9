@@ -1546,3 +1546,37 @@ test('O140: a scheduled prompt fires at its time and every minute, across a daem
   assert.deepEqual((await a.tool('list_schedules')).schedules, []);
   console.log('PASS O140: tick went 3 times across a SIGTERM restart, the once prompt once and then off the list, nothing while paused; waited ' + Math.round(wait / 1000) + ' s past its next run');
 });
+
+// #266 FIX1: a worker's own scheduled prompt is P9's, so a paused sprint keeps it for Resume (S13); and a stopped worker
+// woken by one takes a place under Workers per chat, so at the limit it starts nothing.
+test('O140 FIX1: a worker\'s scheduled prompt waits while its sprint is paused and goes on Resume; a stopped worker\'s at Workers per chat starts nothing', { timeout: 200000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'mcp', key: 'w' }), w = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  const soon = (s) => new Date(Date.now() + s * 1000).toISOString();
+  const turns = async (word) => (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\n' + word));
+  assert.deepEqual(await a.tool('pause_sprint'), { paused: true });
+  const wake = await w.tool('schedule_prompt', { text: 'wake', at: soon(2) });
+  const cap = await w.tool('schedule_prompt', { text: 'cap', at: soon(90) }); // after the stop below; its client goes with it
+  assert.deepEqual([wake.action, cap.action], ['scheduled', 'scheduled'], JSON.stringify([wake, cap]));
+  await pause(6000);
+  assert.deepEqual(await turns('wake'), [], 'a paused sprint\'s worker started a turn for its scheduled prompt');
+  assert.ok((await events(instance, made.chat)).some((e) => e.type === 'held' && e.data.when === 'pause' && e.data.text.endsWith('\n\nwake')), 'it was not kept for Resume');
+  assert.equal((await a.tool('resume_sprint')).sent, 1);
+  await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data.text?.endsWith('\n\nwake'));
+  await a.done(made.chat);
+  // The worker is closed (stopped) and brought back from the archive; another takes the one place Workers per chat leaves.
+  const other = await a.tool('open_chat', { text: 'hello', key: 'other' });
+  await a.done(other.chat);
+  assert.deepEqual((await a.tool('stop_chat', { chat: made.chat, close: true })).archived, [made.chat]);
+  assert.equal((await a.tool('archive_chat', { chat: made.chat, archived: false })).action, 'unarchived'); // O132: closed is archived; back first
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: [] });
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).state, 'stopped');
+  assert.ok(Date.now() < Date.parse(cap.nextRun), 'the set-up ran past cap\'s time, so it went before the worker stopped');
+  await pause(Math.max(0, Date.parse(cap.nextRun) + 6000 - Date.now()));
+  assert.deepEqual(await turns('cap'), [], 'a stopped worker\'s scheduled prompt started it past Workers per chat');
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).state, 'stopped');
+  console.log('PASS O140 FIX1: wake kept while paused and sent on Resume; cap at Workers per chat 1 started nothing');
+});
