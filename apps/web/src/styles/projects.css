@@ -76,6 +76,9 @@
 .ppage .sp-role>span:first-child{flex:1 1 220px;min-width:0}
 .ppage .sp-role .set-pick{flex:none;white-space:nowrap}
 .ppage .sp-role .set-pick select{max-width:180px}
+.ppage .set-row.sp-role>span.sp-role2{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ppage .sp-role .set-pick.sp-owns{flex:1 1 240px;display:flex;align-items:center;gap:6px;min-width:0}
+.ppage .sp-role .sp-owns input{flex:1;min-width:0;height:28px;font-size:12px}
 .ppage .sp-role .rm{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted-foreground);cursor:pointer}
 .ppage .sp-role .rm svg{width:13px;height:13px}
 .ppage .sp-role .rm:hover{color:var(--foreground);background:color-mix(in oklch,var(--foreground) 8%,transparent)}
@@ -91,6 +94,7 @@
 .ppage .sv-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .ppage .sv-say{display:flex;flex-direction:column;gap:3px;flex:1 1 240px;min-width:0}
 .ppage .sv-say b{font-size:15px;font-weight:600}
+.ppage .sv-phase{font-size:12px;font-variant-numeric:tabular-nums}
 .ppage .sv-facts{display:flex;gap:18px;margin:0;flex-wrap:wrap}
 .ppage .sv-facts dt{font-size:11px;color:var(--muted-foreground)}
 .ppage .sv-facts dd{margin:2px 0 0;font-size:13.5px;font-variant-numeric:tabular-nums}

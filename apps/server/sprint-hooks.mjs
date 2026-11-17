@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { childEnv } from './child-env.mjs';
-import { hashOf, planItems } from './sprint-files.mjs';
+import { hashOf, phasesOf, planItems } from './sprint-files.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // The four a script may refuse, then the notices.
@@ -128,7 +128,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
         started: start ? { at: iso(start.at), by: start.by, plan: start.plan } : null },
       project: projectId ? { id: projectId, name: project?.name ?? null } : null,
       phase: null, // reserved: the plan has items only
-      roles: rows.map((r) => ({ key: r.key, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model ?? null, effort: r.effort ?? null, mode: r.mode ?? null })),
+      roles: rows.map((r) => ({ key: r.key, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model ?? null, effort: r.effort ?? null, mode: r.mode ?? null, owns: r.owns ?? null })),
       items: planItems(chat.sprintFiles.read(sprint, 'sprint.md')).map((i) => { const v = verdicts.find((r) => r.item === i.id);
         return { ...i, review: v ? { state: v.state, commit: v.commit, fixes: v.fixes, larger: v.larger, at: v.at } : null }; }),
       workers, subject: subject ?? null,
@@ -196,6 +196,14 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // Sprint View and sprint_status: one answer for the page and the tool, so both show the same sprint. It is what a
   // script is told (state, above) without the parts that are about one script run, plus the counts the page draws:
   // done (plan items passed in review, and ticked), running_ms (since Start), each worker's own work, and how many scripts stand. Reads only.
+  function phasesView(plan, items) {
+    const heads = phasesOf(plan), loose = items.length - heads.reduce((n, p) => n + p.items, 0); // items above the first heading
+    let at = loose;
+    const phases = heads.map((p) => { const mine = items.slice(at, at += p.items);
+      return { title: p.title, passed: mine.filter((i) => i.review?.state === 'passed').length, total: mine.length }; });
+    const current = phases.findIndex((p) => p.passed < p.total);
+    return { phases, phase_now: current < 0 ? null : current };
+  }
   async function view(sprint) {
     const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status');
     const st = standing(sprint), start = chat.projects.started(sprint);
@@ -203,6 +211,9 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       // passed: by P9's own review record; ticked: the box in the plan, a model's say-so.
       done: { passed: s.items.filter((i) => i.review?.state === 'passed').length, ticked: s.items.filter((i) => i.ticked).length, total: s.items.length },
       running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
+      // phases (I1): each "## Phase" heading of the plan with its items passed in review and its total; current: the first
+      // with an item not passed (null once all have passed). [] for a plan with no such heading: the page shows no phase line.
+      ...phasesView(chat.sprintFiles.read(sprint, 'sprint.md'), s.items),
       // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
       workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : s.items.filter((i) => i.role && i.role === w.key);
         return { ...w, work: q ? { done: q.done, total: q.total } : own.length ? { done: own.filter((i) => i.review?.state === 'passed').length, total: own.length } : null }; }),
@@ -360,5 +371,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       return script.error ? script : runNow(sprint, script, 'owner');
     },
   };
-  return { fire, read, status, approved, save, remove, add, run: runAsked, request, owner };
+  return { fire, read, status, approved, save, remove, add, run: runAsked, request, owner, where };
 }

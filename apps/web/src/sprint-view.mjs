@@ -1,7 +1,8 @@
-// Sprint View: where a started sprint stands, for projects-view.mjs. Loaded when a started sprint's page opens, so its
+// Sprint View: where a started sprint stands, and Sprint Setup's Roles rows, for projects-view.mjs. Loaded when a sprint's page opens, so its
 // code is not parsed at startup (test/shell-bundle.test.mjs).
 // It draws one answer: the body of GET /sprints/<id>/status, which is what the sprint_status tool gives an agent
 // (apps/server/sprint-hooks.mjs, view). Nothing here counts on its own: every number on the page is in that answer.
+import { svg, runnerPicks, modes, LOOSE } from './helpers.mjs';
 const R = 16, C = +(2 * Math.PI * R).toFixed(2);
 const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" role="img" aria-label="${label}"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="t" cx="20" cy="20" r="${R}"/>${done && total ? `<circle class="a" cx="20" cy="20" r="${R}" stroke-dasharray="${+(C * Math.min(1, done / total)).toFixed(2)} ${C}"/>` : ''}</svg><b>${done}/${total}</b></span>`;
 // 3 725 000 ms reads "1 h 2 min".
@@ -11,6 +12,13 @@ const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Fa
 const stands = w => w.verdict?.result === 'fix' ? ['fix', 'Fix asked'] : w.waiting ? ['asked', 'Waiting for you'] : w.ready && !w.verdict ? ['ready', 'Ready for review'] : [w.state, WORD[w.state] ?? w.state];
 const REVIEW = { passed: 'Passed', fix: 'Fix asked', ready: 'In review' };
 
+// I1: "N of N steps in phase X, N of N phases", from the plan's "## Phase" headings. A plan with none has no line.
+function phaseLine(s, esc) {
+  const ps = s.phases ?? [], now = ps[s.phase_now];
+  if (!ps.length) return '';
+  const done = ps.filter(p => p.passed >= p.total).length;
+  return `<span class="sv-phase" data-sv-phase>${now ? `${now.passed} of ${now.total} steps in ${esc(now.title)}, ` : 'Every phase passed its review: '}${done} of ${ps.length} phases</span>`;
+}
 export function statusHtml(s, esc) {
   const d = s.done, open = s.items.filter(i => i.review?.state !== 'passed'), n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
   const facts = [
@@ -21,7 +29,7 @@ export function statusHtml(s, esc) {
   return `<section class="sec sv" data-sv aria-label="Sprint View: ${esc(s.sprint.title ?? '')}">
     <div class="sv-top">${ring(d.passed, d.total, `${d.passed} of ${d.total} items passed review`, 'big')}
       <div class="sv-say"><b data-sv-done>${d.total ? `${d.passed} of ${n(d.total, 'item', 'items')} passed review` : 'The plan has no items yet'}</b>
-        <span class="muted">${d.total ? (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its review passes, not when its box is ticked.` : 'Every item passed its review.') : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}</span></div>
+        <span class="muted">${d.total ? (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its review passes, not when its box is ticked.` : 'Every item passed its review.') : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}</span>${phaseLine(s, esc)}</div>
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
@@ -31,4 +39,26 @@ export function statusHtml(s, esc) {
         <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>
     ${s.items.length ? `<h3>Plan items</h3><ul class="sv-items">${s.items.map(i => `<li data-sv-item="${esc(i.id)}" data-review="${esc(i.review?.state ?? '')}"><span class="box" aria-hidden="true">${i.ticked ? '☑' : '☐'}</span><span class="sv-text">${esc(i.text)}</span><span class="muted">${esc(i.role ?? 'no role')}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.fixes ? ` · ${n(i.review.fixes, 'fix', 'fixes')}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : ''}
   </section>`;
+}
+
+// H1-H3: Sprint Setup's Roles rows, for projects-view.mjs (moved here so they are not parsed at startup:
+// test/shell-bundle.test.mjs). roles: the parsed roles.json list, null when it does not read.
+const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;
+  if (t == null) return 'it is missing'; if (!t.trim()) return 'it is empty'; try { const d = JSON.parse(t); return Array.isArray(d?.roles) ? 'a row has no "key"' : 'it has no "roles" list'; } catch (e) { return e.message; } };
+const ROLE = { lead: 'Lead: runs the sprint, merges what passed review', review: 'Reviewer: reviews each piece, gets no worker folder' };
+export function rolesHtml(sp, roles, o, esc) {
+  // A prep is made with its roles.json, so one gone was deleted: it says so, and the file is listed to make again
+  // (FIX1). Any other sprint folder (a chat's notes, made without one) shows no roles.
+  if (!sp.prep && !sp.files.some(f => f.name === 'roles.json')) return '';
+  if (!roles) return `<p class="hint" data-sp-roles-bad role="status">roles.json does not read: <span class="mono" data-sp-roles-why>${esc(rolesWhy(sp))}</span>. Fix it in its file below; the rows show again when it reads.</p>`;
+  const row = r => { const worker = r.key !== 'lead' && r.key !== 'review', p = runnerPicks(o, { agent: String(r.provider ?? ''), model: String(r.model ?? ''), effort: String(r.effort ?? '') },
+    { first: ['', 'Not set'], attr: k => `data-spr="${k}" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}"`, aria: k => `${r.key} ${k}` });
+    // H3: its permissions (the mode Start opens it in; Not set: P9's usual one) and what it owns, for the lead to send work by.
+    const mode = String(r.mode ?? ''), ms = modes[p.a] ?? [], mo = [['', 'Not set'], ...ms.map(m => [m, m]), ...(mode && !ms.includes(mode) ? [[mode, mode]] : [])];
+    const pick = r.provider ? `<label class="set-pick">Mode<select data-slot="input" data-spr="mode" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}" aria-label="${esc(r.key)} mode"${LOOSE[mode] ? ` title="${esc(LOOSE[mode])}"` : ''}>${mo.map(([v, n]) => `<option value="${esc(v)}"${v === mode ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '';
+    return `<div class="set-row sp-role" data-role-row="${esc(r.key)}"><span><strong class="mono">${esc(r.key)}</strong><span class="muted sm">${ROLE[r.key] ?? `Worker: its own folder on branch sprint/…/${esc(r.key)}`}${p.empty ? `. Start one ${esc(o.names[p.a] ?? p.a)} chat first: its models and efforts are listed here after that.` : ''}</span></span>${p.html}`
+      + (worker ? `<button class="rm" data-pj="sprole-rm" data-lead="${esc(sp.lead)}" data-role="${esc(r.key)}" title="Remove the role ${esc(r.key)}" aria-label="Remove the role ${esc(r.key)}">${svg.x}</button>` : '')
+      + `<span class="sp-role2"><label class="set-pick sp-owns">Owns<input data-slot="input" data-sp-owns data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}" maxlength="500" spellcheck="false" autocomplete="off" placeholder="for example: the window, Settings" aria-label="${esc(r.key)} owns" value="${esc(String(r.owns ?? ''))}"></label>${pick}</span></div>`; };
+  return `<div class="sp-roles" data-sp-roles><h3>Roles</h3>${roles.map(row).join('')}`
+    + `<div class="sp-add"><input data-slot="input" class="mono" data-sp-newkey data-lead="${esc(sp.lead)}" maxlength="64" spellcheck="false" autocomplete="off" placeholder="worker name, for example docs" aria-label="New worker's name"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sprole-add" data-lead="${esc(sp.lead)}">${svg.plus}Add worker</button></div></div>`;
 }

@@ -3,7 +3,7 @@
 // the hooks panel.mjs asks for (o.openProject, o.newProject, o.chatMenuItems, o.renderPage). The page lives in #projPage
 // beside #chats; o.S.view says which shows ({ kind: 'project', id }, { kind: 'archived' } or null for the chats).
 // Every change goes through the daemon's project routes (p9:chat); nothing here reads or writes a folder.
-import { svg, esc, runnerPicks } from './helpers.mjs';
+import { svg, esc } from './helpers.mjs';
 import { PANEL_ICONS, LABEL, listedChats, stateOf } from './panel.mjs';
 
 const ERR = { 'folder-exists': 'A folder with that name is already there. Change the name or the parent.', 'folder-refused': 'P9 can\'t use that folder. Pick another.',
@@ -20,6 +20,9 @@ export function installProjects(o, api) {
   const call = (action, body, opts) => o.liveChat.call(action, body, opts);
   const find = id => o.S.sessions.find(s => s.id === id);
   // cur: the shown project as GET /projects/<id> gives it (instructions, files, agentFiles, sharedWith).
+  // instrDrafts: project id -> Instructions typed and not yet saved there. Kept through a refused save (the box may be gone,
+  // left by the side panel), shown again when that project opens, and sent again to that project only.
+  const instrDrafts = new Map();
   let cur = null, edit = false, saveT = 0, sprintOpen = ''; // sprintOpen: '<lead> <name>' of the sprint file shown in its box
   // Sprint file drafts, '<lead> <name>' -> { text, hash }: typed and not saved yet; hash is the file as it was when typing
   // began. spNote: a draft's save that was refused ('changed': someone else's edit came first; 'failed'). spSaving: saves
@@ -85,12 +88,14 @@ export function installProjects(o, api) {
   // ---- The page ----
   async function openProject(id, sprintLead) {
     if (o.S.focus !== 'chat' && !o.focusOn('chat')) return;
-    api.closeMenu(); api.setOpen(id, true); edit = false; spPage = sprintLead || '';
+    flushInstr(); api.closeMenu(); api.setOpen(id, true); edit = false; spPage = sprintLead || '';
     o.S.view = { kind: 'project', id }; if (o.S.focus !== 'chat') o.setFocus('chat');
     if (cur?.id !== id) cur = null; // shown once the full record is in: the list's copy has no instructions or files
     o.renderTabs(); if (o.S.files) o.renderTree();
     const r = await call('project', { id });
-    if (r.status === 200 && o.S.view?.id === id) { cur = r.body.project; renderPage(); }
+    if (r.status === 200 && o.S.view?.id === id) { cur = r.body.project;
+      if (instrDrafts.get(id) === (cur.instructions ?? '')) instrDrafts.delete(id);
+      if (instrDrafts.has(id)) { edit = true; renderPage(); saveInstr(); } else renderPage(); }
     else if (r.status === 404) { o.S.view = null; o.loadProjects(); o.renderTabs(); }
     if (sprintLead && o.S.view?.id === id) page.querySelector(`[data-sprint="${CSS.escape(sprintLead)}"]`)?.scrollIntoView({ block: 'start' });
     page.focus({ preventScroll: true }); // the page, not the editable name: a stray key must not rename the project
@@ -108,7 +113,7 @@ export function installProjects(o, api) {
       : `<div class="wf">${I.folder}<span>Work folder</span>${mine ? `<span class="plain">P9's folder for this project</span><span class="tag">In P9</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`
         : `<span class="mono" title="Chats in this project start here">${esc(where(f))}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`}</div>`;
     const own = !mine && p.agentFiles?.length ? `<p class="ownfile">${svg.files}This folder has its own instructions (${p.agentFiles.map(esc).join(', ')}). Agents read them on their own.</p>` : '';
-    const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(p.instructions ?? '')}</textarea>`
+    const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(instrDrafts.get(p.id) ?? p.instructions ?? '')}</textarea>${instrDrafts.has(p.id) ? '<p class="hint" data-pj-draft>Not saved yet: P9 refused it last time. Kept here and sent again.</p>' : ''}`
       : p.instructions ? instrText(p.instructions) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
     const files = p.files ?? [], open = spPage && (p.sprints ?? []).find(x => x.lead === spPage);
     if (open) return `<div class="wrap" data-page="${esc(p.id)}" data-sp-page="${esc(open.lead)}">
@@ -158,8 +163,6 @@ export function installProjects(o, api) {
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
-  const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;
-    if (t == null) return 'it is missing'; if (!t.trim()) return 'it is empty'; try { const d = JSON.parse(t); return Array.isArray(d?.roles) ? 'a row has no "key"' : 'it has no "roles" list'; } catch (e) { return e.message; } };
   const rolesOf = sp => { try { const d = JSON.parse(sp.files.find(f => f.name === 'roles.json')?.text ?? ''); return Array.isArray(d?.roles) && d.roles.every(r => r && typeof r.key === 'string') ? d.roles : null; } catch { return null; } };
   // O110: a roles.json read between an outside writer's truncate and its write comes back empty or cut short. The page
   // keeps the last good one it had (its hash too, so a pick made meanwhile is refused as changed) and reads the project
@@ -186,7 +189,7 @@ export function installProjects(o, api) {
         if (!sp || rolesOf(sp) !== null || i === 9) {
           adopt(r.body.project, lead); renderPage(); fillBox(false);
           // renderPage leaves the page alone while its file box has the focus: the rows alone are redrawn then.
-          const rows = sp && document.activeElement?.matches?.('[data-sp-box]') && page.querySelector(`[data-sprint="${CSS.escape(lead)}"] :is([data-sp-roles], [data-sp-roles-bad])`);
+          const rows = sp && document.activeElement?.matches?.('[data-sp-box]') && page.querySelector(`[data-sprint="${CSS.escape(lead)}"] :is([data-sp-roles], [data-sp-roles-bad], [data-sp-roles-wait])`);
           if (rows) rows.outerHTML = rolesHtml(sp, rolesOf(sp));
           return;
         }
@@ -205,19 +208,13 @@ export function installProjects(o, api) {
   // Each role's instructions, rules and work file: listed (empty) before anyone writes one, made by its first save.
   // A prep lists the sprint's rules.md too (none yet: Start sends P9's default rules), so all of prep can be done by hand.
   const roleFiles = sp => (sp.prep ? ['rules.md', 'roles.json'] : []).concat((rolesOf(sp) ?? []).flatMap(r => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(r.key) ? ['instructions', 'rules', 'work'].map(k => `roles/${r.key}.${k}.md`) : []));
-  const ROLE = { lead: 'Lead: runs the sprint, merges what passed review', review: 'Reviewer: reviews each piece, gets no worker folder' };
-  function rolesHtml(sp, roles) {
-    // A prep is made with its roles.json, so one gone was deleted: it says so, and the file is listed to make again
-    // (FIX1). Any other sprint folder (a chat's notes, made without one) shows no roles.
-    if (!sp.prep && !sp.files.some(f => f.name === 'roles.json')) return '';
-    if (!roles) return `<p class="hint" data-sp-roles-bad role="status">roles.json does not read: <span class="mono" data-sp-roles-why>${esc(rolesWhy(sp))}</span>. Fix it in its file below; the rows show again when it reads.</p>`;
-    const row = r => { const worker = r.key !== 'lead' && r.key !== 'review', p = runnerPicks(o, { agent: String(r.provider ?? ''), model: String(r.model ?? ''), effort: String(r.effort ?? '') },
-      { first: ['', 'Not set'], attr: k => `data-spr="${k}" data-role="${esc(r.key)}" data-lead="${esc(sp.lead)}"`, aria: k => `${r.key} ${k}` });
-      return `<div class="set-row sp-role" data-role-row="${esc(r.key)}"><span><strong class="mono">${esc(r.key)}</strong><span class="muted sm">${ROLE[r.key] ?? `Worker: its own folder on branch sprint/…/${esc(r.key)}`}${p.empty ? `. Start one ${esc(o.names[p.a] ?? p.a)} chat first: its models and efforts are listed here after that.` : ''}</span></span>${p.html}`
-        + (worker ? `<button class="rm" data-pj="sprole-rm" data-lead="${esc(sp.lead)}" data-role="${esc(r.key)}" title="Remove the role ${esc(r.key)}" aria-label="Remove the role ${esc(r.key)}">${svg.x}</button>` : '') + '</div>'; };
-    return `<div class="sp-roles" data-sp-roles><h3>Roles</h3>${roles.map(row).join('')}`
-      + `<div class="sp-add"><input data-slot="input" class="mono" data-sp-newkey data-lead="${esc(sp.lead)}" maxlength="64" spellcheck="false" autocomplete="off" placeholder="worker name, for example docs" aria-label="New worker's name"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sprole-add" data-lead="${esc(sp.lead)}">${svg.plus}Add worker</button></div></div>`;
-  }
+  // The Roles rows are drawn by sprint-view.mjs, loaded on first use: until it is in, the heading alone. Then each waiting
+  // heading is swapped for its rows on its own, since renderPage leaves the page alone while a file box has the focus.
+  let svMod = null, svP = null;
+  const fillRoles = () => page.querySelectorAll('[data-sp-roles-wait]').forEach(w => {
+    const sp = cur?.sprints?.find(x => x.lead === w.closest('[data-sprint]')?.dataset.sprint); if (sp) w.outerHTML = rolesHtml(sp, rolesOf(sp)); });
+  const loadSv = () => (svP ??= import('./sprint-view.mjs').then(m => { svMod = m; fillRoles(); renderPage(); return m; }, () => (svP = null)));
+  const rolesHtml = (sp, roles) => svMod ? svMod.rolesHtml(sp, roles, o, esc) : (loadSv(), '<div class="sp-roles" data-sp-roles-wait><h3>Roles</h3></div>');
   // A draft whose file was deleted since (a worker, the lead): still listed, with its text, until saved again or discarded.
   const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
   const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1)); };
@@ -235,12 +232,13 @@ export function installProjects(o, api) {
   function renderPage() {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
     page.hidden = !on; chats.hidden = on;
-    if (!on) { if (v?.kind === 'project' && !cur) return; page.innerHTML = ''; return; }
+    if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
     if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());
     // morph changes an option's selected attribute only; a pick the user changed keeps showing their choice, so each role
     // pick is set to what roles.json says (after a refused save it says the lead's value).
     page.querySelectorAll('select[data-spr]').forEach(s => { s.value = s.querySelector('option[selected]')?.value ?? ''; });
+    page.querySelectorAll('[data-sp-owns]').forEach(i => { i.value = i.getAttribute('value') ?? ''; }); // the same for what a role owns
     if (spPage && svFor !== spPage) loadView();
   }
   // ---- Sprint View: the shown sprint's status, drawn by sprint-view.mjs (loaded on first use) from the answer
@@ -249,7 +247,7 @@ export function installProjects(o, api) {
     const lead = svFor = spPage, n = ++svN;
     rereadFiles(lead);
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
-      const [m, r] = await Promise.all([import('./sprint-view.mjs').catch(() => null), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
+      const [m, r] = await Promise.all([loadSv(), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
       if (m && r.status === 200) { sv = { lead, html: m.statusHtml(r.body, esc) }; renderPage(); }
     }
@@ -411,10 +409,19 @@ export function installProjects(o, api) {
   page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-spr]')) return;
     const { lead, role, spr } = x.dataset, value = x.value;
     saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r) return false;
-      if (spr === 'agent') Object.assign(r, { provider: value, model: '', effort: '' }); else r[spr] = value; }); });
-  const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
-    const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) { failed(r); return false; }
-    cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
+      if (spr === 'agent') { Object.assign(r, { provider: value, model: '', effort: '' }); delete r.mode; } else if (spr === 'mode' && !value) delete r.mode; else r[spr] = value; }); });
+  // What a role owns: saved when the box is left or Enter is pressed, emptied = the key removed.
+  page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-sp-owns]')) return;
+    const { lead, role } = x.dataset, value = x.value.trim();
+    saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r || (r.owns ?? '') === value) return false; if (value) r.owns = value; else delete r.owns; }); });
+  const saveInstr = async () => { const box = $('#pjInstr'); if (!box || !cur) return;
+    const id = cur.id, text = box.value; if (text === (cur.instructions ?? '')) { instrDrafts.delete(id); return; }
+    instrDrafts.set(id, text); const r = await call('updateProject', { id, instructions: text }); if (r.status !== 200) { failed(r); return false; }
+    if (instrDrafts.get(id) === text) instrDrafts.delete(id); /* typed on meanwhile: that newer text stays a draft */
+    if (cur?.id === id) { cur = { ...cur, instructions: r.body.project.instructions }; if (!instrDrafts.has(id)) $('[data-pj-draft]')?.remove(); } /* the page may have moved on meanwhile */ const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
+  // Leaving the page by the side panel (a chat, another project, Archived): Instructions typed and not yet saved are sent
+  // now, while the box is still there to read; the 600 ms timer would find it gone.
+  const flushInstr = () => { if ($('#pjInstr') && cur) { clearTimeout(saveT); saveInstr(); } };
   // The open file's box shows its draft, or the file: set as a value, since morph may keep a box another file typed in.
   const fillBox = (focus = true) => { const box = page.querySelector('[data-sp-box]'); if (!box) return;
     box.value = drafts.get(sprintOpen)?.text ?? cur.sprints?.find(x => x.lead === box.dataset.lead)?.files.find(x => x.name === box.dataset.name)?.text ?? box.value; if (focus) box.focus(); };
@@ -442,7 +449,7 @@ export function installProjects(o, api) {
     const note = shown && page.querySelector('[data-sp-note]'); if (note) note.innerHTML = spNoteHtml(id);
     return r.status === 200;
   }
-  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); }
+  page.addEventListener('input', e => { if (e.target.id === 'pjInstr') { if (cur) instrDrafts.set(cur.id, e.target.value); clearTimeout(saveT); saveT = setTimeout(saveInstr, 600); }
     if (e.target.matches('[data-sp-box]')) { const id = e.target.dataset.lead + ' ' + e.target.dataset.name, f = cur?.sprints?.find(x => x.lead === e.target.dataset.lead)?.files.find(x => x.name === e.target.dataset.name);
       drafts.set(id, { text: e.target.value, hash: drafts.get(id)?.hash ?? f?.hash ?? '' }); clearTimeout(saveT); saveT = setTimeout(saveSprint, 600); } });
   page.addEventListener('focusout', e => { if (e.target.matches?.('[data-sp-box]')) { clearTimeout(saveT); saveSprint(); } });

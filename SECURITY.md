@@ -666,7 +666,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -727,10 +727,18 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
-- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `archive_chat` and `answer_chat` are refused while it
-  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat` and `answer_chat` are refused while it
+  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
+- **Sprint Setup.** `sprint_setup` gives a chat the script tools let reach a sprint (its lead, its workers, a chat of
+  its project) every Setup file with its text and hash, and roles.json's rows. `sprint_setup_save` writes one of those
+  files, or one role row, through the same guarded save as the project page: the hash it sends must still be the
+  file's, else nothing is written and it gets the files as they are now. Only sprint.md, rules.md, roles.json and the
+  three files of each role; hooks.json only through the script tools, the review trail and script log never. A role
+  row it saves is checked for shape only; Start checks every row, and asks you, as before. What this adds: an agent
+  whose own sandbox cannot write P9's sprint folder can now change these files. An agent that can write the folder
+  directly still can, with no hash check, as before.
 - **Approvals.** An agent may answer an approval or a question asked by a chat it started,
   directly or through a worker, and by no other chat. For an approval, P9 first asks you in
   the parent's chat, naming the worker, what it asked and the answer the parent wants to give;
