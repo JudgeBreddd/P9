@@ -11,18 +11,22 @@ const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Fa
 const stands = w => w.verdict?.result === 'fix' ? ['fix', 'Fix asked'] : w.waiting ? ['asked', 'Waiting for you'] : w.ready && !w.verdict ? ['ready', 'Ready for review'] : [w.state, WORD[w.state] ?? w.state];
 const REVIEW = { passed: 'Passed', fix: 'Fix asked', ready: 'In review' };
 
-export function statusHtml(s, esc) {
+export function statusHtml(s, esc, opts = {}) {
   const d = s.done, open = s.items.filter(i => i.review?.state !== 'passed'), n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  // closed: the answer is the sprint's record, as it stood at Close. opts.closing: a Close press is out; opts.said: why the last one was refused.
+  const end = s.closed, when = end ? new Date(end.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const facts = [
-    ['time', 'Running', s.running_ms === null ? 'Not started' : span(s.running_ms)],
+    ['time', end ? 'Ran' : 'Running', s.running_ms === null ? 'Not started' : span(s.running_ms)],
     ['ticked', 'Ticked in the plan', `${d.ticked} of ${d.total}`],
     ['chats', 'Chats', String(s.workers.length)],
     ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running)]]; // running already counts the additional ones
-  return `<section class="sec sv" data-sv aria-label="Sprint View: ${esc(s.sprint.title ?? '')}">
+  return `<section class="sec sv" data-sv="${end ? 'closed' : 'open'}" aria-label="${end ? 'Closed sprint' : 'Sprint View'}: ${esc(s.sprint.title ?? '')}">
     <div class="sv-top">${ring(d.passed, d.total, `${d.passed} of ${d.total} items passed review`, 'big')}
       <div class="sv-say"><b data-sv-done>${d.total ? `${d.passed} of ${n(d.total, 'item', 'items')} passed review` : 'The plan has no items yet'}</b>
         <span class="muted">${d.total ? (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its review passes, not when its box is ticked.` : 'Every item passed its review.') : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}</span></div>
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
+    ${end ? `<p class="hint" data-sv-closed>Closed ${esc(when)} by ${end.by === 'owner' ? 'you' : 'a chat\'s agent, on your yes'}. This is its record: everything here is as it stood at Close and no longer changes. Its chats are stopped; its files and worker folders are kept.</p>`
+      : `<div class="sv-ctl"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}"${opts.closing ? ' disabled' : ''} title="Stops every chat of this sprint, keeps its record and turns its scripts off. Nothing is deleted. An agent does the same with close_sprint, after asking you.">${opts.closing ? 'Closing…' : 'Close sprint'}</button>${opts.said ? `<span class="hint" data-sv-said role="status">${esc(opts.said)}</span>` : ''}</div>`}
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items passed review`) : '<span class="sv-ring none" aria-hidden="true"></span>'}

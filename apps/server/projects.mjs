@@ -88,6 +88,8 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
   const pref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? 'null'); } catch { return null; } };
   const prepOf = (sprint) => (ID.test(sprint ?? '') ? pref('prep:' + sprint) : null);
   const started = (sprint) => (ID.test(sprint ?? '') ? pref('sprint-start:' + sprint) : null);
+  // Close sprint's record: { at, by, record } (delegate.mjs, closeSprint). Kept here, not in the sprint's folder, which an agent can write.
+  const closed = (sprint) => (ID.test(sprint ?? '') ? pref('sprint-close:' + sprint) : null);
   const preps = (project) => db.prepare("SELECT key, value FROM prefs WHERE key LIKE 'prep:%'").all()
     .map((r) => { try { return { id: r.key.slice(5), ...JSON.parse(r.value) }; } catch { return null; } }).filter((p) => p?.project === project);
   // A gone or refused work folder is reported, never thrown. AGENTS.md and CLAUDE.md are seen in the listing only.
@@ -101,7 +103,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     const sprints = full && sprintFiles ? [...db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id),
       ...preps(value.id).filter((p) => !row(p.id))]
       .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: sprintFiles.list(c.id), prep: !row(c.id),
-        ...(started(c.id) && { started: started(c.id) }) })) : [];
+        ...(started(c.id) && { started: started(c.id) }), ...(closed(c.id) && { closed: { at: closed(c.id).at, by: closed(c.id).by } }) })) : [];
     // Two projects may use one work folder (N1 spec, 2026-11-08): the others using it, for the dialog to name.
     const where = value.work.kind === 'p9' ? null : path.resolve(workspace, value.work.folder);
     const sharedWith = [];
@@ -273,6 +275,8 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     prepOf,
     started,
     recordStart: (sprint, value) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('sprint-start:' + sprint, JSON.stringify(value)); },
+    closed,
+    recordClose: (sprint, value) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('sprint-close:' + sprint, JSON.stringify(value)); },
     record,
     startFolder,
     filesStart,

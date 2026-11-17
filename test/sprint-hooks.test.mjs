@@ -652,3 +652,98 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   assert.deepEqual([tool.scripts, page.scripts], [{ running: 2, additional: 1, waiting: 1 }, { running: 2, additional: 1, waiting: 1 }]);
   console.log('PASS Sprint status: scripts 2 running (1 of them additional), 1 waiting; before Start the route gave the plan and no clock; after it the tool and the route agreed, with the plan\'s three items, 1 then 2 ticked, the lead and w1 with w1\'s 0 of 2, the time since Start, and unknown-sprint for a sprint that is not there');
 });
+
+// Close sprint: one action for the button's route and the agent's tool. before-close may refuse it; every chat of the
+// sprint is stopped; the record is the status as it stood and no longer moves; the scripts are off afterwards.
+test('Close sprint: a before-close script refuses it, the close_sprint tool asks first, every chat of the sprint is stopped, and the status is the kept record afterwards', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo'), node = process.execPath;
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: the close question is still asked
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const outside = await attach(t, instance, first);
+  const script = (name, exit) => { const f = path.join(ws, name + '.mjs'); fs.writeFileSync(f, `import fs from 'node:fs'; import path from 'node:path'; fs.appendFileSync(path.join(import.meta.dirname, '${name}.ran'), '1'); console.log('${name} says ${exit}'); process.exit(${exit});`); return `${node} ${f}`; };
+  const ran = (name) => (fs.existsSync(path.join(ws, name + '.ran')) ? fs.readFileSync(path.join(ws, name + '.ran'), 'utf8').length : 0);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Omega', work: { kind: 'new', parent: '', name: 'omega' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'To close' })).body, sprint = s.sprint;
+  const plan = (two) => `# Plan\n\n- [x] A1: the first thing; role w1\n- [${two ? 'x' : ' '}] A2: the second thing; role w1\n`;
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(false));
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [
+    { name: 'gate', command: script('gate', 1), point: 'before-close', blocking: true }, { name: 'tidy', command: script('tidy', 0), point: 'after-close', blocking: false }] }));
+  const row = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
+  const close = async () => call(instance, `/sprints/${sprint}/close`, 'POST', {}), status = async () => (await call(instance, `/sprints/${sprint}/status`)).body;
+  // Only a started sprint is closed.
+  let got = await close();
+  assert.deepEqual([got.status, got.body.error], [409, 'sprint-not-started'], JSON.stringify(got.body));
+  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash })).status, 200);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
+  const L = await attach(t, instance, sprint);
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const w1 = await L.tool('open_chat', { text: 'config', key: 'w1' }); assert.ok(w1.chat && !w1.error, JSON.stringify(w1));
+  await replied(instance, w1.chat, 'config:');
+  // A second chat of the same project: its agent may ask to close the sprint, and it is not one of the sprint's chats.
+  const peer = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+  await call(instance, `/chat/${peer}/prompt`, 'POST', { text: 'mcp' });
+  const P = await attach(t, instance, peer);
+  const states = async () => (await status()).workers.map((w) => [w.key, w.state]);
+  assert.equal((await status()).closed, null);
+
+  // The before-close script exits 1: the owner's press is refused with its last line, and nothing changed.
+  got = await close();
+  assert.deepEqual([got.status, got.body.error, got.body.script, got.body.point], [400, 'script-refused', 'gate', 'before-close'], JSON.stringify(got.body));
+  assert.match(got.body.detail, /exit 1: gate says 1$/);
+  assert.deepEqual([ran('gate'), ran('tidy'), (await row()).closed, (await status()).closed, (await states()).some(([, st]) => st === 'stopped')], [1, 0, undefined, null, false]);
+
+  // The tool: a chat outside the project has no such sprint; one with no sprint of its own must name it; the lock refuses.
+  fs.writeFileSync(path.join(ws, 'gate.mjs'), fs.readFileSync(path.join(ws, 'gate.mjs'), 'utf8').replaceAll('says 1', 'says 0').replace('process.exit(1)', 'process.exit(0)'));
+  assert.equal((await outside.tool('close_sprint', { sprint })).error, 'unknown-sprint');
+  assert.equal((await P.tool('close_sprint')).error, 'unknown-sprint');
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await P.tool('close_sprint', { sprint })).error, 'agent-lock-on');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  // It asks the user first, in Unrestricted too. No: nothing ran, nothing closed.
+  const asked = async () => (await events(instance, peer)).filter((e) => e.type === 'approval');
+  const answer = async (seen, optionId) => {
+    const q = await eventually(async () => (await asked())[seen], 'the close question');
+    await call(instance, `/chat/${peer}/answer`, 'POST', { request: q.data.request, answer: { optionId } }); return q.data.toolCall.title;
+  };
+  let going = P.tool('close_sprint', { sprint });
+  const title = await answer(0, 'reject');
+  assert.match(title, /^P9: close the sprint "To close": stop every chat of it/);
+  assert.equal((await going).error, 'not-allowed');
+  assert.deepEqual([ran('gate'), ran('tidy'), (await status()).closed], [1, 0, null]);
+  // Yes: the gate passes now, the worker and then the lead are stopped, the close is recorded, after-close runs.
+  const before = await status();
+  going = P.tool('close_sprint', { sprint }); await answer(1, 'allow');
+  const done = await going;
+  assert.deepEqual([done.error, done.sprint, done.closed.by, done.stopped, done.note], [undefined, sprint, peer, [w1.chat, sprint], undefined], JSON.stringify(done));
+  await eventually(() => ran('tidy') === 1, 'after-close never ran');
+  assert.equal(ran('gate'), 2);
+  const chats = await rows(instance), stateOf = (id) => chats.find((c) => c.id === id)?.state;
+  assert.deepEqual([stateOf(w1.chat), stateOf(sprint), stateOf(peer) === 'stopped'], ['stopped', 'stopped', false], JSON.stringify(chats.map((c) => [c.id, c.state])));
+
+  // The record: the status as it stood, each chat marked stopped, and the same answer from the tool and the route, twice.
+  const kept = await status(), fromTool = await P.tool('sprint_status', { sprint });
+  assert.deepEqual(fromTool, kept);
+  assert.deepEqual([kept.closed, kept.done, kept.items, kept.sprint, kept.workers.map((w) => [w.key, w.chat, w.state])],
+    [done.closed, before.done, before.items, before.sprint, [['lead', sprint, 'stopped'], ['w1', w1.chat, 'stopped']]], JSON.stringify(kept).slice(0, 600));
+  assert.ok(Number.isInteger(kept.running_ms) && kept.running_ms >= before.running_ms && !Number.isNaN(Date.parse(kept.closed.at)), JSON.stringify([kept.running_ms, kept.closed]));
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(true)); // the plan changes after Close: the record does not
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(await status(), kept);
+  assert.deepEqual((await row()).closed, { at: Date.parse(kept.closed.at), by: peer });
+
+  // Closed once: a second close, a Start and Run now are refused, and no script stands.
+  got = await close();
+  assert.deepEqual([got.status, got.body.error, got.body.closed], [409, 'sprint-closed', kept.closed], JSON.stringify(got.body));
+  assert.equal((await P.tool('close_sprint', { sprint })).error, 'sprint-closed');
+  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', {})).body.error, 'sprint-closed');
+  got = await call(instance, `/sprints/${sprint}/run-script`, 'POST', { name: 'tidy' });
+  assert.notEqual(got.status, 200, JSON.stringify(got.body));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual([ran('gate'), ran('tidy')], [2, 1]);
+  console.log('PASS Close sprint: not started 409; a before-close exit 1 refused the press with its last line and changed nothing; the tool was unknown outside the project, refused by the lock, asked first and closed nothing on no; on yes the worker then the lead were stopped, after-close ran once, the tool and the route gave the same kept record, a later plan edit did not move it, and a second close, Start and Run now were refused');
+});
