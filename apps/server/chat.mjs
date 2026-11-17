@@ -378,9 +378,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const gauge = (id) => {
     if (!gauges.has(id)) {
       const newest = (type, has) => { try { return JSON.parse(db.prepare('SELECT data FROM events WHERE conversation = ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1').get(id, type, has)?.data ?? 'null'); } catch { return null; } };
-      gauges.set(id, { model: newest('config', '"model"')?.model?.current ?? null, context: contextOf(newest('update', '"usage_update"')) });
+      gauges.set(id, { model: newest('config', '"model"')?.model?.current ?? null, context: contextOf(newest('update', '"usage_update"')), fold: undefined });
     }
-    return gauges.get(id);
+    // Row 716: spent is what the chat has used so far (its turns' tokens, its reported cost), topped up from the ledger on each read.
+    const kept = gauges.get(id), { into, usage } = ledger.spent(id, kept.fold);
+    kept.fold = into;
+    return { model: kept.model, context: kept.context, spent: usage };
   };
   // O48 (SECURITY.md "Provider profiles"): a Claude chat started on a profile keeps { id, name, model } in prefs under
   // profile:<chat>; the key stays in profiles.mjs. gone: the profile was removed, so the chat can be read, not continued.
