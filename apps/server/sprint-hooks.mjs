@@ -203,7 +203,9 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       // passed: by P9's own review record; ticked: the box in the plan, a model's say-so.
       done: { passed: s.items.filter((i) => i.review?.state === 'passed').length, ticked: s.items.filter((i) => i.ticked).length, total: s.items.length },
       running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
-      workers: s.workers.map((w) => { const q = chat.queue?.(w.chat); return { ...w, work: q ? { done: q.done, total: q.total } : null }; }),
+      // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
+      workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : s.items.filter((i) => i.role && i.role === w.key);
+        return { ...w, work: q ? { done: q.done, total: q.total } : own.length ? { done: own.filter((i) => i.review?.state === 'passed').length, total: own.length } : null }; }),
       scripts: { running: st.running.length, additional: st.additional.length, waiting: st.waiting.length } };
   }
   async function status(caller, named) { const { sprint, ...no } = where(caller, named); return no.error ? no : view(sprint); }

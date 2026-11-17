@@ -96,7 +96,7 @@
 .ppage .sv-facts dd{margin:2px 0 0;font-size:13.5px;font-variant-numeric:tabular-nums}
 .ppage .sv-ring{position:relative;flex:none;width:36px;height:36px;display:grid;place-items:center}
 .ppage .sv-ring.big{width:76px;height:76px}
-.ppage .sv-ring svg{position:absolute;inset:0;transform:rotate(-90deg);fill:none;stroke-width:4}
+.ppage .sv-ring svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg);fill:none;stroke-width:4}
 .ppage .sv-ring .t{stroke:color-mix(in oklch,var(--foreground) 14%,transparent)}
 .ppage .sv-ring .a{stroke:var(--primary);stroke-linecap:round}
 .ppage .sv-ring b{font-size:9.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--muted-foreground)}

@@ -3,7 +3,7 @@
 // It draws one answer: the body of GET /sprints/<id>/status, which is what the sprint_status tool gives an agent
 // (apps/server/sprint-hooks.mjs, view). Nothing here counts on its own: every number on the page is in that answer.
 const R = 16, C = +(2 * Math.PI * R).toFixed(2);
-const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" role="img" aria-label="${label}"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="t" cx="20" cy="20" r="${R}"/><circle class="a" cx="20" cy="20" r="${R}" stroke-dasharray="${+(C * (total ? Math.min(1, done / total) : 0)).toFixed(2)} ${C}"/></svg><b>${done}/${total}</b></span>`;
+const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" role="img" aria-label="${label}"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="t" cx="20" cy="20" r="${R}"/>${done && total ? `<circle class="a" cx="20" cy="20" r="${R}" stroke-dasharray="${+(C * Math.min(1, done / total)).toFixed(2)} ${C}"/>` : ''}</svg><b>${done}/${total}</b></span>`;
 // 3 725 000 ms reads "1 h 2 min".
 export const span = ms => { const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : m ? `${m} min` : 'under a minute'; };
 const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Failed' };
