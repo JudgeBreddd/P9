@@ -67,7 +67,9 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
   assert.ok(main.indexOf("'-Mode', 'PipeLock'") < main.indexOf("'desktop.json'), 'wx'"), 'pipe ACL check must precede credentials');
   assert.match(pack, /extract-node-windows\.ps1/);
   assert.match(pack, /process\.env\.npm_execpath/);
-  assert.match(extract, /Expand-Archive/);
+  // O151: Windows' own tar.exe by full path, and a failed extract stops the build.
+  assert.match(extract, /System32\\tar\.exe'\) -xf \$Archive -C \$Build/);
+  assert.match(extract, /if \(\$LASTEXITCODE -ne 0\) \{ throw/);
 });
 
 // O23: on a Windows machine with WSL, System32\bash.exe and WindowsApps\bash.exe are WSL launchers. A bare bash or sh (a
