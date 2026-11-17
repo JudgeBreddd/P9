@@ -97,7 +97,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['answer_chat', 'Answer a question a chat you started is waiting on (wait_chat\'s waiting, kind question or approval). Answer an approval only when what it asks is within the task you gave that chat; '
       + 'otherwise leave it for the user, who sees it in that chat. For an approval P9 asks the user in your chat first, except in Unrestricted mode.',
       input({ chat, request: { type: 'string', description: 'waiting.request from wait_chat.' },
-        answer: { type: 'object', description: '{ "action": "accept", "content": { field: value } } with the fields of waiting.form, or { "action": "decline" }.' } }, ['chat', 'request', 'answer'])],
+        answer: { type: 'object', description: 'An approval: { "optionId": one of waiting.options[].optionId }. A question: { "action": "accept", "content": { field: value } } with the fields of waiting.form, or { "action": "decline" }.' } }, ['chat', 'request', 'answer'])],
     ['new_sprint', 'Make a sprint to prepare, in your project: returns its id and its folder. Fill in the folder\'s files before start_sprint: sprint.md the plan; roles.json one row per chat, '
       + '{ "folder"?: repo to clone, relative to the workspace, "roles": [ { "key": "lead", "provider", "model", "effort", "mode"?, "owns"? }, { "key": "review", ... }, { "key": "<worker>", ... } ] } '
       + '(provider claude, codex or profile:<id>; model and effort values that agent lists); roles/<key>.instructions.md, .rules.md and .work.md (its first message) for each role.',
@@ -956,6 +956,11 @@ export function createDelegate({ chat, allowed, usage }) {
     const ask = chat.info(args.chat).asks.find((a) => a.request === args.request);
     if (!ask) return { error: 'no-such-request' };
     if (ask.kind !== 'question') {
+      // daemon-9: an answer that names none of the approval's options is refused before the user is asked about it, with
+      // the options, so the parent can answer again (validAnswer in chat.mjs accepts the same two shapes).
+      if (args.answer?.outcome !== 'cancelled' && !ask.options?.some((o) => o.optionId === args.answer?.optionId)) {
+        return { error: 'request-refused', guidance: CROSS_CHAT, detail: 'An approval takes { "optionId": ... } with one of options.', options: ask.options ?? [] };
+      }
       // An approval (SECURITY.md § Delegate): the same check as every acting P9 tool. Unrestricted: no ask; otherwise the
       // user says yes in the caller's own chat. The request may have been answered meanwhile, so the lock and it are re-read.
       const title = `P9 Delegate: answer ${JSON.stringify(args.answer?.optionId ?? null)} to the approval "${chat.info(args.chat).title}" waits on: ${ask.text.slice(0, 400)}`;
