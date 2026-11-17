@@ -17,6 +17,8 @@ export const projectRoutes = (uuid) => {
     newSprint: ({ id, title, ...rest }) => uuid(id) && typeof title === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprints', { title }],
     // hooks: the SHA-256 of the hooks.json the page showed, so the press approves the scripts the owner saw (SECURITY.md § Sprint scripts).
     startSprint: ({ sprint, hooks, ...rest }) => uuid(sprint) && !Object.keys(rest).length && (hooks === undefined || /^[0-9a-f]{64}$/.test(hooks)) && ['POST', '/sprints/' + sprint + '/start', hooks ? { hooks } : {}],
+    // Sprint View: where a started sprint stands (what sprint_status tells an agent).
+    sprintStatus: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['GET', '/sprints/' + sprint + '/status'],
     // SECURITY.md § Sprint scripts, "The library": the owner's saved scripts, and a run of one approved script of a sprint.
     scriptLibrary: ({ sprint, ...rest }) => (sprint === undefined || uuid(sprint)) && !Object.keys(rest).length && ['GET', '/sprint-scripts' + (sprint ? '?sprint=' + sprint : '')],
     allowScripts: ({ on, ...rest }) => typeof on === 'boolean' && !Object.keys(rest).length && ['POST', '/sprint-scripts/allow', { on }],
