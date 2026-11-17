@@ -21,13 +21,16 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       await page.screenshot({ path: path.join(process.env.P9_SCREENSHOTS, name + '.png'), animations: 'disabled' });
     };
     const reset = async () => { await page.goto('p9://app/'); await shellReady(page); };
+    // 733 (Tyler, 2026-11-14): asks and items that need you are bell rows, not top-right cards; these steps open them there.
+    const bellRow = (text) => page.locator('#mdlBody .mlist [data-i]', { hasText: text });
+    const asks = /(agents need|[A-Z]\w* needs) you/, items = /items? needs? you/;
+    const fromBell = async (text) => { await page.click('#rBell'); await bellRow(text).click(); };
     await t.test('reviews resume survives an unrelated explorer modal', async () => {
       await reset();
-      const reviews = page.locator('#cards [data-key^="reviews:"] .open');
-      await reviews.click(); await page.locator('#mdlBody .mlist button').first().click();
+      await fromBell(items); await page.locator('#mdlBody .mlist button').first().click();
       const title = await page.locator('#mdlT').innerText();
       await page.click('#mdlX'); await page.locator('#chats > .pane').first().locator('[data-tool=files]').click({ timeout: 10000 }); await page.click('#tree [data-file="plan.md"]');
-      await page.click('#mdlX'); await reviews.click();
+      await page.click('#mdlX'); await fromBell(items);
       assert.equal(await page.locator('#mdlT').innerText(), title);
       assert.equal(await page.locator('#mdlBody [data-answer]').count(), 1);
       await screenshot('round1-review-resume');
@@ -67,22 +70,25 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       await page.locator('#chats [data-steps]').first().click();
       assert.equal(await shown(), before);
     });
-    await t.test('answering or declining an agent notification closes its dialog and updates the card', async () => {
+    await t.test('answering or declining an agent notification closes its dialog and updates its bell row', async () => {
       for (const action of ['submit', 'decline', 'approve', 'deny']) {
-        await reset(); await page.click('#rMission'); // K11: the cards show (and have room) outside Dev Focus
-        const card = page.locator('#cards [data-key^="asks:"]');
-        assert.equal(await card.locator('.n').innerText(), '2');
-        await card.locator('.open').click();
+        await reset(); await page.click('#rMission');
+        await page.click('#rBell');
+        assert.equal(await bellRow(asks).locator('.n').innerText(), '2');
+        await bellRow(asks).click();
         const approval = action === 'approve' || action === 'deny';
         await page.locator('#mdlBody .mlist button', { hasText: approval ? 'Refactor provider lease' : 'Pick a colour' }).click();
         await page.click(action === 'submit' ? '#mdlBody [type="submit"]' : action === 'decline' ? '#mdlBody [data-decline]' : action === 'deny' ? '#mdlBody [data-approve="reject"]' : '#mdlBody [data-approve="allow_once"]');
         assert.equal(await page.locator('#mdl').evaluate(el => el.open), false, action + ' closes the answered notification');
-        assert.equal(await card.locator('.n').innerText(), '1');
+        await page.click('#rBell');
+        assert.equal(await bellRow(asks).locator('.n').innerText(), '1');
         if (action === 'submit') await screenshot('round1-answer-closed');
-        await card.locator('.open').click();
+        await bellRow(asks).click();
         await page.click(approval ? '#mdlBody [type="submit"]' : '#mdlBody [data-approve="allow_once"]');
         assert.equal(await page.locator('#mdl').evaluate(el => el.open), false);
-        assert.equal(await card.count(), 0, 'no attention card remains after the last answer');
+        await page.click('#rBell');
+        assert.equal(await bellRow(asks).count(), 0, 'no ask remains in the bell after the last answer');
+        await page.keyboard.press('Escape');
       }
     });
     await t.test('fixture label and filename markup stay literal text and preserve attribute values', async () => {
@@ -99,7 +105,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
         const file = page.locator('#tree [data-file]').filter({ hasText: payload + '.md' });
         assert.equal(await file.getAttribute('data-file'), payload + '.md');
         await screenshot('round1-literal-filename');
-        await page.locator('#cards [data-key^="asks:"] .open').click();
+        await fromBell(asks);
         await page.locator('#mdlBody .mlist button', { hasText: 'Pick a colour' }).click();
         assert.ok((await page.locator('#mdlBody [data-question]').innerText()).includes(payload));
         assert.equal(await page.locator('[data-p9-injected]').count(), 0);
@@ -118,7 +124,9 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       await page.keyboard.press('Escape');
       await page.click('#newBtn'); await page.locator('.pane .welcome').waitFor();
       await look('look-new-chat');
-      assert.ok(await alpha(page.locator('#cards .card').first()) >= 0.9, 'card background');
+      // 733: what shows top right is now a notice at the bottom right; it reads over the backdrop too.
+      await page.evaluate(() => window.__toast({ kind: 'look', txt: 'A notice', level: 'ok' }, true));
+      assert.ok(await alpha(page.locator('#toasts .toast').last()) >= 0.9, 'notice background');
     });
     await t.test('Usage shows one row per plan window on the Mission page and in its dialog, amber from 75%, with the pace tick', async () => {
       await app.evaluate(({ ipcMain }, now) => {

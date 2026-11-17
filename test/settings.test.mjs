@@ -214,10 +214,10 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   assert.deepEqual(refused, [...Array(40).fill('settings-refused'), 'ipc-sender-refused']);
   await assert.rejects(readFile(file), { code: 'ENOENT' });
 
-  // Close on send: a chat opened from its card closes once the message is sent.
+  // Close on send: a chat opened from the bell closes once the message is sent (733: an ask is a notice and a bell row, no card).
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'permission' });
-  await page.locator('#cards [data-key^="asks:"] .open').waitFor({ timeout: 15000 });
+  await page.locator('#toasts .toast', { hasText: 'needs you' }).waitFor({ timeout: 15000 });
 
   await page.click('#setBtn');
   await page.locator('#setDlg[open]').waitFor();
@@ -259,12 +259,12 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   assert.equal(await page.locator('#rMission').isHidden(), true);
   await page.keyboard.press('Control+3');
   assert.equal(await page.locator('.shell').getAttribute('data-focus'), 'chat');
-  // The waiting approval was rejected by the lock; the card is gone. A new one: lock off first.
+  // The waiting approval was rejected by the lock; its bell row is gone. A new one: lock off first.
   await page.click('#setBtn'); await page.uncheck('#setLock'); await page.locator('#setLock:not(:checked)').waitFor(); await page.click('#setClose');
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'permission' }).catch(() => {});
-  await page.locator('#cards [data-key^="asks:"] .open').click({ timeout: 15000 });
+  await page.click('#rBell'); await page.locator('#mdlBody .mlist [data-i]', { hasText: 'needs you' }).click({ timeout: 15000 });
   if (await page.locator('#mdlBody .mlist button').count()) await page.locator('#mdlBody .mlist button').first().click();
-  await page.locator('#mdlBody textarea').fill('sent from the card');
+  await page.locator('#mdlBody textarea').fill('sent from the bell');
   await page.locator('#mdlBody textarea').press('Enter');
   await page.waitForFunction(() => !document.querySelector('#mdl').open);
 
@@ -412,7 +412,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
 
   // Each chat holds its own agent's pet (the waiting row).
   const inChat = {};
-  await page.locator('#cards [data-key^="asks:"] .open').click();
+  await page.click('#rBell'); await page.locator('#mdlBody .mlist [data-i]', { hasText: '2 agents need you' }).click();
   for (const n of [0, 1]) {
     if (n) await page.click('#mdlBack');
     await page.locator('#mdlBody .mlist button').nth(n).click();
@@ -1205,7 +1205,7 @@ test('Setup wizard UI: starter settings on a folder with its own layout show the
   console.log('PASS wizard UI: found paths shown in the conflict state; Use these repointed the settings and made nothing else');
 });
 
-test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-made one gets a card, Skip clears it, running chats are robot heads', { timeout: 120000 }, async (t) => {
+test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-made one gets one notice and a bell row (no card), Skip moves it to the waiting row, running chats are robot heads', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async (paths) => {
     const w = paths.workspace;
     await mkdir(path.join(w, '_tyler'), { recursive: true }); await mkdir(path.join(w, 'hub'), { recursive: true });
@@ -1230,29 +1230,32 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   // A turn's end is read from the panel's strip: it is drawn in every focus, the list only while the panel is open.
   const turn = async (id, text) => { await call(instance, `/chat/${id}/prompt`, 'POST', { text }); await page.locator(`#rBots .bot[data-chat="${id}"]:not([data-busy])`).waitFor({ state: 'attached', timeout: 15000 }); };
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
-  // A chat that writes a _tyler/ item: the item gets a card when the turn ends.
+  // A chat that writes a _tyler/ item: the item gets a notice when the turn ends. Notices stay until this test clears them.
+  await page.evaluate(() => document.documentElement.style.setProperty('--toast-life', '600s'));
   await writeFile(path.join(instance.workspace, '_tyler/new-question.md'), '# Made by the chat\n\nA.\n');
   await turn(id, 'make one');
-  const card = page.locator('#cards [data-key^="reviews:"]');
-  await card.waitFor({ timeout: 10000 });
-  assert.match(await card.innerText(), /1\s*1 item needs you/);
+  // 733 (Tyler, 2026-11-14): the item shows once as a notice at the bottom right and is a row in the bell, not a staying card.
+  const notice = page.locator('#toasts .toast', { hasText: '1 item needs you' });
+  await notice.waitFor({ timeout: 10000 });
   assert.equal(await page.locator(`#navList .rowwrap[data-live] .row[data-chat="${id}"] .dot`).getAttribute('data-agent'), 'claude', 'the running chat is a live row in the panel');
-  // Replied (Builder: the chat card never went away): no card for the chat itself, only the _tyler/ one.
-  assert.equal(await page.locator('#cards .card:not([data-key="welcome"])').count(), 1);
+  // Replied (Builder: the chat card never went away): nothing stays on the stack for the chat or the item.
+  assert.equal(await page.locator('#cards .card:not([data-key="welcome"])').count(), 0, 'a new item made a staying card');
   await shot('cards-new-item.png');
-  // Blink (Builder, 2026-10-17): another turn re-renders everything; the card is the same element, so its halo does not restart.
-  await card.evaluate((el) => { el.kept = 'yes'; });
+  assert.match(await center(), /1 item needs you\n_tyler\/ · /, 'the new item is a bell row');
+  // Another turn redraws everything; the item is not new again, so no second notice.
   await turn(id, 'again');
-  assert.equal(await card.evaluate((el) => el.kept), 'yes', 'card rebuilt by an unrelated event');
-  // Skip takes it off the stack; it waits in the bell with the old one.
-  await card.locator('.open').click();
+  assert.equal(await notice.count(), 1, 'one notice per new item, not one per redraw');
+  await page.evaluate(() => { document.documentElement.style.removeProperty('--toast-life'); document.querySelectorAll('#toasts .toast').forEach((el) => el.remove()); });
+  // Skip from its bell row: it waits in the bell with the old one.
+  await page.click('#rBell');
+  await page.locator('#mdlBody .mlist [data-i]', { hasText: '1 item needs you' }).click();
   await page.locator('#mdlFoot [data-skip]').click();
   if (await page.locator('#mdl[open]').count()) await page.keyboard.press('Escape');
-  await card.waitFor({ state: 'detached' });
   // No sample notices in the bell on a live daemon (Builder, 2026-10-18: "its still test data"); they toasted 2.5 s and 5.5 s after load.
   await page.waitForTimeout(Math.max(0, started + 6500 - Date.now()));
   const bell = await center();
   assert.match(bell, /2 items in _tyler\/\nwaiting/);
+  assert.doesNotMatch(bell, /needs you/, 'the skipped item still has its own row');
   assert.doesNotMatch(bell, /rss-report|restic snapshot/, 'sample notices in the live bell');
   await shot('cards-skipped.png');
   // Sort Waiting on you by newest or by project, the file name's <project>- prefix (Builder, 2026-10-19: "an optional sorter
@@ -1761,7 +1764,7 @@ test('Chat file browser: each scope lists its real folder, a file opens in the e
   console.log('PASS chat file browser: four scopes list their folders, Current project follows the chat shown, files open in the editor, bad paths refused');
 });
 
-test('Turn finished: a live turn-end nobody watches makes one notice (P9 words only) and a card; opening the chat clears it; replay makes none (threat model row 21)', { timeout: 120000 }, async (t) => {
+test('Turn finished: a live turn-end nobody watches makes one notice (P9 words only) and a bell row, no card; opening the chat clears it; replay makes none (threat model row 21)', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-done-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -1778,24 +1781,30 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   // and rightly makes no card, so prompting before it raced the window's start.
   await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
-  const card = page.locator('#cards [data-key="done:' + id + '"]');
-  await card.waitFor({ timeout: 15000 });
+  // 733 (Tyler, 2026-11-14): the finish shows once as a notice at the bottom right and is a row in the bell, not a staying card.
+  const notice = page.locator('#toasts .toast', { hasText: 'Claude finished' });
+  const bell = async () => { await page.click('#rBell'); const text = await page.locator('#mdlBody').innerText(); await page.keyboard.press('Escape'); return text; };
+  await notice.waitFor({ timeout: 15000 });
   assert.deepEqual(await page.evaluate(() => window.__notes), [['Claude finished', 'Claude']], 'one notice, agent and tab title only');
-  assert.match(await card.innerText(), /Claude finished\s*Claude/);
-  // Back at the window: opening the chat from the card clears it.
+  assert.match(await notice.innerText(), /Claude finished\s*Claude/);
+  assert.equal(await page.locator('#cards [data-key^="done:"]').count(), 0, 'a finish made a staying card');
+  assert.match(await bell(), /Claude finished\nClaude/, 'the finish is a bell row');
+  // Back at the window: opening the chat from the notice clears it.
   await page.evaluate(() => { document.hasFocus = () => true; });
-  await card.locator('.open').click();
+  await notice.click();
+  await page.locator('#mdl[open] #mdlBody .hist').waitFor({ timeout: 5000 });
   // Opened is seen at once, in the marks kept over a restart too (not only once the chat list next redraws).
-  assert.equal(await page.evaluate((id) => JSON.parse(localStorage.getItem('p9-unseen') || '{}')[id], id), undefined, 'opened from its card, still kept as unseen');
-  await card.waitFor({ state: 'detached', timeout: 5000 });
+  assert.equal(await page.evaluate((id) => JSON.parse(localStorage.getItem('p9-unseen') || '{}')[id], id), undefined, 'opened from its notice, still kept as unseen');
   await page.keyboard.press('Escape');
-  // A reload replays the turn-end: no card, no notice.
+  assert.doesNotMatch(await bell(), /Claude finished/, 'opening the chat left its bell row');
+  // A reload replays the turn-end: no notice, no OS notice, no bell row.
   // Still in the background from the first script on, so only the replay guard stops it.
   await page.addInitScript(background);
   await page.reload(); await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await page.waitForTimeout(1500);
-  assert.deepEqual([await page.locator('#cards [data-key^="done:"]').count(), await page.evaluate(() => window.__notes)], [0, []], 'replayed turn-end made a card or notice');
-  console.log('PASS turn finished: 1 notice with P9 words only, 1 card, opening clears it, replay makes none');
+  assert.deepEqual([await page.locator('#toasts .toast').count(), await page.evaluate(() => window.__notes)], [0, []], 'replayed turn-end made a notice');
+  assert.doesNotMatch(await bell(), /Claude finished/, 'replayed turn-end made a bell row');
+  console.log('PASS turn finished: 1 notice with P9 words only, 1 bell row and no card, opening clears it, replay makes none');
 });
 
 test('Interrupt and send: a queued message sent with the bolt, or Ctrl+Enter, reaches the agent after the cancel; a refused one goes back in the box', { timeout: 120000 }, async (t) => {

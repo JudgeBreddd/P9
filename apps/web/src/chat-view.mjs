@@ -1045,7 +1045,7 @@ async function loadChat() {
       outer.loadProjects?.();
       // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
       try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
-      unseenKept = true;
+      unseenKept = outer.S.loaded = true; // 733: from here a new ask or finish shows a notice (renderCards)
       // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
       // running (the phone may have resumed it) and gets its tab back.
       for (const s of outer.S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (outer.closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; outer.liveChat.stop(s, true); } }

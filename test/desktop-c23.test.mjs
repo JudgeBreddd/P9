@@ -223,6 +223,8 @@ test('Attempt 2 item 4: Dev Focus opens with no chat pane; the toggle still open
 
 test('K11: the Mission page makes room for the cards; no card covers a Mission panel', { timeout: 90000 }, async (t) => {
   const { page, shot } = await launch(t);
+  // 733: asks and items that need you are bell rows now; the welcome card is the one card left on the stack, so it is the card placed here.
+  await page.evaluate(() => window.__setup({ writable: false }));
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
     await page.click('#rMission'); await page.locator('#fMission [data-panel]').first().waitFor({ timeout: 10000 });
