@@ -666,7 +666,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -728,7 +728,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat` and `answer_chat` are refused while it
-  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+  is on, as are `ready`, `verdict` and `close_sprint`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
 - **Sprint Setup.** `sprint_setup` gives a chat the script tools let reach a sprint (its lead, its workers, a chat of
@@ -1114,6 +1114,37 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   or a row P9 cannot start is refused by its role and field before any chat is made or any worker place is taken.
   A worker the plan has no role for needs a role row in Sprint Setup first.
 
+## Close sprint
+
+One action ends a started sprint: it stops the sprint's chats, keeps its record and turns its scripts off. Written
+before the tests (sprint spec S16; 0.1.9 phase 4.5).
+
+- **Who can close it.** You, with the Close sprint button on the desktop's Sprint View (a desktop-only route,
+  `POST /sprints/:id/close`; a phone session gets 404), after a confirm. Or an agent's `close_sprint` from the sprint's
+  lead, one of its workers, or a chat in the same project. For the agent's call P9 asks you first in that chat, in
+  every mode, Unrestricted included, and reads the sprint again after your yes. The agent lock refuses the tool. A
+  sprint from another project does not exist to that agent. Only a started sprint is closed, and only once.
+- **What an agent gains.** With your yes, the stop of chats it could not stop itself: `stop_chat` reaches only a
+  chat's own workers, while `close_sprint` from any chat of the project stops the lead and every chat under it. That
+  is why it asks in every mode. Stopping is all it does to them: no chat, file, worker folder or branch is deleted.
+- **The order.** The `before-close` scripts run first; a blocking one that fails refuses the close and nothing
+  changes (§ Sprint scripts, Blocking). Then P9 reads the record, stops the chats under the lead (deepest first) and
+  the lead last, stores the close, and starts the `after-close` scripts as notices. The chat that called the tool is
+  not stopped by P9: it is told to end its turn. If a chat does not stop, the close is refused with nothing stored;
+  the chats stopped so far stay stopped, and the action can be made again.
+- **The record.** What `sprint_status` answered at that moment (§ Sprint scripts, "What an agent can read": nothing
+  more than the project page and `list_chats` show), with each stopped chat marked stopped, the time, and who closed it
+  (you, or that chat with your yes). It is stored in P9's database, not in the sprint folder, so no agent's file tools
+  can rewrite a closed sprint's numbers. After the close, the status route and `sprint_status` answer with that record
+  and `closed { at, by }`; the page of a closed sprint draws it.
+- **After the close.** None of the sprint's scripts run again: not at a point, not by Run now, not an additional
+  one. The two `after-close` runs use the list that stood just before the close. `start_sprint` and the Start press
+  refuse a closed sprint (`sprint-closed`). The sprint's files stay editable as § Sprint files says; they are no
+  longer part of the record's numbers.
+- **What close does not do.** It does not remove worker folders (that stays its own button, § Worker folders), does
+  not archive the chats, and does not stop you from typing in one of them again. A chat of a closed sprint that you
+  start again is an ordinary chat: Delegate's rules still apply to it, the sprint's scripts do not run for it.
+
 ## Sprint scripts
 
 A sprint can name commands that P9 runs at fixed points of the sprint: a check before it starts, a notice when a
@@ -1214,9 +1245,9 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
 - **Where the owner's routes are.** `GET` and `POST /sprint-scripts`, `POST /sprints/:id/run-script`,
   `POST /sprint-scripts/allow` (the switch) and `POST /sprints/:id/approve-scripts` exist on the desktop's connection
   only: a phone session gets 404, as for Start.
-- **Points nothing fires yet.** `before-merge`, `before-close`, `ci-red`, `gate-passed`, `pause`, `resume` and
-  `after-close` are accepted in the file and approved like the rest, but P9 has no such action yet, so their scripts
-  do not run.
+- **Points nothing fires yet.** `before-merge`, `ci-red`, `gate-passed`, `pause` and `resume` are accepted in the
+  file and approved like the rest, but P9 has no such action yet, so their scripts do not run. `before-close` and
+  `after-close` run at Close sprint (§ Close sprint).
 
 ## Pause sprint
 
