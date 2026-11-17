@@ -897,7 +897,11 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   (`folder-refused`) and not quietly pointed at the address. The project's setup command is read each time a worker
   folder is made, from the project the lead chat is in at that moment: changing it, or moving the lead chat to
   another project, applies to the next worker of a sprint already running, in the clone that sprint already has. The clone is made once per sprint: a source changed later is used by the next sprint, not by one whose
-  clone exists. What remains: P9 downloads whatever that address serves into its own folder, and the workers'
+  clone exists. A clone made from an address is marked as such (`p9-from-address` inside the clone's own `.git`, so the mark
+  goes with the clone and nothing of it outlives a removed clone), and its sprint's
+  later workers get it with no folder read, also after you clear or respell the address mid-sprint: the
+  one-repository check below compares folders' `origin`s, which an address clone was never made from. A folder sprint's
+  clone keeps that check. What remains: P9 downloads whatever that address serves into its own folder, and the workers'
   agents then read and run it in their own modes, as they would in any folder you point a chat at.
 - **Where a worker starts.** The chat's record holds a marker, not a path. At every start P9 finds the folder again
   from the chat's parent and key, and refuses it if it is not a real folder inside the sprint's own folder (a link,
