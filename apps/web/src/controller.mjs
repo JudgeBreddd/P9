@@ -148,7 +148,9 @@ function attrs(o, n) {
   for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
   for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
 }
-const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; addHalos(el); } return el; };
+// O152: a changed string is patched in (morph), not rebuilt: Mission's tiles and windows wrote innerHTML here, so a changed
+// tile answer or count replaced the node under the pointer (the click was lost) and reset scroll and focus every 30 s.
+const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); morph(el, html); addHalos(el); } return el; };
 // note 7: every chat starts in Auto mode
 // Each agent's last model, picker and command lists, so a new chat has them before its own session starts.
 // O47: the model and picker lists are the daemon's (GET /chat's lists: what a running agent last reported there, read
