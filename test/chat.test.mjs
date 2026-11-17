@@ -998,6 +998,26 @@ test('O134: a stored helper config event is skipped on resume; the chat comes ba
   console.log('PASS O134: a planted helper Haiku config was skipped; the resume is on opus, high; the event is unchanged');
 });
 
+// O134 FIX1 (Reviewer on aaebd46): a chat's own one-model config (a shorter list at a later start, O130) has its pickers and is
+// the chat's: after a longer list, a resume still puts back the effort it saved.
+test('O134 FIX1: a chat\'s own one-model config after a longer list is kept on resume', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'config', model: 'opus', config: { effort: 'high' } })).status, 202);
+  const first = await until(instance, (e) => e.type === 'turn-end' && e.conversation === id, 0);
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  const effort = { id: 'effort', name: 'Effort', current: 'low', category: 'thought_level', options: ['low', 'medium', 'high'].map((value) => ({ value, name: value })) };
+  db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'config', JSON.stringify({ model: { current: 'opus', options: [{ value: 'opus', name: 'Opus' }] }, pickers: [effort] }), Date.now());
+  db.close();
+  const second = await restart(t, instance, 'state-o134-own');
+  assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'config' })).status, 202);
+  await until(second, (e) => e.type === 'turn-end' && e.conversation === id && e.cursor > first.cursor, 0);
+  assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > first.cursor, 0)).hit.data.content.text, 'config:model=opus,effort=low,fast=off,sandbox=on', 'the chat\'s own one-model config was skipped');
+  console.log('PASS O134 FIX1: the chat\'s own one-model config with low effort was kept; the resume is on opus, low');
+});
+
 // O39: the adapter is started with the chat's own model named, so a resume never leaves that model: P9 sets no model on it.
 test('resume: the agent starts on the chat\'s own model, so P9 sets no model after it', async (t) => {
   const instance = await start(t);
