@@ -971,8 +971,10 @@ clone (above) cannot serve: `git clone` needs a repository of its own. Written b
   so it sees the folder as it is then. P9 reads it as a folder the lead chat may use (the same check as a worker folder). A folder inside the sprint's own state,
   or one that holds the workspace, P9's state or the home folder, is refused before anything is copied.
 - **A sprint's copy is kept until clean-up.** Like a clone, it is removed only by clean-up, from the desktop, with the rule
-  for worker folders, and for the copy only when its apply is recorded clean and the copy has no edit and no commit made
-  after the applied one; otherwise it is kept, and the close view says why. Clean-up never deletes your original folder.
+  for worker folders, and for the copy only when its apply is recorded clean and the copy holds nothing but the applied
+  commit: every file, link and folder in it is in that commit's tree with the same bytes, nothing in the tree is missing,
+  every ref is that commit or older, and the index matches it. Anything else (an untracked or ignored file, a changed file,
+  an empty folder, a link, a stash) keeps the copy, and the close view names the first paths. Clean-up never deletes your original folder.
 - **Disk.** One copy per sprint plus one working folder per worker, in P9's own folder, until cleaned up, plus the saved
   originals for an apply. The copy is the size of the tracked files at the time it was made.
 - **What remains.** The copy is a snapshot taken when the sprint starts: a change you make to a tracked file during the

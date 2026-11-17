@@ -5,8 +5,8 @@
 // rollback, three lists. The bytes applied are the commit's blobs, staged in P9's record folder before the first write.
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { mkdir, open, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { hash, isGuarded, openSafe, protection, replaceFile, removeFile } from '../../packages/files/index.mjs';
 import { git } from './worker-folders.mjs';
@@ -265,9 +265,11 @@ async function writeResult(sprintDir, body) {
   await rename(part, path.join(sprintDir, 'apply-result.json'));
 }
 
-// Clean-up may remove the copy only when its work is provably applied: the apply result is recorded, clean (no cause, nothing
-// left, not pending), and the copy has no edit and no commit after the applied one. Returns null when it may go, else the
-// reason it stays (the close view shows it). When in doubt the copy stays.
+// Clean-up may remove the copy only when it holds nothing but the applied commit (SECURITY.md: clean-up). Returns null when
+// it may go, else the reason it stays, naming the first paths (the close view shows it). The rule is a manifest, not git
+// status: the applied commit's tree names every file, link and folder the copy may hold, with its blob id; anything else in
+// the copy (untracked, ignored, changed, missing, an empty folder, a link, any other kind) keeps it. Inside .git: every
+// ref (branches, tags, stash) must be the applied commit or its ancestor, and the index must match it. When in doubt it stays.
 export async function copyKeptBecause(sprintDir) {
   const copy = path.join(sprintDir, 'copy');
   const done = await resultOf(sprintDir);
@@ -275,12 +277,47 @@ export async function copyKeptBecause(sprintDir) {
   if (done.pending) return 'apply unknown: its result was not recorded';
   if (done.cause) return 'apply did not finish cleanly: ' + done.cause;
   if ((done.left ?? []).length) return 'something left in your folder';
-  if (!done.head) return 'the applied commit is not recorded';
-  const dirty = await git(copy, ['status', '--porcelain', '-z', '--untracked-files=all']);
-  if (dirty.code !== 0) return 'the copy cannot be read';
-  if (dirty.out !== '') return 'edited after the apply';
-  if (await copyHead(copy) !== done.head) return 'a commit was made after the apply';
+  if (!/^[0-9a-f]{40,64}$/.test(done.head ?? '')) return 'the applied commit is not recorded';
+  const extra = await notInCommit(copy, done.head);
+  if (extra.length) return 'not part of the applied commit: ' + extra.join(', ');
+  const refs = await git(copy, ['rev-list', '-n', '1', '--all', '--not', done.head]);
+  if (refs.code !== 0 || refs.out.trim()) return 'a commit, branch or stash not in the applied commit';
+  if ((await git(copy, ['diff-index', '--cached', '--quiet', done.head])).code !== 0) return 'a staged change not in the applied commit';
   return null;
+}
+
+// Up to max paths in the copy (outside .git) that the commit's tree does not hold byte for byte, and tree entries missing
+// from the copy. Links are compared as links (never followed); files are read through openSafe.
+// ponytail: hashes every file on each clean-up; fine for a sprint copy, slow for a very large tree.
+async function notInCommit(copy, head, max = 3) {
+  const tree = await git(copy, ['ls-tree', '-r', '-t', '-z', '--full-tree', head]);
+  if (tree.code !== 0) return ['(the applied commit cannot be read)'];
+  const want = new Map();
+  for (const entry of tree.out.split('\0').filter(Boolean)) {
+    const tab = entry.indexOf('\t'), [mode, type, id] = entry.slice(0, tab).split(' ');
+    want.set(entry.slice(tab + 1), { mode, type, id });
+  }
+  const algo = head.length === 64 ? 'sha256' : 'sha1', found = [], seen = new Set();
+  const blobId = (bytes) => createHash(algo).update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  async function walk(rel) {
+    let entries;
+    try { entries = await readdir(path.join(copy, rel), { withFileTypes: true }); } catch { found.push(rel || '.'); return; }
+    for (const d of entries.sort((a, b) => a.name < b.name ? -1 : 1)) {
+      if (found.length >= max) return;
+      const p = rel ? `${rel}/${d.name}` : d.name;
+      if (p === '.git') continue;
+      const w = want.get(p);
+      seen.add(p);
+      let same = false;
+      if (d.isDirectory()) { if (w?.type === 'tree') { await walk(p); continue; } }
+      else if (d.isSymbolicLink()) same = w?.mode === '120000' && blobId(await readlink(path.join(copy, p), { encoding: 'buffer' })) === w.id;
+      else if (d.isFile() && w?.type === 'blob' && MODE_FILE.has(w.mode)) { const r = await readAt(copy, p); same = r.kind === 'file' && blobId(r.bytes) === w.id; }
+      if (!same) found.push(d.isDirectory() ? p + '/' : p);
+    }
+  }
+  await walk('');
+  for (const p of want.keys()) if (found.length < max && !seen.has(p)) found.push(p + ' (missing)');
+  return found;
 }
 
 // The close view (SECURITY.md "The result, always three lists"): the apply's three lists as recorded, and every sentence

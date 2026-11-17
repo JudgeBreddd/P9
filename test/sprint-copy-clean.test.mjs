@@ -1,5 +1,6 @@
 // Clean-up of a sprint's copy (SECURITY.md § Sprint from a folder with no remote): the copy goes only once its work is
-// applied cleanly; a sprint with no apply, a partial apply, or a conflict keeps the copy. Throwaway repositories made here.
+// applied cleanly and it holds nothing but the applied commit; a sprint with no apply, a partial apply, a conflict, or any
+// file, folder, link or ref the applied commit does not hold keeps the copy. Throwaway repositories made here.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -86,4 +87,50 @@ test('Sprint copy clean-up: a conflict (cause set, nothing left) keeps the copy'
   record(sprint, { written: [], rolledBack: [], left: [{ path: 'a.txt', reason: 'changed-by-owner' }], cause: 'conflict' });
   await createWorkerFolders({ home }).clean(ID);
   assert.equal(fs.existsSync(copy), true, 'a conflict keeps the copy');
+});
+
+test('Sprint copy clean-up: a file the copy\'s .gitignore excludes, made after a clean apply, is kept and the close view says why', { timeout: 60000 }, async (t) => {
+  unprotected(t);
+  const c = await copied(t), workers = createWorkerFolders({ home: c.home });
+  write(path.join(c.copy, 'a.txt'), 'two\n'); write(path.join(c.copy, '.gitignore'), 'private.txt\n');
+  g(c.copy, 'add', 'a.txt', '.gitignore'); g(c.copy, 'commit', '-qm', 'edit');
+  const shown = (await workers.preview(ID)).shown;
+  assert.deepEqual((await workers.apply(ID, { yes: true, shown })).left, []);
+  write(path.join(c.copy, 'private.txt'), 'only here\n'); // ignored and untracked: git status without --ignored does not list it
+  assert.equal(g(c.copy, 'status', '--porcelain', '--untracked-files=all'), '', 'the control: plain status sees nothing');
+  await workers.clean(ID);
+  assert.equal(fs.readFileSync(path.join(c.copy, 'private.txt'), 'utf8'), 'only here\n', 'the ignored file is still there');
+  assert.match((await workers.close(ID)).copyKept ?? '', /not part of the applied commit: .*private\.txt/);
+});
+
+test('Sprint copy clean-up: a tracked file changed after a clean apply keeps the copy, and the reason names it', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await appliedClean(t);
+  write(path.join(copy, 'a.txt'), 'three\n');
+  await workers.clean(ID);
+  assert.equal(fs.readFileSync(path.join(copy, 'a.txt'), 'utf8'), 'three\n');
+  assert.match((await workers.close(ID)).copyKept ?? '', /not part of the applied commit: a\.txt/);
+});
+
+test('Sprint copy clean-up: an empty folder made after a clean apply keeps the copy, and the reason names it', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await appliedClean(t);
+  fs.mkdirSync(path.join(copy, 'empty'));
+  await workers.clean(ID);
+  assert.equal(fs.existsSync(path.join(copy, 'empty')), true, 'the empty folder is still there');
+  assert.match((await workers.close(ID)).copyKept ?? '', /not part of the applied commit: empty\//);
+});
+
+test('Sprint copy clean-up: a link made after a clean apply keeps the copy, and the reason names it', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await appliedClean(t);
+  fs.symlinkSync('a.txt', path.join(copy, 'link'));
+  await workers.clean(ID);
+  assert.equal(fs.lstatSync(path.join(copy, 'link')).isSymbolicLink(), true);
+  assert.match((await workers.close(ID)).copyKept ?? '', /not part of the applied commit: link/);
+});
+
+test('Sprint copy clean-up: a stash made after a clean apply keeps the copy', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await appliedClean(t);
+  write(path.join(copy, 'a.txt'), 'stashed\n'); g(copy, 'stash', '-q');
+  await workers.clean(ID);
+  assert.equal(fs.existsSync(copy), true, 'the stash lives only in the copy');
+  assert.match((await workers.close(ID)).copyKept ?? '', /stash/);
 });
