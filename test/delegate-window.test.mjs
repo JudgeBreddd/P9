@@ -604,7 +604,7 @@ test('O133: a Settings default effort applies to a worker an agent opens, after 
 // window-4 (row 730, Tyler: "the card above the chat box labeled Worker Report, that is what goes behind the chat box showing
 // the title and clicking the title slides it up, click title again slides it down. that way its not permanently in the way").
 test('window-4: the worker report floats folded to its title above the box, slides up and down from it, and the chat never moves', { timeout: 240000 }, async (t) => {
-  const { instance, parent, made, a, kid, head, page, errors, pane } = await busyLead(t, 0);
+  const ctx = await busyLead(t, 0), { instance, parent, made, a, kid, head, page, errors, pane } = ctx;
   const card = pane.locator(`.card-pin[data-card="ready-${made.chat}"]`), title = card.locator('[data-card-tab]'), body = card.locator('.tb');
   const state = async () => (await call(instance, '/chat')).conversations.find((c) => c.id === parent).state;
   await until(async () => await state() !== 'turn', 'the lead\'s turn ended (the history stops growing)', 120000);
@@ -660,6 +660,24 @@ test('window-4: the worker report floats folded to its title above the box, slid
   const [r, s] = [await box(title), await box(strip)];
   assert.ok(r.height > 0 && s.height > 0 && r.bottom <= s.top, 'both titles show, the report\'s above: ' + JSON.stringify([r, s]));
   await shot(page, 'window4-two-titles');
+  // FIX1 (Reviewer): a short window with the bottom at its 70vh cap (a tall pinned card), the long report opened: its title
+  // and close stay inside the pane, under the history's top, and a click there reaches them (nothing drawn over them).
+  const { app } = ctx;
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 560));
+  assert.equal((await a.tool('pin_card', { id: 'tall', kind: 'markdown', text: Array.from({ length: 30 }, (_, i) => 'Tall pinned line ' + (i + 1)).join('\n\n') })).pinned, 'tall');
+  await pane.locator('.bottom .pinned [data-card="tall"]').waitFor({ timeout: 15000 });
+  await page.waitForTimeout(600);
+  await title.click();
+  await until(async () => await title.getAttribute('aria-expanded') === 'true', 'the report opened on the short window');
+  await page.waitForTimeout(600);
+  const top = (await box(pane.locator('.hist'))).top, close = card.locator('[data-card-close]');
+  const hit = (l) => l.evaluate((el) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el; });
+  const [tb, cb] = [await box(title), await box(close)];
+  assert.ok(tb.top >= top - 1 && cb.top >= top - 1, 'opened on a short window, the title and close sit under the history top: ' + JSON.stringify({ top, tb, cb }));
+  assert.ok(await hit(title) && await hit(close), 'a click on the title and on the close reaches them');
+  await shot(page, 'window4-short-open');
+  await close.click();
+  await until(async () => await card.count() === 0, 'closed from its x on the short window');
   assert.deepEqual(errors, []);
-  console.log('PASS window-4: report arrives folded to its title above the box, the last chat row clear of it; its title slides it up (aria-expanded) and down (Enter); the chat box, scroll and last row stay put opened and closed; a new report arrives folded and takes no height from the history; a pinned card and the report show two titles');
+  console.log('PASS window-4: report arrives folded to its title above the box, the last chat row clear of it; its title slides it up (aria-expanded) and down (Enter); the chat box, scroll and last row stay put opened and closed; a new report arrives folded and takes no height from the history; a pinned card and the report show two titles; on a short window under a tall pin, the opened report keeps its title and close inside the pane and clickable');
 });

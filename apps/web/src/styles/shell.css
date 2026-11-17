@@ -420,7 +420,7 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 .tuck .tb{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s ease}
 .tuck .tb>.msg{min-height:0;overflow:hidden}
 .tuck[data-tuck-open=true] .tb{grid-template-rows:1fr}
-.tuck[data-tuck-open=true] .tb>.msg{overflow:auto;max-height:45vh;padding:4px 0 8px}
+.tuck[data-tuck-open=true] .tb>.msg{overflow:auto;max-height:min(45vh,var(--tuck-body,45vh));padding:4px 0 8px}
 @media (prefers-reduced-motion:reduce){.tuck .tb{transition:none}}
 /* The folded title would cover the chat's last line: while a report floats, the history has room for it below its end (its
    box keeps its size; only the scroll gets one tab longer). */
