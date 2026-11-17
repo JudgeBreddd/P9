@@ -666,7 +666,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `compact_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -676,6 +676,14 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   chat started, directly or through a worker. A general chat (no project) reaches only the chats
   it started. `stop_chat` reaches only the chats the caller started: a chat cannot stop its parent
   or a chat beside it. A chat outside that reach is answered as if it did not exist.
+- **Compacting.** `compact_chat` sends a chat the caller started that agent's own `/compact`, so a finished
+  worker is cheap to restart once its cache has gone cold. It is the only message P9 sends with no
+  label in front: an agent runs a slash command only when it is the first text, and the label would
+  turn it into words. The text is always exactly `/compact`, chosen by P9 and never by the calling
+  agent, so no agent's words reach another agent unlabelled. The worker's history shows it with the
+  sending chat. It is refused while the chat is in a turn or waiting on an answer, while its sprint is
+  paused, and while a moved-chat note waits to go in with the next message; notes, rules and the
+  project text that wait go in with the next ordinary message. Reach is that of `archive_chat`.
 - **Archiving.** `archive_chat` moves a chat the caller started to Archived, or back. It is the
   sidebar's Archive and nothing more: the chat, its messages and its files stay, and you can
   open it or unarchive it from the Archived page. Like `stop_chat` it reaches only the chats the
@@ -730,7 +738,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     whether the agent read it: a note put into a running turn whose answer was lost, or a prompt
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
-- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat` and `answer_chat` are refused while it
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat`, `compact_chat` and `answer_chat` are refused while it
   is on, as are `ready`, `verdict` and `close_sprint`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.

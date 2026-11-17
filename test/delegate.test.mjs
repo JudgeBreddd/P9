@@ -283,6 +283,38 @@ test('Delegate F2: archive_chat archives and brings back a chat the caller start
   console.log('PASS Delegate F2 archive_chat');
 });
 
+test('Delegate daemon-10: compact_chat sends an idle chat the caller started its own /compact with nothing in front; refused in a turn, for any other chat and under the agent lock', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), out = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'fill 600', title: 'Kid' });
+  await a.done(made.chat);
+  const context = async () => (await a.tool('list_chats')).chats.find((c) => c.id === made.chat).context;
+  assert.equal((await context()).used, 600);
+  // Before: send_chat's /compact has the sender line in front, so the agent reads it as words and nothing compacts.
+  await a.tool('send_chat', { chat: made.chat, text: '/compact' });
+  assert.equal((await a.done(made.chat)).last, 'words:/compact');
+  assert.equal((await context()).used, 600);
+  assert.equal((await b.tool('compact_chat', { chat: made.chat })).error, 'not-a-descendant');
+  assert.equal((await out.tool('compact_chat', { chat: made.chat })).error, 'chat-not-found');
+  assert.equal((await a.tool('compact_chat', { chat: a.conversation })).error, 'chat-not-found', 'not its own chat');
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'update' && event.data.content?.text === 'working');
+  assert.equal((await a.tool('compact_chat', { chat: made.chat })).error, 'turn-running');
+  await a.tool('stop_chat', { chat: made.chat });
+  await a.done(made.chat);
+  assert.deepEqual(await a.tool('compact_chat', { chat: made.chat }), { chat: made.chat, action: 'compacting' });
+  await a.done(made.chat);
+  assert.equal((await context()).used, 10, 'the context number fell');
+  const sent = (await events(instance, made.chat)).filter((e) => e.type === 'user').at(-1);
+  assert.equal(sent.data.text, '/compact');
+  assert.equal(sent.data.from, a.conversation, 'the history says which chat sent it');
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await a.tool('compact_chat', { chat: made.chat })).error, 'agent-lock-on');
+  console.log('PASS Delegate daemon-10 compact_chat');
+});
+
 test('Delegate: chats in one project read and message each other but stop only their own workers; a worker starts in its parent\'s project', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });

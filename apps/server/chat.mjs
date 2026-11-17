@@ -336,6 +336,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // ponytail: a chat's waiting notes are its newest 20 and at most 60,000 characters together (the newest always
   // waits), so one prompt can carry them; older ones stay in the chat's history only.
   const notes = new WeakMap(), parked = new Map(), resent = new WeakSet();
+  // daemon-10 compact_chat (api.command only, never a body field): a command P9 itself chose, sent as the prompt's only
+  // block. The adapters take a slash command only from the first text block, so it carries no label, rules or notes.
+  const commands = new WeakSet();
   let noteCount = 0;
   // A chat's waiting notes: from memory, or after a restart from prefs, each rebuilt as a note from its sender.
   const waitingFor = (id) => {
@@ -1335,9 +1338,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // Resume. The owner's own message goes through (Lead's choice, 2026-11-16: holding it would look like a dead chat),
       // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
       const pausing = (from || mixed.has(body)) && !notes.has(body) && pausedOf(conversation.parent);
+      const bare = commands.has(body);
       if (pausing) {
         release();
-        if (solo) return refused(409, 'sprint-paused');
+        if (solo || bare) return refused(409, 'sprint-paused');
         if (pausing.length >= 100) return refused(409, 'sprint-paused-full'); // SECURITY.md § Pause sprint
         const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, mixed: mixed.get(body) ?? null,
           body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } };
@@ -1347,6 +1351,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (!held?.length) emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: 'pause' });
         return { status: 202, held: item.id, when: 'pause' };
       }
+      if (bare && conversation.state === 'turn') { release(); return refused(409, 'turn-running'); }
       if (conversation.state === 'turn') {
         const session = live.get(id);
         try {
@@ -1362,15 +1367,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // A prompt during Stop, or after a cleanup P9 could not confirm, would launch a second adapter beside old work.
       if (!['idle', 'running', 'stopped'].includes(conversation.state)) { release(); return refused(409, conversation.state); }
       if (closing) { release(); return refused(503, 'shutting-down'); }
+      // The moved note goes in with the next message's user event; a command cannot carry it, so it waits for that one.
+      if (bare && movedNote(db, id)) { release(); return refused(409, 'moved-note-waiting'); }
       setState(id, 'turn');
       const note = movedNote(db, id); // read before this message's own user event
       // N1: the project's instructions and added files, when this chat has not been sent this exact text since its last
       // message named a project note (first message, moved in, or changed). projectNote names what was current. A steered
       // message (steer) carries none and is skipped, or one steer would resend the whole note (step 1c).
-      const project = await projects.note(conversation).catch(() => null);
+      const project = bare ? null : await projects.note(conversation).catch(() => null);
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
-      const rules = rulesFor(conversation, body);
+      const rules = bare ? null : rulesFor(conversation, body);
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
       emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }) }); // hash and type only: events stay small
       let session;
@@ -1426,11 +1433,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       let ended;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
       // answers another chat: they wait for the chat's own next message.
-      const told = solo ? [] : waitingFor(id).splice(0);
+      const told = solo || bare ? [] : waitingFor(id).splice(0);
       if (told.length) keepWaiting(id);
       // With notes in front, the message itself says who sent it too (O109): the user's is not left to read as the last note's.
       const shared = told.length > 0 && !mixed.has(body);
-      const prompt = [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
+      const prompt = bare ? blocks(body.text, []) : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
       if (rules?.started) sending.add(id);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
       const done = (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
@@ -1599,6 +1606,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);
       return result.status === 409 && !['moving', 'moved'].includes(result.error) ? park(id, body) : result;
+    },
+    // daemon-10: a slash command P9 chose (delegate.mjs compact_chat), alone in the prompt; refused during a turn.
+    command(id, text, from) {
+      const body = { text };
+      commands.add(body);
+      return api.prompt(id, body, undefined, from);
     },
     ask(id, text, from, still) {
       let end;
