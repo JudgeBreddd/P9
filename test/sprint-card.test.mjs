@@ -279,7 +279,7 @@ test('Sprint files button opens the lead\'s sprint page in its project', { timeo
   assert.equal(await section.locator('[data-pj="spfile"] .t').first().innerText(), 'sprint.md');
   // The sprint has its own page now (one sprint to a page): the button lands on it, not on a section far down the
   // project page, so the project's 30 files are not here and nothing has to scroll.
-  assert.deepEqual([await page.locator('#projPage [data-sp-page="lead1"]').count(), await page.locator('#projPage [data-sp-title]').innerText(), await page.locator('#projPage').getByText('file29.txt').count()], [1, 'Sprint', 0], 'the button did not open the sprint\'s own page');
+  assert.deepEqual([await page.locator('#projPage [data-sp-page="lead1"]').count(), await page.locator('#projPage [data-sp-title]').innerText(), await page.locator('#projPage').getByText('file29.txt').count()], [1, 'Sprint View', 0], 'the button did not open the sprint\'s own page');
   assert.equal(await section.evaluate(e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; }), true);
   await shotAt(page, app, 'sprint-files-section');
 });
