@@ -356,21 +356,36 @@ type Entry = { key: string; sig: string; html: () => string };
 type Strip = { id?: string; events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> };
 const DETAIL_CAP = 2000; // a tool call's expandable detail: the ledger's status and text content, escaped, capped (threat model row 18)
 const toolText = (data: Json) => (Array.isArray(data.content) ? data.content as Json[] : []).map((item) => String(((item.content ?? item) as Json | undefined)?.text ?? '')).filter(Boolean).join('\n');
-const build = perChat((events) => {
-  const blocks: Block[] = [];
+// O145 step 2: a poll that adds events to an open chat folds only those events onto the blocks it already has (its list only
+// grows by push; a replaced list is read again from the start). A block a later event changes is replaced by a changed copy,
+// never edited in place, so itemsOf can keep a block's signature by the block object itself.
+type Folded = { list: Json[]; n: number; seq: number; blocks: Block[]; strip: Strip };
+const folded = new Map<string, Folded>();
+function build(id: string) {
+  const list = eventsOf(id), was = folded.get(id);
+  if (was && was.list === list && was.n === list.length) return was;
+  const grow = was && was.list === list && was.n < list.length;
   // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
-  const strip: Strip = { events: [] };
+  const now: Folded = grow ? { ...was, list, n: list.length, blocks: [...was.blocks] } : { list, n: list.length, seq: 0, blocks: [], strip: { events: [] } };
+  foldBlocks(now, list.slice(grow ? was.n : 0)); folded.set(id, now); return now;
+}
+function foldBlocks(now: Folded, events: Json[]) {
+  const { blocks, strip } = now;
+  const fresh = new WeakSet<Block>(); // made by this fold, not yet handed out: changed in place
+  const own = (index: number) => { let block = blocks[index]; if (!fresh.has(block)) { block = blocks[index] = { ...block }; fresh.add(block); } return block; };
   // O63: `at` names a block by the event that began it (its cursor, and which of that event's blocks), so its node in the
   // page is the same one when earlier events are read in above it or the blocks before it regroup.
-  let at = '', nth = 0, seq = 0;
-  const add = (kind: string, text: unknown, extra: Partial<Block> = {}) => { blocks.push({ kind, text: String(text ?? ''), at: at + '.' + nth++, ...extra }); };
+  let at = '', nth = 0;
+  const add = (kind: string, text: unknown, extra: Partial<Block> = {}) => { const block = { kind, text: String(text ?? ''), at: at + '.' + nth++, ...extra }; fresh.add(block); blocks.push(block); };
   // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
   // O65: a tool call still running when its turn ends (a Stop writes no closing update for it) is over too: it stops spinning.
   // One that does go on (a background task) says so with its next update.
-  const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.text += ' · not answered'; } if (block.kind === 'ask') block.closed = true;
-    if (block.kind === 'tool' && (block.status === 'pending' || block.status === 'in_progress')) block.status = 'ended'; });
+  const settle = () => blocks.forEach((block, index) => {
+    if (block.request) { block = own(index); block.request = undefined; block.text += ' · not answered'; }
+    if (block.kind === 'ask' && !block.closed) own(index).closed = true;
+    if (block.kind === 'tool' && (block.status === 'pending' || block.status === 'in_progress')) own(index).status = 'ended'; });
   for (const event of events) {
-    at = String(event.cursor ?? 'n' + seq); seq++; nth = 0;
+    at = String(event.cursor ?? 'n' + now.seq); now.seq++; nth = 0;
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
     // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
     if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
@@ -380,14 +395,14 @@ const build = perChat((events) => {
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
         const type = update === 'agent_message_chunk' ? 'agent' : 'think', warn = type === 'agent' && agentWarning(text);
         if (warn) { add('warn', warn); continue; } // the adapter's warning, a notice line above the reply (helpers.mjs)
-        if (last?.kind === type) last.text += String(text); else add(type, text);
+        if (last?.kind === type) own(blocks.length - 1).text += String(text); else add(type, text);
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
-        const image = type === 'agent' && imgSrc(data.content); if (image) (blocks.at(-1)!.images ??= []).push(image);
+        const image = type === 'agent' && imgSrc(data.content); if (image) { const block = own(blocks.length - 1); block.images = [...block.images ?? [], image]; }
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
       else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) ?? (data.kind === 'switch_mode' ? '' : undefined) });
       else if (update === 'tool_call_update') {
-        const tool = blocks.find((block) => block.kind === 'tool' && block.id === data.toolCallId);
-        if (tool) {
+        const index = blocks.findIndex((block) => block.kind === 'tool' && block.id === data.toolCallId);
+        if (index >= 0) { const tool = own(index);
           if (typeof data.status === 'string') tool.status = data.status;
           if (typeof data.title === 'string' && data.title) tool.text = data.title;
           const more = toolText(data); if (more) tool.detail = ((tool.detail ? tool.detail + '\n' : '') + more).slice(0, DETAIL_CAP);
@@ -404,9 +419,9 @@ const build = perChat((events) => {
     }
     else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [], plan: artPlan((data.toolCall ?? {}) as Json) });
     else if (kind === 'answered') {
-      const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
-      if (asked) asked.request = undefined;
-      const question = blocks.find((block) => block.kind === 'ask' && block.id === data.request); if (question) question.closed = true;
+      const index = blocks.findIndex((block) => block.request === data.request), asked = blocks[index], answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
+      if (asked) own(index).request = undefined;
+      const question = blocks.findIndex((block) => block.kind === 'ask' && block.id === data.request); if (question >= 0) own(question).closed = true;
       const chosen = asked?.options?.find((option) => option.optionId === outcome?.optionId);
       add('answered', 'You answered · ' + (outcome ? (outcome.outcome === 'selected' ? String(chosen?.name ?? outcome.optionId) : 'Cancelled') : (({ accept: 'Answered', decline: 'Declined' } as Json)[String(answer.action)] ?? 'Cancelled')));
     }
@@ -418,8 +433,7 @@ const build = perChat((events) => {
     else if (kind === 'interrupted') { settle(); add('note', 'Stopped · The P9 daemon restarted mid-turn. Send again to resume.'); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('note', 'Stopped · Send again to resume.'); }
   }
-  return { blocks, strip };
-});
+}
 // P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
 const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
 function blockHtml(block: Block) {
@@ -444,27 +458,19 @@ function blockHtml(block: Block) {
 // Three or more tool calls in a row fold into one row; their images stay in the chat below it, as on the desktop. A block's key is its index (a group's is its first block's), so a
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
 let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
-// O145: a poll that adds an event rebuilds every block of the chat (`build`), so every signature was stringified again: on a
-// long chat megabytes of strings per poll, and a full garbage collection every few polls. A block equal in content to the one
-// last signed under its key keeps that signature (the same string). It is compared with a copy taken when it was signed,
-// never the live object, because render() sets `pinned` on the blocks it was given.
-let sigsKept = new Map<string, { snap: Block[]; extra: string; sig: string }>();
-function same(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
-  const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
-  for (const key in x) if (!same(x[key], y[key])) return false;
-  for (const key in y) if (!(key in x) && y[key] !== undefined) return false;
-  return true;
-}
+// O145: a block's signature is kept by the block object (build replaces a block it changes, step 2), so a poll stringifies
+// only new and changed blocks. render() sets `pinned` on the blocks in place, so it is part of what the kept signature is
+// checked against.
+let sigsKept = new Map<string, { run: Block[]; extra: string; sig: string }>();
 function itemsOf(blocks: Block[]) {
   // O712: a closed report shows its chat row; window-3: so does one whose worker was archived (same blocks, same SHUT), so the pinned one is in the key
   const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
-  const out: Entry[] = [], sigs = new Map<string, { snap: Block[]; extra: string; sig: string }>();
+  const out: Entry[] = [], sigs = new Map<string, { run: Block[]; extra: string; sig: string }>();
   const sign = (key: string, run: Block[], extra: string, make: () => string) => {
     const was = sigsKept.get(key);
-    const kept = was && was.extra === extra && was.snap.length === run.length && run.every((block, n) => same(block, was.snap[n])) ? was : { snap: run.map((block) => ({ ...block })), extra, sig: make() };
+    extra += run.map((block) => block.pinned ? 1 : 0).join('');
+    const kept = was && was.extra === extra && was.run.length === run.length && run.every((block, n) => block === was.run[n]) ? was : { run, extra, sig: make() };
     sigs.set(key, kept); return kept.sig;
   };
   for (let i = 0; i < blocks.length; i++) {
