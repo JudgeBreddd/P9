@@ -6,7 +6,7 @@ const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => '
   landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
 const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 // From the press until it lands or fails (the plan alone can take half a minute): one notice says what is happening, and
-// the button and the message box stay off, so a second press cannot start a second send (Builder's test, 2026-11-02).
+// the button and the message box stay off, so a second press cannot start a second send (seen in a hand test).
 async function leave(s) {
   if (s.leaving) return;
   const note = { t: 'notice', text: 'Moving this chat to ' + (outer.serverInfo?.last || 'the remote') + '. This takes about 30 seconds; don\'t type in this chat or close P9 until it finishes.' };

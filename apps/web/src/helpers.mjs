@@ -61,7 +61,7 @@ export const svg = {
 };
 export const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // The Sprint tracker's times, readable: an ISO time is the device's local time without seconds ("6:53 PM"), with
-// "tomorrow" / "yesterday" or a short date when the day is not today; anything else (the Builder's "07:00") is shown as written.
+// "tomorrow" / "yesterday" or a short date when the day is not today; anything else (such as "07:00") is shown as written.
 const ISO = /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d/;
 export function sprintTime(value, now = new Date()) {
   const raw = String(value ?? '').trim(), at = new Date(raw);
@@ -75,7 +75,7 @@ export function sprintTime(value, now = new Date()) {
 export const sprintTimes = (d, now) => `Updated ${sprintTime(d.updatedAt, now) || 'unknown'}${d.cutoff ? ' · cutoff ' + sprintTime(d.cutoff, now) : ''}`;
 // HI1: the hover "i" beside a Settings row (T-tracer's .info). Its tip says what the row does; a click opens that guide section.
 export const info = (tip, section) => `<button class="info" type="button" data-docs="${esc(section)}" aria-label="${esc(tip)}" title="${esc(tip)}">i</button>`;
-// An agent program's own warning, out of the reply (the owner, 2026-10-29). codex-acp 2.1.1 (createWarningEvent) sends one,
+// An agent program's own warning, out of the reply. codex-acp 2.1.1 (createWarningEvent) sends one,
 // to a client that takes no notices, as a whole reply chunk "Warning: <message>\n\n"; claude-agent-acp sends none.
 // agentWarning gives the message when a chunk is exactly that, and warnHtml draws it as a small grey line above the reply,
 // its "i" opening what it means: a known warning in plain words, any other with the generic line and the raw text.
@@ -83,7 +83,7 @@ export const info = (tip, section) => `<button class="info" type="button" data-d
 // was a while (a send waits up to 90 s, twice), and for a send that the message is back in the box (liveChat.prompt).
 const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop the turn', create: 'start the chat', stop: 'stop the chat' };
 export function chatFailed(action, body, ms) {
-  // The daemon refuses a new chat's folder only (chat.mjs create): say what a folder needs (Builder, 2026-11-02).
+  // The daemon refuses a new chat's folder only (chat.mjs create): say what a folder needs.
   if (action === 'create' && body?.error === 'request-refused') return 'Could not start the chat in that folder. It must exist on the server; a full path works only in Unrestricted mode.';
   if (body?.error === 'profile-gone') return 'This chat\'s provider profile was removed in Settings. The chat can be read, not continued.';
   if (body?.error !== 'daemon-unavailable') return null;

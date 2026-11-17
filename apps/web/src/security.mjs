@@ -1,7 +1,7 @@
 import { LOOSE } from './helpers.mjs';
 
-// Settings > Security settings (c18, threat model row 66), on the desktop (controller.mjs) and the phone (phone.ts). Builder,
-// 2026-10-27: one toggle per restriction, and an Unrestricted mode toggle that turns them all off, so nobody hunts for them.
+// Settings > Security settings (c18, threat model row 66), on the desktop (controller.mjs) and the phone (phone.ts).
+// One toggle per restriction, and an Unrestricted mode toggle that turns them all off, so nobody hunts for them.
 // The defaults are unchanged: agent lock off, File protection on, the red warnings on, new chats in the agents' asking modes.
 // The lock and protection are the daemon's (one for every device); the warnings and the new-chat mode are this device's
 // own storage (rows 25, 25a).

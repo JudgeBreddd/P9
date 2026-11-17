@@ -91,7 +91,7 @@ export function mountShell({ askAdmin } = {}) {
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
   const { leave, onMove, moveReloaded, SERVER_STATE } = installMove(outer);
   adminAsk = askAdmin ?? null;
-// The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
+// The sample data lives in the test folder and never ships (sample data is never part of the app).
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
 // empty and fill from the daemon (GitHub issue #4: a fresh Windows install showed the sample items, and so did a dead daemon).
 const sampleView = !!window.p9?.sample;
@@ -109,10 +109,10 @@ const popover = (...args) => createPopover(args[0], args[1], args[2], lifetime.s
 DUWOP.init(); shareLook(lifetime.signal);
 
 const $ = s => document.querySelector(s);
-// Blink fix (Builder, 2026-10-17: "everything on the page blinks every few seconds"): each event re-rendered the cards and the
+// Blink fix (the whole page blinked every few seconds): each event re-rendered the cards and the
 // Mission panels, restarting every halo. paint writes only when the HTML changed; callers still re-wire their handlers.
 const written = new WeakMap();
-// Brings el's children in line with html without rebuilding them (Builder, 2026-10-18: "the flashing is still there": every
+// Brings el's children in line with html without rebuilding them (the flashing was still there after the blink fix: every
 // event rebuilt the panes, tabs and cards, restarting halos, blinks and thumbnails). Nodes are matched by position; kept
 // ones keep their animations, decoded images and scroll. Form values follow the new markup, as a rebuild did. Pets
 // (canvas.pet, added by tickPets) are left in place.
@@ -288,7 +288,7 @@ function cardList(all) {
   const asks = S.sessions.filter(s => s.pending);
   const cards = [];
   if (asks.length) cards.push({ key: 'asks:' + asks.map(s => s.id + s.pending).join(), quiet: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
-  // Only _tyler/ items that arrive while the app is open get a card (Builder, 2026-10-17); the ones already there, and the ones
+  // Only _tyler/ items that arrive while the app is open get a card; the ones already there, and the ones
   // he skips, wait quietly in the Notification Center. Running chats are robot heads in the panel (panel.mjs).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
   if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), quiet: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
@@ -298,7 +298,7 @@ function cardList(all) {
   // 733: only the welcome card can stay on the stack, and its x skips setup, so there is no snooze any more.
   return all ? cards : cards.filter(c => !c.quiet);
 }
-/* ---------- agent-working indicator and pets (phase 18; Builder's pet requests, 2026-10-17) ---------- */
+/* ---------- agent-working indicator and pets (phase 18; the pet requests) ---------- */
 // The top bar says when agents work or wait on you, in every focus, with Claude Code's spinner. Where a focus shows pets
 // (Settings, one set per focus), every chat on screen holds its agent's pet (petRows); pets left the top bar (O123). A chat's pet drags anywhere in it; the spot is kept per focus. A sheet is 8 x 9 frames of
 // 192 x 208: row 0 idle, 3 wave, 4 jump, 6 waiting, 7 running; each row's frame count is read from the sheet.
@@ -375,7 +375,7 @@ function renderModal() {
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'review', i: +b.dataset.i, back: m }));
   } else if (m.kind === 'review') {
     // D10-3: Save & Continue handles this item and moves on; Skip leaves it pending in _tyler/, takes its card off the stack
-    // (Builder, 2026-10-17: Skip never dismissed it) and moves on, closing after the last item
+    // (Skip once never dismissed it) and moves on, closing after the last item
     if (!S.reviews.length) return closeModal();
     const i = m.i = Math.min(m.i, S.reviews.length - 1), r = S.reviews[i];
     $('#mdlT').textContent = `${i + 1} of ${S.reviews.length} · ${r.proj}`;
@@ -426,7 +426,7 @@ mdl.addEventListener('close', () => {
 $('#mdlPrimary').onclick = () => { if (S.modal.kind === 'file') return devPrimary(S.modal.name); const id = S.modal.id; S.primary = () => {}; closeModal(); setFocus('chat'); focus(id); const t = $(`#chats .pane[data-id="${id}"] textarea`); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } };
 $('#rBell').onclick = () => openModal({ kind: 'center' });
 
-// action buttons answer a click: green for 5 s (Builder, 2026-10-14)
+// action buttons answer a click: green for 5 s
 // ponytail: a button whose footer re-renders on click (Run) is replaced, so only buttons that stay put show it
 addEventListener('click', e => { const b = e.target.closest('#mdlFoot [data-slot="button"], .acts [data-slot="button"], .ebar [data-slot="button"]'); if (!b) return; b.classList.add('done'); clearTimeout(b._done); b._done = setTimeout(() => b.classList.remove('done'), 5000); });
 
@@ -440,12 +440,12 @@ const showModal = HTMLDialogElement.prototype.showModal, modals = []; // in the 
 HTMLDialogElement.prototype.showModal = function () { showModal.call(this); modals.splice(modals.indexOf(this) >>> 0, 1); modals.push(this); raiseToasts(); };
 lifetime.signal.addEventListener('abort', () => { HTMLDialogElement.prototype.showModal = showModal; }); // F7: the next view patches its own
 document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElement) raiseToasts(); }, { capture: true, signal: lifetime.signal });
-// Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped; the rest
-// wait in History. The x stops it on the daemon, so every window and the phone agree (owner, 2026-10-25: a new window
+// Tabs (30 sessions once opened on every load): a live chat gets a tab while it is not stopped; the rest
+// wait in History. The x stops it on the daemon, so every window and the phone agree (before, a new window
 // reopened 9 chats closed in another). Before that, closed IDs lived in this window's localStorage: loadChat stops the
 // idle ones among them once, then forgets the list.
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
-// Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
+// Hide steps (one button hides the commands and thinking output): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
 $('#newBtn').onclick = () => newSession(lastAgent());
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
@@ -475,7 +475,7 @@ function startTurn(s, t, when) {
 function tree(nodes, depth, q, cur) {
   return nodes.map(n => n.kids ? `<button data-dir><span class="k">▾</span><span>${esc(n.name)}</span></button>${tree(n.kids, depth + 1, q, cur)}`.replace('<button data-dir', `<button data-dir style="padding-left:${6 + depth * 12}px"`) : (!q || n.name.toLowerCase().includes(q)) ? `<button data-file="${esc(n.name)}" style="padding-left:${6 + depth * 12}px" aria-current="${cur === n.name}"><span class="k"></span><span>${esc(n.name)}</span>${n.mod ? '<span class="mod" title="modified"></span>' : ''}</button>` : '').join('');
 }
-// Chat Focus files (Builder, 2026-10-19: "A drop down with the options for "current prject" "workspace" "needs you" "ideas"";
+// Chat Focus files (a drop-down of Current project, Workspace, Needs you and Ideas;
 // threat model row 23): real folders through the daemon's read-only list and read, a folder listed when first opened; files
 // open read-only (editing is Dev Focus). Current project is the shown chat's folder, else the main project.
 // ponytail: listings are cached until the panel is reopened or the scope changes; search filters only folders already open.
@@ -503,7 +503,7 @@ const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^#
 
 /* ---------- Mission Control ---------- */
 // workspace-hub's sections from fixtures. Only change from the hub: script buttons are grouped into
-// category tiles, each opening a modal (Builder 2026-10-14). Nothing runs; outputs are mock.
+// category tiles, each opening a modal. Nothing runs; outputs are mock.
 // one Catppuccin Mocha accent per word, stable, so a project or kind keeps its colour
 const CTP = ['#cba6f7', '#89b4fa', '#94e2d5', '#fab387', '#f5c2e7', '#a6e3a1', '#89dceb', '#f9e2af', '#b4befe', '#eba0ac'];
 // A top-row tile knows its level before its window is opened (a tile is a light that shows red while there is an
@@ -521,16 +521,16 @@ let lastArt = '';
 // M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
 // showing; renderMission writes only what changed, so an idle poll costs one local request.
 let lastOverview = '';
-// _tyler/ items a chat makes get their card when its turn ends (Builder, 2026-10-17); otherwise the queue is read at start.
+// _tyler/ items a chat makes get their card when its turn ends; otherwise the queue is read at start.
 let queueTimer = 0;
 // D4 / #14: the chip on a waiting item says who it waits on: the owner's own name from Settings, else "needs you".
 const needsLabel = () => settings.name ? 'needs ' + settings.name : 'needs you';
-// _tyler/ items newest first, or by project: the file name starts with it, <project>-<what>.md (Builder, 2026-10-19 #1).
+// _tyler/ items newest first, or by project: the file name starts with it, <project>-<what>.md.
 function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'project' ? 'project' : 'updated';
   S.reviews.sort(by === 'project' ? (a, b) => (a.name || a.proj).localeCompare(b.name || b.proj) : (a, b) => (b.updated || 0) - (a.updated || 0)); return by; }
 // Mission is short: script tiles, then one small card per section (title, a number, one line) that opens the
-// section in the modal window (Builder, 2026-10-17: "hard to navigate because its so long ... group everything so
-// that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
+// section in the modal window (the long page was hard to navigate, so each
+// section opens in a window). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
 const wins = {
@@ -538,8 +538,8 @@ const wins = {
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
   mnotes: { show: () => widgetOn('notifications'), title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
   mlaunch: { show: () => widgetOn('apps'), title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
-    // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
-    // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
+    // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (an app's or page's graphic
+    // or icon is its launch button). ponytail: the registry has no icon field yet.
     body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
   musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's plan windows as rows with the pace tick
@@ -578,7 +578,7 @@ function renderMission() {
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : ''));
   setHTML(mBody, ''
-    // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
+    // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had. Three columns fill the window; each list scrolls inside itself.
     + (lay ? '<div class="mrow" data-placed>' + placedCols().map(c => `<div class="mcol" data-col="${c.n}"${c.w ? ` data-w="${c.w}"` : ''}>${c.mine.map(placedHtml).join('')}</div>`).join('') + '</div>'
       : '<div class="mrow">' + (widgetOn('waiting') ? NEEDS : '')
     + '<div class="mcol">' + byFile([['primary', '<div data-card="mprimary"></div>'], ['usage', winPanel('musage')]]) + '</div>'
@@ -589,7 +589,7 @@ function renderMission() {
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
   const sort = $('#fMission [data-sort]'); // only where Waiting on you is drawn (finding 3a)
   if (sort) { sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); }; }
-  // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
+  // New idea on the page itself, where workspace-hub had it (it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
   $('#fMission').querySelectorAll('[data-sprint]').forEach(b => b.onclick = () => openModal({ kind: 'sprint', sec: b.dataset.sprint || undefined }));
@@ -658,7 +658,7 @@ const toggleFiles = () => { S.files = !S.files; $('#files').hidden = !S.files; p
 const toggleSplit = () => { S.split = !S.split; if (S.split && S.open.length < 2) { const s = S.sessions.findLast(x => !x.hidden && !S.open.includes(x.id)); if (s) S.open.push(s.id); } pressed('split', S.split); renderTabs(); renderChats(); };
 const TOOLS = { files: toggleFiles, split: toggleSplit, term: () => toggleTerm(), search: () => { if (!S.files) toggleFiles(); $('#fileSearch').focus(); } };
 addEventListener('click', e => { const b = e.target.closest?.('[data-tool]'); if (b && TOOLS[b.dataset.tool]) TOOLS[b.dataset.tool](); });
-// One shared shell; each focus remembers whether it shows it and how (Builder 2026-10-14):
+// One shared shell; each focus remembers whether it shows it and how:
 // Dev opens it as a drawer, Chat and Mission as a pop-out. dFloat flips the mode for that focus.
 // Dev Focus docks it only: the editor is a separate view drawn above this page, so a floating terminal went behind it.
 function showTerm() {
@@ -715,7 +715,7 @@ function placeDev() {
   if (k && k.right > x && k.left < right && k.bottom > y && k.top < r.bottom) {
     if ((right - k.right) * (r.bottom - y) >= (right - x) * (r.bottom - k.bottom)) x = k.right + 8; else y = k.bottom + 8;
   }
-  // D14 (Builder, 2026-10-28: "It should never be hidden behind any panel"): the view draws above the page, so it keeps clear of a
+  // D14 (never hidden behind any panel): the view draws above the page, so it keeps clear of a
   // floating terminal: the editor takes the biggest of the room left of it, right of it, above it or below it.
   let bottom = r.bottom;
   const d = $('#dock'), t = !d.hidden && d.classList.contains('float') ? d.getBoundingClientRect() : null; // $: placeDev runs before const dock
@@ -726,7 +726,7 @@ function placeDev() {
   if (visible) devRect = { x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) };
   return window.p9.devView(visible ? { visible, ...devRect } : { visible });
 }
-// Builder, 2026-11-02 ("the editor being on top of everything"): a top-bar menu (machines, theme, history) opened over the view
+// The editor sits on top of everything, so a top-bar menu (machines, theme, history) opened over the view
 // would be under it. While one is open over it, a still of the editor (p9:dev-still) takes its place and the view steps aside;
 // closing the menu brings the live editor back. The still costs one capture per menu opened, only when the menu is over the editor.
 let devRect = null, devFrozen = false, devFreezing = 0;
@@ -771,7 +771,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Backquote' && e.ctrlKey) { e.preventDefault(); toggleTerm(); }
 });
 $('#term').innerHTML = M.terminal.map(l => `<span class="${l.startsWith('user@') ? 'cmd' : l.startsWith('✔') ? 'ok' : ''}">${esc(l)}</span>`).join('\n') + '<span class="caret"></span>';
-// Live, the dock is a real shell (Builder, 2026-10-18: "1. Yes"): one of P9's own tmux sessions, the same ones the phone's
+// Live, the dock is a real shell: one of P9's own tmux sessions, the same ones the phone's
 // Terminal tab lists. terminal.mjs is the phone's code; main holds the socket and relays its frames to this stand-in.
 let relay = null;
 function relaySocket(id) {
@@ -830,7 +830,7 @@ if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TM
 const dock = $('#dock');
 dragBar($('#grip'), { axis: 'y', dir: -1, get: () => dock.offsetHeight, set: px => { dock.style.height = px + 'px'; }, min: 120, max: () => innerHeight * .7, signal: lifetime.signal });
 $('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
-// Floating terminal (Builder, 2026-10-17: "wigs out on click and drag to move, highlights all the stuff below it, and wont resize").
+// Floating terminal (dragging it jumped and selected the page below it, and it would not resize).
 // left/top are relative to the dock's parent, not the viewport (the jump); pointer capture and preventDefault stop the selection;
 // CSS resize: both gives the corner handle.
 dock.querySelector('.tb').onpointerdown = e => {
@@ -861,7 +861,7 @@ $('#sessionMode').onclick = () => {
 };
 $('#stopGo').onclick = () => { if (liveChat.on) { S.sessions.filter(s => s.live && s.state === 'running').forEach(s => { s.state = 'stopping'; }); liveChat.call('stopAll'); } else S.sessions.forEach(s => { if (s.state === 'running') { s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped by Stop All at ' + new Date().toTimeString().slice(0,5) + '.'}); } }); $('#stopDlg').close(); renderTabs(); renderChats(); };
 /* ---------- walkthrough (first login, then Ctrl K) ---------- */
-// The guide pet is Chat's system pet at Settings' largest size, 128 px (Builder, 2026-10-19); without one the bubble is text only. A step whose
+// The guide pet is Chat's system pet at Settings' largest size, 128 px; without one the bubble is text only. A step whose
 // element is hidden or empty is shown in the middle of the window. Ends back in the focus it started from.
 function walkthrough(i = 0, from = S.focus) {
   document.querySelector('.walk-at')?.classList.remove('walk-at'); $('#walk')?.remove();
@@ -959,7 +959,7 @@ $('.shell').removeAttribute('data-pending');
 
 /* ---------- start (O122: P9 opens in Chat, or the first view still on if Chat is off; the landing page is gone) ---------- */
 // The walkthrough runs once, on the first start, in Chat and back to the focus it began in, after the setup wizard while a
-// check fails (Builder approved it in _tyler/p9-walkthrough-review.md: "A."; GitHub issue #4 item 2). Ctrl K brings it back.
+// check fails (approved in _tyler/p9-walkthrough-review.md; GitHub issue #4 item 2). Ctrl K brings it back.
 // It began when the landing page first closed; now it begins with the window. Test runs turn it off (P9_FIRST_RUN=off,
 // scripts/with-tmp.mjs): its dialogs would cover the shell they click.
 let started = false;
@@ -973,7 +973,7 @@ function firstStart() {
 $('#brandBtn').onclick = () => setFocus('chat');
 
 /* ---------- first-run setup wizard (v0.1.3 C1; threat model rows 17, 31, 32) ---------- */
-// Seven screens (Builder approved them, 2026-10-22). It opens itself once, on the first start, before the walkthrough.
+// Seven screens (approved before they shipped). It opens itself once, on the first start, before the walkthrough.
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
@@ -1085,7 +1085,7 @@ function wizRender() {
   } else if (key === 'you') {
     title = 'You';
     body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">Cards waiting on you put this name after "needs". Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
-      // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
+      // Issue #4 item 4, option C: Skipper ships as the default; petdex.dev has more.
       + row('Pets', 'Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.', '', btn('pets', 'Open Settings → Pets'));
   } else {
     title = Object.values(d).includes(false) ? 'Almost there' : 'You are set';
@@ -1221,7 +1221,7 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
   }
   return r;
 };
-// Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
+// A refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
 // 2026-10-24: one refused because a turn runs is queued instead, and shown and kept as queued.
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
@@ -1266,7 +1266,7 @@ addEventListener('click', async e => {
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches; // reduced motion: the move shows without its sky
 const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
 // The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
-// is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
+// is frozen (the same prompt comes first); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
 let fxFiles = null; // the chat whose move sends its folder first, for the uploading words
 $('#moveCancel').onclick = () => { $('#moveCancel').hidden = true; $('#moveWhat').textContent = 'Cancelling…'; window.p9.cancelMove(FX.id).catch(() => {}); };
 window.p9?.onMove?.(onMove);
@@ -1287,7 +1287,7 @@ function onServerUpdate(u) {
     'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
     'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],
     'app-older': ['The remote runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
-    // A connection that dropped on its own (owner, 2026-11-02): a notification. Disconnecting, or quitting with a Temporary
+    // A connection that dropped on its own: a notification. Disconnecting, or quitting with a Temporary
     // remote, closes it on purpose and says nothing; the remote stays in the machine menu either way.
     dropped: ['Lost the connection to ' + u.host + ' for 30 seconds. P9 keeps trying to connect again.', 'bad', true],
     unsupported: [on + ' cannot update itself (it is not a source checkout run by systemd). It stays on ' + u.server + '.', 'bad', true],
@@ -1337,7 +1337,7 @@ async function renderServerMenu() {
   }, () => {}));
   // U9: the same switch as This computer above, said plainly.
   if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); window.p9.server(null); };
-  // Builder, 2026-11-02: the after-connect window again with only the agents question (shell-start.ts), now rather than at the next poll.
+  // The after-connect window again with only the agents question (shell-start.ts), now rather than at the next poll.
   if ($('#serverAgents')) $('#serverAgents').onclick = async () => { serverPop.close(); await window.p9.remoteAgents(null).catch(() => {}); dispatchEvent(new Event('p9:status-now')); };
   $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }
@@ -1345,7 +1345,7 @@ if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat'); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
-// bell with test data (Builder, 2026-10-18); live notices are P9's own alerts.
+// bell with test data; live notices are P9's own alerts.
 if (!window.p9?.mission) M.notifications.forEach((n, i) => setTimeout(() => toast({ ...n }), 2500 + i * 3000));
 
 // Anymouse: DUWOP's idea / bug / gripe box. The desktop main process sends it; the daemon files it or main opens

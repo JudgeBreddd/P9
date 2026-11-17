@@ -43,7 +43,7 @@ function renderTree() {
   outer.$('#tree').querySelectorAll('[data-file]').forEach(b => b.onclick = () => outer.openModal({ kind: 'file', name: b.dataset.file }));
 }
 // Send files (item 23; main's p9:xfer, desktop/xfer.mjs): the files panel's folder goes to the same folder on the server.
-// Main plans and keeps the plan; this asks what the plan cannot settle alone (Builder, 2026-10-27: one choice for the whole
+// Main plans and keeps the plan; this asks what the plan cannot settle alone (one choice for the whole
 // list; a delete is asked; a Syncthing folder warns; a limit names its Setting), then shows the send. A plan with nothing
 // to ask sends at once: one button press.
 const XFER_SETTINGS = { fileMiB: ['Largest file to send', 'MiB', 65536], files: ['Most files in one send', 'files', 200000], sendGiB: ['Most data in one send', 'GiB', 1024] }; // desktop/xfer.mjs XFER_LIMITS

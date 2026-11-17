@@ -2,7 +2,7 @@ import { dragBar } from './helpers.mjs';
 // The side panel (specs/side-panel.md): one resizable column beside the focus panes, one slot showing at a time.
 //   side.open(slot, { title, render(bodyEl), onClose(reason), mode, focuses, defaultWidth(stageWidth) })
 //   side.close(slot) · side.toggle(slot, opts?) · side.current() · side.onResize(fn) · side.focus(name) · side.swap()
-// Width is one number per focus in localStorage['eh-side:<focus>']; min 280; the pane beside it keeps 480 (Builder, 2026-10-27).
+// Width is one number per focus in localStorage['eh-side:<focus>']; min 280; the pane beside it keeps 480.
 // The panel sits on the right or the left (the Dev Focus swap), kept in localStorage['eh-side-edge:<focus>'].
 // A slot that lists focuses shows only in them: leaving one hides it without onClose, coming back shows it again.
 // when(), if given, hides it the same way while it returns false; side.refresh() reads it again (the artifact's chat, O28).

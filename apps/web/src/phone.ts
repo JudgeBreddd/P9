@@ -206,7 +206,7 @@ async function readChat() {
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
   } catch { one('#events').innerHTML = one('#chatList').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
 }
-// Most recently used first, in the daemon's order (owner, 2026-10-25): the open chats, then History, the stopped ones a
+// Most recently used first, in the daemon's order: the open chats, then History, the stopped ones a
 // message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
 // apart. The chat shown stays picked.
 function fillPicker() {
@@ -846,7 +846,7 @@ one('#sheetBody').addEventListener('click', async (event) => {
     await loadChat(); openChat(String(result.body.conversation));
   }
 });
-// Mode and Model for the picked chat (Builder, 2026-10-18: the phone could change neither; threat model row 15). An open
+// Mode and Model for the picked chat (the phone could change neither; threat model row 15). An open
 // chat starts at "as set" and sends nothing until picked, so a Plan picked on the desktop stays; the label shows the mode
 // the daemon last set (its 'mode' event). A chat made here starts in this phone's last pick for its agent. P6 (row 25):
 // all of the agent's modes, the two loosened ones behind the desktop's red warning. Model lists the agent's own models
@@ -1459,8 +1459,8 @@ const checklists: Record<string, unknown> = {};
 // O67: the closed row's line, as a folder row has its count: what the list holds, once it was read.
 const checklistLine = (r: unknown) => { const got = r as { error?: string; files?: unknown[] } | undefined; return !got ? '…' : got.error ? 'not read' : !got.files?.length ? 'nothing to review' : got.files.length === 1 ? '1 file' : got.files.length + ' files'; };
 const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
-// Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
-// its in a window i can open"). Callers escape title and line.
+// Each section is a small tile that opens it as a full-screen window (each section
+// opens in a window of its own). Callers escape title and line.
 const win = (id: string, title: string, count: number | string, line: string, body: string, bad = false) => {
   // Rows needing attention (a red one, or something waiting) lead the list; a zero count is drawn muted (spec §6).
   const attn = bad || (id === 'queue' && Number(count) > 0), zero = /^(0( .*)?)?$/.test(String(count));
@@ -1614,7 +1614,7 @@ async function loadMission(cached = false) {
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
       const quick = space.quick_note ? [`<div class="tile-row" data-qn="${escape(JSON.stringify(space.quick_note))}">${quickNoteHtml(escape, space.quick_note, quickTyped[space.quick_note.root + '/' + space.quick_note.path])}</div>`] : [];
-      // What the section shows comes first and its buttons after them (Builder, 2026-10-31: actions under the information).
+      // What the section shows comes first and its buttons after them (actions under the information).
       // The section's order field (the desktop's too) moves these; the text is not a row, so it is not counted.
       const parts: Record<string, string[]> = { text, quick_note: quick, notes: folder, logs: space.logs.map((log) => row(escape(log.title), lazy({ name: log.id }))), data: tiles, cards, links: webLinks,
         folders: lists, checklists: checks, refs, widgets: (space.widgets ?? []).map(widgetRow), buttons: sprint ? [] : groups.get(space.id) ?? [] };
@@ -1924,7 +1924,7 @@ one('#mission').addEventListener('submit', async (event) => {
     const item = mission.scripts[Number(form.dataset.run)];
     if (item.confirm && !confirm(`Run "${item.title}"?`)) return;
     const output = form.nextElementSibling as HTMLElement; output.hidden = false; output.textContent = '';
-    // Copy (Builder, 2026-10-18: "Yes" to phone Copy): a plain-text write from this tap only; the page never reads the clipboard (threat model row 19).
+    // Copy (approved for the phone): a plain-text write from this tap only; the page never reads the clipboard (threat model row 19).
     const copy = output.nextElementSibling as HTMLButtonElement; copy.hidden = false; copy.textContent = 'Copy';
     copy.onclick = () => navigator.clipboard.writeText(output.textContent ?? '').then(() => 'Copied', () => 'Copy failed').then((said) => { copy.textContent = said; });
     const args = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
@@ -2134,7 +2134,7 @@ one('#sheetBody').addEventListener('click', (event) => {
   else if (button.dataset.file === 'preview') preview(!!one<HTMLElement>('#rendered').hidden); else discard();
   sheet.close();
 });
-// A workspace image (rows 23/26/27 adds; the owner, 2026-10-29: as on the desktop): read-only, through GET /files/image under the
+// A workspace image (rows 23/26/27 adds; as on the desktop): read-only, through GET /files/image under the
 // phone's own root, with the desktop's words and check (helpers.mjs). No editor, no Save, no file menu.
 function showImage(on: boolean) {
   const view = one<HTMLElement>('#imageView'), file = one<HTMLElement>('#fileView');

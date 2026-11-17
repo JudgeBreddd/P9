@@ -40,7 +40,7 @@ function wirePetSettings() {
   outer.$('#setPetSize').onchange = e => setPet({ size: +e.target.value });
   outer.$('#setPetSize').oninput = e => { e.target.nextElementSibling.textContent = e.target.value + 'px'; };
   outer.$('#petReset').onclick = () => { for (const k in outer.petSpots) delete outer.petSpots[k]; localStorage.removeItem('p9-pet-spots'); setPet({ top: null, pane: null }); };
-  // Builder, 2026-10-19: copy this focus's three pet picks to every focus; show, size and positions stay per focus.
+  // Copy this focus's three pet picks to every focus; show, size and positions stay per focus.
   outer.$('#petAll').onclick = () => saveSettings({ ...outer.settings, pet: Object.fromEntries(Object.entries(outer.settings.pet).map(([m, o]) => [m, { ...o, ...Object.fromEntries(outer.PET_ROLES.map(r => [r, outer.settings.pet[mode][r]])) }])) });
   const refresh = async () => { outer.pets = await window.p9.listPets().catch(() => outer.pets); renderSettings(); };
   const addWith = add => async () => {

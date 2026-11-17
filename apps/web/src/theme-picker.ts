@@ -20,7 +20,7 @@ export function shareLook(signal: AbortSignal) {
 }
 
 // The picker is DUWOP's Appearance card (@duwop/appearance, appearance.tsx) without React: theme cards painted in
-// their own theme, AMOLED, font and effects (Builder, 2026-10-19: "cards + all").
+// their own theme, AMOLED, font and effects.
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
 };

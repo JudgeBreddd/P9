@@ -102,7 +102,7 @@ dialog[open]{animation:pop .18s ease}
 
 /* ---- Agent identity (shared by both apps) ---- */
 .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--muted-foreground)}
-.dot[data-agent="claude"]{background:#d97757}  /* Builder 2026-10-19: the agent's colour (Anthropic orange, Codex blue), whatever the look */
+.dot[data-agent="claude"]{background:#d97757}  /* The agent's colour (Anthropic orange, Codex blue), whatever the look */
 .dot[data-agent="codex"]{background:#3b82f6}
 .dot[data-live]{box-shadow:0 0 0 3px color-mix(in oklch,currentColor 0%,transparent),0 0 10px 1px color-mix(in oklch,var(--glow) 60%,transparent)}
 .attn{width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 2px color-mix(in oklch,var(--warn) 30%,transparent);animation:breathe 2s ease-in-out infinite}

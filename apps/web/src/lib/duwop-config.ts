@@ -23,7 +23,7 @@ export const duwopConfig: {
 } = {
   storageKey: "p9-look",
   defaultLook: { theme: "event-horizon-prime", effects: ["underglow", "motion", "shine"], amoled: true, font: "spacegrotesk" },
-  themes: "all",  // Builder, 2026-10-19: "add the rest of the duwop themes"
+  themes: "all",  // every DUWOP theme, not a subset
   extraThemes: [...commandCenter, ...gods, ...aphrodite, ...eventHorizonAzure],
   loadFonts: false,
 };
