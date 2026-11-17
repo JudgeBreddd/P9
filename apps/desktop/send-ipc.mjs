@@ -10,7 +10,7 @@ export function sendIpc(outer) {
   // Its progress goes to the window on p9:move (specs/move-progress-events.md, threat row 3): phase, percent, bytes and the
   // host main chose, never a path or a credential. Only for drawing; the ledger events stay the record.
   // With a Send files plan (item 23): id, plan id, choice, deleteToo, as the page answered the prompt for the chat's folder. The
-  // folder goes over first, a Syncthing folder's not at all (Builder, 2026-10-27: "Keep today's wait"). Limits refuse before the freeze.
+  // folder goes over first, a Syncthing folder's not at all (today's wait stays). Limits refuse before the freeze.
   const sending = new Map();
   let xferPlan = null, xferBusy = false; // Send files' plan and its one-at-a-time, below; a move with files takes them too
   ipcMain.handle('p9:send-to-server', async (event, ...args) => {
@@ -60,7 +60,7 @@ export function sendIpc(outer) {
   const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
   const inWorkspace = f => typeof f === 'string' && f.length <= 4096 && XFER_FOLDER.test(f) && !f.split('/').some(p => p === '.' || p === '..');
   const fullPath = f => typeof f === 'string' && f.length <= 4096 && !f.includes('\0') && isFull(f);
-  // U4 (Builder, 2026-11-02): the remote folder picker for a chat started outside the workspace walks the remote over a tunnel
+  // U4: the remote folder picker for a chat started outside the workspace walks the remote over a tunnel
   // of its own ('folders' and 'list', as the window's /files/folders and /files/list). Kept open between clicks, closed after
   // a minute without one. ponytail: one picker tunnel; a second window's walk shares it.
   let pickLink = null, pickTimer;
@@ -107,7 +107,7 @@ export function sendIpc(outer) {
       if (!work) return { error: 'choice', message: 'Pick how to settle the files that differ.' };
       const limit = overLimit(work, outer.settings.xfer, p.truncated);
       if (limit) return limit;
-      xferPlan = null; // used once: sending again plans again (Builder, 2026-10-27: that is the resync)
+      xferPlan = null; // used once: sending again plans again (that is the resync)
       const r = await runPlan({ local: outer.localState, host, userData: app.getPath('userData'), plan: p, work, ssh: outer.sshCommand,
         onProgress: progress => { if (!outer.window.isDestroyed()) outer.window.webContents.send('p9:xfer', { id: a, ...progress }); } });
       return { ...r, sent: r.sent?.length ?? 0, received: r.received?.length ?? 0, deletedOnServer: r.deletedOnServer?.length ?? 0, deletedHere: r.deletedHere?.length ?? 0,

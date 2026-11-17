@@ -127,8 +127,8 @@ export function slimScript(version, admin = false, force = false) {
 export const SLIM = ['apps/server', 'apps/desktop/tools.sh', 'apps/desktop/editor-host.mjs', 'scripts/install.sh', 'scripts/background.sh',
   'scripts/deps.mjs', 'scripts/install-editor.mjs', 'scripts/agents.mjs', 'node_modules/@agentclientprotocol', 'node_modules/@openai/codex',
   'node_modules/@anthropic-ai/claude-agent-sdk', 'packages', 'package.json', 'agents.json', 'LICENSE', 'NOTICES.md'];
-// Inside them, only what runs: no package's README, changelog or other notes, type declarations or source maps (the owner,
-// 2026-11-02: the slim P9 carries only what chat and the ssh editor need). Licence and notice files stay.
+// Inside them, only what runs: no package's README, changelog or other notes, type declarations or source maps (the slim
+// P9 carries only what chat and the ssh editor need). Licence and notice files stay.
 const NOT_RUN = /(^|\/)(readme|changelog|history|contributing)[^/]*$|\.(d\.[cm]?ts|map)$/i;
 const DOC = /\.(md|markdown)$/i, LEGAL = /(^|\/)(licen[cs]e|notice|copying)[^/]*$/i;
 export function slimArchive(folder) {

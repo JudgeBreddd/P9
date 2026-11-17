@@ -54,7 +54,7 @@ export function devIpc(outer) {
     if (config.server) return { ok: false, error: 'server-mode' };
     return openInCode({ workspace: config.workspace, name: input.name, line: input.line, reason: input.reason });
   });
-  // p9 edit / p9 diff (threat model row 14). Anything running as Builder can start a second instance, so this is the boundary:
+  // p9 edit / p9 diff (threat model row 14). Anything running under the same user account can start a second instance, so this is the boundary:
   // exact shape, absolute paths, real path a regular file inside the workspace's real path. It only opens; saving stays guarded.
   const checkOpen = async data => {
     if (!outer.state || !data || typeof data !== 'object' || Array.isArray(data)) return null;

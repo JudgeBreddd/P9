@@ -46,7 +46,7 @@ export const GUIDE_URL = 'https://github.com/' + REPO + '/blob/main/docs/guide.m
 export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance', 'mission-control-files', 'buttons-apps-and-pages', 'security-settings', 'remote-connect-send-to-remote-and-send-files', 'send-files']);
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
 export const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
-// Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
+// Settings → Pets: where pets come from (GitHub issue #4 follow-up: the petdex.dev text needs a link).
 export const PETDEX_URL = 'https://petdex.dev';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
@@ -55,7 +55,7 @@ export { FILE_PROTECTION_RISK }; // the warning's words, in protocol so the phon
 // The Settings page's UI settings (threat model row 15): one fixed shape, checked here, kept in the profile folder.
 // pet: each focus mode's own pet settings: shown or not, size in pixels, a petdex pet per agent (system when the agent has
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
-// Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
+// Skipper is the System pet a new profile starts with (the pet that ships as the system default).
 const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
 // name: what cards waiting on the user call them ("needs <name>"; '' leaves the name out).
 // xfer: Send files' limits (apps/desktop/xfer.mjs), each a whole number from 1 to its ceiling.
@@ -216,7 +216,7 @@ export async function createDesktop({ state, open } = {}) {
   const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
-  // Builder, 2026-11-02: the agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
+  // The agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
   // after connecting; the install there sends none, and fetchAgents below asks that daemon for these once connected.
   // agentsAgain: the machine menu's AI agents item asks again on this remote (this launch only).
   const pickable = list => Array.isArray(list) && list.length <= 2 && new Set(list).size === list.length && list.every(a => a === 'claude' || a === 'codex');
@@ -248,7 +248,7 @@ export async function createDesktop({ state, open } = {}) {
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {}, updateWindow = null;
-  // W1 (Builder, 2026-11-07: ask first, one rule for every build kind): a dialog naming both versions before this app
+  // W1 (ask first, one rule for every build kind): a dialog naming both versions before this app
   // changes the server's P9. Not now leaves it as it is, and that host and pair are not asked again until the next launch.
   const updateDeclined = new Map();
   const askUpdate = async ({ host, server: there, app: here }) => {
@@ -322,7 +322,7 @@ export async function createDesktop({ state, open } = {}) {
       setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
     }
   };
-  // A connection that dropped on its own and is still down 30 s later is a notification (owner, 2026-11-02); a shorter blip
+  // A connection that dropped on its own and is still down 30 s later is a notification; a shorter blip
   // stays quiet (D20). A disconnect, a switch or a quit is on purpose and says nothing.
   const dropNote = attempt => { const host = serverHost; setTimeout(() => { if (attempt === serverTry && !server && !leaving.signal.aborted) tellUpdate({ phase: 'dropped', host }); }, 30000); };
   const useServer = async host => {
@@ -480,7 +480,7 @@ export async function createDesktop({ state, open } = {}) {
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
   window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && event.url !== FRAME_URL) event.preventDefault(); }); // item 19: only the artifact frame's page
   window.webContents.on('will-attach-webview', event => event.preventDefault());
-  // Freeze record (Builder, 2026-10-20: the window freezes "and i just need to close and reopen the app"): when the window
+  // Freeze record (the window froze until the app was closed and reopened): when the window
   // stops answering, the JavaScript it is stuck in goes to p9-freeze.log in the profile folder, then how long it lasted.
   // "no stack" means it was stuck outside JavaScript (layout, paint, an IPC wait). Kept as daemon.log is (trimLog): over 5 MB
   // it goes to p9-freeze.log.1 and starts again, checked before each line; the lines are written one at a time, in order.
@@ -507,7 +507,7 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   app.on('before-quit', (event) => {
-    // Server mode: quitting this window never stops the server's chats (the owner, 2026-10-26); the phone may be in one.
+    // Server mode: quitting this window never stops the server's chats; the phone may be in one.
     if (persistent || stoppingBeforeQuit || !state || serverHost) return;
     event.preventDefault();
     stoppingBeforeQuit = true;
@@ -785,7 +785,7 @@ export async function createDesktop({ state, open } = {}) {
     try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : ['startSprint', 'runSprintScript'].includes(action) ? SPRINT_START_MS : undefined); }
     catch (error) { const reply = failedReply(error); return { ...reply, body: { ...reply.body, ...where } }; }
   });
-  // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
+  // Terminal dock (a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
   // holds. One socket at a time; frames pass through as they are (the page stamps keys with the daemon's leases, like the
   // phone) and the daemon checks every one. Each socket has a serial, so the page can tell a new socket's frames from an old one's.
@@ -951,7 +951,7 @@ export async function createDesktop({ state, open } = {}) {
     probes.set(host, { at: Date.now(), state });
     return state;
   });
-  // Builder, 2026-11-02: the agents for this window's remote (a list of claude and codex, maybe empty), stored and fetched now;
+  // The agents for this window's remote (a list of claude and codex, maybe empty), stored and fetched now;
   // null asks again (the machine menu's AI agents). Picking fewer removes nothing already there.
   ipcMain.handle('p9:remote-agents', async (event, ...args) => {
     const [names] = args;
@@ -1112,7 +1112,7 @@ export async function createDesktop({ state, open } = {}) {
       const host = serverHost ? await serverEditor() : await startHost();
       const origin = 'http://127.0.0.1:' + host.port;
       // Extension pages (webviews: a README, an image preview) get their own origin, p9://webview, so their scripts can't reach
-      // window.p9dev (threat model row 5; Builder, 2026-10-19: "photos ... blocked"). VS Code injects an inline script into each
+      // window.p9dev (threat model row 5; images were blocked). VS Code injects an inline script into each
       // page, so inline scripts run there; the page's own CSP narrows that, and index-*.html carries its own hash-only CSP.
       const isWebview = name => /^\/assets\/(index-[^/]+\.html|fake-[^/]+\.html|service-worker-[^/]+\.js)$/.test(name);
       sites.webview = { files: new Map([...devFiles].filter(([name]) => isWebview(name))), csp: "default-src 'none'; script-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; "
@@ -1250,7 +1250,7 @@ export async function createDesktop({ state, open } = {}) {
         || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))) throw new Error('ipc-sender-refused');
     if (!b.visible) { devView?.setVisible(false); return { ok: true }; }
     const shown = devView?.getVisible();
-    // D11 (Builder, 2026-10-28: the editor side "flash white really fast" while sliding, only when not connected): a failed start
+    // D11 (the editor side flashed white while sliding, only when not connected): a failed start
     // left dev unset, so each placement (every frame of a drag) built a new view. Shown and failed, a placement only moves it; coming
     // back to Dev Focus tries again, as the page says.
     if (!(shown && devFailed)) openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
@@ -1267,7 +1267,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!shown) devView.webContents.focus();
     return { ok: true };
   });
-  // Builder, 2026-11-02 ("the editor being on top of everything"): the view draws above the page, so a top-bar menu opened over it
+  // The view draws above the page, so a top-bar menu opened over it
   // would be under it. The shell asks for a still of the editor, shows it in the view's place, then hides the view while the menu
   // is open. Only the shell may ask; the still goes only to it.
   ipcMain.handle('p9:dev-still', async (event, ...args) => {

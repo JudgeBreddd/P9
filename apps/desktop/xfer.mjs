@@ -11,7 +11,7 @@ import { connectServer } from './remote.mjs';
 
 const LONG = 120_000; // a 4 MiB piece over a slow link, or a daemon hashing a big folder
 const BATCH = 2000;   // files a commit: keeps its body under the daemon's 12 MiB limit
-// The limits (Builder, 2026-10-27: each a Setting, and a refusal names it): defaults and the largest each Setting allows
+// The limits (each a Setting, and a refusal names it): defaults and the largest each Setting allows
 // (the server's ceilings, apps/server/xfer.mjs MAX_FILE and MAX_COUNT).
 export const XFER_LIMITS = Object.freeze({
   fileMiB: { label: 'Largest file to send', unit: 'MiB', default: 512, max: 64 * 1024 },
@@ -129,7 +129,7 @@ export async function open({ local, host, ssh, runtime = process.env.XDG_RUNTIME
 }
 
 export const isFull = (folder) => path.posix.isAbsolute(folder) || path.win32.isAbsolute(folder);
-// U4 (Builder, 2026-11-02: a chat started outside the workspace can Send to remote): its folder, a full path here, goes to
+// U4 (a chat started outside the workspace can Send to remote): its folder, a full path here, goes to
 // the same full path on the remote when that folder is there and the remote may use it; otherwise the answer is
 // pick-folder, the window's remote folder picker opens, and the plan is made again with to, the folder picked there (a full
 // path, or a remote workspace folder, '' its top). The files go by the same rules as a workspace chat's; their paths are
