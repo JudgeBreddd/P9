@@ -1,4 +1,4 @@
-// O123: the top-bar indicators go; the chat bar on the left shows the state instead: a working chat a spinning ring,
+// O123: the pets leave the top bar; the chat bar on the left shows each chat's state: a working chat a spinning ring,
 // an idle one a green circle, a blocked one a red hand. Real Electron, the real daemon and the fake agent
 // ("slow" works until cancelled, "permission" waits on the user). Also: no pet sheet loads at startup while pets are off.
 import test from 'node:test';

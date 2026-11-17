@@ -359,7 +359,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
 
   const ev = process.env.P9_EVIDENCE, shot = async (name) => { if (ev) await page.screenshot({ path: path.join(ev, name) }); else if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name.replace(/\.png$/, '') + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); } };
   const settingsNow = () => page.evaluate(() => window.p9.getSettings());
-  // O123 (no indicators in the top bar): no pet in the top bar, ever; the spinner and its words stay.
+  // O123: no pet in the top bar, ever; the spinner and its words stay.
   const topPets = () => page.evaluate(() => document.querySelectorAll('#agentInd canvas, #indPets').length);
   const spinnerShows = async (text, what) => { assert.equal(await topPets(), 0, what + ': no top-bar pet'); assert.equal(await page.locator('#indGlyph').isVisible(), true, what + ': spinner'); assert.equal(await page.locator('#indText').innerText(), text, what); };
   const drawn = (sel) => page.waitForFunction((sel) => { const c = [...document.querySelectorAll(sel)]; return c.length && c.every((cv) => cv.getContext('2d').getImageData(96, 104, 1, 1).data[3] > 0); }, sel);
