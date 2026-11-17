@@ -370,7 +370,10 @@ test('replay after a restart never records a turn twice: in process, and through
   const call = (one, route, method = 'GET', body) => http({ socketPath: path.join(one.state, 'daemon.sock'), route, method,
     headers: { ...authenticated(one.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
   const telemetryFile = path.join(instance.directory, '.local', 'state', 'p9-foundation', 'telemetry.db');
-  const waitRows = async (n) => { for (let i = 0; i < 100; i++) { if (existsSync(telemetryFile) && rows(telemetryFile).length >= n) return rows(telemetryFile); await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error('rows: ' + (existsSync(telemetryFile) ? rows(telemetryFile).length : 'no file ' + (await readdir(instance.directory, { recursive: true })).filter((name) => name.includes('p9')).join(','))); };
+  // The daemon's writer creates telemetry.db before it creates the turns table, so the file can exist for a moment with no table: that is
+  // 'not ready yet', the same as no file. Any other error still fails the test at once.
+  const readRows = () => { try { return rows(telemetryFile); } catch (error) { if (/no such table: turns/.test(error.message)) return null; throw error; } };
+  const waitRows = async (n) => { for (let i = 0; i < 100; i++) { const found = existsSync(telemetryFile) ? readRows() : null; if (found && found.length >= n) return found; await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error('rows: ' + (existsSync(telemetryFile) ? rows(telemetryFile).length : 'no file ' + (await readdir(instance.directory, { recursive: true })).filter((name) => name.includes('p9')).join(','))); };
   const id = JSON.parse((await call(instance, '/chat', 'POST', { provider: 'claude' })).text).conversation;
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' })).status, 202);
   const before = await waitRows(1);
