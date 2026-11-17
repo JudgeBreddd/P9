@@ -637,6 +637,8 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 - **Where P9 never puts the key.** The page, the phone, the ledger, a transcript event, the
   daemon's log, telemetry, the memory engine, Send to remote, an export. A profile chat
   cannot be sent to a remote: it is refused with the reason, because the key does not travel.
+  Nor is it handed off to a terminal (refused with the reason): the `claude` typed there runs
+  on this computer's Claude sign-in, so the chat would go on outside its profile.
   This is about what P9 writes, not what the agent may print: if a command in that chat
   prints its environment (`env`), the key is in that command's output, and the output is
   part of the chat like any other, so it reaches the ledger, the window, the phone and the
