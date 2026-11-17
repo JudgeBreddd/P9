@@ -1117,7 +1117,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // A message that replaces one still waiting is held with it, whatever its path would have been (FIX1: a steer would
   // send the correction now and leave the old wording to go later). A foreign sender's ID, or one no longer waiting, is not a replace.
   const waitingReplace = (session, body) => body.replaces !== undefined && [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
-  function hold(id, session, body, images, when) {
+  function hold(id, session, body, images, when, repicks = false) {
     if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     const item = { id: randomUUID(), body, images, allowed: captureAuthority() };
@@ -1129,7 +1129,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       list.splice(list.indexOf(old), 1);
       unheld(id, [old], 'replaced');
     }
-    const mode = old ? (oldQueued ? 'queue' : 'steer') : when;
+    // #257 FIX1: a replacement that picks another model or effort waits for the turn's end even when the one it replaces
+    // was a steer, since a steer would drop the pick.
+    const mode = old ? (oldQueued || repicks ? 'queue' : 'steer') : when;
     (mode === 'queue' ? session.queued : session.held).push(item);
     emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: mode, ...(old && { replaces: old.id }) });
     return { status: 202, held: item.id, when: mode, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
@@ -1172,22 +1174,26 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (why) { unheld(id, [item], why); gone.push(item); }
     }
     const send = [];
-    let text = '', images = [], mode, rest = false;
+    let text = '', images = [], mode, model, config = {}, rest = false;
+    const agrees = (m, c, b) => (m === undefined || b.model === undefined || b.model === m) && Object.entries(b.config ?? {}).every(([k, v]) => c[k] === undefined || c[k] === v);
     for (const item of items.filter((x) => !gone.includes(x))) {
       // Messages from different senders are one prompt with each under its own line (partOf), counted in MAX_TEXT.
       const bodies = [...send.map((x) => x.body), item.body];
       const joined = bodies.map(new Set(bodies.map((b) => senders.get(b))).size > 1 ? partOf : (b) => b.text).join('\n\n');
       // A7: messages sent for different modes are not one prompt, or a chat's text would run in the mode of your later message.
       // Nor is another chat's question joined to anything: it gets a turn of its own (peer help).
-      const other = (mode !== undefined && item.body.mode !== undefined && item.body.mode !== mode) || (send.length > 0 && (solos.has(item.body) || solos.has(send[0].body)));
+      const other = (mode !== undefined && item.body.mode !== undefined && item.body.mode !== mode) || (send.length > 0 && (solos.has(item.body) || solos.has(send[0].body)))
+        // #257 FIX1: nor messages that pick different models or efforts: each prompt sets one model and effort, so a pick
+        // the joined prompt could not carry would be lost. Picks that agree (or are left out) join, and all of them are sent.
+        || (send.length > 0 && !agrees(model, config, item.body));
       // rest: once one message waits for the next turn, so does every later one, or they would run out of order.
       if (rest || (send.length && (other || joined.length > MAX_TEXT || images.length + item.images.length > MAX_IMAGES))) { rest = true; session.queued.push(item); continue; }
-      send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode;
+      send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode; model ??= item.body.model; config = { ...config, ...item.body.config };
     }
     if (!send.length) return;
     const allowed = () => send.every((item) => item.allowed());
     // Joined from several senders: no one sender for the whole prompt, its lines are in the text.
-    const from = [...new Set(send.map((item) => senders.get(item.body)))], body = { ...send.at(-1).body, ...(mode !== undefined && { mode }), text, images };
+    const from = [...new Set(send.map((item) => senders.get(item.body)))], body = { ...send.at(-1).body, ...(mode !== undefined && { mode }), ...(model !== undefined && { model }), ...(Object.keys(config).length && { config }), text, images };
     if (from.length > 1) mixed.set(body, from);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.map((item) => item.id), from.length > 1 ? undefined : from[0], solos.get(send[0].body))).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
@@ -1362,7 +1368,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // mid-turn was steered in and the chat stayed on Sonnet, with no config event).
           const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
             || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v)));
-          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer');
+          if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks);
           if (solo) return refused(409, 'turn-running');
           return await steer(id, body, images);
         } finally { release(); }
