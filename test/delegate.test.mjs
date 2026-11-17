@@ -1580,3 +1580,30 @@ test('O140 FIX1: a worker\'s scheduled prompt waits while its sprint is paused a
   assert.equal((await rows(instance)).find((c) => c.id === made.chat).state, 'stopped');
   console.log('PASS O140 FIX1: wake kept while paused and sent on Resume; cap at Workers per chat 1 started nothing');
 });
+
+// O140, the other-chat path: a schedule aimed at another chat goes as the owner's send_chat with when: queue. A busy
+// target keeps it until its turn ends; a once prompt goes once and leaves the owner's list.
+test('O140 other chat: a once prompt scheduled to a busy chat waits for its turn to end, arrives once from its owner, and is gone', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'tools 3', title: 'Busy' }); // three 3 s tool calls: a turn of about 9 s
+  const busy = await until(instance, (e) => e.conversation === made.chat && e.type === 'update' && e.data.sessionUpdate === 'tool_call');
+  const later = await a.tool('schedule_prompt', { chat: made.chat, text: 'later', at: new Date(Date.now() + 2000).toISOString() });
+  assert.deepEqual([later.action, later.chat, later.once], ['scheduled', made.chat, true], JSON.stringify(later));
+  const held = await until(instance, (e) => e.conversation === made.chat && e.type === 'held' && e.data.text?.endsWith('later'), busy.cursor);
+  assert.equal(held.hit.data.when, 'queue', JSON.stringify(held.hit.data));
+  await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data.text?.endsWith('later'), held.cursor);
+  await a.done(made.chat);
+  await pause(3000); // nothing more comes for a once prompt
+  const all = await events(instance, made.chat);
+  const got = all.filter((e) => e.type === 'user' && e.data.text?.endsWith('later'));
+  assert.equal(got.length, 1, 'the once prompt did not arrive exactly once');
+  const at = all.indexOf(got[0]), heldAt = all.findIndex((e) => e.type === 'held' && e.data.text?.endsWith('later'));
+  const ends = (from, to) => all.slice(from, to).filter((e) => e.type === 'turn-end').length;
+  assert.equal(ends(0, heldAt), 0, 'it was held after the busy turn had already ended, so the test did not show the wait');
+  assert.equal(ends(heldAt, at), 1, 'it did not wait for the running turn to end');
+  assert.equal(got[0].data.from, a.conversation, 'it did not come from the chat that scheduled it');
+  assert.deepEqual((await a.tool('list_schedules')).schedules, [], 'the once prompt is still listed');
+  console.log('PASS O140 other chat: held while busy (when ' + held.hit.data.when + '), sent after its turn end, once, from its owner; list empty');
+});
