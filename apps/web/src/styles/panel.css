@@ -107,7 +107,7 @@
 .lpanel .mk{flex:none;display:inline-grid;place-items:center;width:14px;height:14px}
 .lpanel .mk svg{width:13px;height:13px}
 /* Running is a ring, unread a filled dot: told apart by shape, not only colour. */
-/* O123 (Builder, 2026-11-15): "a working chat with a spinning ring. Green circle is idle. Red hand is blocked." */
+/* O123: a working chat shows a spinning ring, an idle one a green circle, a blocked one a red hand. */
 .lpanel .mk-run::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ok);grid-area:1/1}
 .lpanel .mk-run[data-busy]::before{content:none}
 .lpanel .mk-run[data-busy]::after{content:"";width:11px;height:11px;box-sizing:border-box;border-radius:50%;border:2px solid var(--ok);border-right-color:transparent;grid-area:1/1;animation:lp-spin .9s linear infinite}

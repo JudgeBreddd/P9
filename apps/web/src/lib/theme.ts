@@ -113,7 +113,7 @@ export const fonts = [
 
 /**
  * The look after picking a theme: its own font and effects, or the defaults when it has none. A font another
- * theme brought along goes back to the default; one the person picked themselves stays. (Builder 2026-10-10:
+ * theme brought along goes back to the default; one the person picked themselves stays. (So
  * themes should look the part without a separate "Use them" step.)
  */
 export function lookForTheme(id: string, look: Look): Look {

@@ -232,7 +232,7 @@ body {
 }
 
 /* ---- Personalities (2026-10-10): each theme looks the part, not just its colours ----
-   Builder: "we shouldn't dim it down, we should do more the opposite"; 8-bit and ASCII should look like pixel art
+   Themes are turned up, never dimmed down; 8-bit and ASCII should look like pixel art
    and a text terminal. Apps opt elements in with classes they already use:
      .fx-title   a page title (gets the theme's title treatment and display font)
      .fx-lift    a card or image tile (frames, cut corners)

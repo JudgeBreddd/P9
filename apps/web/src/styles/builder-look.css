@@ -5,7 +5,7 @@
    the approval buttons get fx-lift. */
 
 /* Notification halo (from HALO_CSS in design-suite/eh-editor/overlay/eh.js; not in DUWOP yet).
-   Builder 2026-10-14: spins until handled. */
+   It spins until handled. */
 /* The ring is drawn once and turned by transform (the compositor does it), not repainted each frame: a conic gradient
    under a fixed ring mask. The .halo child comes from addHalos in controller.mjs. The old ::after drop-shadow was cut
    to the ring by its own mask and added at most 35/255 on the ring pixels, so the new ring has none. */

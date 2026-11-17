@@ -10,7 +10,7 @@
 /* iOS Safari zooms into any focused field under 16px (labels are 13px and fields inherit), so fields never go below 16px. */
 input,select,textarea{font-size:16px}
 input[type=checkbox]{min-height:0;width:20px;height:20px;margin:0 8px 0 0;vertical-align:middle}
-/* Mission tiles: two columns of small boxes, each opens its section as a full-screen window (Builder, 2026-10-17) */
+/* Mission tiles: two columns of small boxes, each opens its section as a full-screen window */
 #mission .tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .xterm .xterm-helper-textarea{font-size:16px}
 /* PH2: messages kept on this phone until they can go; the grid above would show it empty */
@@ -61,7 +61,7 @@ main>section{position:absolute;inset:0;overflow-y:auto;overscroll-behavior:conta
 main>section>:not(.bar){margin-left:16px;margin-right:16px}
 section[data-view=chat]:not([hidden]){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
 #chatBody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
-/* No safe-area term here: with the tab bar showing it owns the home indicator, and with the keyboard open the keyboard covers it (a 34 pt gap on an iPhone, Builder 2026-10-27). */
+/* No safe-area term here: with the tab bar showing it owns the home indicator, and with the keyboard open the keyboard covers it (a 34 pt gap on an iPhone). */
 /* O109: a column in which only the queued list gives way, so the box is never scrolled out of view. */
 #composerSlot{flex:none;display:flex;flex-direction:column;max-height:55%;padding:8px 0;border-top:1px solid rgba(255,255,255,.08)}#composerSlot[hidden]{display:none}#composerSlot>*{flex:none}#composerSlot>#queued{flex:0 1 auto;min-height:0;display:flex;flex-direction:column}#queued details{display:flex;flex-direction:column;min-height:0}#queued summary{min-height:32px;display:flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--cyan);font-size:13px;font-weight:700;cursor:pointer}#queued .list{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin-top:4px;max-height:30vh;overflow-y:auto}
 #nowStep{margin:0 8px 6px;padding:0 12px;color:var(--dim);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#nowStep::before{content:"▸ ";color:var(--cyan)}#nowStep[hidden]{display:none}
@@ -74,7 +74,7 @@ section[data-view=chat]:not([hidden]){display:flex;flex-direction:column;overflo
 .bar h1{font-size:17px;font-weight:600;line-height:1.2;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar small{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar .back{width:auto;padding:0 8px 0 0;margin-left:-8px;color:var(--cyan)}
-/* The shared 2 px ring (d1.css) sat outside the button and the scrolling screen cut it off at the top (Builder 2026-10-27): inside, thin and soft. */
+/* The shared 2 px ring (d1.css) sat outside the button and the scrolling screen cut it off at the top: inside, thin and soft. */
 .bar .back:focus-visible{outline:1px solid color-mix(in srgb,var(--cyan) 45%,transparent);outline-offset:-1px}
 .bar button{min-height:44px;min-width:44px;border:0;border-radius:12px;background:transparent;color:var(--cyan);font-weight:600}
 .bar button svg{width:24px;height:24px}

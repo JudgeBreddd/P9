@@ -533,7 +533,7 @@ export function installProjects(o, api) {
     const r = await call('startedIn', { folder: f }), offer = r.status === 200 ? r.body.conversations.filter(c => !c.project && shown.has(c.id)) : [];
     D.started = offer.map(c => c.id);
     const fd = form.querySelector('.found'), n = D.started.length; fd.hidden = !n; F.adopt.checked = false;
-    // Named, newest first, so you can see what will move (Builder: "it didn't tell me" which chat): up to 3, then "and N more".
+    // Named, newest first, so you can see what will move (it once did not say which chat): up to 3, then "and N more".
     const t = offer.map(c => `“${c.title || 'Untitled chat'}”`), names = n > 3 ? `${t.slice(0, 3).join(', ')} and ${n - 3} more` : n > 1 ? `${t.slice(0, -1).join(', ')} and ${t[n - 1]}` : t[0];
     fd.querySelector('label').textContent = `${n} chat${n > 1 ? 's were' : ' was'} started in this folder: ${names}. Add ${n > 1 ? 'them' : 'it'} to the project?`;
   }
