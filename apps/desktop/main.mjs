@@ -534,7 +534,11 @@ export async function createDesktop({ state, open } = {}) {
     }
     try {
       const h = state && await health(state);
-      if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
+      // O135: an update can leave the service on another daemon (a unit or drop-in naming an older copy). Say which, and where
+      // it runs from (/health from; a daemon older than #261 has none), instead of Daemon connected.
+      const other = h?.version && h.version !== ownVersion && [`Daemon ${h.version}, not ${ownVersion}` + (h.from ? ': ' + h.from : ''),
+        `This window is P9 ${ownVersion}, but its background service still runs ${h.version}` + (h.from ? ' from ' + h.from : '') + '. Updating P9 did not move it; start the service from the installed P9 to use ' + ownVersion + '.'];
+      if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}), ...(other && { note: other }) };
     } catch {}
     if (process.platform !== 'win32' || !state) return { status: 'unavailable', ...(missingLib && { reason: 'missing-library', library: missingLib }) };
     await wake();
