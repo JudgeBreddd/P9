@@ -717,7 +717,11 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   await page.locator(`[data-sprint="${lead}"] [data-pj="spfile"]`, { hasText: /^sprint\.md/ }).click();
   // This save is guarded (the file exists now), so for the instant of its swap the file is absent: not yet, like polled.
   await until(async () => (await readFile(path.join(folder, 'roles', 'docs.work.md'), 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; })).includes(' Then the FAQ.'), 'the work file saved while roles.json is empty');
-  await writeFile(file, JSON.stringify(written, null, 2) + '\n');
+  // The daemon writes the work file, then reads every sprint file for its answer. roles.json written between the two is
+  // read whole: no row is ever missing, the page starts no read of its own, and the second sprint's torn file is never
+  // met. So the file is written only once that answer is on the page: the click opens sprint.md's box after the save.
+  await until(async () => (await box.getAttribute('data-name')) === 'sprint.md', 'the save answered while roles.json is empty');
+  await writeFile(file,JSON.stringify(written, null, 2) + '\n');
   await until(async () => (await seen(lead)) === 'claude', async () => 'the rows show the written roles.json without a reload; seen ' + await page.locator(`[data-sprint="${lead}"] [data-sp-roles]`).innerHTML({ timeout: 1000 }).catch((e) => e.message));
   // The second sprint was off screen while it was torn: its page, opened now, still has its rows, and shows its file once written.
   await openSprint(lead2);
