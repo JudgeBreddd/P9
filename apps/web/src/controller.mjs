@@ -47,7 +47,7 @@ export function mountShell({ askAdmin } = {}) {
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
     get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
     get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get profiles() { return profiles; }, get loadProfiles() { return loadProfiles; }, get loadStarts() { return loadStarts; }, get saveStarts() { return saveStarts; }, get defaultEffort() { return defaultEffort; },
-    get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
+    get claimFresh() { return claimFresh; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
     get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
@@ -56,7 +56,7 @@ export function mountShell({ askAdmin } = {}) {
     get missionLive() { return missionLive; }, get modals() { return modals; }, get morph() { return morph; },
     get moveDlg() { return moveDlg; }, get moveReloaded() { return moveReloaded; }, get names() { return names; },
     get needsLabel() { return needsLabel; }, get newSession() { return newSession; }, get lastAgent() { return lastAgent; }, get noteModal() { return noteModal; },
-    get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; }, get petCanvas() { return petCanvas; },
+    get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; },
     get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
     get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
     get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get loadProjects() { return panel.loadProjects; },
@@ -70,7 +70,7 @@ export function mountShell({ askAdmin } = {}) {
     get setTimeout() { return setTimeout; }, get settings() { return settings; }, set settings(v) { settings = v; },
     get settingsAt() { return settingsAt; }, get setupMode() { return setupMode; }, set setupMode(v) { setupMode = v; },
     get showTerminal() { return showTerminal; }, get side() { return side; }, get sideSession() { return sideSession; },
-    get skipWelcome() { return skipWelcome; }, get sky() { return sky; }, get spaceForm() { return spaceForm; }, set spaceForm(v) { spaceForm = v; },
+    get skipWelcome() { return skipWelcome; }, get spaceForm() { return spaceForm; }, set spaceForm(v) { spaceForm = v; },
     get spaceMenuHtml() { return spaceMenuHtml; }, set spaceMenuHtml(v) { spaceMenuHtml = v; },
     get spacePop() { return spacePop; }, set spacePop(v) { spacePop = v; }, get startMode() { return startMode; },
     get startTurn() { return startTurn; }, get still() { return still; }, get sync() { return sync; },
@@ -379,7 +379,7 @@ function renderModal() {
     // D10-3: Save & Continue handles this item and moves on; Skip leaves it pending in _tyler/, takes its card off the stack
     // (Skip once never dismissed it) and moves on, closing after the last item
     if (!S.reviews.length) return closeModal();
-    const i = m.i = Math.min(m.i, S.reviews.length - 1), r = S.reviews[i];
+    const i = m.i = Math.min(m.i, S.reviews.length - 1), r = S.reviews[i]; m.f = r.file; // O148: a card reopens this file, wherever its row is then (cardAct)
     $('#mdlT').textContent = `${i + 1} of ${S.reviews.length} · ${r.proj}`;
     body.innerHTML = `<div class="review"><span class="kind">${esc(r.kind)} · ${esc(r.age)}</span><p>${esc(r.txt)}</p><div class="fileview" aria-label="${esc(r.file)}"><span class="mono sm muted">${esc(r.file)}</span>${fileView(r.file)}</div><label>Your answer<textarea data-answer placeholder="Write your answer. It is kept if you close this.">${esc(r.draft || '')}</textarea></label></div>`;
     const ta = body.querySelector('textarea'); ta.oninput = () => { r.draft = ta.value; };

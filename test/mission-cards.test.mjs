@@ -8,7 +8,8 @@
 // with that text and the file, read again by the daemon.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, symlink, mkdtemp, unlink, utimes } from 'node:fs/promises';
+import os from 'node:os';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -407,4 +408,53 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note').scrollIntoViewIfNeeded();
   shot('m5-phone', await phone.screenshot());
   assert.equal(hits, 0, 'nothing reached the network server from the phone either');
+});
+
+// O148: a bell row reopens a review where you left it (D10-6) by its file, not its row number. Open the new item from its bell
+// row, close it, let a newer item sort above it, click Continue: the same file opens. Then that file goes: the row opens its
+// own item, never the file that now sits at the old row.
+test('O148 Continue reopens the review by its file after the queue moved, and never another file once it is gone', { timeout: 120000 }, async (t) => {
+  const fake = path.join(root, 'test/fake-acp-agent.mjs');
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    const w = paths.workspace; // the setup of top-right-bell.test's 733 test
+    await mkdir(path.join(w, '_waiting'), { recursive: true }); await mkdir(path.join(w, 'hub'), { recursive: true });
+    await writeFile(path.join(w, 'hub/registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+    await writeFile(path.join(w, 'AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(w, '_waiting/old-question.md'), '# Old question\n\nA.\n');
+    await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'AGENTS.md' }));
+    return { args: ['--acp-override', fake, '--settings', path.join(paths.directory, 'settings.json')] };
+  });
+  const call = (route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+    headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => JSON.parse(result.text));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-o148-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  await page.locator('#rBell b', { hasText: '1' }).waitFor({ timeout: 15000 });
+  const item = (f) => path.join(instance.workspace, '_waiting', f);
+  const bellRows = async () => { await page.click('#rBell'); const rows = await page.locator('#mdlBody .mlist li').allInnerTexts(); await page.keyboard.press('Escape'); return rows.map((r) => r.replace(/\s+/g, ' ').trim()); };
+  // The waiting list reloads when a turn ends (queueSoon), so each change is followed by a turn.
+  const id = (await call('/chat', 'POST', { provider: 'claude' })).conversation;
+  await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  const waitRows = async (want) => { await call('/chat/' + id + '/prompt', 'POST', { text: 'hello' });
+    for (let n = 0; n < 15; n++) { const r = await bellRows(); if (want.test(r.join('|'))) return r; await page.waitForTimeout(1000); } return bellRows(); };
+  // Continue: the bell row that opens the waiting items (a fresh one, "N item(s) need you").
+  const opened = async () => { await page.click('#rBell'); await page.locator('#mdl[open] #mdlBody .mlist li', { hasText: /needs? you/ }).last().click();
+    const file = page.locator('#mdl[open] #mdlBody .fileview'); await file.waitFor({ timeout: 5000 }); const f = await file.getAttribute('aria-label'); await page.keyboard.press('Escape'); return f; };
+  await writeFile(item('b-mine.md'), '# The one I opened\n\nA.\n');
+  assert.match((await waitRows(/1 item needs you/)).join('|'), /1 item needs you/);
+  assert.equal(await opened(), '_waiting/b-mine.md', 'the bell row opens the new item');
+  // A newer item arrives and sorts first (newest first): the remembered row number is now that item.
+  await writeFile(item('a-newer.md'), '# Newer\n\nA.\n'); const later = new Date(Date.now() + 60000); await utimes(item('a-newer.md'), later, later);
+  assert.match((await waitRows(/2 items need you/)).join('|'), /2 items need you/);
+  assert.equal(await opened(), '_waiting/b-mine.md', 'Continue reopens the same file after the queue moved');
+  // The file is answered elsewhere and goes: the row opens its own item, never the file now at the old row.
+  await unlink(item('b-mine.md'));
+  assert.match((await waitRows(/1 item needs you/)).join('|'), /1 item needs you/);
+  assert.equal(await opened(), '_waiting/a-newer.md', 'a gone file opens the row\'s own item, never another file');
+  console.log('PASS O148: Continue reopens the review by its file after the queue moved; a gone file opens the row\'s own item');
 });
