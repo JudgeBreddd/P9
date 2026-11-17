@@ -1165,6 +1165,66 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items passed, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
 });
 
+// Close sprint (sprint spec S16): the Sprint View's button asks once, a script that refuses is said beside it, and a
+// closed sprint's page is its record: no Close, no Start, the same numbers as the status route keeps.
+test('projects: Close sprint on the Sprint View asks first, says a refusal, then shows the closed sprint\'s record', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Ends', work: { kind: 'new', parent: '', name: 'ends' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const run = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Ending one' });
+  const gate = path.join(instance.workspace, 'gate.mjs');
+  await writeFile(gate, 'console.log("the gate says not yet"); process.exit(1);');
+  const hooksFile = path.join(run.folder, 'hooks.json');
+  await writeFile(path.join(run.folder, 'sprint.md'), '# Plan\n\n- [x] A1: draw the page; role lead\n- [ ] A2: test the page; role lead\n');
+  await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+  await writeFile(hooksFile, JSON.stringify({ scripts: [{ name: 'gate', command: `${process.execPath} ${gate}`, point: 'before-close', blocking: true }] }));
+  const row = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === run.sprint);
+  const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash });
+  assert.equal(started.status, 200, JSON.stringify(started));
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const btn = page.locator(`[data-pj="spopen"][data-lead="${run.sprint}"]`), view = page.locator('[data-sv]'), close = page.locator('[data-pj="spclose"]'), ask = page.locator('dialog[open] form');
+  const status = () => call(instance, `/sprints/${run.sprint}/status`);
+  await btn.click();
+  await close.waitFor({ timeout: 10000 });
+  assert.deepEqual([await view.getAttribute('data-sv'), await page.locator('[data-sp-title]').textContent()], ['open', 'Sprint View']);
+  // The press asks first; Cancel closes nothing.
+  await close.click();
+  assert.match(await ask.textContent(), /Close this sprint\?.*Nothing is deleted/s);
+  await ask.locator('[value="no"]').click();
+  assert.deepEqual([(await status()).closed ?? null, await view.getAttribute('data-sv')], [null, 'open']);
+  // A before-close script that exits 1 refuses the close: said beside the button, the sprint stays open.
+  await close.click(); await ask.locator('[value="yes"]').click();
+  await until(async () => /^Not closed: /.test(await page.locator('[data-sv-said]').textContent().catch(() => '')), 'the refusal beside the button');
+  assert.deepEqual([(await status()).closed ?? null, await view.getAttribute('data-sv'), await close.isEnabled()], [null, 'open', true]);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-close-refused ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // The script's own file now passes (the approved command line is the same) and the press is made again: closed.
+  await writeFile(gate, 'console.log("the gate says go"); process.exit(0);');
+  await close.click(); await ask.locator('[value="yes"]').click();
+  await until(async () => (await view.getAttribute('data-sv').catch(() => '')) === 'closed', async () => 'the closed page; beside the button: ' + await page.locator('[data-sv-said]').textContent().catch(() => 'nothing'), 20000);
+  const st = await status();
+  assert.deepEqual([st.status, st.closed?.by, st.workers.map((w) => [w.key, w.state])], [200, 'owner', [['lead', 'stopped']]], JSON.stringify(st).slice(0, 600));
+  assert.equal(await page.locator('[data-sp-title]').textContent(), 'Closed sprint');
+  assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record/);
+  assert.deepEqual([await close.count(), await page.locator('[data-pj="spstart"]').count()], [0, 0], 'a closed sprint has no Close and no Start');
+  assert.deepEqual([await page.locator('.sv-facts dt').first().textContent(), await page.locator('[data-sv-fact="ticked"]').textContent(), await page.locator('[data-sv-worker="lead"] [data-sv-state]').textContent()],
+    ['Ran', `${st.done.ticked} of ${st.done.total}`, 'Stopped']);
+  // The record no longer changes: a box ticked after Close is not counted, on the page or by the route.
+  await writeFile(path.join(run.folder, 'sprint.md'), '# Plan\n\n- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead\n');
+  await new Promise((go) => setTimeout(go, 6500)); // longer than the page's 5 s re-read
+  assert.deepEqual([await page.locator('[data-sv-fact="ticked"]').textContent(), (await status()).done.ticked], ['1 of 2', 1]);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-closed ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // The project page says so on the sprint's button.
+  await page.locator('[data-pj="spback"]').click();
+  await until(async () => await btn.locator('[data-sp-closed]').count() === 1, 'the sprint\'s button says Closed');
+  assert.match(await btn.locator('[data-sp-closed]').textContent(), /^Closed /);
+  assert.deepEqual(errors, []);
+  console.log('PASS Close sprint page: the press asked first and Cancel closed nothing; a before-close exit 1 was said beside the button and the sprint stayed open; the next press closed it: Closed sprint, by you, Ran, the lead Stopped, no Close and no Start, equal to the status route; a box ticked after Close changed nothing; the project page\'s button says Closed');
+});
+
 // Row 697 A: Instructions typed and then left by the side panel (a chat, another project) inside the 600 ms were dropped:
 // the timer ran after the page was emptied and found no box. They are sent as the page is left. B, C: a role's row on
 // Sprint Setup sets what it owns and its mode (permissions), both kept in roles.json with the rest of the file.
