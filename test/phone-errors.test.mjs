@@ -27,7 +27,10 @@ test('O128: the phone sends the structure of its uncaught errors, rejections and
   const server = await remoteDaemon(t);
   let journal = '';
   server.child.stderr.on('data', (chunk) => { journal += chunk; });
-  const lines = (device, match = () => true) => journal.split('\n').filter((line) => line.startsWith('P9_PHONE_ERROR '))
+  // The daemon writes its line before it answers, but the line comes over the stderr pipe and the answer over the socket:
+  // the test can hold the 204 before the line (CI job 133954343975). So a read after a POST waits for the line, and only
+  // complete lines count (a chunk can end mid-line).
+  const lines = (device, match = () => true) => journal.split('\n').slice(0, -1).filter((line) => line.startsWith('P9_PHONE_ERROR '))
     .map((line) => JSON.parse(line.slice(15))).filter((line) => line.device === device && match(line));
   const until = async (check, what) => { for (let i = 0; i < 100; i++) { if (check()) return; await new Promise((r) => setTimeout(r, 100)); } assert.fail(what + '\njournal: ' + journal.slice(-3000)); };
   const SECRET = /private draft words/;
@@ -112,16 +115,20 @@ test('O128: the phone sends the structure of its uncaught errors, rejections and
   const odd = await post({ kind: 'odd', name: 'Bad\u001b[31m\nP9_READY', message: 'o128 private draft words', stack: 'Error: private draft words',
     page: '/phone/"private draft words"', file: '/x.js\nP9_READY', app: 'a b', sw: 'v1', frames });
   assert.equal(odd.status, 204, odd.text);
+  await until(() => lines(other.session.device).length, 'the odd line');
   const [oddLine] = lines(other.session.device);
   assert.deepEqual(oddLine, { device: other.session.device, kind: 'error', name: 'other', page: '', file: '', app: '', sw: 'v1',
-    frames: ['/a.js:1:2', '/d0.js:0:1', '/d1.js:1:1', '/d2.js:2:1', '/d3.js:3:1'] }, JSON.stringify(oddLine));
+    frames: ['/a.js:1:2', '/d0.js:0:1', '/d1.js:1:1', '/d2.js:2:1', '/d3.js:3:1'] }, String(JSON.stringify(oddLine)));
   assert.ok(!journal.split('\n').some((line) => line.startsWith('P9_READY') && journal.indexOf(line) > journal.indexOf(other.session.device)), 'no forged line');
   // 12 quick reports: 10 lines in the minute (the odd one counted), then one dropped line and 429s.
   const statuses = [];
   for (let i = 0; i < 12; i++) statuses.push((await post({ kind: 'error', name: 'BurstCheck' })).status);
+  // The dropped line is written after the 9 burst lines, down the same pipe: once it is here, they all are.
+  const dropped = () => journal.split('\n').slice(0, -1).filter((line) => line.startsWith('P9_PHONE_ERRORS_DROPPED ') && line.includes(other.session.device));
+  await until(() => dropped().length, 'the dropped line ' + JSON.stringify(statuses));
   assert.equal(lines(other.session.device, (l) => l.name === 'BurstCheck').length, 9, 'with the odd line, 10 lines in the minute ' + JSON.stringify(statuses));
   assert.equal(statuses.filter((s) => s === 429).length, 3, JSON.stringify(statuses));
-  assert.equal(journal.split('\n').filter((line) => line.startsWith('P9_PHONE_ERRORS_DROPPED ') && line.includes(other.session.device)).length, 1, 'one dropped line');
+  assert.equal(dropped().length, 1, 'one dropped line');
   assert.ok(!/AnonCheck|ForgedCheck|BigCheck/.test(journal), 'refused reports wrote nothing');
   assert.doesNotMatch(journal, SECRET, 'no message text anywhere in the journal');
   console.log('PASS O128 phone errors: 4 kinds plus a service worker failure as structure only, no text stored or sent, offline later, 401/403/413, patterns enforced, 10 a minute');
