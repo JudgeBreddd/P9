@@ -171,7 +171,7 @@ test('window: lists that arrive while Settings is open fill its default rows and
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'setName', 'and it still has the caret');
   // The new row's select still saves.
   await page.locator('#setBody [data-default-model="claude"]').evaluate((el) => { el.value = 'opus'; el.dispatchEvent(new Event('change')); }); // on another Settings page, so not clicked
-  assert.equal(await page.evaluate(() => localStorage.getItem('p9-model-default:claude')), 'opus');
+  await until(async () => (await call(instance, '/start-defaults')).claude.model === 'opus', 'saved in the daemon (O133)');
   assert.deepEqual(errors, []);
   console.log('PASS window: lists arriving with Settings open fill the default rows only');
 });

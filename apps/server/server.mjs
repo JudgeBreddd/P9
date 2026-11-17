@@ -230,7 +230,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     settingsSaves = turn.then(() => {}, () => {});
     return turn;
   };
-  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change) });
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change), usage: () => usageNow() });
   // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
   // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
   // the page of a folder Dev Focus has since left is refused, never written into the new one.
@@ -497,17 +497,22 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   // ?lists=fresh (O47): a window or phone asks, and the first ask of a daemon run reads each agent's lists fresh.
   api.get('/chat', (c) => c.json({ conversations: chat.list(), lists: chat.lists(c.req.query('lists') === 'fresh') }));
+  // O48p (threat model row O48p): the phone's New chat names each provider profile. Id, name and model names only; the
+  // rest of a profile is the desktop's (/profiles below).
+  api.get('/profiles/names', (c) => reply(c, chat.profiles.names()));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c), c.req.header('x-p9-op'))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until'), tail = c.req.query('tail');
     return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail))); });
   // P8: a signed-out Codex has no plan figure (its old sessions would show one months old) and is named signed out. Claude
   // is left out: on a Mac its login is in the Keychain, so a missing credentials file says nothing.
-  api.get('/usage', async (c) => {
+  // One answer for the page and for a sprint script's input (sprint-hooks.mjs).
+  const usageNow = async () => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
     const limits = await planLimits({ home: os.homedir(), claudeLive, claudePolled: claudeUsage?.look(), codexPolled: codexUsage?.look() }), signedOut = (await signedIn()).codex ? [] : ['codex'];
-    return c.json({ ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } });
-  });
+    return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } };
+  };
+  api.get('/usage', async (c) => c.json(await usageNow()));
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));
   api.get('/chat/:id/folder', async (c) => reply(c, await chat.folder(c.req.param('id'))));
@@ -596,7 +601,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     app.post('/devices/:id/revoke', (c) => reply(c, auth.revoke(c.req.param('id'))));
   }
   // Send to server (D14, threat model row 51, move.mjs): the desktop moves a chat; the phone never sees these routes.
-  // O48 provider profiles: desktop only; the phone has no route. The reply never holds a key.
+  // O48 provider profiles: desktop only; the phone has /profiles/names above and nothing here. The reply never holds a key.
   app.get('/profiles', (c) => reply(c, chat.profiles.list()));
   app.post('/profiles', async (c) => reply(c, chat.profiles.save(await json(c))));
   app.delete('/profiles/:id', (c) => reply(c, chat.profiles.remove(c.req.param('id'))));

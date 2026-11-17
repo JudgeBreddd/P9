@@ -617,7 +617,8 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
-  // O48: provider profiles (their names, addresses and the key's writes) are the desktop's only.
+  // O48: provider profiles (their addresses and the key's writes) are the desktop's only. The phone's own read is
+  // /profiles/names (row O48p, test/phone-parity.test.mjs).
   assert.equal((await server.desk('/profiles')).status, 200);
   assert.equal((await server.remote('/profiles', { session: auth })).status, 404);
   assert.equal((await server.remote('/profiles', { method: 'POST', session: auth, body: { name: 'x', baseUrl: 'https://x.example.test', models: ['m'], key: 'k' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
@@ -630,6 +631,23 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(files.body.settings && !files.text.includes('settings.json'), files.text);
   // The wizard's writes and sign-in stay desktop-only (threat model rows 17, 31).
   for (const route of ['/setup/starter', '/setup/login', '/setup/login/code', '/setup/login/stop', '/setup/agent-terminal']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
+  // S18: the owner's script library and Run now are the desktop's alone (SECURITY.md § Sprint scripts).
+  assert.deepEqual([(await server.desk('/sprint-scripts')).body.library, (await server.remote('/sprint-scripts', { session: auth })).status], [[], 404]);
+  assert.equal((await server.remote('/sprint-scripts', { method: 'POST', session: auth, body: { save: { name: 'p', command: '/usr/bin/true', point: 'after-close' } } })).status, 404);
+  assert.deepEqual((await server.desk('/sprint-scripts')).body.library, [], 'a phone session wrote the script library');
+  // S20: the "Allow additional scripts" switch and the owner's Approve are the desktop's alone.
+  assert.equal((await server.remote('/sprint-scripts/allow', { method: 'POST', session: auth, body: { on: true } })).status, 404);
+  // (A body the route itself refuses with 400: a 404 here is the route missing, not the sprint.)
+  assert.deepEqual([(await server.desk('/sprints/11111111-1111-4111-8111-111111111111/approve-scripts', 'POST', { other: 1 })).status,
+    (await server.remote('/sprints/11111111-1111-4111-8111-111111111111/approve-scripts', { method: 'POST', session: auth, body: { other: 1 } })).status], [400, 404]);
+  assert.equal((await server.desk('/sprint-scripts')).body.allowed, false, 'a phone session turned Allow additional scripts on');
+  // Sprint View's status route is the desktop's alone. An unknown sprint is 404 on the desktop too, so the body tells
+  // them apart: the desktop's route answers unknown-sprint, the phone has no such route.
+  const deskStatus = await server.desk('/sprints/11111111-1111-4111-8111-111111111111/status'), phoneStatus = await server.remote('/sprints/11111111-1111-4111-8111-111111111111/status', { session: auth });
+  assert.deepEqual([deskStatus.status, deskStatus.body?.error, phoneStatus.status, phoneStatus.body?.error === 'unknown-sprint'], [404, 'unknown-sprint', 404, false], phoneStatus.text);
+  console.log('PASS Sprint View phone: the status route answers the desktop and is absent for a signed-in phone');
+  console.log('PASS S20 phone: the switch and Approve are 404 for a signed-in phone');
+  console.log('PASS S18 phone: the script library answers the desktop and is 404 for a signed-in phone, read and write');
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {
     const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });

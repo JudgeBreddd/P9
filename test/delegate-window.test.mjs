@@ -10,7 +10,8 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { once } from 'node:events';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -494,4 +495,108 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   await shot(page, 'o712-reloaded');
   assert.deepEqual(errors, []);
   console.log('PASS 712: archived worker off the card; one stopped cleared by its x; a stopped ready row has an x; Clear 3 stopped took two plain and one ready; archived in the daemon; still gone after a reload; clearing another worker left the pinned report, clearing its own worker closed it; text box on screen');
+});
+
+// window-3 (row "A sprint never ends", Tyler 2026-11-13: the closed probe worker's report "is also still drawn above the message box"):
+// a worker archived anywhere but its own card row (archive_chat, the sidebar, another window) left its report pinned above the box,
+// because the pinned report looked only at this browser's closed list. Archived is the daemon's word, so every window drops it.
+test('window-3: an archived worker\'s report leaves the box above the message box, and stays gone after a reload and the lead\'s next turn', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  writeFileSync(path.join(instance.workspace, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', instance.workspace]);
+  execFileSync('git', ['-C', instance.workspace, 'add', '.']);
+  execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const live = await a.tool('open_chat', { text: 'first', item: 'W0', done_means: 'x', checks: ['Tests pass'] }); await a.done(live.chat); // keeps the card on screen
+  const made = await a.tool('open_chat', { text: 'first', item: 'W1', done_means: 'x', checks: ['Tests pass'] }); assert.ok(made.chat, JSON.stringify(made)); await a.done(made.chat);
+  const kid = made.chat;
+  await a.tool('send_chat', { chat: kid, text: 'mcp' });
+  const k = await tools(t, instance, kid);
+  await a.done(kid);
+  await a.tool('send_chat', { chat: kid, text: 'late' }); // ready needs the worker mid-turn
+  const r = await k.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest: 'x' }); assert.ok(r.ready, JSON.stringify(r));
+  await a.done(kid);
+  assert.equal((await a.tool('stop_chat', { chat: kid, close: true })).action, 'stopped'); // "closed with stop and close"
+  const { app, page, errors } = await launch(t, instance);
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
+  await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  const pane = page.locator(`.pane[data-id="${parent}"]`), card = pane.locator('.sprint');
+  const row = card.locator(`[data-sprint-open="${kid}"]`), pin = pane.locator(`.card-pin[data-card="ready-${kid}"]`), inline = pane.locator(`.hist [data-report="ready-${kid}"]`);
+  await pin.waitFor({ timeout: 20000 }); // stopped and closed, not archived: the report is still the one to read (712 keeps it)
+  await shot(page, 'w3-report-pinned');
+  // The way archive_chat (and the sidebar) archives it: not from this card, so this window's own clear never ran.
+  await call(instance, `/chat/${kid}/archive`, 'POST', { archived: true });
+  await until(async () => await pin.count() === 0, 'the archived worker\'s report is still pinned above the box');
+  assert.equal(await row.count(), 0, 'the archived worker is still on the card');
+  await inline.waitFor({ timeout: 5000 }); // it scrolls with the chat, as a closed report does
+  await shot(page, 'w3-archived');
+  await page.reload();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  await card.locator(`[data-sprint-open="${live.chat}"]`).waitFor({ state: 'attached', timeout: 20000 });
+  assert.equal(await pin.count(), 0, 'the archived worker\'s report came back after a reload');
+  assert.equal(await row.count(), 0, 'the archived worker came back to the card after a reload');
+  // The lead's next turn draws the chat again; the worker and its report stay gone.
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'the lead goes on' });
+  await pane.locator('.msg.user', { hasText: 'the lead goes on' }).waitFor({ timeout: 20000 });
+  await until(async () => await pane.locator('.working').count() === 0, 'the lead\'s turn ended', 30000);
+  assert.equal(await pin.count(), 0, 'the archived worker\'s report came back after the lead\'s next turn');
+  assert.equal(await row.count(), 0, 'the archived worker came back to the card after the lead\'s next turn');
+  await shot(page, 'w3-after-lead-turn');
+  assert.deepEqual(errors, []);
+  console.log('PASS window-3: a stopped worker\'s report stays pinned; archived by archive_chat it leaves the box and the card and scrolls with the chat; still gone after a reload and after the lead\'s next turn');
+});
+
+// O133 (Tyler, 2026-11-16: Settings set to "sol medium", "it keeps changing back to agent default"): Settings > New chats
+// start in was kept only in the window, so a chat an agent opens never got it. A Codex default effort picked in Settings
+// survives a P9 restart, and a Codex worker a Claude chat opens with no effort runs on it, not Codex's own (medium here).
+test('O133: a Settings default effort applies to a worker an agent opens, after a restart, and Settings still shows it', { timeout: 150000 }, async (t) => {
+  let instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // One Delegation row: a Codex worker, its model and effort left to the agent (so nothing names them).
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: [{ agent: 'codex', model: '', effort: '' }] })).status, 200);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const seen = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Seen' })).conversation;
+  await call(instance, `/chat/${seen}/prompt`, 'POST', { text: 'hi' });
+  await until(async () => (await events(instance, seen)).some((e) => e.type === 'config'), 'Codex\'s lists');
+  let { app, page, errors } = await launch(t, instance);
+  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
+  const pick = '[data-default-effort="codex"]';
+  await settings();
+  await page.locator(pick + ' option[value="high"]').waitFor({ state: 'attached', timeout: 15000 });
+  await page.selectOption(pick, 'high');
+  await page.waitForTimeout(1500); // the save is a request; give it time either way, so the old build fails below, not here
+  await shot(page, 'o133-picked');
+  assert.deepEqual(errors, []);
+  await app.close();
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  instance = await restart(t, instance, 'state-2');
+  const parent = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Lead' })).conversation;
+  await call(instance, `/chat/${parent}/prompt`, 'POST', { text: 'mcp' });
+  const a = await tools(t, instance, parent);
+  const made = await a.tool('open_chat', { text: 'config', provider: 'codex', title: 'Review2' });
+  assert.ok(made.chat, JSON.stringify(made));
+  await a.done(made.chat);
+  const said = (await events(instance, made.chat)).find((e) => e.data?.content?.text?.startsWith('config:'))?.data.content.text;
+  assert.match(said ?? '', /effort=high/, 'the worker ran on the Settings default, not Codex\'s own');
+  ({ app, page, errors } = await launch(t, instance));
+  await page.locator(`#navList .row[data-chat="${parent}"]`).click();
+  const row = page.locator(`#navList .row[data-chat="${made.chat}"]`);
+  await row.waitFor({ timeout: 20000 }); await row.click();
+  const effort = page.locator(`.pane[data-id="${made.chat}"] [data-pill="Effort"]`);
+  await effort.waitFor({ timeout: 20000 });
+  assert.equal(await effort.getAttribute('aria-label'), 'Effort: High', 'the worker\'s pill');
+  await shot(page, 'o133-worker');
+  await settings();
+  await until(async () => await page.locator(pick).inputValue() === 'high', 'Settings still shows High after the restart', 10000);
+  await shot(page, 'o133-settings');
+  assert.deepEqual(errors, []);
+  console.log('PASS O133: a Codex default effort set in Settings survives a restart and a Codex worker opened by a Claude chat runs on it');
 });

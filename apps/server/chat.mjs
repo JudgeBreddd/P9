@@ -543,11 +543,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lists[session.provider] = { ...configOf(session), def, at: Date.now() };
     db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('lists:' + session.provider, JSON.stringify(lists[session.provider]));
   };
+  const listed = (options) => { const o = Array.isArray(options) && options.find((x) => x?.type === 'select' && x.id === 'model' && Array.isArray(x.options)); return o ? select(o).options.length : Infinity; };
   const models = (session, id, options, tell = true) => {
     const all = (Array.isArray(options) ? options : []).filter((x) => x?.type === 'select' && typeof x.id === 'string' && x.id.length <= 60 && Array.isArray(x.options));
     const o = all.find((x) => x.id === 'model');
     if (!o) return false;
     const { current, options: list } = select(o);
+    session.listed = list.length;
     // O48: a profile chat offers the one model it was started on, under the provider's own name for it.
     session.models = { current, options: session.profile ? [{ value: session.profile.model, name: session.profile.model }].filter((x) => list.some((m) => m.value === x.value)) : list };
     session.pickers = all.filter((x) => x.id !== 'model' && PICKERS.includes(x.category)).map(select).filter((x) => x.options.length > 1).slice(0, 6);
@@ -801,7 +803,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         let update = session.window && raw?.sessionUpdate === 'usage_update' && raw.size > session.window ? { ...raw, size: Math.max(session.window, Number(raw.used) || 0) } : raw;
         // O48: a profile chat does not spend the Claude plan, so nothing it reports may reach the plan's usage rows.
         if (session.profile && update?.sessionUpdate === 'usage_update' && update._meta?.['_claude/rateLimit']) { const { '_claude/rateLimit': _, ...rest } = update._meta; update = { ...update, _meta: rest }; }
-        if (update?.sessionUpdate === 'config_option_update') models(session, conversation.id, update.configOptions);
+        // O130 (Tyler, 2026-11-16: only the user or the parent chat changes a model): a helper agent's settings come through
+        // here too, the first tagged with its tool call, the rest not, each listing only the helper's one model. Neither is the
+        // chat's: nothing is set, saved or sent, so a resume puts back what the chat was on. ponytail: an agent that really
+        // drops models mid-session is read again at its next start.
+        if (update?.sessionUpdate === 'config_option_update' && !update._meta?.claudeCode?.parentToolUseId && !(listed(update.configOptions) < session.listed)) models(session, conversation.id, update.configOptions);
         // Both adapters name the chat after its first turn (session_info_update.title); kept so the tab and list show it.
         if (update?.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
           const title = update.title.replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -1446,6 +1452,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     restarted: () => recovered.then(() => ({ chats: [...cut], storm: starts.length >= 3 })),
     rules: (id) => rulesOf(id),
+    // The sprint script library (S18; sprint-hooks.mjs checks every row on the way in and out), in prefs under 'sprint-scripts'.
+    scriptLibrary: () => { try { const v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'sprint-scripts'").get()?.value ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; } },
+    setScriptLibrary: (rows) => { db.prepare("INSERT INTO prefs (key, value) VALUES ('sprint-scripts', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(rows)); },
+    // "Allow additional scripts" (S20; SECURITY.md § Sprint scripts, "Scripts added after Start"): off until the owner turns it on.
+    allowScripts: () => db.prepare("SELECT value FROM prefs WHERE key = 'sprint-scripts-allow'").get()?.value === 'true',
+    setAllowScripts: (on) => { db.prepare("INSERT INTO prefs (key, value) VALUES ('sprint-scripts-allow', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(on === true ? 'true' : 'false'); },
     // Settings > Delegation (SECURITY.md § Delegate), kept in prefs under 'delegation'. start: who starts a sprint ('off',
     // 'ask' the default, 'agent'); max: running workers per chat (1 to 20, 5 until set); workers: one row per worker, in the
     // order they start: agent ('' the parent's own, an agent's name, or 'profile:<id>'), model and effort ('' not set).
@@ -1455,6 +1467,18 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // setup: the owner's command run in each new worker folder before its worker starts; left out when empty (A4).
       return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max, ...(typeof v?.setup === 'string' && v.setup && v.setup.length <= 2000 && { setup: v.setup }),
         workers: Array.from({ length: max }, (_, i) => { const x = Array.isArray(v?.workers) ? v.workers[i] : null, a = agent(x?.agent); return { agent: a, model: a ? str(x?.model) : '', effort: a ? str(x?.effort) : '' }; }) }; },
+    // O133 (Tyler, 2026-11-16: the Settings defaults "keep changing back to agent default"): Settings > New chats start in,
+    // each agent's Default model and Default effort ('' the agent's own), kept here so a chat an agent opens starts on them
+    // too, not only one the window makes. Kept in prefs under 'start-defaults'.
+    newChatDefaults: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'start-defaults'").get()?.value ?? '{}'); } catch { v = {}; }
+      const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : '');
+      return Object.fromEntries(Object.keys(MODES).map((a) => [a, { model: str(v?.[a]?.model), effort: str(v?.[a]?.effort) }])); },
+    // #222 review: a save names only the fields it changes ({ codex: { effort: 'high' } }) and is merged into what is kept, so two
+    // picks in flight, or two windows, never put back each other's older value. onlyEmpty (the one-time move of a value the window
+    // kept itself) fills a field only while it is still ''.
+    setNewChatDefaults(patch, onlyEmpty = false) { const v = this.newChatDefaults();
+      for (const [a, f] of Object.entries(patch)) for (const [k, x] of Object.entries(f)) if (!onlyEmpty || !v[a][k]) v[a][k] = x;
+      db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(v)); return this.newChatDefaults(); },
     // Which Settings row a worker started on (0 is the first); kept so a row frees only when its worker stops.
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
     setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },
@@ -1496,6 +1520,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     })(),
     // O48, desktop only (server.mjs): what Settings and New chat show (never a key), save and remove.
     profiles: { list: () => ({ status: 200, profiles: profiles.list() }),
+      // O48p: what a phone may read. Built field by field, never the shown row (it has the base URL and the key's kind).
+      names: () => ({ status: 200, profiles: profiles.list().map((p) => ({ id: p.id, name: p.name, models: p.models })) }),
       save: (body) => { const saved = body && typeof body === 'object' ? profiles.save(body) : null; return saved ? { status: 200, profile: saved } : refused(400, 'request-refused'); },
       // A chat running on the removed profile is stopped: its agent still holds the key and would go on answering.
       async remove(id) {

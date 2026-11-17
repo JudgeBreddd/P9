@@ -151,9 +151,9 @@ const spaceWords = (subject, error) => (error === 'empty'
     : { error: 'invalid-space', detail: subject + ' is JSON but not a space: it must be an object with a "sections" list, such as {"sections": []}.' });
 
 // useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
-const ANSWERING = new Set(['describe_mission', 'status', 'validate_registry', 'validate_space', 'list_chats', 'read_chat', 'wait_chat']);
+const ANSWERING = new Set(['describe_mission', 'status', 'validate_registry', 'validate_space', 'list_chats', 'list_providers', 'read_chat', 'wait_chat']);
 
-export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings }) {
+export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings, usage }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
 
   const need = () => { const settings = current(); if (!settings) throw new Error('settings-missing'); return settings; };
@@ -607,7 +607,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       : result.error ? result : { error: result.reason ?? 'save-failed', code: result.code };
   }
 
-  const { ownerStart, ...delegateCalls } = createDelegate({ chat, allowed });
+  const { ownerStart, ownerScripts, ...delegateCalls } = createDelegate({ chat, allowed, usage });
   const calls = {
     ...delegateCalls,
     describe_mission: () => describeMission(),
@@ -808,5 +808,5 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const reg = read(registry), spc = read(space), lists = (data, key) => (Array.isArray(data[key]) ? data[key].filter(object) : []);
     return { registry: registry.hash, space: space?.hash ?? null, protection: protection(), records: { scripts: lists(reg, 'scripts'), apps: lists(reg, 'apps'), pages: lists(reg, 'pages'), sections: lists(spc, 'sections') } };
   }
-  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates, ownerStart };
+  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates, ownerStart, ownerScripts };
 }

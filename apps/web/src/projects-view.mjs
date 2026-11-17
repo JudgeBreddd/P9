@@ -26,10 +26,35 @@ export function installProjects(o, api) {
   // go one at a time, so each one names the file the one before it wrote.
   // cleaned: lead -> what "Clean up worker folders" last answered (SECURITY.md § Worker folders, "Who cleans up").
   const cleaned = new Map();
+  // window-10, Start sprint (SECURITY.md § Start sprint): lead -> what the last press answered; starting: the presses still out,
+  // so a redraw meanwhile keeps the button off. The press is the approval record; the page shows the one P9 kept.
+  const startSaid = new Map(), starting = new Set();
+  // A lead chat takes its sprint's id, so the chat a press here makes is known before it exists; chat-view leaves it
+  // where it is listed instead of putting it on screen, so the press's answer (a failure halfway too) stays in view.
+  const pressed = new Set(); o.pressedStart = id => pressed.has(id);
+  const startText = r => r.status === 200 ? 'Started: ' + r.body.chats.map(c => c.key + (c.existing ? ' (kept)' : '')).join(', ') + '.'
+    : 'Not started: ' + (r.body?.detail || r.body?.error || r.status) + (r.body?.chats?.length ? ' Made so far: ' + r.body.chats.map(c => c.key).join(', ') + '.' : '');
+  const startedHtml = sp => sp.started ? `<p class="hint" data-sp-started>Started ${esc(new Date(sp.started.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} by ${sp.started.by === 'owner' ? 'you' : esc(find(sp.started.by)?.title ?? 'a chat\'s agent, on your yes')}: your approval of its plan, sha256 <span class="mono" title="${esc(sp.started.plan)}">${esc(sp.started.plan.slice(0, 12))}</span>.</p>` : '';
+  // The sprint's scripts (SECURITY.md § Sprint scripts): what Start approves, command by command, and what P9 runs now.
+  // The server parses hooks.json for real and refuses a file it cannot read; this only shows it.
+  const scriptsOf = sp => { const text = sp.files.find(f => f.name === 'hooks.json')?.text ?? ''; if (!text.trim()) return [];
+    try { const rows = JSON.parse(text)?.scripts; return Array.isArray(rows) && rows.every(r => r && typeof r.name === 'string' && typeof r.command === 'string' && typeof r.point === 'string') ? rows : null; } catch { return null; } };
+  const scriptLine = s => `${s.name} (${s.point}${s.blocking === true ? ', blocking' : ''}): ${s.command}`;
+  const scriptsHtml = sp => { const file = scriptsOf(sp), ok = sp.started?.scripts ?? [], same = file && JSON.stringify(file.map(scriptLine)) === JSON.stringify(ok.map(scriptLine));
+    const list = rows => `<ul class="sp-scripts">${rows.map(s => `<li class="mono">${esc(scriptLine(s))}</li>`).join('')}</ul>`;
+    return (ok.length ? `<div class="hint" data-sp-scripts="approved">Scripts you approved at Start. P9 runs these as you, outside every agent's mode, and only these:${list(ok)}</div>` : '')
+      + (file === null ? '<p class="hint" data-sp-scripts="unread" role="alert">hooks.json is not a scripts list: Start will refuse it and say why.</p>'
+        : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
+        : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
+  const startBtn = sp => !sp.prep && !sp.started ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
   const cleanText = r => r.status === 200 ? (r.body.removed.length || r.body.kept.length
     ? [r.body.removed.length && 'Removed: ' + r.body.removed.join(', ') + '.', r.body.kept.length && 'Kept: ' + r.body.kept.map(k => `${k.item} (${k.why}, ${size(k.bytes)})`).join(', ') + '.'].filter(Boolean).join(' ')
     : 'No worker folders to clean up.') : 'Not cleaned: ' + (r.body?.detail || r.body?.error || r.status);
   const drafts = new Map(), spNote = new Map(); let spSaving = Promise.resolve(true);
+  // The sprint whose own page is open (its lead's id), '' for the project page. Each sprint is one button on the project
+  // page; the button opens the sprint's page: Sprint Setup until it is started.
+  let spPage = '';
+  let sv = null, svFor = '', svN = 0; // Sprint View (loadView): the status drawn { lead, html }, the sprint being read, the read's number
   const say = (txt, level = 'ok') => o.toast({ kind: 'project', txt, level }, true);
   const failed = r => say(ERR[r.body?.error] || 'That did not work (' + (r.body?.error || r.status) + ').', 'warn');
 
@@ -57,7 +82,7 @@ export function installProjects(o, api) {
   // ---- The page ----
   async function openProject(id, sprintLead) {
     if (o.S.focus !== 'chat' && !o.focusOn('chat')) return;
-    api.closeMenu(); api.setOpen(id, true); edit = false;
+    api.closeMenu(); api.setOpen(id, true); edit = false; spPage = sprintLead || '';
     o.S.view = { kind: 'project', id }; if (o.S.focus !== 'chat') o.setFocus('chat');
     if (cur?.id !== id) cur = null; // shown once the full record is in: the list's copy has no instructions or files
     o.renderTabs(); if (o.S.files) o.renderTree();
@@ -82,7 +107,13 @@ export function installProjects(o, api) {
     const own = !mine && p.agentFiles?.length ? `<p class="ownfile">${svg.files}This folder has its own instructions (${p.agentFiles.map(esc).join(', ')}). Agents read them on their own.</p>` : '';
     const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(p.instructions ?? '')}</textarea>`
       : p.instructions ? instrText(p.instructions) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
-    const files = p.files ?? [];
+    const files = p.files ?? [], open = spPage && (p.sprints ?? []).find(x => x.lead === spPage);
+    if (open) return `<div class="wrap" data-page="${esc(p.id)}" data-sp-page="${esc(open.lead)}">
+      <div class="ph"><div class="grow"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spback" title="Back to the project's page">‹ ${esc(p.name)}</button><h1 data-sp-title>${open.prep ? 'Sprint Setup' : 'Sprint View'}</h1>
+        <p class="about">${open.prep ? 'Everything before Start: the plan, the roles and each role\'s files, the rules and the scripts. Each is a file in the sprint\'s folder, so an agent can fill in the same things. Nothing runs until Start sprint.' : 'This sprint is started. Where it stands is first, read again every few seconds; an agent reads the same with sprint_status. Its roles and files are below.'}</p></div></div>
+      ${sv?.lead === open.lead && !open.prep ? sv.html : ''}${sprintHtml(open)}</div>`;
+    const stamp = sp => sp.prep ? '<span class="tag">Not started</span>' : `<span class="when">Started${sp.started ? ' ' + esc(new Date(sp.started.at).toLocaleDateString([], { month: 'short', day: 'numeric' })) : ''}</span>`;
+    const sprintRows = (p.sprints ?? []).map(sp => `<button class="crow" data-pj="spopen" data-lead="${esc(sp.lead)}" title="${sp.prep ? 'Open its Sprint Setup' : 'Open this sprint'}">${svg.files}<span class="t">${esc(sp.title)}</span>${stamp(sp)}</button>`).join('');
     return `<div class="wrap" data-page="${esc(p.id)}">
       <div class="ph"><div class="grow"><h1 contenteditable="plaintext-only" spellcheck="false" id="pjName" title="Click to rename" aria-label="Project name">${esc(p.name)}</h1><p class="about" contenteditable="plaintext-only" id="pjAbout" title="Click to edit" aria-label="What it is about" data-ph="Add a line about what this project is for">${esc(p.about || '')}</p></div>
         <div class="acts2"><button data-slot="button" data-variant="default" data-size="sm" data-pj="new" title="Starts in the work folder, with the instructions and added files">${svg.plus}New chat</button><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="more" aria-haspopup="menu" aria-expanded="false" title="More">${I.more}More</button></div></div>
@@ -94,30 +125,33 @@ export function installProjects(o, api) {
       <section class="sec" data-drop-files aria-labelledby="pjFilesH"><div class="sh2"><h2 id="pjFilesH">${mine ? 'Files' : 'Added files'}</h2><span class="muted">${mine ? 'handed to every chat in this project' : 'kept in P9, handed to every chat in this project'}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="add">${svg.plus}Add files</button></div>
         ${files.map(x => `<div class="crow file">${svg.files}<span class="t" title="${esc(x.name)}">${esc(x.name)}</span><span class="sz">${size(x.size)}</span><button class="rm" data-pj="rm" data-name="${esc(x.name)}" title="Remove ${esc(x.name)}" aria-label="Remove ${esc(x.name)}">${svg.x}</button></div>`).join('')
           || '<p class="hint">Drop files here, or Add files. Every chat in this project gets them.</p>'}</section>
-      ${window.p9 && p.sprint ? `<section class="sec" aria-labelledby="pjSprintH"><div class="sh2"><h2 id="pjSprintH">Sprint setup</h2><span class="muted">for sprints a chat in this project leads</span><span class="saved" id="pjSprintSaved" role="status">Saved</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spset">Save</button><button data-slot="button" data-variant="outline" data-size="sm" data-pj="spnew">${svg.plus}New sprint</button></div>
+      ${window.p9 && p.sprint ? `<section class="sec" aria-labelledby="pjSprintH"><div class="sh2"><h2 id="pjSprintH">Sprints</h2><span class="muted">each opens on its own page</span><button data-slot="button" data-variant="outline" data-size="sm" data-pj="spnew">${svg.plus}New sprint</button></div>
+        ${sprintRows || '<p class="hint">No sprint yet. New sprint makes one to prepare; nothing starts until you press Start sprint on its page.</p>'}
+        <div class="sh2 sp-every"><span class="muted">For every sprint in this project</span><span class="saved" id="pjSprintSaved" role="status">Saved</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spset">Save</button></div>
         <label class="spset"><span>Clone from</span><input data-slot="input" class="mono" id="pjSpSource" maxlength="2000" spellcheck="false" autocomplete="off" placeholder="https://… or git@host:owner/repo.git" value="${esc(p.sprint.source)}"></label>
         <p class="hint">Empty: each sprint is cloned from the folder its workers would start in${mine ? '' : ' (this project\'s work folder)'}, and that folder is only read. With an address here, P9 clones from the address instead and does not read your folder at all. Signing in is your own git sign-in.</p>
         <label class="spset"><span>Setup command</span><input data-slot="input" class="mono" id="pjSpSetup" maxlength="2000" spellcheck="false" autocomplete="off" placeholder="for example: pnpm install" value="${esc(p.sprint.setup)}"></label>
         <p class="hint">Runs in each new worker folder before its worker starts. Empty: the one in Settings &gt; Delegation is used. Only you set these, here on the desktop; no agent can.</p></section>` : ''}
-      ${(p.sprints ?? []).map(sprintHtml).join('')}
+      ${window.p9 && p.sprint || !sprintRows ? '' : `<section class="sec" aria-label="Sprints"><div class="sh2"><h2>Sprints</h2></div>${sprintRows}</section>`}
     </div>`;
   }
   // D1, D3, D4: a sprint's files, kept in P9; its lead and workers edit them too. One open at a time, saved as you type.
   function sprintHtml(sp) {
-    const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker', 'roles.json': 'the roles above' };
+    const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker', 'roles.json': 'the roles above', 'hooks.json': 'the sprint\'s scripts: P9 runs only what you approved at Start', 'hooks.log': 'P9\'s log of script runs, read only', 'review-trail.md': 'P9\'s record of reviews, read only' };
     const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this role gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this role with the sprint rules' : /\.work\.md$/.test(n) ? 'its first message at Start' : 'the worker keeps it itself');
-    const roles = rolesOf(sp), files = [...sp.files, ...roleFiles(sp).filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
-    const fixed = ['sprint.md', 'rules.md', 'roles.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : 3;
-    files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < 3 ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>Sprint: ${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
+    const roles = rolesOf(sp), files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
+    const fixed = ['sprint.md', 'rules.md', 'roles.json', 'hooks.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : fixed.length;
+    files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < fixed.length ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
+      ${startedHtml(sp)}${scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
       ${rolesHtml(sp, roles)}
       ${[...files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
         const sz = what(f.name) + (f.gone ? ' · deleted, your text not saved' : drafts.has(sp.lead + ' ' + f.name) ? ' · not saved'
           : f.unmade && f.name === 'rules.md' ? ' · none yet, P9\'s defaults are sent' : f.unmade || f.text === '' ? ' · empty' : '');
         return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz" title="${esc(sz)}">${esc(sz)}</span></button>`
-          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false">${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
+          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false"${f.name === 'hooks.log' || f.name === 'review-trail.md' ? ' readonly' : ''}>${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
@@ -178,8 +212,8 @@ export function installProjects(o, api) {
       + `<div class="sp-add"><input data-slot="input" class="mono" data-sp-newkey data-lead="${esc(sp.lead)}" maxlength="64" spellcheck="false" autocomplete="off" placeholder="worker name, for example docs" aria-label="New worker's name"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sprole-add" data-lead="${esc(sp.lead)}">${svg.plus}Add worker</button></div></div>`;
   }
   // A draft whose file was deleted since (a worker, the lead): still listed, with its text, until saved again or discarded.
-  const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && !roleFiles(sp).includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
-  const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id) && !roleFiles(sp).includes(id.slice(sp.lead.length + 1)); };
+  const goneDrafts = sp => [...drafts.keys()].filter(id => id.startsWith(sp.lead + ' ') && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1))).map(id => ({ name: id.slice(sp.lead.length + 1), text: '', gone: true }));
+  const isGone = id => { const sp = cur?.sprints?.find(x => id.startsWith(x.lead + ' ')); return !!sp && drafts.has(id) && !sp.files.some(f => sp.lead + ' ' + f.name === id) && ![...roleFiles(sp), 'hooks.json'].includes(id.slice(sp.lead.length + 1)); };
   const spNoteHtml = id => (spNote.get(id) !== 'failed' && isGone(id) ? 'This file was deleted in P9 after you opened it (the lead or a worker removed it). Your text is still here, not saved. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spmine">Save it again</button> <button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sptheirs">Discard my text</button>' : null) ?? ({ changed: 'This file changed in P9 after you opened it (the lead or a worker edited it). Your text is still here, not saved. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spmine">Save mine over it</button> <button data-slot="button" data-variant="ghost" data-size="sm" data-pj="sptheirs">Show theirs</button>',
     failed: 'Not saved. Your text is still here. <button data-slot="button" data-variant="outline" data-size="sm" data-pj="spretry">Try again</button>' })[spNote.get(id)] ?? '';
   function archivedHtml() {
@@ -200,6 +234,18 @@ export function installProjects(o, api) {
     // morph changes an option's selected attribute only; a pick the user changed keeps showing their choice, so each role
     // pick is set to what roles.json says (after a refused save it says the lead's value).
     page.querySelectorAll('select[data-spr]').forEach(s => { s.value = s.querySelector('option[selected]')?.value ?? ''; });
+    if (spPage && svFor !== spPage) loadView();
+  }
+  // ---- Sprint View: the shown sprint's status, drawn by sprint-view.mjs (loaded on first use) from the answer
+  // sprint_status gives an agent. ponytail: read again every 5 s while its page shows; no push from the daemon.
+  async function loadView() {
+    const lead = svFor = spPage, n = ++svN;
+    if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
+      const [m, r] = await Promise.all([import('./sprint-view.mjs').catch(() => null), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
+      if (n !== svN) return;
+      if (m && r.status === 200) { sv = { lead, html: m.statusHtml(r.body, esc) }; renderPage(); }
+    }
+    setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
   }
   const refresh = p => { if (p) cur = p; o.loadProjects(); renderPage(); };
   async function update(body) { const r = await call('updateProject', { id: cur.id, ...body }); if (r.status !== 200) { failed(r); return false; } refresh(r.body.project); return true; }
@@ -247,17 +293,36 @@ export function installProjects(o, api) {
     if (!cur) return;
     if (k === 'new') return o.newSession(o.lastAgent(), '', cur.id);
     if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
-    if (k === 'edit') { if (edit) { clearTimeout(saveT); await saveInstr(); } edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
+    // Instructions typed and not yet saved are saved before the box leaves the page; a refused save keeps box and page.
+    const kept = async () => { if (!$('#pjInstr')) return true; clearTimeout(saveT); return await saveInstr() !== false; };
+    if (k === 'edit') { if (edit && !await kept()) return; edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }
     if (k === 'add') return picker.click();
     if (k === 'spset') return saveSprintSet();
+    if (k === 'spopen' || k === 'spback') { if (!await kept()) return; spPage = b.dataset.lead ?? ''; renderPage(); page.scrollTop = 0; return page.focus({ preventScroll: true }); }
     if (k === 'spnew') { const title = await confirmIt({ title: 'New sprint', body: 'A sprint to prepare: its plan, its roles and each role\'s files. No chat starts until Start sprint.', input: '', ok: 'Make it' }); if (!title) return;
-      const r = await call('newSprint', { id: cur.id, title }); if (r.status !== 201) return failed(r); return openProject(cur.id, r.body.sprint); }
+      if (!await kept()) return; const r = await call('newSprint', { id: cur.id, title }); if (r.status !== 201) return failed(r); return openProject(cur.id, r.body.sprint); }
     if (k === 'sprole-add') { const box = page.querySelector(`[data-sp-newkey][data-lead="${CSS.escape(b.dataset.lead)}"]`), key = box?.value.trim() ?? '';
       if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(key) || /^[0-9a-f]{8}-/.test(key)) return say('A worker\'s name is 1 to 64 of a-z, 0-9, dot, dash and underscore, starting with a letter or digit.', 'warn');
       return saveRoles(b.dataset.lead, rs => rs.some(r => r.key === key) ? say(`There is a role named ${key} already.`, 'warn') : rs.push({ key, provider: '', model: '', effort: '' })); }
     if (k === 'sprole-rm') return saveRoles(b.dataset.lead, rs => { const i = rs.findIndex(r => r.key === b.dataset.role); if (i >= 0) rs.splice(i, 1); else return false; });
     // A file whose save was refused stays open with its draft: nothing switches over unsaved text.
     if (k === 'spfile') { clearTimeout(saveT); if (!await saveSprint()) { renderPage(); return fillBox(); } const id = b.dataset.lead + ' ' + b.dataset.name; sprintOpen = sprintOpen === id ? '' : id; renderPage(); return fillBox(); }
+    // An open file's draft is saved first: the press approves the plan as it is on disk. The page is read again after, in
+    // place (the user may be elsewhere by then: nothing is opened for them).
+    // The press is out from the click, its draft's save too: a second press while that save is held sends nothing.
+    if (k === 'spstart') { const lead = b.dataset.lead, id = cur.id; if (starting.has(lead)) return;
+      // The scripts this press approves are the ones drawn with its button (SECURITY.md § Sprint scripts): a hooks.json that
+      // reached the page since (a save's reply carries every file) is shown, and waits for a press of its own.
+      const shown = b.dataset.hooks ?? '', hooksNow = () => cur?.sprints?.find(s => s.lead === lead)?.files.find(f => f.name === 'hooks.json')?.hash ?? ''; starting.add(lead); clearTimeout(saveT); renderPage(); fillBox(false);
+      if (!await saveSprint().catch(() => false)) { starting.delete(lead); renderPage(); return fillBox(); }
+      if (hooksNow() !== shown) { starting.delete(lead); startSaid.set(lead, 'Not started: hooks.json changed before your press went out. Look at the scripts listed here, then press Start again.'); renderPage(); return fillBox(); }
+      pressed.add(lead); startSaid.delete(lead); renderPage(); fillBox(false);
+      const r = await call('startSprint', { sprint: lead, ...(shown && { hooks: shown }) }, { quiet: true }).finally(() => starting.delete(lead));
+      startSaid.set(lead, startText(r));
+      const again = cur?.id === id && await call('project', { id }, { quiet: true });
+      if (again?.status === 200 && cur?.id === id) adopt(again.body.project, lead);
+      o.loadProjects(); renderPage(); return fillBox(false); }
+    if (k === 'spscripts') return openScripts(b.dataset.lead);
     if (k === 'spclean') { b.disabled = true; cleaned.set(b.dataset.lead, cleanText(await call('cleanSprint', { lead: b.dataset.lead }, { quiet: true }))); renderPage(); return fillBox(); }
     if (k === 'spretry' || k === 'spmine') { clearTimeout(saveT); return saveSprint(k === 'spmine'); }
     if (k === 'sptheirs') { const gone = isGone(sprintOpen); drafts.delete(sprintOpen); spNote.delete(sprintOpen); if (gone) sprintOpen = ''; renderPage(); return fillBox(); }
@@ -325,7 +390,7 @@ export function installProjects(o, api) {
     saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r) return false;
       if (spr === 'agent') Object.assign(r, { provider: value, model: '', effort: '' }); else r[spr] = value; }); });
   const saveInstr = async () => { const box = $('#pjInstr'); if (!box || box.value === (cur.instructions ?? '')) return;
-    const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) return failed(r);
+    const r = await call('updateProject', { id: cur.id, instructions: box.value }); if (r.status !== 200) { failed(r); return false; }
     cur = { ...cur, instructions: r.body.project.instructions }; const s = $('#pjSaved'); s?.classList.add('on'); setTimeout(() => s?.classList.remove('on'), 1200); };
   // The open file's box shows its draft, or the file: set as a value, since morph may keep a box another file typed in.
   const fillBox = (focus = true) => { const box = page.querySelector('[data-sp-box]'); if (!box) return;
@@ -383,6 +448,15 @@ export function installProjects(o, api) {
     const r = await call('deleteChat', { id: s.id }); if (r.status !== 200) return failed(r);
     o.S.sessions = o.S.sessions.filter(x => x !== s); o.S.open = o.S.open.filter(x => x !== s.id); o.renderTabs(); o.renderChats();
     say(`Deleted ${s.title}.`);
+  }
+
+  // ---- Sprint scripts (S18): the window is sprint-scripts-view.mjs, loaded on first use ----
+  let scriptsWin = null;
+  async function openScripts(lead) {
+    clearTimeout(saveT); await saveSprint().catch(() => false);
+    scriptsWin ??= import('./sprint-scripts-view.mjs').then(m => m.installScripts({ cur: () => cur, esc, scriptLine, scriptsOf, call, failed, ERR, say, adopt, renderPage, fillBox }));
+    const win = await scriptsWin.catch(() => { scriptsWin = null; });
+    return win ? win.show(lead) : say('The Sprint scripts window did not load. Try again.', 'warn');
   }
 
   // ---- New project ----

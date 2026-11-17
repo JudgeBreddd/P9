@@ -602,8 +602,22 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
   line, and keeps the key in memory only for that start. The command is split on spaces
   into a program and its arguments; nothing in it is read by a shell.
 - **Who can set one.** The desktop window only. The phone, the P9 MCP server and agents have
-  no route to read, add, change or remove a profile. The command is run as you, by the
+  no route to add, change or remove a profile, or to read its base URL, its key or its
+  command. The command is run as you, by the
   daemon; the desktop window can already open a real terminal, so it gains nothing by it.
+- **On the phone (threat model row O48p).** A signed-in phone reads each profile's id, name
+  and model names (`GET /profiles/names`), so its New chat can offer them, and starts a chat
+  on one with the same request the desktop sends. That read never holds the base URL, the
+  key, the key command or whether one is set, and the desktop's `/profiles` routes answer a
+  phone 404. A chat started from the phone runs on the computer P9 runs on, with that
+  profile's key, exactly as one started at the desktop: everything under "Where the key
+  goes" and "What the service sees" holds for it. The phone has no notice beside the row;
+  the choice of service was made when the profile was typed on the desktop.
+- **What an agent can read.** `list_providers` (§ Delegate) gives a chat's agent each
+  profile's id, name and model names, and nothing else of it: what it needs to name a profile
+  in `open_chat` or in a sprint's roles.json, the same choice the desktop's pickers give you.
+  Naming one starts nothing you did not allow: `open_chat` still starts only what a free
+  Settings > Delegation row starts, and a sprint still starts only on your press.
 - **What the page gets back.** Name, base URL, model names, and whether a key or a command
   is set. Never the key, and never the command's output. A saved key cannot be read back:
   it can only be replaced or removed.
@@ -652,7 +666,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -674,6 +688,13 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   still reaches it and starts nothing, and you can still open and message it yourself from
   the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
   mode. No tool deletes a chat.
+- **A worker is only what Settings > Delegation allows.** You set each worker's agent, model and
+  effort in Settings > Delegation, one row per worker (a row left on "the parent's" allows the
+  parent's own). `open_chat` left without them starts the next free row as you set it. A provider,
+  model or effort the agent names must be what one of your free rows starts, and that row is used;
+  anything else is refused (`delegation-refused`, naming the field and the values your rows allow),
+  never swapped for something near it, and nothing starts. Start sprint is not bound by these rows:
+  a sprint's chats come from its own roles.
 - **A worker is never wider than its parent.** It starts in the parent's mode unless a narrower
   one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. A message from
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
@@ -707,7 +728,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
     that carried the note and failed. After a second such failure the note is dropped from the
     waiting list; it stays in the chat's history.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `archive_chat` and `answer_chat` are refused while it
-  is on, as are `ready` and `verdict`. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+  is on, as are `ready` and `verdict`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
 - **Approvals.** An agent may answer an approval or a question asked by a chat it started,
@@ -998,7 +1019,7 @@ id>/` (the same folder as its worker folders, 0700). The lead's agent, its worke
 Written before the code (sprint spec D1, D3, D4).
 
 - **Only these names.** `sprint.md`, `rules.md`, `roles.json`, `roles/<key>.instructions.md`, `roles/<key>.rules.md`,
-  `roles/<key>.work.md`, `notes/<key>.md` and `review-trail.md`, where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
+  `roles/<key>.work.md`, `notes/<key>.md`, `review-trail.md`, `hooks.json` and `hooks.log` (§ Sprint scripts), where `key` follows `open_chat`'s key rule (a worker without a key has its notes under its chat
   ID; `open_chat` refuses a key shaped like a chat ID, so two workers never share notes). P9 reads or writes no other
   name there. If a folder on
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
@@ -1052,7 +1073,8 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
 - **Who can start it.** You, with the Start press on the desktop (a desktop-only route; the phone has none), or an
   agent's `start_sprint` from a chat in the same project. For the agent's call P9 asks you first in that chat, in every
   mode, Unrestricted included. Your yes or your press is the approval record: P9 stores the time, who started it (you,
-  or that chat with your yes) and a SHA-256 of `sprint.md` and `roles.json` as they were. A sprint from another project
+  or that chat with your yes) and a SHA-256 of `sprint.md` and `roles.json` as they were. It also stores the sprint's
+  scripts as they were (§ Sprint scripts): the copy P9 runs. A sprint from another project
   does not exist to that agent.
 - **What it makes.** The lead's chat, which takes the sprint's id (so the prep's folder is its own), then each other
   row's chat under it, one by one with a short pause between them. A row other than `review` gets a worker folder
@@ -1077,6 +1099,116 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   one that did is sent nothing. A P9 restart in the middle of that first turn counts as not reached, so that chat may
   read its work twice. Two presses at the same time:
   the second is refused while the first runs.
+- **Workers a lead opens later.** A sprint's workers come only from its role rows, never from Settings > Delegation.
+  A chat is a sprint lead when New sprint made its sprint or its sprint folder has a `roles.json` (`open_chat` writes
+  neither, so a plain chat's workers stay Delegate's). Its `open_chat` must name the key of a `roles.json` row; the
+  worker starts on exactly that row and is named for it. No key, a key with no row, a missing or broken `roles.json`
+  or a row P9 cannot start is refused by its role and field before any chat is made or any worker place is taken.
+  A worker the plan has no role for needs a role row in Sprint Setup first.
+
+## Sprint scripts
+
+A sprint can name commands that P9 runs at fixed points of the sprint: a check before it starts, a notice when a
+worker folder is made. Written before the code (sprint spec S18 to S20; threat model rows S18, S19, S20).
+
+- **What a script is.** A row of `hooks.json` in the sprint folder (§ Sprint files): a name, a command, a point, and
+  optionally `"blocking": true`. At most 12 rows, a name of at most 60 characters, a command of at most 200. The
+  points are `before-start`, `before-new-worker`, `before-merge`, `before-close` (these four may block) and
+  `sprint-start`, `worker-folder-made`, `before-ready`, `ci-red`, `gate-passed`, `pause`, `resume`, `after-close`
+  (notice only: `blocking` there is refused). A file P9 cannot read as that refuses Start, by row and field.
+- **A script runs as you.** P9 runs the command as your user, outside every agent's mode and sandbox: no shell (the
+  command is split on spaces into a program and its arguments), the short allow-list environment, the sprint folder
+  as its working folder, the sprint's state as JSON on its input, a limit of 60 seconds for a blocking run and 300
+  for a notice, and at most 64 KiB of output kept. At the limit P9 ends the program it started and stops waiting; a program that one
+  started is not followed, and one that keeps the script's output open does not hold the action past the limit or
+  past the script's own end. This is the same trust as a setup command (§ Worker folders), so it gets the same rule:
+  nothing runs that you did not approve.
+- **P9 runs the copy you approved, never the file.** The lead's agent and its workers can edit `hooks.json`, as they
+  can every sprint file. So P9 does not run what the file says: at Start it reads the file, and your approval stores
+  the scripts in P9's database, in the approval record (§ Start sprint), which no agent can write. Only that copy
+  runs. An edit to `hooks.json` after Start changes nothing until you start the sprint again and approve the new
+  list. A sprint that was never started this way (a chat's workers under Delegate alone) has no copy and runs
+  nothing.
+- **You see every command before you approve it.** The project page lists each script (name, point, blocking, the
+  whole command) beside the Start button, and the press sends the SHA-256 of the `hooks.json` the page showed; P9
+  refuses the press if the file is no longer that one, so a script slipped in after you looked is not approved. The hash is the one of
+  the list drawn with the button you pressed: if a newer `hooks.json` reaches the page before the press goes out (while
+  an open draft saves), the press is not sent, the page shows the new list and says to press again. For an
+  agent's `start_sprint`, the question P9 asks you lists the same four things for every script, and after your yes P9
+  reads the file again and refuses if it changed while you were asked.
+- **What the approval does not cover.** P9 approves the command line, not the bytes of the program it names. A
+  command such as `./check.sh` runs whatever that file holds when the point comes, and a file in the sprint folder or
+  in a worker folder is one an agent can write. Name programs that agents cannot write (outside the workspace and the
+  sprint folder) for anything that must not change; the per-script approval of S20 does not change this either.
+- **Blocking.** A blocking script that exits non-zero, runs past its limit or cannot be started refuses the action:
+  Start makes nothing and records nothing, a worker is not started. The refusal carries the script's name, its exit
+  and its last output line (at most 300 characters, control characters removed), to the page or to the agent's tool.
+  A script's exit 0 allows nothing by itself: every other check of the action still applies after it, and
+  when `before-start` ends, Delegation off, the agent lock, Workers per chat and the modes (never wider than the
+  caller is now) are all read again, before anything is recorded or made. A notice never
+  delays or refuses anything; its result is only logged.
+- **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
+  sprint: its id, title and folder, the approval record, the project's id and name, the role rows, the plan's items
+  with P9's review record, each chat of the sprint (key, title, agent, model, effort, mode, state, context use,
+  folder, its ready and verdict records), plan usage and limits as the usage page shows them, and the last 20 lines
+  of the script log. No key, no provider profile's address, no chat text.
+- **The log.** Every run adds one line to `hooks.log` in the sprint folder: time, point, name, exit or reason,
+  duration, last output line. P9 keeps the last 100 lines. The project page and `set_rules` cannot write it, but it
+  is a plain file in a folder agents can write, so an agent could alter it: it is a convenience, and what a script
+  reads back from it in `log` is only as trustworthy as that.
+- **What an agent can read.** `sprint_scripts` gives an agent in the sprint's project the points, the approved
+  scripts, what `hooks.json` holds now (or why it is refused), whether the two differ, and the last log lines. It
+  changes nothing. No agent tool approves a script. `sprint_status` gives the same agent where the sprint stands,
+  the answer the desktop's Sprint View page reads (`GET /sprints/<id>/status`, desktop only, no phone route): what
+  a script is told, without the parts about one script run, plus the counts the page draws. Nothing in it is more
+  than the project page and `list_chats` already show for that sprint, and it changes nothing.
+- **The library.** Scripts you want in more than one sprint are kept in a library: rows of the same four fields, at
+  most 100, held in P9's database (the `prefs` table, key `sprint-scripts`), not in a file, so no agent's file tools
+  reach it and one library serves every project. It is the same list the Macro card will read. The Sprint scripts
+  window on the project page lists three things for a sprint: the scripts approved at Start, the rows of its
+  `hooks.json`, and the library; it makes, edits and removes a row in either place, saves a sprint's row to the
+  library and adds a library row to the sprint. The agent's tools do the same, checked by the same code:
+  `sprint_script_save` and `sprint_script_remove` (the sprint's `hooks.json`, or the library with `library: true`)
+  and `sprint_script_add` (a copy of a library row into the sprint). They are refused while the agent lock is on and,
+  for a sprint's rows, outside the caller's project. A library row is data: nothing runs from the library. Adding a
+  row to a sprint copies it into that sprint's `hooks.json`, where it waits for your Start like any row there, and a
+  later change to the library changes no sprint and no approved copy. So an agent that writes a hostile row into
+  the library gains what it had by writing `hooks.json`: a line you see, whole, beside the Start button before it can
+  run. Read the command each time; the name is the agent's to choose.
+- **Run now.** One approved script can be run on request, outside its point: the Run now button in the window (your
+  own press, on the desktop only), or the agent's `run_sprint_script`, which asks you first with the whole command in
+  the question, except in Unrestricted mode (agent lock and File protection both off), where it runs without asking,
+  as `run_script` does. Either way only the copy approved at Start runs, found by name; a row that is only in
+  `hooks.json` or only in the library is refused, with the reason. If the approved copy changed while you were
+  asked, nothing runs. For the agent's run, the cancel, the agent lock and the approved copy are checked once more
+  right before the program is started, after its input is gathered. The run is not blocking, has the 60-second limit, gets the same state on its input with
+  `subject: { manual: true, by }`, and adds its line to `hooks.log` with the point marked "(run now)". A manual run
+  carries the limit of the approval above: it runs whatever the named program holds at that moment.
+- **Scripts added after Start.** Pressing Start approves every script then in `hooks.json`. A row that appears in the
+  file later, or that differs in any field from the approved copy of the same name, is an additional script, whoever
+  wrote it. What P9 does with it is your switch, "Allow additional scripts", in the Sprint scripts window:
+  - **Off (the default).** It does not run until you approve that exact row. You approve in the window (Approve on
+    the row, or Approve all; the press carries the SHA-256 of the `hooks.json` the window showed and is refused if the
+    file is no longer that one), or by your yes to an agent's `request_sprint_scripts`, which asks one question for
+    every waiting row, each shown whole, in every mode, Unrestricted too; the rows are read again after your yes and
+    nothing is approved if they changed. A row changed after you approved it waits again, and until then the copy you
+    approved keeps running.
+  - **On.** It runs at its point with no question, and a changed row replaces the approved one. This is the one
+    place P9 gives up the rule above that nothing runs that you did not approve: with the switch on, any agent
+    that can write the sprint folder can have a command run as you, outside its mode, at the next point. Turn it
+    on only for agents you would give your own shell. The window says this before it turns on.
+  In both positions a script approved at Start keeps running when its row is removed from the file: only your next
+  Start drops it. A `hooks.json` P9 cannot read adds nothing. The switch is one setting for all sprints, kept in P9's
+  database; `sprint_scripts` tells an agent whether it is on, which additional scripts run and which wait, and no
+  tool changes it. The agent lock refuses `request_sprint_scripts`. At most 24 rows can be approved between one Start
+  and the next (`too-many-scripts`); Start again approves the file as it is. Run now, yours and the agent's, runs
+  what stands: the copies approved at Start and the additional ones running, never a waiting row.
+- **Where the owner's routes are.** `GET` and `POST /sprint-scripts`, `POST /sprints/:id/run-script`,
+  `POST /sprint-scripts/allow` (the switch) and `POST /sprints/:id/approve-scripts` exist on the desktop's connection
+  only: a phone session gets 404, as for Start.
+- **Points nothing fires yet.** `before-merge`, `before-close`, `ci-red`, `gate-passed`, `pause`, `resume` and
+  `after-close` are accepted in the file and approved like the rest, but P9 has no such action yet, so their scripts
+  do not run.
 
 ## Agent modes
 

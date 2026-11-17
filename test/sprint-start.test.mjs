@@ -148,7 +148,7 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const plan = createHash('sha256').update(fs.readFileSync(path.join(prep.body.folder, 'sprint.md'), 'utf8') + '\0' + text).digest('hex');
   listed = (await call(instance, '/projects/' + project)).body.project.sprints.find((s) => s.lead === sprint);
   assert.equal(listed.prep, false);
-  assert.deepEqual({ ...listed.started, at: typeof listed.started.at }, { at: 'number', plan, by: 'owner' });
+  assert.deepEqual({ ...listed.started, at: typeof listed.started.at }, { at: 'number', plan, by: 'owner', scripts: [] });
   assert.deepEqual(press.body.started, listed.started);
 
   // Pressing again: everything is kept, nothing is made or sent again.
@@ -224,9 +224,13 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   fs.writeFileSync(path.join(made.folder, 'roles.json'), roles([lead, review]));
   fs.writeFileSync(path.join(made.folder, 'roles/lead.work.md'), 'config'); fs.writeFileSync(path.join(made.folder, 'roles/review.work.md'), 'config');
   const n3 = (await rows(instance)).length;
+  // S19: the sprint's scripts are in the question the user answers (a point P9 does not fire yet, so nothing runs here).
+  const tidy = { name: 'tidy', command: 'node tidy.mjs', point: 'after-close' };
+  fs.writeFileSync(path.join(made.folder, 'hooks.json'), JSON.stringify({ scripts: [tidy] }));
   let pending = a.tool('start_sprint', { sprint: made.sprint });
   let asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', a.cursor);
   assert.match(asked.hit.data.toolCall.title, /^P9: start the sprint "S3": lead \(claude opus high\), review \(claude haiku low\)\. This is your approval of its plan/);
+  assert.match(asked.hit.data.toolCall.title, /It also approves this script, which P9 will run as you, outside every agent's mode: .*tidy.*node tidy\.mjs/);
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'reject' } });
   assert.equal((await pending).error, 'not-allowed');
   assert.equal((await rows(instance)).length, n3, 'a rejected start made a chat');
@@ -242,6 +246,17 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const byTool = await pending;
   assert.equal(byTool.error, undefined, JSON.stringify(byTool));
   assert.equal(byTool.started.by, a.conversation);
+  assert.deepEqual(byTool.started.scripts, [{ ...tidy, blocking: false }]);
+  // hooks.json changed while the user was asked: the yes was to another file, so nothing is approved or run.
+  pending = a.tool('start_sprint', { sprint: made.sprint });
+  asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
+  fs.writeFileSync(path.join(made.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'swap', command: 'node swap.mjs', point: 'before-new-worker', blocking: true }] }));
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  assert.equal((await pending).error, 'scripts-changed');
+  const scr = await a.tool('sprint_scripts', { sprint: made.sprint });
+  assert.deepEqual([scr.approved?.scripts.map((x) => x.name), scr.file.scripts?.map((x) => x.name), scr.pending], [['tidy'], ['swap'], true], JSON.stringify(scr));
+  fs.writeFileSync(path.join(made.folder, 'hooks.json'), JSON.stringify({ scripts: [tidy] }));
+  console.log('PASS S19 agent start: the question lists the scripts; a file changed during the question is refused');
   assert.equal((await rows(instance)).find((r) => r.id === made.sprint).parent, a.conversation);
   for (const [row, c] of [[lead, byTool.chats[0]], [review, byTool.chats[1]]]) assert.match(await config(instance, c.chat), new RegExp(`^config:model=${row.model},effort=${row.effort},`));
   // Delegation turned Off while the user is asked: Allow makes nothing.
@@ -281,4 +296,88 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const out = await agent(t, instance, undefined);
   assert.equal((await out.tool('start_sprint', { sprint: s2.sprint })).error, 'unknown-sprint');
   console.log('PASS Start sprint: refusals by role and field with no chat, every chat on its row (lead, review, codex and claude workers), press again keeps all, halfway then rest, an undelivered first message sent on the next press, claude row never on a profile, record ' + plan.slice(0, 12) + ', start_sprint asked with its place held, Off and a lower limit after the ask, 3 levels');
+});
+
+test('Sprint roles: a worker the lead opens for a role starts on its roles.json row and is named for it, whatever Settings > Delegation says; a value the row does not start is refused by field', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  // P9 learns Claude's model and effort lists when it first runs.
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Roles' })).body;
+  const write = (name, body) => fs.writeFileSync(path.join(s.folder, name), body);
+  const lead = { key: 'lead', provider: 'claude', model: 'opus', effort: 'high' };
+  write('roles.json', JSON.stringify({ roles: [lead] })); write('roles/lead.work.md', 'mcp');
+  const press = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  const L = await attach(t, instance, s.sprint);
+  // Every Settings > Delegation row on opus/high; the plan's roles on haiku/low.
+  const opus = { agent: 'claude', model: 'opus', effort: 'high' };
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill(opus) })).status, 200);
+  write('roles.json', JSON.stringify({ roles: [lead, { key: 'phone', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'window', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const count = (await rows(instance)).length;
+  // A value the role's row does not start: refused by field, whatever Delegation allows; nothing made.
+  const wide = await L.tool('open_chat', { text: 'config', key: 'window', model: 'opus' });
+  assert.deepEqual([wide.error, wide.role, wide.field], ['role-refused', 'window', 'model'], JSON.stringify(wide));
+  const low = await L.tool('open_chat', { text: 'config', key: 'window', effort: 'high' });
+  assert.deepEqual([low.error, low.field], ['role-refused', 'effort'], JSON.stringify(low));
+  assert.equal((await rows(instance)).length, count, 'a refused role made a chat');
+  // The role's row decides and names the chat, even with another title given.
+  const made = await L.tool('open_chat', { text: 'config', key: 'phone', title: 'Something else' });
+  assert.equal(made.error, undefined, JSON.stringify(made));
+  assert.match(await config(instance, made.chat), /^config:model=haiku,effort=low,/, 'the role\'s worker did not start on its roles.json row');
+  assert.equal((await rows(instance)).find((r) => r.id === made.chat).title, 'phone', 'the role\'s worker is not named for its role');
+  // Its own values named are what the row starts: allowed.
+  const same = await L.tool('open_chat', { text: 'config', key: 'window', model: 'haiku', effort: 'low' });
+  assert.match(await config(instance, same.chat), /^config:model=haiku,effort=low,/);
+  // FIX1 (#225): a role on a provider profile is named as its row writes it, profile:<id>; another profile, or another
+  // agent, is refused by field and makes nothing.
+  const post = async (name) => (await call(instance, '/profiles', 'POST', { name, baseUrl: 'https://models.example.test/api/', models: ['glm-5.3'], key: 'sk-profile-test-0f3a9c71d2e84b56' })).body.profile.id;
+  const mineId = await post('Far Cloud'), otherId = await post('Other Cloud');
+  write('roles.json', JSON.stringify({ roles: [lead, { key: 'far', provider: 'profile:' + mineId, model: 'glm-5.3', effort: 'low' }] }));
+  const atFar = (await rows(instance)).length;
+  const foreign = await L.tool('open_chat', { text: 'config', key: 'far', provider: 'profile:' + otherId });
+  assert.deepEqual([foreign.error, foreign.role, foreign.field], ['role-refused', 'far', 'provider'], JSON.stringify(foreign));
+  assert.match(foreign.detail, new RegExp('row starts \\(profile:' + mineId + '\\)'), foreign.detail);
+  assert.equal((await L.tool('open_chat', { text: 'config', key: 'far', provider: 'codex' })).field, 'provider');
+  assert.equal((await rows(instance)).length, atFar, 'a role named on another profile made a chat');
+  const farRole = await L.tool('open_chat', { text: 'config', key: 'far', provider: 'profile:' + mineId, model: 'glm-5.3' });
+  assert.equal(farRole.error, undefined, 'a profile role named as its own row writes it was refused: ' + JSON.stringify(farRole));
+  assert.equal((await rows(instance)).find((r) => r.id === farRole.chat).title, 'far');
+  await L.tool('wait_chat', { chat: farRole.chat });
+  assert.equal((await L.tool('stop_chat', { chat: farRole.chat, close: true })).error, undefined);
+  console.log('PASS Sprint roles FIX1: a profile role opened when named profile:<its id>; another profile and another agent were refused on provider with no chat');
+  // Workers come only from role rows: no key, a key with no row, a row P9 cannot start, a broken or missing roles.json
+  // are refused before anything is made, and take no worker place (the lead has one place left; a role row takes it).
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 3, workers: Array(3).fill(opus) })).status, 200);
+  const before = (await rows(instance)).length;
+  const keyless = await L.tool('open_chat', { text: 'config' });
+  assert.deepEqual([keyless.error, keyless.field], ['role-refused', 'key'], JSON.stringify(keyless));
+  const late = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.deepEqual([late.error, late.role, late.field], ['role-refused', 'late', 'key'], JSON.stringify(late));
+  assert.match(late.detail, /role row first: add it in Sprint Setup/);
+  const roles = [lead, { key: 'phone', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'window', provider: 'claude', model: 'haiku', effort: 'low' }];
+  write('roles.json', JSON.stringify({ roles: [...roles, { key: 'bad', provider: 'claude', model: 'nope', effort: 'low' }] }));
+  const bad = await L.tool('open_chat', { text: 'config', key: 'bad' });
+  assert.deepEqual([bad.error, bad.role, bad.field], ['role-refused', 'bad', 'model'], JSON.stringify(bad));
+  write('roles.json', '{ "roles": [');
+  const broken = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.deepEqual([broken.error, broken.field], ['role-refused', 'roles.json'], JSON.stringify(broken));
+  fs.unlinkSync(path.join(s.folder, 'roles.json'));
+  const missing = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.deepEqual([missing.error, missing.field], ['role-refused', 'roles.json'], JSON.stringify(missing));
+  assert.match(missing.detail, /roles\.json in .* is missing/);
+  assert.equal((await rows(instance)).length, before, 'a refused sprint worker made a chat');
+  write('roles.json', JSON.stringify({ roles: [...roles, { key: 'late', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  const added = await L.tool('open_chat', { text: 'config', key: 'late' });
+  assert.equal(added.error, undefined, 'a refusal took a worker place: ' + JSON.stringify(added));
+  assert.match(await config(instance, added.chat), /^config:model=haiku,effort=low,/);
+  // A plain chat (no sprint made by New sprint, no roles.json) is unchanged: its keyed worker starts on its Delegation row.
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const plain = await (await attach(t, instance, first)).tool('open_chat', { text: 'config', key: 'late' });
+  assert.equal(plain.error, undefined, JSON.stringify(plain));
+  assert.match(await config(instance, plain.chat), /^config:model=opus,effort=high,/, 'a plain chat\'s worker did not start on its Delegation row');
+  console.log('PASS Sprint roles: phone and window started on their roles.json row (haiku/low) under Delegation rows of opus/high, named for the role; opus and high for window were refused by field with nothing made; no key, a key with no row, a bad row, a broken and a missing roles.json were refused with nothing made and no place taken; a plain chat\'s worker took its Delegation row');
 });

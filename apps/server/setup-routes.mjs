@@ -215,6 +215,16 @@ export function setupRoutes(outer) {
         || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setDelegation(body));
   });
+  // Desktop only, Settings > New chats start in (O133): each agent's Default model and Default effort.
+  outer.app.get('/start-defaults', (c) => c.json(outer.chat.newChatDefaults()));
+  // Body { set: { <agent>: { model?, effort? } }, onlyEmpty?: true }: only the fields named change (see setNewChatDefaults).
+  outer.app.post('/start-defaults', async (c) => {
+    const body = await outer.json(c), agents = Object.keys(outer.chat.newChatDefaults()), str = (x) => typeof x === 'string' && x.length <= 200, set = body?.set;
+    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => k !== 'set' && k !== 'onlyEmpty') || (body.onlyEmpty !== undefined && body.onlyEmpty !== true)
+        || !set || typeof set !== 'object' || Array.isArray(set) || !Object.keys(set).length
+        || !Object.entries(set).every(([a, f]) => agents.includes(a) && f && typeof f === 'object' && Object.keys(f).length && Object.entries(f).every(([k, x]) => (k === 'model' || k === 'effort') && str(x)))) return c.json({ error: 'request-refused' }, 400);
+    return c.json(outer.chat.setNewChatDefaults(set, body.onlyEmpty === true));
+  });
   // Desktop only (SECURITY.md § Worker folders, "Who cleans up"): one sprint's worker folders, by the store's own rules
   // (worker-folders.mjs clean). Refused while a worker the lead started is not stopped, and while the lead is in a turn or
   // has a message waiting: it may be making a worker folder, which has nothing of its own yet and would read as merged.
@@ -258,11 +268,44 @@ export function setupRoutes(outer) {
   outer.app.post('/projects/:id/sprints', async (c) => outer.reply(c, await outer.chat.projects.newSprint(c.req.param('id'), await outer.json(c))));
   outer.app.post('/sprints/:id/start', async (c) => {
     const body = await outer.json(c);
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
-    const result = await outer.mcp.ownerStart(c.req.param('id'));
-    const status = !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : result.error === 'sprint-starting' ? 409
-      : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off'].includes(result.error) ? 400 : 500;
+    // hooks: the SHA-256 of the hooks.json the page showed (SECURITY.md § Sprint scripts); nothing else is taken.
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((k) => k !== 'hooks') || (body.hooks !== undefined && !/^[0-9a-f]{64}$/.test(body.hooks))) return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp.ownerStart(c.req.param('id'), undefined, body.hooks);
+    const status = !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : ['sprint-starting', 'scripts-changed'].includes(result.error) ? 409
+      : ['role-refused', 'too-many-roles', 'request-refused', 'delegate-off', 'scripts-refused', 'script-refused'].includes(result.error) ? 400 : 500;
     return c.json(result, status);
+  });
+  // Desktop only (SECURITY.md § Sprint scripts, "The library"): the owner's script library and a run of one approved
+  // script. No phone route. An agent has the tools instead (sprint_script_save, _remove, _add, run_sprint_script).
+  const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed', 'scripts-changed', 'sprint-not-started', 'too-many-scripts'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);
+  // Sprint View's numbers, desktop only: the answer the sprint_status tool gives an agent.
+  outer.app.get('/sprints/:id/status', async (c) => { const result = await outer.mcp.ownerScripts.status(c.req.param('id')); return c.json(result, scriptStatus(result)); });
+  outer.app.get('/sprint-scripts', (c) => c.json(outer.mcp.ownerScripts.library(c.req.query('sprint'))));
+  // The owner's switch and Approve (S20, "Scripts added after Start"): desktop only, and no agent tool does either.
+  outer.app.post('/sprint-scripts/allow', async (c) => {
+    const body = await outer.json(c), result = body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).join() === 'on' ? outer.mcp.ownerScripts.allow(body.on) : { error: 'request-refused' };
+    return c.json(result, scriptStatus(result));
+  });
+  outer.app.post('/sprints/:id/approve-scripts', async (c) => {
+    const body = await outer.json(c), ok = body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).every((k) => ['hash', 'names'].includes(k))
+      && (body.names === undefined || (Array.isArray(body.names) && body.names.length > 0 && body.names.every((n) => typeof n === 'string')));
+    const result = ok ? outer.mcp.ownerScripts.approve(c.req.param('id'), body.hash, body.names) : { error: 'request-refused' };
+    return c.json(result, scriptStatus(result));
+  });
+  outer.app.post('/sprint-scripts', async (c) => {
+    // One of save (a row), remove (a name) or add (a library name, into a sprint); sprint: that sprint's hooks.json instead of the library.
+    const body = await outer.json(c), { sprint, ...rest } = body && typeof body === 'object' && !Array.isArray(body) ? body : {}, keys = Object.keys(rest).join();
+    const result = sprint !== undefined && typeof sprint !== 'string' ? { error: 'request-refused' }
+      : keys === 'save' && rest.save && typeof rest.save === 'object' && !Array.isArray(rest.save) ? outer.mcp.ownerScripts.save(rest.save, sprint)
+      : keys === 'remove' && typeof rest.remove === 'string' ? outer.mcp.ownerScripts.remove(rest.remove, sprint)
+      : keys === 'add' && typeof rest.add === 'string' && sprint !== undefined ? outer.mcp.ownerScripts.add(rest.add, sprint) : { error: 'request-refused' };
+    return c.json(result, scriptStatus(result));
+  });
+  outer.app.post('/sprints/:id/run-script', async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join() !== 'name' || typeof body.name !== 'string') return c.json({ error: 'request-refused' }, 400);
+    const result = await outer.mcp.ownerScripts.run(c.req.param('id'), body.name);
+    return c.json(result, scriptStatus(result));
   });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).

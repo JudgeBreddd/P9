@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
@@ -773,4 +774,37 @@ for (const how of ['a cancelled mode warning', 'a pick of the value already sele
   assert.equal(posts.length, 2, 'two posts: ' + posts.join(' | '));
   assert.equal(posts[0], posts[1], 'the same ID and the same body: ' + posts.join(' | '));
   assert.equal(users, 1, 'the message shows once');
+});
+// Threat model row O48p (Builder, 2026-11-16: "Yes to starting chats with any provider on the phone").
+test('O48 on the phone: New chat lists each provider profile\'s models; the chat it starts is on that profile and model; the phone reads id, name and model names only', { timeout: 90000 }, async (t) => {
+  const { page, server, session } = await phoneOn(t);
+  const KEY = 'sk-profile-test-0f3a9c71d2e84b56';
+  const saved = await server.desk('/profiles', 'POST', { name: 'Far <b>Cloud', baseUrl: 'https://models.example.test/api/', models: ['glm-5.3', 'kimi-k3:cloud'], key: KEY });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  const id = saved.body.profile.id;
+  const names = await server.remote('/profiles/names', { session });
+  assert.deepEqual(names.body, { profiles: [{ id, name: 'Far <b>Cloud', models: ['glm-5.3', 'kimi-k3:cloud'] }] }, 'the phone read more or less than id, name and model names');
+  for (const never of ['models.example.test', KEY, 'baseUrl', 'secret', 'command']) assert.ok(!names.text.includes(never), 'the phone\'s read holds ' + never);
+  assert.equal((await server.remote('/profiles/names')).status, 401, 'the names were read with no session');
+  assert.equal((await server.remote('/profiles', { session })).status, 404);
+  // A model the profile does not list: refused, nothing made.
+  const before = (await server.desk('/chat')).body.conversations.length;
+  assert.equal((await server.remote('/chat', { method: 'POST', session, body: { provider: 'claude', profile: id, model: 'opus' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 400);
+  assert.equal((await server.desk('/chat')).body.conversations.length, before, 'a refused profile chat was made');
+  await page.waitForSelector('#newChat');
+  if (await page.isVisible('[data-bar="chat"] [data-back]')) await page.click('[data-bar="chat"] [data-back]');
+  await page.click('#newChat');
+  await page.waitForSelector('#sheet[open] [data-profile]');
+  assert.deepEqual(await page.$$eval('#sheet .opt', (rows) => rows.map((row) => row.textContent)), ['New Claude chat', 'New Codex chat', 'New Far <b>Cloud chat · glm-5.3', 'New Far <b>Cloud chat · kimi-k3:cloud']);
+  assert.equal(await page.locator('#sheet b').count(), 0, 'a profile name was drawn as markup');
+  assert.ok(!(await page.content()).includes('models.example.test'), 'the phone page holds the base URL');
+  await shot(page, 'o48p-new-chat');
+  const made = page.waitForResponse((response) => new URL(response.url()).pathname === '/chat' && response.request().method() === 'POST', { timeout: 10000 });
+  await page.click('#sheet[open] [data-profile-model="kimi-k3:cloud"]');
+  const reply = await made; assert.equal(reply.status(), 201, await reply.text());
+  const chat = String((await reply.json()).conversation);
+  await page.waitForFunction((id) => location.hash === '#chat=' + id && document.querySelector('#conversation').value === id, chat, { timeout: 10000 });
+  const row = (await server.desk('/chat')).body.conversations.find((c) => c.id === chat);
+  assert.deepEqual([row.provider, row.profile?.id, row.profile?.model], ['claude', id, 'kimi-k3:cloud'], 'the chat the phone started is not on the profile and model picked');
+  console.log('PASS O48 on the phone: names read as id, name, models only (no base URL, key or key kind; 401 with no session; /profiles still 404); the sheet listed both models with the name as text; the chat started on the profile and model picked; an unlisted model was refused with no chat');
 });
