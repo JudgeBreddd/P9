@@ -9,6 +9,7 @@ import { childEnv } from './child-env.mjs';
 import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
+import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, hashOf, notesLine } from './sprint-files.mjs';
 import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
 
@@ -46,6 +47,8 @@ export const DELEGATE_TOOLS = (input) => {
     sprint_script_save: 'Do not write a script the user did not ask for.', sprint_script_remove: 'Do not remove a script you did not add unless the user asked.',
     sprint_script_add: 'Do not take adding a script as approving it.', run_sprint_script: 'Do not run a script to get around a refusal.', request_sprint_scripts: 'Do not ask again for scripts the user refused.',
     pause_sprint: 'Do not pause to stop a turn already running; it finishes.',
+    schedule_prompt: 'Do not schedule work the user did not ask for.', remove_schedule: 'Do not remove a schedule another chat relies on without saying so.',
+    list_schedules: 'Do not poll it to wait for a run; a scheduled prompt arrives as a message.',
     resume_sprint: 'Do not resume a sprint the user paused unless the user asked you to.',
   };
   return [
@@ -62,6 +65,15 @@ export const DELEGATE_TOOLS = (input) => {
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
     ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
     ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. P9 sends the worker your note, counts its fixes, and asks the lead for a larger model at the third fix. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
+    ['schedule_prompt', 'Have P9 send a prompt later, once (at) or every so many minutes (every), to this chat (your own wake-up) or to a chat send_chat reaches. '
+      + 'P9 sends it like send_chat with when: queue, so a chat that is working gets it when its turn ends. It is kept across a P9 restart; a run missed while P9 was down goes once when it is back. '
+      + 'At most ' + SCHEDULES_MAX + ' per chat. With id: change one of yours (text, at, every, paused); paused: true stops it until paused: false. Returns its id and next run.',
+    input({ text: { type: 'string', maxLength: SCHEDULE_TEXT_MAX }, chat: { type: 'string', description: 'The chat to send it to. Left out: this chat.' },
+      at: { type: 'string', description: 'When it first goes, an ISO time like 2026-11-17T09:30:00Z. Left out: one every from now.' },
+      every: { type: 'integer', minimum: 1, maximum: EVERY_MAX, description: 'Minutes between runs. Left out: once, at at.' },
+      paused: { type: 'boolean' }, id: { type: 'string', description: 'A schedule of yours to change, from schedule_prompt or list_schedules.' } })],
+    ['list_schedules', 'The prompts you scheduled, soonest first: id, chat, text, once or every minutes, next run, paused, and the last run\'s result.', input({})],
+    ['remove_schedule', 'Delete one of your scheduled prompts by id.', input({ id: { type: 'string' } }, ['id'])],
     ['set_rules', 'Replace your sprint rules: one text, at most ' + MAX_RULES + ' characters, that P9 sends along with every message you send a chat you started, so a worker '
       + 'keeps them through a long task. Until you set them, P9 sends its own short default (state the folder and branch first, wait for what you started, end with pass or fail). '
       + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
@@ -750,6 +762,29 @@ export function createDelegate({ chat, allowed, usage }) {
   const shelved = (id) => chat.list().some((c) => c.id === id && c.archived);
   const SHELVED = { error: 'chat-archived', detail: 'It is archived. Bring it back first: archive_chat with archived: false.' };
 
+  // O140: a chat's scheduled prompts. To itself one goes as a queued prompt from P9, marked as scheduled (its own wake-up,
+  // not the user's words), so a paused sprint keeps it for Resume (S13) and a stopped worker takes a place under Workers
+  // per chat as send_chat's start does. To another chat it goes as that chat's send_chat with when: queue, checked then.
+  // No database (a test's chat without the ledger): no schedules, and the three tools say so.
+  const schedules = chat.db ? createSchedules({ db: chat.db, fire: async (s) => {
+    if (s.chat !== s.owner) return sendChat(s.owner, { chat: s.chat, text: s.text, when: 'queue' });
+    if (chat.lock(s.owner).on) return { error: 'agent-lock-on' };
+    if (shelved(s.owner)) return SHELVED;
+    const me = chat.info(s.owner);
+    const place = me?.parent && ['stopped', 'moved'].includes(me.state) ? take(me.parent, s.owner) : null;
+    if (place?.error) return place;
+    const sent = await chat.prompt(s.owner, { text: '[P9: your scheduled prompt ' + s.id + ' (list_schedules). It is not a message from the user.]\n\n' + s.text, when: 'queue' }, undefined, 'p9').finally(() => place?.release());
+    return sent.status === 202 || sent.status === 200 ? { sent: sent.when === 'pause' ? 'kept for the sprint\'s resume' : true } : { error: sent.error ?? 'refused' };
+  } }) : null;
+  const NO_SCHEDULES = { error: 'schedules-unavailable' };
+  function schedulePrompt(caller, args) {
+    if (chat.lock(caller).on) return { error: 'agent-lock-on' };
+    const target = args.chat ?? caller;
+    if (args.id === undefined && target !== caller && !reach(caller, target)) return { error: 'chat-not-found' };
+    if (args.id !== undefined && args.chat !== undefined) return { error: 'request-refused', detail: 'A schedule keeps its chat: remove it and schedule a new one.' };
+    return schedules ? schedules.save(caller, args, target) : NO_SCHEDULES;
+  }
+
   async function sendChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!text(args.text, 100_000) || (args.when !== undefined && !['auto', 'steer', 'queue', 'note'].includes(args.when))) return { error: 'request-refused' };
@@ -1171,6 +1206,9 @@ export function createDelegate({ chat, allowed, usage }) {
     verdict: (args, caller) => verdict(caller, args),
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
     send_chat: (args, caller) => sendChat(caller, args),
+    schedule_prompt: (args, caller) => schedulePrompt(caller, args),
+    list_schedules: (args, caller) => (schedules ? { schedules: schedules.list(caller) } : NO_SCHEDULES),
+    remove_schedule: (args, caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : schedules ? schedules.remove(caller, args.id) : NO_SCHEDULES),
     wait_chat: (args, caller, signal) => waitChat(caller, args, signal),
     read_chat: (args, caller) => readChat(caller, args),
     stop_chat: (args, caller) => stopChat(caller, args),
