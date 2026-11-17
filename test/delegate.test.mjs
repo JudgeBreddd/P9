@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { once } from 'node:events';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
-import { DELEGATE_TOOLS } from '../apps/server/delegate.mjs';
+import { DELEGATE_TOOLS, createDelegate } from '../apps/server/delegate.mjs';
 // The real MCP SDK client, as in mcp.test.mjs: the tools are called the way an agent's adapter calls them.
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -196,7 +196,7 @@ test('Delegate: send, wait, read, list and stop reach a chat\'s own workers; ano
   assert.equal((await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).state, 'working', 'the timeout stopped nothing');
   assert.deepEqual(await a.tool('stop_chat', { chat: made.chat }), { chat: made.chat, action: 'interrupted', chats: [made.chat] });
   assert.equal((await a.done(made.chat)).state, 'idle');
-  assert.deepEqual(await a.tool('stop_chat', { chat: made.chat, close: true }), { chat: made.chat, action: 'stopped', chats: [made.chat] });
+  assert.deepEqual(await a.tool('stop_chat', { chat: made.chat, close: true }), { chat: made.chat, action: 'stopped', chats: [made.chat], archived: [made.chat] });
   assert.equal((await a.tool('wait_chat', { chat: made.chat })).state, 'stopped');
 
   // The agent lock: nothing is started, sent or answered; reading still works.
@@ -805,6 +805,8 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   assert.equal((await a.tool('read_chat', { chat: third.chat })).error, undefined);
   // F8: a stopped worker gave up its place. Over the limit it is not started again (a note is still taken); an idle
   // worker keeps its place and takes a message; with room again the stopped one starts.
+  // O132: the close archived it; the documented way back comes first.
+  assert.equal((await a.tool('archive_chat', { chat: first.chat, archived: false })).action, 'unarchived');
   const back = await a.tool('send_chat', { chat: first.chat, text: 'config' });
   assert.equal(back.error, 'too-many-chats', 'a stopped worker was started again past the limit: ' + JSON.stringify(back));
   assert.match((await a.tool('send_chat', { chat: first.chat, text: 'for later', when: 'note' })).sent ?? '', /^as a note/);
@@ -824,10 +826,74 @@ const sevenSetup = async (t) => {
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
   const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), kids = [];
   for (const title of ['One', 'Two', 'Three']) { const k = await a.tool('open_chat', { text: 'hello', title }); await a.done(k.chat); kids.push(k.chat); }
-  for (const id of kids.slice(0, 2)) assert.equal((await a.tool('stop_chat', { chat: id, close: true })).action, 'stopped');
+  for (const id of kids.slice(0, 2)) {
+    assert.deepEqual((await a.tool('stop_chat', { chat: id, close: true })).archived, [id]);
+    assert.equal((await a.tool('archive_chat', { chat: id, archived: false })).action, 'unarchived'); // O132: closed is archived; back first
+  }
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: [] }); // One place free: Three runs
   return { instance, a, b, kids };
 };
+// O132 / row 721: stop_chat close: true also archives what it stopped; a plain stop does not; under the agent lock a close
+// still stops but archives nothing. A closed worker is reached again only after archive_chat archived: false.
+test('Delegate O132: a close archives, a plain stop does not, a close under the agent lock stops without archiving; send, ask and compact refuse a closed worker until it is brought back', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project }), kids = [];
+  for (const title of ['Plain', 'Closed', 'Locked']) { const k = await a.tool('open_chat', { text: 'hello', title }); await a.done(k.chat); kids.push(k.chat); }
+  const [plain, closed, locked] = kids;
+  const listed = async () => (await a.tool('list_chats')).chats.map((c) => c.id);
+  // A: a plain stop interrupts and archives nothing.
+  await a.tool('send_chat', { chat: plain, text: 'slow' });
+  assert.deepEqual(await a.tool('stop_chat', { chat: plain }), { chat: plain, action: 'interrupted', chats: [plain] });
+  await a.done(plain);
+  assert.ok((await listed()).includes(plain), 'a plain stop archived the chat');
+  // B: a close stops and archives; the chat leaves list_chats, and send, ask and compact name the way back.
+  assert.deepEqual(await a.tool('stop_chat', { chat: closed, close: true }), { chat: closed, action: 'stopped', chats: [closed], archived: [closed] });
+  assert.ok(!(await listed()).includes(closed), 'a closed worker is still listed');
+  assert.equal((await call(instance, `/chat/${closed}/askable`, 'POST', { on: true })).status, 200);
+  const refused = [await a.tool('send_chat', { chat: closed, text: 'hello' }), await b.tool('ask_chat', { chat: closed, text: 'mode' }), await a.tool('compact_chat', { chat: closed })];
+  assert.deepEqual(refused.map((r) => r.error), ['chat-archived', 'chat-archived', 'chat-archived'], JSON.stringify(refused));
+  for (const r of refused) assert.match(r.detail, /archive_chat with archived: false/);
+  assert.equal((await a.tool('archive_chat', { chat: closed, archived: false })).action, 'unarchived');
+  assert.equal((await a.tool('send_chat', { chat: closed, text: 'hello' })).sent, 'started a turn');
+  await a.done(closed);
+  // The agent lock: a close still stops, and archives nothing.
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  const held = await a.tool('stop_chat', { chat: locked, close: true });
+  assert.deepEqual([held.action, held.chats, held.archived], ['stopped', [locked], []], JSON.stringify(held));
+  assert.match(held.note, /agent lock is on: stopped, not archived/);
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  assert.equal((await a.tool('list_chats')).chats.find((c) => c.id === locked)?.state, 'stopped', 'a close under the lock archived the chat');
+  console.log('PASS Delegate O132 close archives: plain stop kept, close archived and refused send/ask/compact until unarchived, lock close stopped without archiving');
+});
+
+// #255 FIX1: a close archives under archive_chat's rule at the moment of archiving. A child stopped first that starts again
+// while its parent's stop is still awaited is kept, not hidden while it works.
+test('Delegate O132 FIX1: a close does not archive a child that started again while a later stop was awaited; the answer lists it as kept', async () => {
+  const lead = '00000000-0000-0000-0000-0000000000a1', parent = '00000000-0000-0000-0000-0000000000a2', child = '00000000-0000-0000-0000-0000000000a3';
+  const family = [{ id: lead }, { id: parent, parent: lead, title: 'P' }, { id: child, parent, title: 'C' }];
+  const state = new Map([[lead, 'turn'], [parent, 'idle'], [child, 'idle']]), archivedIds = [];
+  let release, holding;
+  const held = new Promise((resolve) => { release = resolve; }), reached = new Promise((resolve) => { holding = resolve; });
+  const chat = { lock: () => ({ on: false }), family: () => family, list: () => family.map((c) => ({ ...c, archived: archivedIds.includes(c.id) })),
+    info: (id) => ({ ...family.find((c) => c.id === id), state: state.get(id), asks: [] }),
+    // The parent's stop is held (the later one: children stop first); the child's is not.
+    stop: async (id) => { if (id === parent) { holding(); await held; } state.set(id, 'stopped'); return { status: 200 }; },
+    projects: { chats: { archive: (id) => { archivedIds.push(id); return { status: 200 }; } } },
+    gauge: () => ({}), note: async () => {}, pin: () => {}, turnEnded: () => {}, settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
+  const tools = createDelegate({ chat });
+  const closing = tools.stop_chat({ chat: parent, close: true }, lead);
+  await reached;
+  assert.equal(state.get(child), 'stopped', 'the child was not stopped first');
+  state.set(child, 'turn'); // the owner (or another chat) starts the child again while the parent's stop is awaited
+  release();
+  const done = await closing;
+  assert.deepEqual(done, { chat: parent, action: 'stopped', chats: [child, parent], archived: [parent], kept: [{ chat: child, error: 'chat-working', state: 'turn' }] }, JSON.stringify(done));
+  assert.deepEqual(archivedIds, [parent], 'a working child was archived');
+  console.log('PASS Delegate O132 FIX1 race: ' + JSON.stringify({ archived: done.archived, kept: done.kept }));
+});
+
 test('Delegate daemon-7: two messages sent at once to two stopped workers with one place free start one; the other is too-many-chats', { timeout: 180000 }, async (t) => {
   const { a, b, kids } = await sevenSetup(t);
   // From two chats (each agent's MCP client sends its calls one at a time): the parent and a chat in its project.
@@ -1124,6 +1190,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   // Finding 4: an agent without steering (Claude's on ACP 2) cannot take a steer into its running turn; the refusal names queue.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
+  assert.equal((await a.tool('archive_chat', { chat: made.chat, archived: false })).action, 'unarchived'); // O132: closed is archived; back first
   const before = (await call(instance, '/chat/events?after=0&only=' + made.chat)).body.cursor; // the first slow turn's 'working' is older
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'slow' })).sent, 'started a turn');
   await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working', before);

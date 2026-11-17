@@ -445,7 +445,11 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
     await a.done(made.chat);
   }
   const gone = [0, 1, 2, 3, 5].map((n) => kids[n]);
-  for (const id of gone) { const r = await a.tool('stop_chat', { chat: id, close: true }); assert.equal(r.action, 'stopped', JSON.stringify(r)); } // kids[4] stays: a live worker keeps its row and has no clear
+  for (const id of gone) {
+    const r = await a.tool('stop_chat', { chat: id, close: true }); assert.deepEqual([r.action, r.archived], ['stopped', [id]], JSON.stringify(r));
+    // O132: a close archives. This test is about stopped workers left on the card, so each comes back the documented way.
+    assert.equal((await a.tool('archive_chat', { chat: id, archived: false })).action, 'unarchived');
+  } // kids[4] stays: a live worker keeps its row and has no clear
   console.log('O712 stopped 5');
   // The way archive_chat clears one, before the window opens (Tyler's try on 2026-11-14).
   await call(instance, `/chat/${kids[0]}/archive`, 'POST', { archived: true });
@@ -523,14 +527,16 @@ test('window-3: an archived worker\'s report leaves the box above the message bo
   await a.tool('send_chat', { chat: kid, text: 'late' }); // ready needs the worker mid-turn
   const r = await k.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest: 'x' }); assert.ok(r.ready, JSON.stringify(r));
   await a.done(kid);
-  assert.equal((await a.tool('stop_chat', { chat: kid, close: true })).action, 'stopped'); // "closed with stop and close"
+  assert.deepEqual((await a.tool('stop_chat', { chat: kid, close: true })).archived, [kid]); // "closed with stop and close"
+  // O132: the close archived it. This test archives it from outside the card, so it comes back first, stopped.
+  assert.equal((await a.tool('archive_chat', { chat: kid, archived: false })).action, 'unarchived');
   const { app, page, errors } = await launch(t, instance);
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
   await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
   await page.locator(`#navList .row[data-chat="${parent}"]`).click();
   const pane = page.locator(`.pane[data-id="${parent}"]`), card = pane.locator('.sprint');
   const row = card.locator(`[data-sprint-open="${kid}"]`), pin = pane.locator(`.card-pin[data-card="ready-${kid}"]`), inline = pane.locator(`.hist [data-report="ready-${kid}"]`);
-  await pin.waitFor({ timeout: 20000 }); // stopped and closed, not archived: the report is still the one to read (712 keeps it)
+  await pin.waitFor({ timeout: 20000 }); // stopped and closed, then back from Archived: the report is still the one to read (712 keeps it)
   await shot(page, 'w3-report-pinned');
   // The way archive_chat (and the sidebar) archives it: not from this card, so this window's own clear never ran.
   await call(instance, `/chat/${kid}/archive`, 'POST', { archived: true });
