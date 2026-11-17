@@ -42,8 +42,8 @@ test('Chat Focus file modal: edit and Save through the guarded PUT /files, a cha
   // The bell '1' is the waiting-folder item already on disk, quieted by the first Mission overview. A timeout here used to say
   // only "waiting for #rBell b", so a one-off stall stayed unexplained: when the wait fails, dump the page state (bell
   // text and title, the Mission note — a retry shows as its text and its restart button — the cards stack, a fresh
-  // overview probe that tells the daemon's answer apart from the page's, and page errors), so the next stall names
-  // its cause itself. The probe can take the daemon's 10 s answer wait; the race keeps a stalled page from hanging it.
+  // overview probe that tells the daemon's answer apart from the page's, and page errors), so the next stall's page state
+  // narrows the possible causes. The probe can take the daemon's 10 s answer wait; the race keeps a stalled page from hanging it.
   const bellDump = () => page.evaluate(async () => {
     const $ = (s) => document.querySelector(s);
     const state = { bell: $('#rBell')?.innerHTML ?? null, bellTitle: $('#rBell')?.title ?? null, bellItems: $('#rBell')?.dataset?.items ?? null,
