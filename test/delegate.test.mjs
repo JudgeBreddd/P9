@@ -1182,6 +1182,8 @@ test('O125 point 2: two notes from one worker waiting for a parent in a turn: th
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first note is held.
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid ended its turn'));
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
   const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
@@ -1204,6 +1206,8 @@ test('O125 point 2: two notes from one worker while the steerable parent runs a 
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
+  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first note is held.
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid ended its turn'));
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
   const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');

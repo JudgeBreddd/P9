@@ -63,5 +63,23 @@ test('O139: a worker compacting after its turn tells its parent it will continue
   await tool('send_chat', { chat: made.chat, text: 'late' });
   await until(async () => (await told(instance, lead)).includes('[p9] Kid ended its turn: late reply'), 30000);
   assert.equal((await told(instance, lead)).filter((text) => text === compactingLine).length, 2);
-  console.log('PASS O139: compacting note, then the end line at the run\'s end; quiet end after a failed compaction; plain end unchanged');
+  // FIX1: two ends inside the 3 s hold leave one end line, the later one's. A compaction run that ends inside it: no
+  // compacting note, one end line. A second turn prompted and ended inside it: only its own line.
+  const ends = async () => (await told(instance, lead)).filter((text) => text.startsWith('[p9] Kid ended its turn'));
+  let had = (await ends()).length;
+  await tool('send_chat', { chat: made.chat, text: 'compactquick' });
+  await until(async () => (await ends()).length > had, 20000);
+  await pause(5000);
+  assert.deepEqual((await ends()).slice(had), ['[p9] Kid ended its turn: working after the compaction, then done'], 'a quick compaction run: one end line');
+  assert.equal((await told(instance, lead)).filter((text) => text === compactingLine).length, 2, 'a quick compaction run sent a compacting note');
+  had = (await ends()).length;
+  await tool('send_chat', { chat: made.chat, text: 'first' });
+  await until(async () => (await tool('list_chats')).chats.find((c) => c.id === made.chat).state === 'idle' && (await events(instance, made.chat)).some((e) => e.data?.content?.text === 'echo:first'), 10000);
+  const sentAt = Date.now();
+  await tool('send_chat', { chat: made.chat, text: 'second' });
+  await until(async () => (await ends()).length > had, 20000);
+  await pause(5000);
+  assert.ok(Date.now() - sentAt < 30000);
+  assert.deepEqual((await ends()).slice(had), ['[p9] Kid ended its turn: echo:second'], 'two turns ended inside the hold: one line, the second\'s');
+  console.log('PASS O139: compacting note, then the end line at the run\'s end; quiet end after a failed compaction; plain end unchanged; two ends inside the hold sent one line');
 });

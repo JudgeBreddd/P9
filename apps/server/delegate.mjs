@@ -985,13 +985,18 @@ export function createDelegate({ chat, allowed, usage }) {
   // meanwhile drops it: that turn's own end comes. A parent in wait_chat on it at the end gets no end line (wait_chat's
   // answer is the news), but does get the compacting note. ponytail: a compaction later than END_HOLD_MS still sends the end line first.
   const END_HOLD_MS = 3000;
-  chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id));
+  // FIX1 (Reviewer): each end takes the chat's next number and only the newest one's timer sends, so a turn or a
+  // compaction run that ends within END_HOLD_MS of the last end leaves one line, its own.
+  const endGen = new Map(); // chat -> number of its latest end
+  chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
     if (first !== null && NOTHING_FOR.test(first) && !chat.sprint(id).ready) return void chat.setSprint(id, { endNote: { at: Date.now(), text: first } });
     setTimeout(() => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
-    if (!child || chat.sprint(id).ready || child.state === 'turn') return;
+    if (endGen.get(id) !== gen) return;
+    if (!child) return void endGen.delete(id);
+    if (chat.sprint(id).ready || child.state === 'turn') return;
     if (child.compacting) {
       if (parent && !shelved(parent.id) && ['running', 'turn'].includes(parent.state)) chat.note(parent.id, '[p9] ' + child.title + ' is compacting and will continue.', 'p9').catch(() => {});
       return;

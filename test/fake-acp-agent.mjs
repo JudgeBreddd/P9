@@ -315,14 +315,15 @@ const connection = acp.connectAgent(stream, {
     // O139, as P9's history shows Claude Code after a turn: the prompt ends, 0.5 s later the compaction (tool call, then a
     // usage_update with the cost so far), then "compactgo" works on unprompted and ends on a usage_update with a higher
     // cost; "compactstop" is a compaction that failed: nothing more comes.
-    if (text === 'compactgo' || text === 'compactstop') {
+    // "compactquick": the run after the compaction ends 1 s later, inside P9's 3 s hold of the end line.
+    if (text === 'compactgo' || text === 'compactstop' || text === 'compactquick') {
       setTimeout(async () => {
         const cost = (amount) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount, currency: 'USD' } } });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-' + text, title: 'Compact conversation', kind: 'think', status: 'completed' } });
         await cost(1);
         if (text === 'compactstop') return;
         await say('working after the compaction');
-        await new Promise((resolve) => setTimeout(resolve, 6000));
+        await new Promise((resolve) => setTimeout(resolve, text === 'compactquick' ? 1000 : 6000));
         await say(', then done');
         await cost(2);
       }, 500);
