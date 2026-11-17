@@ -1469,3 +1469,42 @@ test('O125 point 2: two notes from one worker while the steerable parent runs a 
   const kid = (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
   assert.equal(kid.length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
 });
+
+// O140: prompts the daemon sends at a time. Real minutes: the first run is 2 s out, then every minute, with a SIGTERM
+// restart between the first and second run, so the second and third come from what the restarted daemon read back.
+test('O140: a scheduled prompt fires at its time and every minute, across a daemon restart; a once prompt fires once and is gone; paused, it stops', { timeout: 300000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  let a = await agent(t, instance);
+  const soon = (s) => new Date(Date.now() + s * 1000).toISOString();
+  const sent = async (word) => (await events(instance, a.conversation)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\n' + word)).length;
+  const reach = async (word, n, seconds) => { for (let i = 0; (await sent(word)) < n && i < seconds * 10; i += 1) await pause(100); return sent(word); };
+  const tick = await a.tool('schedule_prompt', { text: 'tick', at: soon(2), every: 1 });
+  assert.equal(tick.action, 'scheduled', JSON.stringify(tick));
+  const single = await a.tool('schedule_prompt', { text: 'single', at: soon(30) });
+  assert.equal(single.once, true, JSON.stringify(single));
+  assert.equal((await a.tool('schedule_prompt', { text: 'x' })).error, 'request-refused', 'a schedule with no time was taken');
+  assert.equal(await reach('tick', 1, 30), 1, 'the first run did not go');
+  const first = (await events(instance, a.conversation)).find((e) => e.type === 'user' && e.data.text?.endsWith('\n\ntick'));
+  assert.match(first.data.text, /^\[P9: your scheduled prompt .* not a message from the user\.\]/);
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  instance = await restart(t, instance, 'state-2');
+  assert.equal(await reach('tick', 3, 160), 3, 'after the restart the recurring prompt did not go twice more');
+  assert.equal(await sent('single'), 1, 'the once prompt did not go exactly once');
+  // Its old MCP client went with the restart: a new one from a fresh 'mcp' message.
+  const fresh = (await call(instance, '/chat/events?after=0')).body.cursor;
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' });
+  a = await connect(t, instance, a.conversation, fresh);
+  const kept = (await a.tool('list_schedules')).schedules;
+  assert.deepEqual(kept.map((s) => [s.id, s.everyMinutes, s.paused]), [[tick.id, 1, false]], 'the once prompt is still listed, or the recurring one is gone');
+  assert.match(kept[0].last, / sent$/);
+  const paused = await a.tool('schedule_prompt', { id: tick.id, paused: true });
+  assert.equal(paused.paused, true, JSON.stringify(paused));
+  const wait = Date.parse(paused.nextRun) + 5000 - Date.now();
+  await pause(Math.max(0, wait));
+  assert.equal(await sent('tick'), 3, 'a paused prompt went');
+  assert.equal((await a.tool('remove_schedule', { id: tick.id })).action, 'removed');
+  assert.deepEqual((await a.tool('list_schedules')).schedules, []);
+  console.log('PASS O140: tick went 3 times across a SIGTERM restart, the once prompt once and then off the list, nothing while paused; waited ' + Math.round(wait / 1000) + ' s past its next run');
+});
