@@ -163,8 +163,8 @@ test('Item 4: Paste wraps in the bracketed-paste markers only when the program t
   // pasted here runs). A shell is no good for "off": its line editor turns the mode back on at every prompt.
   const program = async (mode) => {
     await page.click('#screen'); await page.keyboard.press('Control+c');
-    // PD-1 (c): the mode is on only once the screen has read the printf; a fixed wait lost that race in CI (the paste came
-    // back whole but plain). The marker is printed after the mode and is not in the typed line (%s), so seeing it means
+    // PD-1 (c): the mode is on only once the screen has read the printf; a fixed wait may have lost that race in CI (belief
+    // from 2 logs, not reproduced: the paste came back whole but plain). The marker is printed after the mode and is not in the typed line (%s), so seeing it means
     // the terminal has the mode.
     await page.keyboard.type("printf '\\033[?2004" + mode + "p9%s\\n' mode-" + mode + "; cat"); await page.keyboard.press('Enter');
     await page.waitForFunction((m) => document.querySelector('#screen .xterm-rows')?.textContent.includes('p9mode-' + m), mode, { timeout: 10000 });
