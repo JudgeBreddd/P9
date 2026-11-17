@@ -39,7 +39,7 @@ test('Chat Focus file modal: edit and Save through the guarded PUT /files, a cha
   page.on('pageerror', (e) => pageErrors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text()); });
   await page.setViewportSize({ width: 1300, height: 860 }).catch(() => {});
-  // The bell '1' is the _tyler item already on disk, quieted by the first Mission overview. A timeout here used to say
+  // The bell '1' is the waiting-folder item already on disk, quieted by the first Mission overview. A timeout here used to say
   // only "waiting for #rBell b", so a one-off stall stayed unexplained: when the wait fails, dump the page state (bell
   // text and title, the Mission note — a retry shows as its text and its restart button — the cards stack, a fresh
   // overview probe that tells the daemon's answer apart from the page's, and page errors), so the next stall names
