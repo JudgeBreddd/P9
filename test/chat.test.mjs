@@ -508,16 +508,16 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
 // PD-1 (b): every process the server starts is given childEnv() as its environment, read from the source. On top of it
 // only launchTree (process-tree.mjs) adds names it is handed for one child (O48: a profile chat's model names); any other
 // start may add only the fixed flags below. The starts listed in KNOWN do not use childEnv yet: an open question
-// (OPEN-ITEMS-0.1.9 PD-2), kept here by file so a new one fails and a fixed one must leave the list.
+// (OPEN-ITEMS-0.1.9 PD-2), kept here by file with their exact shape, so a new one fails, a changed one fails, and a fixed one must leave the list.
 test('every process the server starts gets childEnv(); only launchTree adds names to it, others only fixed flags', async () => {
   const FIXED = { P9_PHONE: 'terminal opened from the phone', P9_NO_GREETING: 'terminal welcome hidden',
     GIT_TERMINAL_PROMPT: 'git never asks', GIT_OPTIONAL_LOCKS: 'git status takes no lock', SSH_ASKPASS_REQUIRE: 'git never asks', GIT_PAGER: 'git never pages' };
-  const KNOWN = [ // [file, words in the start's line]: open question, not judged here
-    ['server.mjs', 'execFile(command, args, { cwd: checkout'], // passes the daemon's whole environment plus PATH
-    ['update.mjs', 'execFile(command, args, { cwd, timeout'], // the same
-    ['setup-routes.mjs', 'execFile(process.execPath, [script'], // no env: inherits the daemon's
-    ['xfer.mjs', "run('git', ['-C', cwd, 'ls-files'"], // the daemon's whole environment plus one git flag
-    ['folder-copy.mjs', "execFile('git', ['-C', copy, 'cat-file'"], // no env: inherits the daemon's
+  const KNOWN = [ // [file, words in the start's line, what is wrong with it exactly]: open question, held to that shape
+    ['server.mjs', 'execFile(command, args, { cwd: checkout', 'not childEnv(): { ...process.env, PATH: toolPath() }'],
+    ['update.mjs', 'execFile(command, args, { cwd, timeout', "not childEnv(): { ...process.env, PATH: toolPath(), CI: '1' }"],
+    ['setup-routes.mjs', 'execFile(process.execPath, [script', "no env: it inherits the daemon's"],
+    ['xfer.mjs', "run('git', ['-C', cwd, 'ls-files'", "not childEnv(): { ...process.env, GIT_OPTIONAL_LOCKS: '0' }"],
+    ['folder-copy.mjs', "execFile('git', ['-C', copy, 'cat-file'", "no env: it inherits the daemon's"],
   ];
   // The text of the value after `key:` (a balanced { } or one token), or null.
   const value = (text, at) => {
@@ -549,7 +549,7 @@ test('every process the server starts gets childEnv(); only launchTree adds name
       const lineStart = source.lastIndexOf('\n', found.index) + 1, line = source.slice(lineStart, source.indexOf('\n', found.index));
       if (/^\s*(\/\/|\*)/.test(line) || /function\s+\w*\s*$/.test(source.slice(lineStart, found.index))) continue; // a comment, or its own definition
       const known = KNOWN.find(([where, words]) => where === file && line.includes(words));
-      if (known) { seen.add(known); continue; }
+      if (known) seen.add(known);
       const call = source.slice(found.index, found.index + 600), close = call.indexOf(');');
       const env = /[{,]\s*env\s*(:\s*|(?=[,}\s]))/.exec(close < 0 ? call : call.slice(0, close + 2));
       let problem;
@@ -559,6 +559,8 @@ test('every process the server starts gets childEnv(); only launchTree adds name
         const made = source.slice(0, found.index).lastIndexOf('const env = ');
         problem = made < 0 ? 'env from elsewhere' : judge(value(source, made + 'const env = '.length), file);
       }
+      if (known && problem !== known[2]) problem = problem ? 'changed from its known shape: ' + problem : 'follows the rule now: take it off KNOWN';
+      else if (known) problem = '';
       if (problem) wrong.push(`${file}:${source.slice(0, found.index).split('\n').length} ${problem}`);
     }
   }
