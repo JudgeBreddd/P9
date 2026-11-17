@@ -132,6 +132,57 @@ test('approvals and questions are answered only with options and fields the agen
   console.log('PASS chat answers: unknown option 400, unknown request 404, unknown field 400; allow and colour reached the agent; busy 409; cancel; codex agent (Auto review)');
 });
 
+// O133: a model or effort picked and sent mid-turn is not steered into the turn (which keeps its model): the message
+// waits for the turn's end and goes as the next prompt, on the picked model and effort, with a config event.
+test('O133: a message that picks another model and effort mid-turn waits for the turn end, then runs on them', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' });
+  const { cursor } = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call');
+  const sent = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'config', model: 'haiku', config: { effort: 'high' } }));
+  assert.deepEqual([sent.status, sent.body.when], [202, 'queue'], sent.text);
+  const reply = await until(instance, said(id, 'config:'), cursor);
+  assert.match(reply.hit.data.content.text, /model=haiku,effort=high/, reply.hit.data.content.text);
+  const config = reply.seen.filter((e) => e.conversation === id && e.type === 'config').at(-1);
+  assert.equal(config?.data.model.current, 'haiku', 'no config event says haiku');
+  assert.equal(config.data.pickers.find((p) => p.id === 'effort').current, 'high');
+  // A message that picks what the chat already runs is steered as before.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' });
+  const again = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call', reply.cursor);
+  const same = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'same', model: 'haiku', config: { effort: 'high' } }));
+  assert.equal(same.body.when ?? (same.body.steered && 'steered'), 'steer', same.text);
+  await until(instance, said(id, 'got:same'), again.cursor);
+  console.log('PASS O133 mid-turn pick: ' + JSON.stringify({ first: sent.body.when, reply: reply.hit.data.content.text, same: same.body.when }));
+});
+
+// #257 FIX1 (Reviewer on cf3bd33): a repick that replaces a held steer still waits for the turn's end; queued messages
+// with different picks are not joined into one prompt that keeps only the last one's.
+test('O133 FIX1: a repick replacing a held steer waits and applies; queued messages with different picks keep every pick, in order', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  const tool = (after) => until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.sessionUpdate === 'tool_call', after);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' });
+  const first = await tool(0);
+  const held = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'plain' }));
+  assert.equal(held.body.when, 'steer', held.text);
+  const replaced = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'config', model: 'haiku', config: { effort: 'high' }, replaces: held.body.held }));
+  assert.deepEqual([replaced.body.when, replaced.body.replaced], ['queue', held.body.held], replaced.text);
+  const one = await until(instance, said(id, 'config:'), first.cursor);
+  assert.match(one.hit.data.content.text, /model=haiku,effort=high/, one.hit.data.content.text);
+  // Three queued: a (opus) and b (effort low) agree and join; c (model haiku) differs from a's opus, so it is its own prompt.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' });
+  const second = await tool(one.cursor);
+  for (const body of [{ text: 'a', model: 'opus' }, { text: 'b', config: { effort: 'low' } }, { text: 'config', model: 'haiku' }])
+    assert.equal((await json(call(instance, `/chat/${id}/prompt`, 'POST', { ...body, when: 'queue' }))).body.when, 'queue');
+  const two = await until(instance, said(id, 'config:'), second.cursor);
+  const mine = two.seen.filter((e) => e.conversation === id);
+  assert.deepEqual(mine.filter((e) => e.type === 'user').map((e) => e.data.text), ['a\n\nb', 'config'], 'joined or reordered wrong');
+  const configs = mine.filter((e) => e.type === 'config').map((e) => e.data.model.current + '/' + e.data.pickers.find((p) => p.id === 'effort').current);
+  assert.ok(configs.includes('opus/low'), 'the joined prompt did not run on opus/low: ' + configs);
+  assert.match(two.hit.data.content.text, /model=haiku,effort=low/, two.hit.data.content.text);
+  console.log('PASS O133 FIX1: ' + JSON.stringify({ replaced: replaced.body.when, configs, last: two.hit.data.content.text }));
+});
+
 // contracts.md rule 2 for Claude (O51): claude-agent-acp 0.104.1 starts a session in auto, which approves on its own.
 // A prompt that names no mode (the phone, the API) must still run in Manual, on a new chat and on a resumed one.
 // The fake starts every process 'unset', so only the daemon setting the mode makes this pass.
