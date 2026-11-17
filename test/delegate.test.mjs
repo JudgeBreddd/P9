@@ -283,7 +283,7 @@ test('Delegate F2: archive_chat archives and brings back a chat the caller start
   console.log('PASS Delegate F2 archive_chat');
 });
 
-test('Delegate daemon-10: rename_chat renames a chat the caller started, or its own; never a chat beside it or its parent; refused under the agent lock', { timeout: 120000 }, async (t) => {
+test('Delegate daemon-10: rename_chat renames a chat the caller started, or its own; never a chat beside it; refused under the agent lock', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
