@@ -186,6 +186,24 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.equal(modes.at(-1), 'Manual', 'a kept message ran wider than its sender is now: ' + JSON.stringify(modes));
   assert.equal(await isPaused(), false);
 
+  // A restart while resumed messages wait in a running turn's queue (202 held, in memory only): they stay Resume's until
+  // they reach the agent, so the next start sends them, each once, in order.
+  mark = await cursor(instance);
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  again = await attach(t, instance, sprint, mark);
+  assert.deepEqual(await again.tool('pause_sprint'), { paused: true });
+  await call(instance, `/chat/${id.w2}/prompt`, 'POST', { text: 'slow' }); // the owner's own message goes through; its turn waits for a cancel
+  await until(instance, (e) => e.conversation === id.w2 && e.type === 'user' && e.data.text === 'slow', mark);
+  for (const text of ['queued-one', 'queued-two']) assert.ok((await again.tool('send_chat', { chat: id.w2, text })).held, text + ' was not kept');
+  mark = await cursor(instance);
+  call(instance, `/sprints/${sprint}/resume`, 'POST', {}).catch(() => null);
+  for (const text of ['queued-one', 'queued-two']) await until(instance, (e) => e.conversation === id.w2 && e.type === 'held' && e.data.when === 'queue' && e.data.text?.includes(text), mark);
+  instance.child.kill('SIGKILL'); await once(instance.child, 'exit');
+  instance = await restart(t, instance, 'state-5');
+  await until(instance, (e) => e.conversation === id.w2 && e.data?.content?.text?.includes('queued-two'), mark);
+  await pause(1000);
+  assert.deepEqual((await turns(id.w2, 'queued-', mark)).flatMap((e) => e.data.text.match(/queued-\w+/g)), ['queued-one', 'queued-two'], 'a message queued behind a running turn was lost or sent twice across a restart');
+
   // The cap: the lead's own pause (no note to itself), 100 kept, the 101st refused by name.
   mark = await cursor(instance);
   await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
@@ -195,5 +213,5 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   for (let i = 0; i < 100; i += 1) assert.ok((await again.tool('send_chat', { chat: id.w2, text: 'cap-' + i })).held, 'message ' + i + ' was not kept');
   got = await again.tool('send_chat', { chat: id.w2, text: 'cap-100' });
   assert.equal(got.reason ?? got.error, 'sprint-paused-full', JSON.stringify(got));
-  console.log('PASS Pause sprint: held in order across a restart, resumed with senders; note and owner pass; ask_chat, open_chat, start_sprint refused; lock; senders\' mode now; a restart mid-Resume loses and repeats nothing; cap 100');
+  console.log('PASS Pause sprint: held in order across a restart, resumed with senders; note and owner pass; ask_chat, open_chat, start_sprint refused; lock; senders\' mode now; a restart mid-Resume loses and repeats nothing, queued behind a running turn too; cap 100');
 });

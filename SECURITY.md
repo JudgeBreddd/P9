@@ -1150,8 +1150,8 @@ migration spec S13).
   message it holds. At most 100 messages are held per sprint; the next one is refused `sprint-paused-full`.
 - **Resume.** Every held message goes out in the order it was sent, each as if its sender sent it now: with that
   sender's rules, and no wider than that sender's mode at Resume (read then, not when it was kept; a sender with no
-  known mode, or gone, gets its message refused, shown on the worker's window). Until each one's prompt has answered it
-  stays in the ledger, so a P9 restart during Resume sends the rest after the restart, and one already recorded is not
+  known mode, or gone, gets its message refused, shown on the worker's window). Until each one reaches its agent or is
+  refused (one waiting in a running turn's queue included) it stays in the ledger, so a P9 restart during Resume sends the rest after the restart, and one already recorded is not
   sent twice (its turn, cut by the restart, is like any turn a restart cuts). A held message that carries a line you sent from a
   phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
   Pause and Resume each send the lead one note.

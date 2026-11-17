@@ -357,8 +357,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
+    if (type === 'user' && Array.isArray(data.held)) settleResumed(data.held);
+    else if (type === 'unheld') settleResumed([data.id]);
     wakeAll(type);
   };
+  // A resumed message that went into a running turn's queue (202 held) stays in resuming:<lead> as queued: <held id>
+  // until a 'user' event carries that id (it reached the agent) or an 'unheld' names it (refused, replaced, cancelled):
+  // the queue is memory, so a restart in between sends it again (resumeLeft). Hoisted: emit runs before the prefs helpers.
+  function settleResumed(ids) {
+    for (const { key, value } of db.prepare("SELECT key, value FROM prefs WHERE key LIKE 'resuming:%'").all()) {
+      let list; try { list = JSON.parse(value); } catch { continue; }
+      const left = list.filter((i) => !ids.includes(i.queued));
+      if (left.length === list.length) continue;
+      if (left.length) db.prepare('UPDATE prefs SET value = ? WHERE key = ?').run(JSON.stringify(left), key);
+      else db.prepare('DELETE FROM prefs WHERE key = ?').run(key);
+    }
+  }
   // Streamed updates wake long polls once per tick, not once per event: a burst is one read for each poller (finding 16).
   // Every other event wakes them now, so 'created' reaches a window before the create's reply (controller.mjs relies on it).
   let waking = false;
@@ -420,7 +434,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (delivering.has(lead)) return; // the running pass takes what was added
     delivering.add(lead);
     try {
-      for (let item; (item = resumingOf(lead)[0]);) {
+      for (let item; (item = resumingOf(lead).find((i) => !i.queued));) {
         const done = () => setResuming(lead, resumingOf(lead).filter((i) => i.id !== item.id));
         const allowed = heldAuthority.get(item.id) ?? (() => true);
         heldAuthority.delete(item.id);
@@ -433,7 +447,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (item.mixed) mixed.set(body, item.mixed);
         const result = await api.prompt(item.chat, body, undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
         if (result.status !== 202 && result.status !== 200) emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: result.error ?? 'refused' });
-        done();
+        // Into a running turn's queue: kept until settleResumed sees it delivered or refused.
+        if (result.held && result.when === 'queue') setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, queued: result.held } : i)));
+        else done();
       }
     } finally { delivering.delete(lead); }
   }
@@ -1499,7 +1515,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // After a restart, what a Resume had not sent yet (delegate.mjs calls it once, with its narrow).
     async resumeLeft(narrow) {
       await recovered;
-      for (const { key } of db.prepare("SELECT key FROM prefs WHERE key LIKE 'resuming:%'").all()) deliver(key.slice(9), narrow).catch(() => {});
+      for (const { key } of db.prepare("SELECT key FROM prefs WHERE key LIKE 'resuming:%'").all()) {
+        // A message left in a turn's queue when P9 stopped: recorded (a 'user' event carries its id, or an 'unheld' names
+        // it) leaves the list; otherwise the queue it was in is gone, and it is sent again in its place.
+        const lead = key.slice(9), seen = db.prepare("SELECT 1 FROM events WHERE conversation = ? AND json_valid(data) AND ((type = 'user' AND EXISTS (SELECT 1 FROM json_each(data, '$.held') WHERE value = ?)) OR (type = 'unheld' AND data ->> '$.id' = ?)) LIMIT 1");
+        setResuming(lead, resumingOf(lead).flatMap((i) => (!i.queued ? [i] : seen.get(i.chat, i.queued, i.queued) ? [] : [{ ...i, queued: undefined }])));
+        deliver(lead, narrow).catch(() => {});
+      }
     },
     queue: (id) => { const c = db.prepare('SELECT parent, key FROM conversations WHERE id = ?').get(id); return c ? queueOf(c.parent, c.key, sprintOf(id)) : null; },
     setSprint,
