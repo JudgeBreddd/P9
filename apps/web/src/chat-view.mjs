@@ -830,7 +830,7 @@ async function continueOnPhone(s) {
   outer.$('#phoneDlg').showModal();
 }
 // A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser,
-// after a question showing the whole address (the chat link confirm, item 1.6); "don't ask again"
+// after a question showing the whole address; "don't ask again"
 // is kept on this computer.
 const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true) : new Promise(done => {
   const d = outer.$('#linkDlg'); outer.$('#linkU').textContent = href; d.returnValue = '';
