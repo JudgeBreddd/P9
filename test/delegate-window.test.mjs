@@ -191,7 +191,30 @@ test('Delegate window: workers indented under their chat and folded past three; 
   assert.match((await kid.tool('send_chat', { chat: parent, text: 'The branch is pushed and the tests pass.', when: 'note' })).sent ?? '', /^as a note/);
   await row(parent).click();
   const who = page.locator(`.pane[data-id="${parent}"] .msg.user .who`).last();
-  await until(async () => (await who.innerText()).startsWith('Note from Kid 1 · information only'), 'the note under its sender\'s name');
+  // O58 (j): a CI run timed out here with no cause named (run 44197851093, linux (6), n=1; the rerun passed). The record
+  // below keeps what a timeout saw, so the next one narrows the candidates: the parent pane's .who texts say whether the
+  // note rendered as 'Note from another chat' (the sender's title lookup missed, chat-view.mjs:284) or is absent from the
+  // pane, and the daemon's ledger says whether the daemon delivered it. No single reading names the cause — a rendering
+  // or event-poll stall could still hide behind either — but together they say which side to look at next.
+  try {
+    await until(async () => (await who.innerText()).startsWith('Note from Kid 1 · information only'), 'the note under its sender\'s name');
+  } catch (e) {
+    // Best-effort record: each part is bounded and caught on its own, so a stalled renderer or a rejecting daemon read
+    // can neither hang the diagnostic nor replace the original note-wait failure (kept as this error's cause).
+    const bounded = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(undefined), 3000))]);
+    const parts = [];
+    try {
+      const whos = await bounded(page.locator(`.pane[data-id="${parent}"] .msg.user .who`).allInnerTexts());
+      parts.push(whos ? 'window .who texts ' + JSON.stringify(whos.slice(-4)) : 'window .who texts <record: timed out>');
+    } catch (d) { parts.push('window .who texts <record failed: ' + d.message + '>'); }
+    try {
+      const ledger = (await bounded(events(instance, parent)))?.filter((v) => ['note', 'user'].includes(v.type)).slice(-4);
+      parts.push(ledger ? 'daemon note/user events ' + JSON.stringify(ledger) : 'daemon note/user events <record: timed out>');
+    } catch (d) { parts.push('daemon note/user events <record failed: ' + d.message + '>'); }
+    const err = new Error(e.message + ' — record: ' + parts.join(' · '));
+    err.cause = e;
+    throw err;
+  }
   await who.scrollIntoViewIfNeeded();
   await shot(page, 'note-from-worker');
   assert.deepEqual(errors, [], 'page errors: ' + errors.join(' | '));
