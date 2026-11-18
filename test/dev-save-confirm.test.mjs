@@ -2,7 +2,7 @@
 // A source check only: the dev space cannot run this editor (O77), so nothing here opens the workbench. It runs the
 // saveConfirm arrow from client.js against a stand-in <dialog> to hold the answer mapping, and reads the wiring around it.
 // What it does not hold: that the workbench really calls showSaveConfirm on close, that a real <dialog> shows and takes
-// focus, or that Revert really reloads the tab. Tyler checks those on the next nightly (O173v).
+// focus, or that Revert really reloads the tab. the owner checks those on the next nightly (O173v).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
