@@ -25,8 +25,8 @@ const ENV = '[Service]\nEnvironment=P9_EXAMPLE=1\n';
 // that sets ExecStart (zz.conf). base(workspace): the unit's own text instead of OLD_UNIT; spaced: the drop-in writes
 // 'ExecStart =' with indentation and spaces round '=' and carries phone flags 9443 and https://b.example. local: false writes no
 // override.conf (only env.conf); paths(unit, dropins): what systemctl show says for FragmentPath and DropInPaths instead of the
-// files written here.
-async function machine({ health = { version: '5.0.0' }, installFails = false, name = 'my work', quoted = true, phone = true, second = false, base, spaced = false, local = true, paths } = {}) {
+// files written here; reload: the NeedDaemonReload answer (null: none); later: what the second paths answer is instead.
+async function machine({ reload = 'no', later,  health = { version: '5.0.0' }, installFails = false, name = 'my work', quoted = true, phone = true, second = false, base, spaced = false, local = true, paths } = {}) {
   const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-home-'))), bin = await mkdtemp(path.join(os.tmpdir(), 'p9-bin-'));
   const workspace = path.join(home, name), units = path.join(home, '.config', 'systemd', 'user'), dir = path.join(home, '.local', 'share', 'p9', 'daemon', '5.0.0');
   for (const folder of [workspace, path.join(home, 'my'), path.join(units, 'p9-foundation.service.d'), path.join(dir, 'scripts')]) await mkdir(folder, { recursive: true });
@@ -49,9 +49,10 @@ writeFileSync(unit, '[Service]\\nExecStart=/launcher/p9-launch.sh node main.mjs\
   await writeFile(path.join(bin, 'shows'), seen);
   const dropins = ['env.conf', ...(local ? ['override.conf'] : []), ...(second ? ['zz.conf'] : [])], unitFile = path.join(units, 'p9-foundation.service');
   const written = dropins.map((n) => path.join(units, 'p9-foundation.service.d', n));
-  await writeFile(path.join(bin, 'paths'), paths ? paths(unitFile, written) : `FragmentPath=${unitFile}\nDropInPaths=${written.join(' ')}\n`);
+  await writeFile(path.join(bin, 'paths'), (paths ? paths(unitFile, written) : `FragmentPath=${unitFile}\nDropInPaths=${written.join(' ')}\n`) + (reload === null ? '' : `NeedDaemonReload=${reload}\n`));
+  if (later) await writeFile(path.join(bin, 'later'), later(unitFile, written));
   await writeFile(path.join(bin, 'health'), JSON.stringify(health));
-  await writeFile(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${bin}/calls"\n[ "$2" = show ] && [ "$5" = ExecStart ] && cat "${bin}/shows"\n[ "$2" = show ] && [ "$5" = FragmentPath ] && cat "${bin}/paths"\nexit 0\n`, { mode: 0o755 });
+  await writeFile(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${bin}/calls"\n[ "$2" = show ] && [ "$5" = ExecStart ] && cat "${bin}/shows"\n[ "$2" = show ] && [ "$5" = FragmentPath ] && { if [ -e "${bin}/asked" ] && [ -e "${bin}/later" ]; then cat "${bin}/later"; else cat "${bin}/paths"; fi; touch "${bin}/asked"; }\nexit 0\n`, { mode: 0o755 });
   const use = async (options) => {
     const { stdout } = await run(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(teh)});
 const { readFile, rename, writeFile } = await import('node:fs/promises');
@@ -96,14 +97,17 @@ test('O135 use installed: an unquoted workspace that is not one clean word, or a
   }
 });
 
-test('O135 use installed: an override systemd applies from outside the files read, a unit file other than the one read, or no paths from systemctl is refused, and nothing is touched', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+test('O135 use installed: an override systemd applies from outside the files read, a unit file other than the one read, no paths from systemctl, a pending daemon-reload or an unlisted ExecStart drop-in is refused, and nothing is touched', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
   const runtime = '/run/user/1000/systemd/user/p9-foundation.service.d/50-x.conf';
   const prefix = (workspace) => `[Service]\nExecStart=/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${quote(path.join(path.dirname(workspace), 'my'))} --state %t/p9-foundation --recovery /r\n`;
-  for (const [why, setup] of [['local /my, the active override /my w', { name: 'my w', phone: false, local: false, base: prefix, paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${[...d, runtime].join(' ')}\n` }], ['a runtime drop-in', { paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${[...d, runtime].join(' ')}\n` }],
+  for (const [why, setup, error = 'workspace-unclear'] of [['NeedDaemonReload=yes, disk says /my, systemd runs /my w', { name: 'my w', phone: false, local: false, base: prefix, reload: 'yes' }],
+    ['no NeedDaemonReload', { reload: null }], ['an unlisted ExecStart drop-in', { paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${d.filter((f) => !f.endsWith('override.conf')).join(' ')}\n` }],
+    ['a reload pending by the time work would stop', { later: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${d.join(' ')}\nNeedDaemonReload=yes\n` }, 'unit-changed'],
+    ['local /my, the active override /my w', { name: 'my w', phone: false, local: false, base: prefix, paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${[...d, runtime].join(' ')}\n` }], ['a runtime drop-in', { paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${[...d, runtime].join(' ')}\n` }],
     ['a vendor unit file', { paths: (unit, d) => `FragmentPath=/usr/lib/systemd/user/p9-foundation.service\nDropInPaths=${d.join(' ')}\n` }],
     ['no DropInPaths', { paths: (unit) => `FragmentPath=${unit}\n` }], ['no answer', { paths: () => '' }]]) {
     const m = await machine(setup);
-    assert.deepEqual(await m.use({ checkout: '/usr/bin/node x', seen: m.seen }), { error: 'workspace-unclear' }, why);
+    assert.deepEqual(await m.use({ checkout: '/usr/bin/node x', seen: m.seen }), { error }, why);
     const after = await m.state();
     assert.equal(after.unit, m.unitText, why + ': unit rewritten');
     assert.deepEqual(after.dropins, m.dropins, why + ': drop-ins moved');
