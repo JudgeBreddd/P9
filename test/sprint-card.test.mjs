@@ -219,27 +219,33 @@ test('Sprint card: a new worker, its ready, its verdict and its next turn reach 
   assert.equal(await row('w-1').locator('.sp-st time').textContent(), '12 min');
   await send([lead, w()], [{ type: 'note', conversation: 'lead-1', data: { text: 'busy' } }]);
   await is('w-1', 'working', 'idleSince dropped');
-  // 709: a queue worker's ring counts its role's items in the plan, done as P9's review record counts
-  // them: the daemon's queue field on the list (chat.mjs queueOf), not one item per task.
-  const q = (done) => ({ done, total: 3, items: ['d1', 'd2', 'd3'].map((id, i) => ({ id, text: id + ': x. Role: daemon.', state: i < done ? 'passed' : 'todo', fixes: 0 })) });
+  // 709 / O164: a queue worker's ring counts its role's items in the plan, done as P9's own merge record counts
+  // them (a pass is a review, not a merge): the daemon's queue field on the list (chat.mjs queueOf), not one item per task.
+  const q = (done, passed = done) => ({ done, total: 3, items: ['d1', 'd2', 'd3'].map((id, i) => ({ id, text: id + ': x. Role: daemon.', state: i < passed ? 'passed' : 'todo', fixes: 0, merged: i < done })) });
   const ringIs = async (want, why) => { const r = row('w-1').locator('.sp-ring'); let got;
     for (let i = 0; i < 60; i++) { got = (await r.count()) ? await r.getAttribute('aria-label') : null; if (got === want) return; await page.waitForTimeout(100); }
     assert.fail(why + ': wanted "' + want + '", the ring says "' + got + '"'); };
   await send([lead, w({ queue: q(0) })], [{ type: 'note', conversation: 'lead-1', data: { text: 'queue' } }]);
-  await ringIs('0 of 3 items passed', 'a queue worker with nothing passed');
+  await ringIs('0 of 3 items merged', 'a queue worker with nothing merged');
   if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]'); // open, so the shots show the ring
   assert.ok(await row('w-1').locator('.sp-ring').isVisible(), 'the ring is on screen');
   await shotAt(page, app, 'sprint-ring-0-of-3');
-  await send([lead, w({ queue: q(1), ready: { commit: 'c3', at: Date.now() }, verdict: { by: 'rev', commit: 'c3', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'd1 passed' } }]);
-  await ringIs('1 of 3 items passed', 'd1 passed review');
+  // O164: a pass is a review, not a merge — the ring stays empty though the verdict says passed.
+  await send([lead, w({ queue: q(0, 1), ready: { commit: 'c3', at: Date.now() }, verdict: { by: 'rev', commit: 'c3', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'd1 passed review' } }]);
+  await ringIs('0 of 3 items merged', 'a pass does not fill the ring');
+  // The merge: the daemon's own record (merged: true, what P9's status read sends after the reviewed head reaches the
+  // main line — that real path, a bare remote and a sprint_status read, is covered by ring-window, delegate and
+  // sprint-done-merged) arrives on the card and fills the ring.
+  await send([lead, w({ queue: q(1), ready: { commit: 'c3', at: Date.now() }, verdict: { by: 'rev', commit: 'c3', result: 'pass', note: '', at: Date.now() } })], [{ type: 'note', conversation: 'lead-1', data: { text: 'd1 merged' } }]);
+  await ringIs('1 of 3 items merged', 'the merge record filled the ring');
   assert.equal(await row('w-1').locator('.sp-ring b').textContent(), '1/3');
-  // P9 starts its next item: the next message drops ready and verdict, and the pass stays counted.
+  // P9 starts its next item: the next message drops ready and verdict, and the merge stays counted.
   await send([lead, w({ queue: q(1) })], [{ type: 'user', conversation: 'w-1', data: { text: 'next item' } }]);
   await is('w-1', 'working', 'the next item started');
-  await ringIs('1 of 3 items passed', 'the pass stays after the next message');
+  await ringIs('1 of 3 items merged', 'the merge stays after the next message');
   await shotAt(page, app, 'sprint-ring-1-of-3-working');
-  await send([lead, w({ queue: q(3) })], [{ type: 'note', conversation: 'lead-1', data: { text: 'all passed' } }]);
-  await ringIs('3 of 3 items passed', 'every item passed');
+  await send([lead, w({ queue: q(3) })], [{ type: 'note', conversation: 'lead-1', data: { text: 'all merged' } }]);
+  await ringIs('3 of 3 items merged', 'every item merged');
   await shotAt(page, app, 'sprint-ring-3-of-3');
   console.log('PASS 709 ring counts the plan items');
 });
