@@ -134,3 +134,48 @@ test('Sprint O171 framing: Setup files at Start reach chats as approved by the u
   assert.ok(from >= 0 && from < prompt.findIndex((b) => b.endsWith('FAKE]')), 'no sender line before the message: ' + JSON.stringify(prompt));
   console.log('PASS sprint setup framing');
 });
+
+// FIX1 (Reviewer on 6a75f9e): the file hashes are taken at the approval, before any before-start script runs. A script
+// that rewrites a Setup file then has its text differ from the record, so that text keeps the chat's framing.
+test('Sprint O171 framing FIX1: a before-start script that rewrites rules.md and a role\'s instructions does not make its text approved; a file it left keeps the approved framing', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await settle(async () => (await events(instance, first)).some((e) => e.data?.content?.text?.startsWith('config:')), 'config reply');
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const prep = await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'S2' });
+  assert.equal(prep.status, 201, JSON.stringify(prep.body));
+  const sprint = prep.body.sprint, folder = prep.body.folder, file = (name) => path.join(folder, name);
+  const save = async (name, text) => {
+    const now = fs.existsSync(file(name)) ? hashOf(fs.readFileSync(file(name), 'utf8')) : '';
+    const got = await call(instance, '/projects/' + project + '/sprint-file', 'POST', { lead: sprint, name, text, hash: now });
+    assert.equal(got.status, 200, name + ' ' + JSON.stringify(got.body));
+  };
+  await save('roles.json', JSON.stringify({ folder: 'repo', roles: ['lead', 'review'].map((key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' })) }));
+  await save('rules.md', 'USER-RULES');
+  await save('roles/review.rules.md', 'USER-ROLE');
+  await save('roles/review.instructions.md', 'USER-REVIEW');
+  await save('roles/lead.work.md', 'mcp');
+  // The before-start script rewrites rules.md and the reviewer's instructions; it leaves the reviewer's role rules.
+  const hook = path.join(ws, 'rewrite.mjs');
+  fs.writeFileSync(hook, `import fs from 'node:fs'; process.stdin.resume().on('end', () => {
+  fs.writeFileSync(${JSON.stringify(file('rules.md'))}, 'HOOK-RULES'); fs.writeFileSync(${JSON.stringify(file('roles/review.instructions.md'))}, 'HOOK-REVIEW'); });`);
+  const command = `${process.execPath} ${hook}`; assert.ok(command.length <= 200, 'the test\'s own command is too long: ' + command.length);
+  const hooksText = JSON.stringify({ scripts: [{ name: 'rewrite', command, point: 'before-start', blocking: true }] });
+  fs.writeFileSync(file('hooks.json'), hooksText);
+
+  const press = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: hashOf(hooksText) });
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  assert.equal(fs.readFileSync(file('rules.md'), 'utf8'), 'HOOK-RULES', 'the before-start script did not run');
+
+  const review = await settle(() => rulesLogs(ws).find((b) => b.includes('USER-ROLE')), 'the reviewer\'s rules block');
+  assert.equal(review.split('\n\n[P9: your notes file')[0],
+    APPROVED + 'roles/review.rules.md, written by the user:\nUSER-ROLE]\n\n'
+    + FROM_CHAT + 'HOOK-RULES]\n\n'
+    + '[P9: your instructions, from your sprint\'s roles/review.instructions.md.\nHOOK-REVIEW]', JSON.stringify(review));
+  console.log('PASS sprint setup framing FIX1');
+});

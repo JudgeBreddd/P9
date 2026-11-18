@@ -538,6 +538,10 @@ export function createDelegate({ chat, allowed, usage }) {
         if (no) return no;
         if ((chat.sprintFiles.read(sprint, 'hooks.json') ?? null) !== hooksText) return moved;
       }
+      // O171 (framing): the hash of each Setup file whose text P9 sends to chats, taken at the approval (the user's yes, or
+      // the press) and before any script runs, so that text reaches chats as approved by the user while it is unchanged.
+      // FIX1: a before-start script that rewrites one makes it differ from this record, so it keeps the chat's framing.
+      const files = Object.fromEntries(chat.sprintFiles.list(sprint).filter((f) => SENT.test(f.name)).map((f) => [f.name, f.hash]));
       // before-start: the scripts being approved by this very start. A refusal records nothing and makes nothing.
       const refused = await hooks.fire(sprint, 'before-start', null, file.scripts);
       if (refused) return refused;
@@ -545,9 +549,7 @@ export function createDelegate({ chat, allowed, usage }) {
       // A script may have taken a minute: every check is made again before anything is recorded or made.
       const late = again();
       if (late) return late;
-      // The press is the approval record: the plan's hash, when and by whom. O171 (framing): and the hash of each Setup
-      // file whose text P9 sends to chats, so that text reaches them as approved by the user while it is unchanged.
-      const files = Object.fromEntries(chat.sprintFiles.list(sprint).filter((f) => SENT.test(f.name)).map((f) => [f.name, f.hash]));
+      // The press is the approval record: the plan's hash, when and by whom, and files (taken above, before the scripts).
       const started = { at: Date.now(), plan, by: caller ?? 'owner', scripts: file.scripts, files };
       chat.projects.recordStart(sprint, started);
       const L = roles.lead, chats = [];
