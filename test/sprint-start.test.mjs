@@ -267,9 +267,9 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const n4 = (await rows(instance)).length;
   pending = a.tool('start_sprint', { sprint: s4.sprint });
   asked = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', asked.cursor);
-  // O96: a worker's turn ending meanwhile sends a P9 note ('[p9] ... ended its turn'); it is not the user's answer, so the approval stays open.
+  // O96: a worker's turn ending meanwhile sends a P9 note ('[p9] ... ended its turn', O188: a note event, not a prompt); it is not the user's answer, so the approval stays open.
   await call(instance, `/chat/${byTool.chats[0].chat}/prompt`, 'POST', { text: 'x' });
-  await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data?.text?.startsWith('[p9]'), asked.cursor);
+  await until(instance, (e) => e.conversation === a.conversation && ['user', 'note'].includes(e.type) && e.data?.text?.startsWith('[p9]'), asked.cursor);
   await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: [] });
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
   const offReply = await pending;

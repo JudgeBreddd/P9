@@ -6,7 +6,7 @@
 // object P9 cannot render, "slow" waits for cancel, "crash" exits, "auth-required" fails the turn signed out, "detach" starts a setsid sleeper and replies with its
 // pid, "env" replies with its environment's names (never values), "mcp" with the MCP servers P9 handed it, "config" with its model and settings, "probe <port> <host> <script>" runs the phase 10 credential probe, anything else is echoed. A file named slow-init in
 // the working directory stalls initialize for 10 s, hang-init never answers it; slow-close stalls session/close for 2 s.
-// "tools <n>" runs n tool calls of 3 s each (10 s with a slow-tools file; a cancel ends them), "tool-open" one that never completes before the turn ends, "tool-last" one
+// "tools <n>" runs n tool calls of 3 s each (10 s with a slow-tools file, 40 s with slower-tools too; a cancel ends them), "tool-open" one that never completes before the turn ends, "tool-last" one
 // that completes as the turn ends. Each steer is appended to steers.log; as Codex, one past the turn starts a turn of its
 // own (startedNewTurn) that answers "got:<text>" and reports no end. "limits <n>" ends the turn, then reports context and plan use at n% a second later.
 import { Readable, Writable } from 'node:stream';
@@ -60,12 +60,12 @@ const take = async (sessionId, say) => { for (const m of inbox.get(sessionId)?.s
 // A7: P9's sprint rules block is not the message: it goes to rules.log (one JSON string a line) and the commands below never see it.
 const SPRINT = '[P9: sprint rules';
 const FROM = '[P9: from another chat';
-const NOTE = '[P9: a note from another chat'; // a note's sender line; a note that waited is one block, line and text // the sender label, to from.log the same way
+const NOTE = '[P9: a note from another chat'; // P9's parked end notes (O188) arrive as '[p9] <title> ended its turn: ...\n\n' blocks and are not the message either; // a note's sender line; a note that waited is one block, line and text // the sender label, to from.log the same way
 const sprintRules = (prompt) => { for (const block of prompt) if (block.type === 'text') { if (block.text.startsWith(SPRINT)) appendFileSync('rules.log', JSON.stringify(block.text) + '\n'); if (block.text.startsWith(FROM)) appendFileSync('from.log', JSON.stringify(block.text) + '\n'); } };
 // O171: a start block with no rules block before it (a lead started from the Setup page gets it with P9's message).
 const START = ['[P9: your instructions', '[P9: you lead this sprint', '[P9: your notes file'];
 const LINES = ['[P9: from the user, in this chat.]\n\n', '[P9: a line from P9 itself, not from the user.]\n\n']; // a sender line as its own block (O109)
-const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || START.some((s) => block.text.startsWith(s)) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
+const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || (block.text.startsWith('[p9] ') && block.text.includes(' ended its turn: ') && block.text.endsWith('\n\n')) || START.some((s) => block.text.startsWith(s)) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.
 const png = (w, h) => {
   const chunk = (type, data) => { const head = Buffer.alloc(4), tail = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
@@ -523,7 +523,7 @@ const connection = acp.connectAgent(stream, {
       return { stopReason: 'end_turn' };
     }
     if (text.startsWith('tools ') || text === 'tool-open' || text === 'tool-last') {
-      const n = text.startsWith('tools ') ? Number(text.slice(6)) : 1, ms = existsSync('slow-tools') ? 10000 : 3000;
+      const n = text.startsWith('tools ') ? Number(text.slice(6)) : 1, ms = existsSync('slow-tools') ? (existsSync('slower-tools') ? 40000 : 10000) : 3000;
       cancelled.delete(sessionId);
       for (let i = 1; i <= n; i++) {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tool-' + i, title: 'Run tool ' + i, kind: 'execute', status: 'in_progress' } });

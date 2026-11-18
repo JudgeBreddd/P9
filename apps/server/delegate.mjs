@@ -81,13 +81,14 @@ export const DELEGATE_TOOLS = (input) => {
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
       + 'or queue (after the running turn). An agent without steering cannot take a message into its running turn: while it works, auto and steer are refused (turn-running) and only queue reaches it. It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
       + 'when: note passes information on and asks for nothing (a result, a branch that is ready, something you found): it never starts a turn, the chat reads it in its running turn '
-      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. '
+      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. Your worker\'s turn end reaches you as such a note from P9 (see wait_chat). '
       + 'key (not with a note) gives a worker you started, reused for another role, that role\'s key first, so this message carries roles/<key>.rules.md; a worker in its own worktree keeps its key.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] },
       replaces: { type: 'string', description: 'The held ID of your own earlier message still waiting for the turn to end (returned as held): this one replaces it, and it is marked replaced, not sent.' },
       key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
-      + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again.',
+      + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again. '
+      + 'Not waiting, a worker\'s turn end reaches you as a note from P9, which starts no turn; one still stopped 10 minutes later starts your turn once, and a failed turn at once.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
       + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
@@ -1185,6 +1186,11 @@ export function createDelegate({ chat, allowed, usage }) {
   // meanwhile drops it: that turn's own end comes. A parent in wait_chat on it at the end gets no end line (wait_chat's
   // answer is the news), but does get the compacting note. ponytail: a compaction later than END_HOLD_MS still sends the end line first.
   const END_HOLD_MS = 3000;
+  // O188 (the owner's usage plan point 1): a worker's end reaches its parent as a note, which starts no turn (CI, dev-space
+  // and other waits end turns all night). Only a worker still stopped WAKE_AFTER_MS later (no newer end, no turn or tool
+  // call started, not compacting, not ready) prompts its parent, once; a failed turn prompts at once.
+  // P9_WAKE_AFTER_MS is honoured only under the test home (test/helpers.mjs sets P9_TEST_HOME), so a shipped unit never takes it.
+  const WAKE_AFTER_MS = process.env.P9_TEST_HOME && Number(process.env.P9_WAKE_AFTER_MS) > 0 ? Number(process.env.P9_WAKE_AFTER_MS) : 600_000;
   // FIX1 (Reviewer): each end takes the chat's next number and only the newest one's timer sends, so a turn or a
   // compaction run that ends within END_HOLD_MS of the last end leaves one line, its own.
   // FIX2 (Reviewer): a prompted turn's end also takes a number (turnEnded runs for a cancelled one too, which runs no
@@ -1209,13 +1215,25 @@ export function createDelegate({ chat, allowed, usage }) {
     }
     const last = first;
     if (!live || !parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
-    const line = '[p9] ' + child.title + (ok ? ' ended its turn: ' + last : ' failed; read_chat shows why.');
-    // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
+    if (!ok) return void wake(parent, id, '[p9] ' + child.title + ' failed; read_chat shows why.');
+    // O188: the end itself is a note (starts no turn); the parent is prompted only if the worker is still stopped WAKE_AFTER_MS later.
+    chat.note(parent.id, '[p9] ' + child.title + ' ended its turn: ' + last, 'p9').catch(() => {});
+    const acts = chat.acts(id);
+    setTimeout(() => {
+      const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
+      if (endGen.get(id) !== gen || !child || child.state === 'turn' || child.compacting || chat.acts(id) !== acts || chat.sprint(id).ready || chat.activeTaskTurn(id)) return;
+      if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
+      wake(parent, id, '[p9] ' + child.title + ' has been stopped 10 min: ' + last);
+    }, WAKE_AFTER_MS).unref?.();
+  }, END_HOLD_MS); });
+  // A line that starts the parent's turn: steered into a running one, else queued after it.
+  // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
+  function wake(parent, id, line) {
     const replacing = waitingNote.has(id) ? { replaces: waitingNote.get(id) } : {};
     chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }), ...replacing }, undefined, 'p9')
       .then((sent) => (sent.status === 409 ? chat.prompt(parent.id, { text: line, when: 'queue', ...replacing }, undefined, 'p9') : sent))
       .then((sent) => { if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {});
-  }, END_HOLD_MS); });
+  }
 
   // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and
   // so one turn. P9 resends nothing; a sprint that was idle is not touched; none on the third start in 10 minutes.

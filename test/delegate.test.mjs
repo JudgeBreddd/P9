@@ -12,11 +12,12 @@ import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelc
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 // profile.log in the workspace: the stand-in writes there what provider settings each agent start was given (a hash, never the key).
-const boot = (t) => daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
+// env: O188's P9_WAKE_AFTER_MS for a test that needs the worker's late wake sooner than 10 min.
+const boot = (t, env) => daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake], ...(env && { env }) }; });
 // Settings > Delegation starts on Ask me first; these tests are about the tools, so they run on Agent decides (the
 // Delegation test below boots without it).
 const ROW = { agent: '', model: '', effort: '' }, five = (...set) => Array.from({ length: 5 }, (_, i) => set[i] ?? ROW);
-const start = async (t) => { const instance = await boot(t); await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] }); return instance; };
+const start = async (t, env) => { const instance = await boot(t, env); await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] }); return instance; };
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
   .then((result) => ({ ...result, body: result.text ? JSON.parse(result.text) : null }));
@@ -51,6 +52,8 @@ async function connect(t, instance, conversation, after = 0) {
 }
 const rows = async (instance) => (await call(instance, '/chat')).body.conversations;
 const notices = async (instance, id) => (await events(instance, id)).filter((e) => e.type === 'user' && e.data.from === 'p9').map((e) => e.data.text);
+// O188: everything P9 told a chat, its notes (which start no turn) and its prompts, in order.
+const told = async (instance, id) => (await events(instance, id)).filter((e) => (e.type === 'note' || e.type === 'user') && e.data.from === 'p9').map((e) => e.data.text);
 
 test('Delegate: open_chat asks the user first; the worker is an ordinary chat with its parent kept; the same key makes one chat; a mode wider than the sender is refused', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
@@ -209,7 +212,7 @@ test('Delegate: send, wait, read, list and stop reach a chat\'s own workers; ano
   console.log('PASS Delegate tools: sent, waited, read and listed its own worker; another chat got chat-not-found on all five; question answered, approval refused; timeout stopped nothing; lock refused');
 });
 
-test('Delegate: a finished worker tells its running parent in one line, not while the parent waits on it; a stopped parent is not started', { timeout: 120000 }, async (t) => {
+test('Delegate: a finished worker tells its running parent in one note, not while the parent waits on it; a stopped parent is not started', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const a = await agent(t, instance);
@@ -217,21 +220,63 @@ test('Delegate: a finished worker tells its running parent in one line, not whil
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   assert.equal((await a.done(made.chat)).last, 'late reply');
   await pause(500);
-  assert.deepEqual(await notices(instance, a.conversation), [], 'a notice was sent while wait_chat was open');
-  // Not waiting: one line, marked as P9's, in the parent's chat.
+  assert.deepEqual(await told(instance, a.conversation), [], 'a notice was sent while wait_chat was open');
+  // Not waiting: one note (O188: it starts no turn), marked as P9's, in the parent's chat.
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
-  await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.from === 'p9');
-  assert.deepEqual(await notices(instance, a.conversation), ['[p9] Kid ended its turn: late reply']);
-  await until(instance, (event) => event.conversation === a.conversation && event.data?.content?.text === 'echo:[p9] Kid ended its turn: late reply');
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'note' && event.data.from === 'p9');
+  assert.deepEqual(await told(instance, a.conversation), ['[p9] Kid ended its turn: late reply']);
   // A stopped parent is not woken.
   await call(instance, `/chat/${a.conversation}/stop`, 'POST', {});
   const before = (await events(instance, a.conversation)).length;
   await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'late' });
   await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end' , (await events(instance, made.chat)).at(-1).cursor);
   await pause(500);
-  assert.equal((await notices(instance, a.conversation)).length, 1, 'a stopped parent was sent a notice');
+  assert.equal((await told(instance, a.conversation)).length, 1, 'a stopped parent was sent a notice');
   assert.ok(!(await events(instance, a.conversation)).slice(before).some((e) => e.type === 'connected'), 'a stopped parent was started');
-  console.log('PASS Delegate notice: none while waited on, one line to a running parent, none to a stopped one');
+  console.log('PASS Delegate notice: none while waited on, one note to a running parent, none to a stopped one');
+});
+
+// O188 (the owner's usage plan point 1): a worker's end no longer starts its parent's turn. It is a note; only a worker
+// still stopped WAKE_AFTER_MS later prompts its parent, once. A turn started before then cancels that; a failed turn prompts at once.
+test('O188: a worker\'s end is a note to its running parent; still stopped after the wake time it prompts once; a new turn first prompts nobody; a failed turn prompts at once', { timeout: 180000 }, async (t) => {
+  const WAKE = 8000, instance = await start(t, { P9_WAKE_AFTER_MS: String(WAKE) });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const turns = async () => (await events(instance, a.conversation)).filter((e) => e.type === 'turn-end').length;
+  const woken = async () => (await notices(instance, a.conversation)).filter((text) => text.includes('has been stopped'));
+  // The end: one note, and no turn in the parent.
+  const had = await turns();
+  const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
+  const noted = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9');
+  const notedAt = Date.now();
+  await pause(1000);
+  assert.deepEqual(await told(instance, a.conversation), ['[p9] Kid ended its turn: late reply'], 'the end was not one note');
+  assert.equal(await turns(), had, 'the end note started a turn in the parent');
+  // Still stopped after the wake time: one prompt, and the parent's turn runs.
+  const woke = await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data.from === 'p9', noted.cursor);
+  assert.equal(woke.hit.data.text, '[p9] Kid has been stopped 10 min: late reply');
+  assert.ok(Date.now() - notedAt >= WAKE - 1500, 'the wake came too soon: ' + (Date.now() - notedAt) + ' ms after the note');
+  for (let i = 0; i < 100 && await turns() === had; i += 1) await pause(100);
+  assert.equal(await turns(), had + 1, 'the wake did not start the parent\'s turn');
+  await pause(WAKE + 4000);
+  assert.equal((await woken()).length, 1, 'the parent was woken more than once');
+  // A new turn started before the wake time: nobody is prompted, not while it runs and not after it is stopped.
+  const notes = (await told(instance, a.conversation)).length;
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  for (let i = 0; i < 100 && (await told(instance, a.conversation)).length === notes; i += 1) await pause(100);
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
+  await pause(WAKE + 4000);
+  assert.equal((await woken()).length, 1, 'a worker in a new turn woke its parent');
+  assert.equal((await a.tool('stop_chat', { chat: made.chat })).action, 'interrupted');
+  await pause(WAKE + 4000);
+  assert.equal((await woken()).length, 1, 'a stopped turn woke the parent');
+  // A failed turn: the parent is prompted at once (after the 3 s hold), not after the wake time.
+  const crashedAt = Date.now();
+  await a.tool('send_chat', { chat: made.chat, text: 'crash' });
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data.text === '[p9] Kid failed; read_chat shows why.');
+  assert.ok(Date.now() - crashedAt < WAKE, 'the failed line waited for the wake time: ' + (Date.now() - crashedAt) + ' ms');
+  console.log('PASS O188: end note with no parent turn; one wake after ' + WAKE + ' ms; a new turn and its stop woke nobody; a failed turn prompted at once');
 });
 
 test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
@@ -278,14 +323,14 @@ test('Delegate F2: archive_chat archives and brings back a chat the caller start
   assert.equal(await archived(made.chat), false);
   // P9's own line at a worker's turn end starts nothing in an archived parent either; brought back, it is told again.
   assert.equal((await call(instance, `/chat/${a.conversation}/archive`, 'POST', { archived: true })).status, 200);
-  const told = (await notices(instance, a.conversation)).length;
+  const had = (await told(instance, a.conversation)).length;
   await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'late' });
   await until(instance, (event) => event.conversation === made.chat && event.type === 'turn-end', (await events(instance, made.chat)).at(-1).cursor);
   await pause(500);
-  assert.equal((await notices(instance, a.conversation)).length, told, 'an archived parent was sent a turn-end line');
+  assert.equal((await told(instance, a.conversation)).length, had, 'an archived parent was sent a turn-end line');
   await call(instance, `/chat/${a.conversation}/archive`, 'POST', { archived: false });
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
-  await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.from === 'p9', (await events(instance, a.conversation)).at(-1).cursor);
+  await until(instance, (event) => event.conversation === a.conversation && ['note', 'user'].includes(event.type) && event.data.from === 'p9', (await events(instance, a.conversation)).at(-1).cursor);
   await call(instance, '/agent-lock', 'POST', { on: true });
   assert.equal((await a.tool('archive_chat', { chat: made.chat })).error, 'agent-lock-on');
   assert.equal(await archived(made.chat), false);
@@ -425,7 +470,7 @@ test('Delegate notes: a note reaches a wider working chat and a worker\'s parent
   await call(instance, `/chat/${kid.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Plan' });
   await said(kid.conversation, 'mode:plan', beforeKid);
   await quiet(kid.conversation);
-  await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data.from === 'p9' && e.data.text.includes('Kid ended its turn'), beforeKid);
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('Kid ended its turn'), beforeKid);
   await quiet(a.conversation);
   const fresh = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
   const started = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'slow', mode: 'Auto' });
@@ -444,7 +489,7 @@ test('Delegate notes: a note reaches a wider working chat and a worker\'s parent
   await pause(500);
   assert.notEqual(await state(a.conversation), 'turn', 'a note started a turn');
   assert.equal((await of(a.conversation, 'user')).length, before, 'a note was recorded as a message');
-  assert.deepEqual((await of(a.conversation, 'note')).map((e) => [e.data.text, e.data.from]), [['review is done', kid.conversation]]);
+  assert.deepEqual((await of(a.conversation, 'note')).filter((e) => e.data.from !== 'p9').map((e) => [e.data.text, e.data.from]), [['review is done', kid.conversation]]);
   // The next message carries it, once.
   await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Auto' });
   await said(a.conversation, 'note:review is done');
@@ -1506,7 +1551,7 @@ test('O125 point 2: a worker whose end line says nothing for its parent sends no
   const made = await a.tool('open_chat', { text: 'nothing for you', title: 'Kid' });
   assert.equal((await a.done(made.chat)).last, 'echo:nothing for you');
   await pause(500);
-  assert.deepEqual(await notices(instance, a.conversation), [], 'the parent got a note that said nothing for it');
+  assert.deepEqual(await told(instance, a.conversation), [], 'the parent got a note that said nothing for it');
   const status = (await events(instance, made.chat)).filter((e) => e.type === 'sprint-state' && e.data.endNote);
   assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for you', 'the worker status did not keep its end line');
 });
@@ -1519,7 +1564,7 @@ test('O125 point 2: an end line that says nothing for the parent sends no note e
   const made = await a.tool('open_chat', { text: 'nothing for the parent', title: 'Kid' });
   assert.equal((await a.done(made.chat)).last, 'echo:nothing for the parent');
   await pause(500);
-  assert.deepEqual(await notices(instance, a.conversation), [], 'the parent got a note that said nothing for the parent');
+  assert.deepEqual(await told(instance, a.conversation), [], 'the parent got a note that said nothing for the parent');
   const status = (await events(instance, made.chat)).filter((e) => e.type === 'sprint-state' && e.data.endNote);
   assert.equal(status.at(-1)?.data.endNote.text, 'echo:nothing for the parent', 'the worker status did not keep its end line');
 });
@@ -1527,7 +1572,7 @@ test('O125 point 2: an end line that says nothing for the parent sends no note e
 // O125 point 2: only the newest note from a worker waits for its parent's turn; a newer one replaces the older by its ID.
 test('O125 point 2: two notes from one worker waiting for a parent in a turn: the second replaces the first, one goes as the next prompt', { timeout: 120000 }, async (t) => {
   // No steering (as Claude on ACP 2 offers none): a note meant for a running parent is refused (409) and waits.
-  const instance = await start(t);
+  const instance = await start(t, { P9_WAKE_AFTER_MS: '2000' }); // O188: the end is a note; the 2 s late wake is the line that waits
   await call(instance, '/file-protection', 'POST', { on: false });
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
   const a = await agent(t, instance);
@@ -1537,17 +1582,17 @@ test('O125 point 2: two notes from one worker waiting for a parent in a turn: th
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
-  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first note is held.
-  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid ended its turn'));
+  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first wake is held.
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid has been stopped'));
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
   const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
-  assert.ok(replaced.hit.data.text.includes('Kid ended its turn'), 'the replaced note is not marked replaced: ' + JSON.stringify(replaced.hit.data));
+  assert.ok(replaced.hit.data.text.includes('Kid has been stopped'), 'the replaced note is not marked replaced: ' + JSON.stringify(replaced.hit.data));
   fs.writeFileSync(path.join(instance.workspace, 'go'), '');
   await pause(100);
   for (let i = 0; i < 100 && (await notices(instance, a.conversation)).length < 1; i += 1) await pause(100);
   const kid = await notices(instance, a.conversation);
-  assert.equal(kid.filter((text) => text.includes('Kid ended its turn')).length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
+  assert.equal(kid.filter((text) => text.includes('Kid has been stopped')).length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
 });
 
 // O139 FIX2: the end line is held 3 s. A turn after it that runs no end hook must not send it with the wrong text: an
@@ -1557,7 +1602,7 @@ test('O139 FIX2: a held end line keeps its text across an ask_chat answer; a can
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
   const a = await agent(t, instance, { project }), b = await agent(t, instance, { project });
-  const ends = async () => (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
+  const ends = async () => (await told(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'first', title: 'Kid' });
   await call(instance, `/chat/${made.chat}/askable`, 'POST', { on: true });
@@ -1583,24 +1628,25 @@ test('O139 FIX2: a held end line keeps its text across an ask_chat answer; a can
 
 // O125 point 2 FIX1: a steerable parent running a tool holds the worker's first note (202), so the second must replace it too.
 test('O125 point 2: two notes from one worker while the steerable parent runs a tool: the second replaces the first, one goes', { timeout: 120000 }, async (t) => {
-  const instance = await start(t);
+  const instance = await start(t, { P9_WAKE_AFTER_MS: '2000' }); // O188: the end is a note; the 2 s late wake is the line that waits
   await call(instance, '/file-protection', 'POST', { on: false });
   fs.writeFileSync(path.join(instance.workspace, 'slow-tools'), '');
+  fs.writeFileSync(path.join(instance.workspace, 'slower-tools'), ''); // the parent's tool runs 40 s, past both wakes
   const a = await agent(t, instance);
   assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'tool-open' })).status, 202);
   await until(instance, (event) => event.conversation === a.conversation && JSON.stringify(event).includes('Run tool 1'));
   const turnEnds = async (chat) => (await events(instance, chat)).filter((e) => e.type === 'turn-end').length;
   const made = await a.tool('open_chat', { text: 'late', title: 'Kid' });
   for (let i = 0; (await turnEnds(made.chat)) < 1 && i < 300; i += 1) await pause(100);
-  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first note is held.
-  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid ended its turn'));
+  // O139 FIX1: two ends inside the 3 s end hold merge before any note waits, so the second turn starts once the first wake is held.
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'held' && String(event.data?.text).includes('Kid has been stopped'));
   await a.tool('send_chat', { chat: made.chat, text: 'late' });
   for (let i = 0; (await turnEnds(made.chat)) < 2 && i < 300; i += 1) await pause(100);
   const replaced = await until(instance, (event) => event.conversation === a.conversation && event.type === 'unheld' && event.data.why === 'replaced');
-  assert.ok(replaced.hit.data.text.includes('Kid ended its turn'), 'the replaced note is not the worker note: ' + JSON.stringify(replaced.hit.data));
-  for (let i = 0; i < 300 && (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn')).length < 1; i += 1) await pause(100);
+  assert.ok(replaced.hit.data.text.includes('Kid has been stopped'), 'the replaced note is not the worker note: ' + JSON.stringify(replaced.hit.data));
+  for (let i = 0; i < 600 && (await notices(instance, a.conversation)).filter((text) => text.includes('Kid has been stopped')).length < 1; i += 1) await pause(100);
   await pause(1000);
-  const kid = (await notices(instance, a.conversation)).filter((text) => text.includes('Kid ended its turn'));
+  const kid = (await notices(instance, a.conversation)).filter((text) => text.includes('Kid has been stopped'));
   assert.equal(kid.length, 1, 'more than one note from the same worker went: ' + JSON.stringify(kid));
 });
 
