@@ -532,3 +532,28 @@ test('Sprint O174 FIX1: a sprint lead past Delegation still stops at 20 running 
   assert.equal(tooDeep.error, 'too-many-chats', 'a sprint lead 3 deep started a worker: ' + JSON.stringify(tooDeep));
   console.log('PASS Sprint O174 FIX1: 20 running held (two at once: one started, one refused; a 21st refused) and a lead 3 deep refused under Off');
 });
+
+// O174 (found in its FIX1): a chat with no project can be a lead (set_rules makes its sprint folder). The user's
+// Start press on it starts it as one in a project would, never a 500 from reading a New sprint record it never had.
+test('Sprint O174 no project: a Start press on a chat with no project but its own roles.json starts it, not a 500', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const P = await attach(t, instance, first);
+  assert.equal((await rows(instance)).find((c) => c.id === first).project ?? null, null, 'the chat has a project');
+  const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  assert.equal((await P.tool('set_rules', { rules: 'Mine.' })).error, undefined);
+  assert.equal((await P.tool('sprint_setup_save', { name: 'roles.json', text: JSON.stringify({ roles: [row('lead')] }), hash: '' })).error, undefined);
+  const press = await call(instance, `/sprints/${first}/start`, 'POST', {});
+  assert.notEqual(press.status, 500, 'a Start press on a chat with no project: ' + JSON.stringify(press.body));
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  assert.equal(press.body.error, undefined);
+  // Started: a second press is the same sprint again, and an unknown id is still refused by name.
+  assert.equal((await call(instance, `/sprints/${first}/start`, 'POST', {})).status, 200);
+  const unknown = await call(instance, `/sprints/00000000-0000-4000-8000-000000000000/start`, 'POST', {});
+  assert.deepEqual([unknown.status, unknown.body.error], [404, 'unknown-sprint']);
+  console.log('PASS Sprint O174 no project: Start press on a no-project chat starts it (200), a second press too, unknown id 404');
+});
