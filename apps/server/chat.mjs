@@ -1202,11 +1202,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   const unheld = (id, items, why) => { for (const item of items) { emit(id, 'unheld', { id: item.id, text: item.body.text, why }); solos.get(item.body)?.end({ error: why }); } };
+  // O188: each chat's count of turns and tool calls started (delegate.mjs: a worker's late wake is cancelled by either).
+  const acts = new Map(), act = (id) => acts.set(id, (acts.get(id) ?? 0) + 1);
   function toolStep(id, session, update) {
     if (update.status === 'completed' || update.status === 'failed') {
       session.tools.delete(update.toolCallId);
       for (const item of session.held.splice(0)) steerHeld(id, session, item);
-    } else if (update.status === 'pending' || update.status === 'in_progress') session.tools.add(update.toolCallId);
+    } else if (update.status === 'pending' || update.status === 'in_progress') { if (!session.tools.has(update.toolCallId)) act(id); session.tools.add(update.toolCallId); }
   }
   async function steerHeld(id, session, item) {
     if (!item.allowed()) return unheld(id, [item], 'session-ended');
@@ -1505,6 +1507,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session, body);
       const turn = session.turn = randomUUID();
+      act(id);
       // O176: a prompted turn ends the unprompted run; the agent's next one has a new ID (ownRun), never the old one back.
       session.unprompted = null;
       // A worker on a work queue has no task but a ready: its next message ends that report too (its reviews stay).
@@ -1650,6 +1653,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
+    acts: (id) => acts.get(id) ?? 0,
     activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
     // O176: the run ready may report from. A prompted turn's own ID; with no prompt open (Claude Code works on after a
     // compaction or a plugin's prompt, which P9 never sent) a live agent calling a tool is in a run of its own: one ID

@@ -798,10 +798,15 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   only; Delegate saves nothing that grants access. What it adds to the ledger is which chat
   started which, and the name the parent gave it.
 - **What P9 sends on its own.** When a worker's turn ends and its parent is not waiting on it,
-  P9 sends the parent one line, `[p9] <title> finished: <last line of the reply>`, marked in the
-  transcript as P9's and not yours. That line is text the worker wrote, so the parent reads
+  P9 sends the parent one note, `[p9] <title> ended its turn: <last line of the reply>`, marked in the
+  transcript as P9's and not yours. Like any note it starts no turn (O188): a parent that is working
+  reads it at its next step (one whose agent cannot steer, at its next message), and an idle parent
+  keeps it until its next message. If the worker is still stopped 10 minutes later (no newer end, no
+  turn or tool call started, not compacting, not marked ready), P9 sends the parent one message,
+  `[p9] <title> has been stopped 10 min: <last line>`, which starts its turn, or waits for the
+  running one to end and then goes with the notes that waited. That line is text the worker wrote, so the parent reads
   it as a report, not as an instruction from you. A worker whose agent dies mid-turn is reported
-  as `[p9] <title> failed`. Either line is sent only to a parent that is running; it never starts
+  at once as `[p9] <title> failed`, a message that starts the parent's turn. Each is sent only to a parent that is running; none starts
   a stopped chat.
 - **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
   receiving agent with one line in front, added by P9: it says the message is from another chat's
