@@ -55,9 +55,16 @@ test('Sprint O172 window: chats of a sprint started with the window open keep th
   // A search for the project lists all its chats, workers unfolded; a row's title attribute is the chat's name.
   const rows = async () => { await page.fill('#navQ', 'Fresh'); return page.evaluate((ids) => ids.map((id) => (document.querySelector(`#navList .row[data-chat="${id}"]`)?.title ?? '').split(' · ')[0]), [lead, review]); };
   const names = async (want, what) => { let got; await settle(async () => JSON.stringify(got = await rows()) === JSON.stringify(want), what, 15000).catch(() => {}); assert.deepEqual(got, want, what); };
+  // O172, Sprint panel: on the lead's chat the card lists its workers (kin: the lead is not a row of its own card), each by
+  // the <b> in .sp-name; the lead's own name is the pane's crumb.
+  const panel = async () => { await page.locator(`#navList .row[data-chat="${lead}"]`).click(); return page.evaluate((id) => { const p = document.querySelector(`.pane[data-id="${id}"]`);
+    return { crumb: p?.querySelector('.ptool .ct')?.textContent ?? '', rows: [...(p?.querySelectorAll('.sprint .sp-row .sp-name b') ?? [])].map((b) => b.textContent) }; }, lead); };
+  const card = async (what) => { const want = { crumb: 'test 1', rows: ['review'] }; let got; await settle(async () => JSON.stringify(got = await panel()) === JSON.stringify(want), what, 15000).catch(() => {}); assert.deepEqual(got, want, what); };
   await names(['test 1', 'review'], 'live: the lead keeps its sprint\'s name and the worker its role key over the agent\'s titles');
+  await card('live: the Sprint panel names the lead and its worker by role');
   await page.reload(); await page.locator('#rChat').waitFor();
   await names(['test 1', 'review'], 'after a reload the role names show');
+  await card('after a reload the Sprint panel names them by role');
 
   const renamed = await call(instance, `/chat/${review}/rename`, 'POST', { title: 'Reviewer A' });
   assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
