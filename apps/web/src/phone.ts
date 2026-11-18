@@ -1620,7 +1620,8 @@ async function loadMission(cached = false) {
         folders: lists, checklists: checks, refs, widgets: (space.widgets ?? []).map(widgetRow), buttons: sprint ? [] : groups.get(space.id) ?? [] };
       const ordered = partOrder(space.order, PHONE_PARTS).flatMap((part) => parts[part]);
       // A widget section is the phone's own window for it: it draws a window of its own only for the other things it holds, the widget's row first.
-      if (space.widget && !ordered.length) { groups.delete(space.id); names.delete(space.id); continue; }
+      // A section with nothing to draw (widget or not) draws no empty window here, whatever it is named.
+      if (!ordered.length) { groups.delete(space.id); names.delete(space.id); continue; }
       if (ordered[0] === text[0] && text.length) { notes.set(space.id, text[0]); ordered.shift(); }
       if (space.widget) ordered.unshift(widgetRow(space.widget));
       groups.set(space.id, ordered);
