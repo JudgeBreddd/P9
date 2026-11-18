@@ -71,8 +71,8 @@ function petTicker() {
 // Each chat keeps its own pet spot, apart in Chat Focus and in its chat window (before, moving one pet moved
 // both, and moving the robot head window's pet moved the chat's). Settings' per-focus pane spot is no longer read.
 // ponytail: localStorage (petSpots, top of this section), last 200 dragged chats; move it into the settings file if spots should follow a profile copy.
-// Until dragged, a chat's pet stands left of its message box, standing on the box's top edge (moved there from
-// the right side, where pets had been dragged to); with no room there, just above the box's left end.
+// Until dragged, a chat's pet stands left of its message box, standing on the box's top edge; with no room
+// there, just above the box's left end.
 // D2: the pet's place is relative to the chat box. A spot is px from the message box's top-left
 // corner, not a share of the pane, so a side panel, split view or the editor that moves the box moves the pet with it.
 function petHome(p, cv, r, b) {
