@@ -171,8 +171,9 @@ test('Delegate window: workers indented under their chat and folded past three; 
   await group.locator('[data-dg-agent="1"]').selectOption('codex');
   await group.locator('[data-dg-agent="2"]').selectOption('profile:' + profile.id);
   await until(async () => { const d = await call(instance, '/delegation'); return d.start === 'ask' && JSON.stringify(d.workers) === JSON.stringify([{ agent: 'claude', model: 'opus', effort: 'high' },
-    { agent: 'codex', model: '', effort: '' }, { agent: 'profile:' + profile.id, model: '', effort: '' }]); }, 'every pick saved together');
-  assert.deepEqual(await group.locator('[data-dg-model="2"] option').allInnerTexts(), ['glm-5.3', 'kimi-k3:cloud'], 'a profile row offers something other than the profile\'s models');
+    { agent: 'codex', model: '', effort: '' }, { agent: 'profile:' + profile.id, model: 'glm-5.3', effort: '' }]); }, 'every pick saved together (O170: a profile saves its first model)');
+  assert.deepEqual(await group.locator('[data-dg-model="2"] option').allInnerTexts(), ['Not set', 'glm-5.3', 'kimi-k3:cloud'], 'a profile row offers something other than Not set and the profile\'s models');
+  assert.equal(await group.locator('[data-dg-model="2"]').inputValue(), 'glm-5.3', 'O170: the Model pick shows another model than the one saved');
   // Changing a row's agent drops the model and effort that belonged to the other agent.
   await group.locator('[data-dg-agent="0"]').selectOption('codex');
   await until(async () => { const w = (await call(instance, '/delegation')).workers[0]; return w.agent === 'codex' && w.model === '' && w.effort === ''; }, 'the old agent\'s model dropped');
