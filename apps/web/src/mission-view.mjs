@@ -792,14 +792,14 @@ function missionModal(m, body, row) {
   if (m.kind === 'win') {
     const w = outer.wins[m.id]; if (!w || (w.show && !w.show() && !m.any)) return outer.closeModal(); // any: the panel's Usage button opens it whatever the space shows
     outer.$('#mdlT').textContent = w.title();
-    body.innerHTML = panel(m.id, esc(w.title()), w.body()); outer.addHalos(body);
+    outer.setHTML(body, panel(m.id, esc(w.title()), w.body())); // O152: patched in place, so a redraw keeps the node under the pointer
     bindWin(body, m); missionLive();
     body.onscroll = () => { winTop[m.id] = body.scrollTop; };
   } else if (m.kind === 'scripts') {
     if (!outer.M.scripts[m.g]) return outer.closeModal();
     const n = sectionRows(m.g, outer.M.scripts[m.g]), word = n > outer.M.scripts[m.g].length ? 'item' : 'script';
     outer.$('#mdlT').textContent = `${gTitle(m.g)} · ${n} ${word}${n === 1 ? '' : 's'}`;
-    sectionBody(m, body, m.g, { write: (el, html) => { el.innerHTML = html; return true; }, shown: () => outer.S.modal === m, seen: () => !document.hidden, redraw: outer.renderModal, back: m });
+    sectionBody(m, body, m.g, { write: writeKeep, shown: () => outer.S.modal === m, seen: () => !document.hidden, redraw: outer.renderModal, back: m });
   } else if (m.kind === 'folder') {
     outer.$('#mdlT').textContent = m.f.title;
     if (m.list === undefined) { m.list = null; window.p9.mission('folder', { id: m.f.id }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (outer.S.modal === m) outer.renderModal(); }); }
