@@ -498,6 +498,7 @@ const noteList = (notes, at) => notes.length ? `<ul class="plist">${notes.map((a
 function fillWidgets(root, back) {
   root?.querySelectorAll('.wdg[data-widget]').forEach(box => {
     const w = box.dataset.widget, b = box.querySelector('.wbody'), notes = allNotes();
+    outer.written.delete(b); // O152: a patched section keeps this node but empties it, so its last fill is no longer on screen
     if (w === 'notifications') outer.setHTML(b, noteList(notes, 'data-wnote')).querySelectorAll('[data-wnote]').forEach(x => x.onclick = () => outer.openModal({ kind: 'alert', a: notes[+x.dataset.wnote], back: back ?? outer.S.modal }));
     else if (w === 'waiting') outer.setHTML(b, reviewList('data-wreview')).querySelectorAll('[data-wreview]').forEach(x => x.onclick = () => outer.openModal({ kind: 'review', i: +x.dataset.wreview }, 'reviews'));
     else if (w === 'usage') outer.setHTML(b, outer.wins.musage.inline());
