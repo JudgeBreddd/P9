@@ -583,9 +583,12 @@ function imageModal(m, body) {
   body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
     : `<div class="file-image"><img src="${i.src}" alt="${esc(name)}"></div>`;
 }
+// O173: with a draft, Discard drops it and reads the file from disk again, so closing and reopening shows no draft.
 function liveFoot(m) {
-  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.saveBtn(liveKey(m.name))}`;
+  const key = liveKey(m.name);
+  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.dirty(key) ? '<button data-slot="button" data-variant="outline" data-size="sm" data-discard>Discard</button>' : ''}${outer.saveBtn(key)}`;
   const b = outer.$('#mdlFoot [data-savefile]'); if (b) b.onclick = () => saveLive(m);
+  const x = outer.$('#mdlFoot [data-discard]'); if (x) x.onclick = () => { delete outer.S.docs[key]; m.asked = m.conflict = null; outer.renderModal(); };
 }
 async function saveLive(m, hash) {
   const key = liveKey(m.name), d = outer.S.docs[key]; if (!d || m.saving || (!hash && !outer.dirty(key))) return;
