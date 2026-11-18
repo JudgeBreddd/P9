@@ -1,5 +1,5 @@
 // Row 730 / 709, end to end: a queue worker's ring on the sprint card counts its role's items in the plan, and fills from a
-// real ready and a real pass verdict (no mocked queue). Real Electron, the real daemon, the fake agent and the MCP clients
+// real ready, a real pass verdict and the merge of the reviewed head into the main line (O164: a pass alone does not fill it; no mocked queue). Real Electron, the real daemon, the fake agent and the MCP clients
 // the agents are handed (as close-window).
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,7 +50,7 @@ async function tools(t, instance, conversation) {
   return { tool, done };
 }
 
-test('ring-window: a queue worker\'s ring shows its plan items and fills from a real ready and pass verdict', { timeout: 240000 }, async (t) => {
+test('ring-window: a queue worker\'s ring shows its plan items and fills from a real ready, pass verdict and merge (a pass alone does not fill it)', { timeout: 240000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
   await call(instance, '/file-protection', 'POST', { on: false });
@@ -83,7 +83,7 @@ test('ring-window: a queue worker\'s ring shows its plan items and fills from a 
   if (await pane.locator('.sprint[data-folded="true"]').count()) await pane.locator('[data-sprint-fold]').click(); // open, so the shots show the ring
   const ringIs = async (want, why) => { let got;
     await until(async () => { got = await ringOf.getAttribute('aria-label'); return got === want; }, why).catch(() => { throw new Error(why + ': wanted "' + want + '", the ring says "' + got + '"'); }); };
-  await ringIs('0 of 2 items passed', 'a queue worker with two plan items and nothing passed');
+  await ringIs('0 of 2 items merged', 'a queue worker with two plan items and nothing merged');
   await shot(page, 'ring-0-of-2');
 
   // A real ready (inside a turn: 'late' keeps one running) and a real pass verdict from the reviewer.
@@ -93,14 +93,25 @@ test('ring-window: a queue worker\'s ring shows its plan items and fills from a 
   await a.done(w.chat);
   const pass = await reviewer.tool('verdict', { chat: w.chat, commit: ready.ready.commit, result: 'pass', note: 'ok' });
   assert.equal(pass.review?.state, 'passed', JSON.stringify(pass));
-  await ringIs('1 of 2 items passed', 'd1 passed review');
+  // O164: a pass is a review, not a merge — the ring stays empty though the review says passed.
+  await ringIs('0 of 2 items merged', 'a pass does not fill the ring');
+  assert.equal(await ringOf.locator('b').textContent(), '0/2');
+  // The merge: the reviewed head reaches a main line (a bare remote the sprint's clone fetches), and P9's own look —
+  // one sprint_status read — records the evidence that fills the ring.
+  const remote = path.join(instance.workspace, 'ring-remote.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+  execFileSync('git', ['-C', folder, 'push', '-q', remote, 'HEAD:main']);
+  execFileSync('git', ['-C', instance.workspace, 'clone', '-q', '--no-checkout', remote, path.join(sprint, 'clone')]);
+  const looked = await a.tool('sprint_status', { sprint: lead });
+  assert.equal(looked.error, undefined, JSON.stringify(looked));
+  await ringIs('1 of 2 items merged', 'the merge moved the ring');
   assert.equal(await ringOf.locator('b').textContent(), '1/2');
-  // P9's "start your next item" is the worker's next message: it drops ready and verdict, and the pass stays counted.
+  // P9's "start your next item" is the worker's next message: it drops ready and verdict, and the merge stays counted.
   await a.done(w.chat);
-  await ringIs('1 of 2 items passed', 'the pass stays after the next message');
+  await ringIs('1 of 2 items merged', 'the merge stays after the next message');
   const dash = await ringOf.locator('circle.a').getAttribute('stroke-dasharray');
   assert.ok(parseFloat(dash) > 0, 'the ring is drawn part full: ' + dash);
   await shot(page, 'ring-1-of-2');
   assert.deepEqual(errors, []);
-  console.log('PASS ring-window: the ring read 0 of 2, then 1 of 2 after a real ready and pass verdict, and kept it after the next message');
+  console.log('PASS ring-window: the ring read 0 of 2 after a real ready and pass verdict (a pass is a review, not a merge), then 1 of 2 once the reviewed head reached the main line and P9 looked, and kept it after the next message');
 });

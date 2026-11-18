@@ -639,7 +639,7 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   const route = async (id = sprint) => call(instance, `/sprints/${id}/status`);
   // Not started: the plan's items are there, nothing runs yet.
   let got = await route();
-  assert.deepEqual([got.status, got.body.sprint.started, got.body.running_ms, got.body.done, got.body.workers], [200, null, null, { merged: 0, ticked: 1, total: 3 }, []], JSON.stringify(got.body));
+  assert.deepEqual([got.status, got.body.sprint.started, got.body.running_ms, got.body.done, got.body.workers], [200, null, null, { merged: 0, ticked: 1, unproven: 0, total: 3 }, []], JSON.stringify(got.body));
   assert.deepEqual([(await route('11111111-1111-4111-8111-111111111111')).status, (await route('nope')).body.error], [404, 'unknown-sprint']);
   assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', {})).status, 200);
   assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
@@ -653,7 +653,7 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   let { tool, page } = await both();
   assert.deepEqual([tool.error, 'contract' in tool, 'script' in tool, 'point' in tool], [undefined, false, false, false], JSON.stringify(tool).slice(0, 400));
   assert.deepEqual(tool.items.map((i) => [i.id, i.role, i.ticked]), planItems(plan(false)).map((i) => [i.id, i.role, i.ticked]));
-  assert.deepEqual([tool.done, tool.sprint.id, tool.sprint.title, tool.project.id, tool.scripts], [{ merged: 0, ticked: 1, total: 3 }, sprint, 'Watched', project, { running: 0, additional: 0, waiting: 0 }]);
+  assert.deepEqual([tool.done, tool.sprint.id, tool.sprint.title, tool.project.id, tool.scripts], [{ merged: 0, ticked: 1, unproven: 0, total: 3 }, sprint, 'Watched', project, { running: 0, additional: 0, waiting: 0 }]);
   assert.deepEqual(tool.workers.map((w) => [w.key, w.chat, w.model, w.work]), [['lead', sprint, 'opus', tool.workers[0].work], ['w1', w1.chat, 'haiku', { done: 0, total: 2 }]], JSON.stringify(tool.workers));
   assert.ok(tool.sprint.started.at && Number.isInteger(tool.running_ms) && tool.running_ms >= 0 && page.running_ms >= tool.running_ms, JSON.stringify([tool.sprint.started, tool.running_ms, page.running_ms]));
   // A sprint named from a chat of the same project, and from the worker with no name: the same sprint.
@@ -662,7 +662,7 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   // The plan changes on disk: both follow.
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(true));
   ({ tool, page } = await both());
-  assert.deepEqual([tool.done, page.done], [{ merged: 0, ticked: 2, total: 3 }, { merged: 0, ticked: 2, total: 3 }]);
+  assert.deepEqual([tool.done, page.done], [{ merged: 0, ticked: 2, unproven: 0, total: 3 }, { merged: 0, ticked: 2, unproven: 0, total: 3 }]);
   // Scripts: running is every script that runs (Start's and the ones approved after), additional is the part of it
   // approved after Start, waiting is apart. One of each kind: 2, 1, 1, from the tool and the route.
   const row = (name) => ({ name, command: `/usr/bin/touch ${name}.txt`, point: 'after-close', blocking: false });

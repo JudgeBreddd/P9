@@ -212,12 +212,14 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     if (end?.record) return { ...end.record, closed: { at: iso(end.at), by: end.by } };
     // O164 (done means merged): the one look P9 takes for its own merge evidence before answering. What it proves is
     // recorded on the review record, so the count stays between looks. Best effort: offline, the record stands as it is.
-    await chat.mergedNow?.(sprint).catch(() => {});
+    const repo = await chat.mergedNow?.(sprint).catch(() => undefined);
     const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status');
     const st = standing(sprint), start = chat.projects.started(sprint);
     return { ...s, closed: null,
       // merged: by P9's own record of the merge (mergedNow); ticked: the box in the plan, a model's say-so, counted but never done.
-      done: { merged: s.items.filter((i) => i.review?.merged === true).length, ticked: s.items.filter((i) => i.ticked).length, total: s.items.length },
+      // unproven: reviewed items P9 cannot prove merged because it holds no clone or copy of the repo — the 0 is a fact, not silence.
+      done: { merged: s.items.filter((i) => i.review?.merged === true).length, ticked: s.items.filter((i) => i.ticked).length,
+        unproven: repo === null ? s.items.filter((i) => i.review?.commit && i.review?.merged !== true).length : 0, total: s.items.length },
       running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
       // phases (I1): each "## Phase" heading of the plan with its items merged and its total; current: the first
       // with an item not merged (null once all have merged). [] for a plan with no such heading: the page shows no phase line.

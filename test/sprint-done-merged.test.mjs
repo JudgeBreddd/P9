@@ -75,31 +75,37 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   const verdict = await R.tool('verdict', { chat: w1, commit: head, result: 'pass', note: 'ok' });
   assert.equal(verdict.verdict?.result, 'pass', JSON.stringify(verdict));
 
-  // Passed but not merged: done stays 0 — the ring and the status page count no pass as done.
-  let st = await status();
-  assert.equal(st.items.find((i) => i.id === 'A1').review.state, 'passed', JSON.stringify(st.items.find((i) => i.id === 'A1')));
-  assert.deepEqual(st.done, { merged: 0, ticked: 0, total: 4 }, JSON.stringify(st.done));
-  assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 0, total: 3 }, JSON.stringify(st.workers));
+  // Passed but not merged: the ring's own record counts no pass as done (no look has run yet).
   q = await queue();
   assert.deepEqual([q.done, q.total, q.items.find((i) => i.id === 'A1').merged], [0, 3, false], JSON.stringify(q));
 
-  // Ticking the plan's box moves nothing: a box is a say-so, done is P9's own evidence.
+  // Ticking the plan's box moves nothing: a box is a say-so, done is P9's own evidence. One look (a status read) runs
+  // the fetch; a second read within the 30 s window runs no new one — the evidence already recorded answers.
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan('x'));
+  const clone = path.join(path.dirname(s.folder), s.sprint, 'clone');
+  const fetchHead = path.join(clone, '.git', 'FETCH_HEAD');
+  let st = await status();
+  assert.equal(st.items.find((i) => i.id === 'A1').review.state, 'passed', JSON.stringify(st.items.find((i) => i.id === 'A1')));
+  assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 4 }, JSON.stringify(st.done));
+  assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 0, total: 3 }, JSON.stringify(st.workers));
+  const fetched = fs.statSync(fetchHead).mtimeMs;
   st = await status();
-  assert.deepEqual(st.done, { merged: 0, ticked: 1, total: 4 }, JSON.stringify(st.done));
+  assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 4 }, 'the second read within the window answered from the recorded evidence');
+  assert.equal(fs.statSync(fetchHead).mtimeMs, fetched, 'two status reads within 30 s ran one fetch');
   assert.deepEqual([st.workers.find((w) => w.key === 'w1').work.done, (await queue()).done], [0, 0]);
 
-  // The merge: the reviewed head reaches the remote's main line, and P9's own look (the status read) records it.
-  const clone = path.join(path.dirname(s.folder), s.sprint, 'clone');
+  // The merge: the reviewed head reaches the remote's main line, and P9's own look records it. The look waits out the
+  // 30 s fetch window (a read sooner would answer from the record and miss it).
   g(clone, 'push', '-q', 'origin', 'sprint/' + s.sprint.slice(0, 8) + '/w1:main');
+  await new Promise((resolve) => setTimeout(resolve, 31_000));
   st = await status();
   assert.equal(st.items.find((i) => i.id === 'A1').review.merged, true, JSON.stringify(st.items.find((i) => i.id === 'A1')));
-  assert.deepEqual(st.done, { merged: 1, ticked: 1, total: 4 }, JSON.stringify(st.done));
+  assert.deepEqual(st.done, { merged: 1, ticked: 1, unproven: 0, total: 4 }, JSON.stringify(st.done));
   assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 1, total: 3 }, JSON.stringify(st.workers));
   q = await queue();
   assert.deepEqual([q.done, q.total, q.items.find((i) => i.id === 'A1').merged], [1, 3, true], JSON.stringify(q));
   // The second item, passed by nobody, stays open; P9's own record holds the first between looks.
   st = await status();
   assert.equal(st.done.merged, 1);
-  console.log('PASS O164 done means merged: passed-but-unmerged 0/3, a tick moved nothing, the merge moved the ring to 1/3 (the pass and the review stay recorded)');
+  console.log('PASS O164 done means merged: passed-but-unmerged 0/3, a tick moved nothing, the merge moved the ring to 1/3 (the pass and the review stay recorded; two reads in the window ran one fetch)');
 });

@@ -1091,8 +1091,9 @@ Written before the code (sprint spec D1, D3, D4).
 - **The review trail has one writer.** `review-trail.md` is P9's copy of its own review record: one row per item a
   worker reported with `ready` (item, worker, commit, state, fix count, larger model), rewritten whole at each `ready`
   and `verdict`. The project page and `set_rules` cannot write it, and an edit to it is replaced at the next write. A
-  worker's work queue (its role's item lines in `sprint.md`) and its done count come from P9's record, never from a
-  tick in the plan. `ready` and `verdict` send their messages as `queue` messages, in the sender's name `p9`: to the
+  worker's work queue (its role's item lines in `sprint.md`) and its done count come from P9's record — an item counts
+  when its reviewed head has reached the sprint's main line, which P9 proves in its own clone or copy of the repo
+  (never the owner's repository), never from a tick in the plan or the Reviewer's pass, which comes before the merge. `ready` and `verdict` send their messages as `queue` messages, in the sender's name `p9`: to the
   worker's sibling with key `review` (ready), to the worker (verdict), and to the lead at an item's third fix.
 - **Who makes them.** P9 makes `sprint.md` (a short outline) at the lead's first worker, and a notes outline for every
   worker. For a worker with a key it also makes empty role files. It never writes over a file that is already there.

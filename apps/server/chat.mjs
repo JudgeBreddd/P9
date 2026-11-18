@@ -502,19 +502,28 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // O164 (done means merged): P9 looks for its own evidence that a reviewed head reached the sprint's main line and
   // records what it proves on the review record (merged: true, once — a merge does not un-land). Never the box: the
   // plan's tick stays a say-so. The git read runs in the sprint's own clone, never the owner's repository. Nothing it
-  // cannot prove is recorded, so the next look asks again.
+  // cannot prove is recorded, so the next look asks again. Returns the repository the proof runs in ('copy' | 'clone',
+  // null when P9 holds none — the status then says the count cannot be proven). The fetch runs for a sprint at most
+  // once every 30 s (FETCH_MS): Sprint View re-reads every 5 s while its page shows, and a slow fetch must not hold
+  // up the answer — the evidence already recorded answers meanwhile, and the next look after the window fetches again.
+  const fetchedAt = new Map();
+  const FETCH_MS = 30_000;
   async function mergedNow(lead) {
     if (!ID.test(lead ?? '')) return;
     const pending = [];
     for (const c of db.prepare('SELECT id FROM conversations WHERE parent = ?').all(lead)) {
       for (const [item, r] of Object.entries(sprintOf(c.id).reviews ?? {})) if (r?.commit && r.merged !== true) pending.push({ chat: c.id, item, commit: r.commit });
     }
-    if (!pending.length) return;
+    const repo = (await workers.repoOf?.(lead)) ?? null;
+    if (!pending.length || !repo) return repo; // without a repository no fetch runs, so no fetch window starts
+    if (Date.now() - (fetchedAt.get(lead) ?? 0) < FETCH_MS) return repo;
+    fetchedAt.set(lead, Date.now());
     const proof = await workers.merged(lead, [...new Set(pending.map((p) => p.commit))]);
     for (const p of pending) if (proof.get(p.commit) === true) {
       const reviews = sprintOf(p.chat).reviews ?? {}, r = reviews[p.item];
       if (r?.commit === p.commit && r.merged !== true) setSprint(p.chat, { reviews: { ...reviews, [p.item]: { ...r, merged: true } } });
     }
+    return repo;
   }
   const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
   // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
