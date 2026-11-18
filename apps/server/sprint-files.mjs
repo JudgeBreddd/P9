@@ -36,8 +36,10 @@ export function planItems(plan) {
   for (const line of typeof plan === 'string' ? plan.split('\n') : []) {
     const found = /^\s*- \[([ xX])\] (.+)$/.exec(line), item = found?.[2].trim();
     if (!item) continue;
-    const role = [...item.matchAll(/(?:^|[;.]\s*)role:?\s+([a-z0-9][a-z0-9_-]*(?:\.[a-z0-9_-]+)*)/gi)].at(-1)?.[1].toLowerCase() ?? null;
-    items.push({ id: item.split(':')[0].trim().slice(0, 200), text: item.slice(0, 500), role, ticked: found[1] !== ' ' });
+    const id = item.split(':')[0].trim().slice(0, 200);
+    // O164 part (3): an id ending in v after its number (O159v) is the owner's own line, whatever role it names.
+    const role = /\dv$/.test(id) ? 'owner' : [...item.matchAll(/(?:^|[;.]\s*)role:?\s+([a-z0-9][a-z0-9_-]*(?:\.[a-z0-9_-]+)*)/gi)].at(-1)?.[1].toLowerCase() ?? null;
+    items.push({ id, text: item.slice(0, 500), role, ticked: found[1] !== ' ' });
   }
   return items;
 }
@@ -52,7 +54,8 @@ export function phasesOf(plan) {
   }
   return phases;
 }
-export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.role === key).map(({ id, text }) => ({ id, text }));
+// A Role: owner line is never a worker's queue, even a worker keyed 'owner' (O164 part (3)).
+export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.role !== 'owner' && i.role === key).map(({ id, text }) => ({ id, text }));
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {

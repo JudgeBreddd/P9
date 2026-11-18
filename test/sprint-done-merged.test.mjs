@@ -47,7 +47,8 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
 
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
   const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Merged' })).body;
-  // Three worker lines and one owner's own: the owner's line is never the worker's (the v-row rule's counting part).
+  // Three worker lines and one owner's own: the owner's line is never the worker's, and is counted nowhere a merge is
+  // counted (done.total holds the three worker lines) — it closes on the owner's click instead (O164 part (3)).
   const plan = (tick) => `# Plan\n\n- [${tick}] A1: the first thing. Role: w1\n- [ ] A2: the second thing. Role: w1\n- [ ] A3: the third thing. Role: w1\n- [ ] O9v: the owner's own look. Role: owner.\n`;
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), plan(' '));
   const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
@@ -86,11 +87,11 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   const fetchHead = path.join(clone, '.git', 'FETCH_HEAD');
   let st = await status();
   assert.equal(st.items.find((i) => i.id === 'A1').review.state, 'passed', JSON.stringify(st.items.find((i) => i.id === 'A1')));
-  assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 4 }, JSON.stringify(st.done));
+  assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 3 }, JSON.stringify(st.done));
   assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 0, total: 3 }, JSON.stringify(st.workers));
   const fetched = fs.statSync(fetchHead).mtimeMs;
   st = await status();
-  assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 4 }, 'the second read within the window answered from the recorded evidence');
+  assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 3 }, 'the second read within the window answered from the recorded evidence');
   assert.equal(fs.statSync(fetchHead).mtimeMs, fetched, 'two status reads within 30 s ran one fetch');
   assert.deepEqual([st.workers.find((w) => w.key === 'w1').work.done, (await queue()).done], [0, 0]);
 
@@ -100,7 +101,7 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   await new Promise((resolve) => setTimeout(resolve, 31_000));
   st = await status();
   assert.equal(st.items.find((i) => i.id === 'A1').review.merged, true, JSON.stringify(st.items.find((i) => i.id === 'A1')));
-  assert.deepEqual(st.done, { merged: 1, ticked: 1, unproven: 0, total: 4 }, JSON.stringify(st.done));
+  assert.deepEqual(st.done, { merged: 1, ticked: 1, unproven: 0, total: 3 }, JSON.stringify(st.done));
   assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 1, total: 3 }, JSON.stringify(st.workers));
   q = await queue();
   assert.deepEqual([q.done, q.total, q.items.find((i) => i.id === 'A1').merged], [1, 3, true], JSON.stringify(q));

@@ -21,6 +21,8 @@ export const projectRoutes = (uuid) => {
     sprintStatus: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['GET', '/sprints/' + sprint + '/status'],
     // Sprint View's Close sprint button (what close_sprint does for an agent, after asking you).
     closeSprint: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/close', {}],
+    // O164 part (3): the Sprint View's click on a v line (Role: owner), closing the owner's own item. No merge involved.
+    ownerDone: ({ sprint, item, ...rest }) => uuid(sprint) && typeof item === 'string' && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/owner-done', { item }],
     // SECURITY.md § Sprint scripts, "The library": the owner's saved scripts, and a run of one approved script of a sprint.
     scriptLibrary: ({ sprint, ...rest }) => (sprint === undefined || uuid(sprint)) && !Object.keys(rest).length && ['GET', '/sprint-scripts' + (sprint ? '?sprint=' + sprint : '')],
     allowScripts: ({ on, ...rest }) => typeof on === 'boolean' && !Object.keys(rest).length && ['POST', '/sprint-scripts/allow', { on }],

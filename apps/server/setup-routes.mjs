@@ -284,6 +284,14 @@ export function setupRoutes(outer) {
     const result = await outer.mcp.ownerClose(c.req.param('id'));
     return c.json(result, !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : ['sprint-closed', 'sprint-not-started', 'sprint-starting'].includes(result.error) ? 409 : ['request-refused', 'script-refused'].includes(result.error) ? 400 : 500);
   });
+  // Desktop only (O164 part (3), Role: owner on a v line): the Sprint View's click that closes the owner's own item.
+  // No merge is involved and no agent tool does this — it is the owner's own call, recorded by P9.
+  outer.app.post('/sprints/:id/owner-done', async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join() !== 'item' || typeof body.item !== 'string') return c.json({ error: 'request-refused' }, 400);
+    const result = outer.mcp.ownerDone(c.req.param('id'), body.item);
+    return c.json(result, !result.error ? 200 : result.error === 'unknown-sprint' ? 404 : ['sprint-not-started', 'sprint-closed'].includes(result.error) ? 409 : result.error === 'not-the-owners' ? 422 : 400);
+  });
   // Desktop only (SECURITY.md § Sprint scripts, "The library"): the owner's script library and a run of one approved
   // script. No phone route. An agent has the tools instead (sprint_script_save, _remove, _add, run_sprint_script).
   const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed', 'scripts-changed', 'sprint-not-started', 'too-many-scripts'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);

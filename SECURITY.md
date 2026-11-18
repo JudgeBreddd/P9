@@ -1214,6 +1214,10 @@ before the tests (sprint spec S16; 0.1.9 phase 4.5).
 - **What close does not do.** It does not remove worker folders (that stays its own button, § Worker folders), does
   not archive the chats, and does not stop you from typing in one of them again. A chat of a closed sprint that you
   start again is an ordinary chat: Delegate's rules still apply to it, the sprint's scripts do not run for it.
+- **Your own items (O164).** A plan line whose id ends in `v` after its number (`O159v`) is yours, whatever role it
+  names: it is in no worker's queue or ring and in no merged count. It closes only with your Close on that line in the
+  Sprint View (a desktop-only route, `POST /sprints/:id/owner-done`; no agent tool does it). P9 records the click on
+  the lead's sprint state; the plan's box is not changed, and no merge or review is involved.
 
 ## Sprint scripts
 

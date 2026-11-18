@@ -197,10 +197,12 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // Sprint View and sprint_status: one answer for the page and the tool, so both show the same sprint. It is what a
   // script is told (state, above) without the parts that are about one script run, plus the counts the page draws:
   // done (plan items merged, and ticked), running_ms (since Start), each worker's own work, and how many scripts stand. Reads only.
+  // items: every plan line, in the plan's order, so the slices line up with phasesOf's counts; a phase counts only the
+  // lines that merge (O164 part (3) FIX1: an owner line is in no phase's steps, the same set as done.total).
   function phasesView(plan, items) {
     const heads = phasesOf(plan), loose = items.length - heads.reduce((n, p) => n + p.items, 0); // items above the first heading
     let at = loose;
-    const phases = heads.map((p) => { const mine = items.slice(at, at += p.items);
+    const phases = heads.map((p) => { const mine = items.slice(at, at += p.items).filter((i) => i.role !== 'owner');
       return { title: p.title, merged: mine.filter((i) => i.review?.merged === true).length, total: mine.length }; });
     const current = phases.findIndex((p) => p.merged < p.total);
     return { phases, phase_now: current < 0 ? null : current };
@@ -215,17 +217,25 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     const repo = await chat.mergedNow?.(sprint).catch(() => undefined);
     const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status');
     const st = standing(sprint), start = chat.projects.started(sprint);
+    // O164 part (3): a v line (Role: owner) never merges — it closes on the owner's click — so it is counted nowhere a
+    // merge is counted: not in done.total, not in a phase's steps. It belongs to the owner's own queue and ring (owner).
+    const mine = s.items.filter((i) => i.role !== 'owner'), owned = s.items.filter((i) => i.role === 'owner'),
+      clicked = new Set(Object.keys(chat.sprint?.(sprint)?.ownerDone ?? {}));
     return { ...s, closed: null,
       // merged: by P9's own record of the merge (mergedNow); ticked: the box in the plan, a model's say-so, counted but never done.
       // unproven: reviewed items P9 cannot prove merged because it holds no clone or copy of the repo — the 0 is a fact, not silence.
-      done: { merged: s.items.filter((i) => i.review?.merged === true).length, ticked: s.items.filter((i) => i.ticked).length,
-        unproven: repo === null ? s.items.filter((i) => i.review?.commit && i.review?.merged !== true).length : 0, total: s.items.length },
+      done: { merged: mine.filter((i) => i.review?.merged === true).length, ticked: s.items.filter((i) => i.ticked).length,
+        unproven: repo === null ? mine.filter((i) => i.review?.commit && i.review?.merged !== true).length : 0, total: mine.length },
+      // The owner's own (Role: owner lines): closed by P9's record of the owner's click (ownerDone on the lead's state),
+      // never by the plan's tick, never by a merge. An empty queue answers { done: 0, total: 0, items: [] }.
+      owner: { done: owned.filter((i) => clicked.has(i.id)).length, total: owned.length,
+        items: owned.map((i) => ({ id: i.id, text: i.text, ticked: i.ticked, done: clicked.has(i.id) })) },
       running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
       // phases (I1): each "## Phase" heading of the plan with its items merged and its total; current: the first
       // with an item not merged (null once all have merged). [] for a plan with no such heading: the page shows no phase line.
       ...phasesView(chat.sprintFiles.read(sprint, 'sprint.md'), s.items),
       // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
-      workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : s.items.filter((i) => i.role && i.role === w.key);
+      workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : mine.filter((i) => i.role && i.role === w.key);
         return { ...w, work: q ? { done: q.done, total: q.total } : own.length ? { done: own.filter((i) => i.review?.merged === true).length, total: own.length } : null }; }),
       scripts: { running: st.running.length, additional: st.additional.length, waiting: st.waiting.length } };
   }
