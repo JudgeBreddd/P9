@@ -343,7 +343,10 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       try { file = await readFile(workspace, `${settings.waiting}/${entry.name}`); } catch { continue; }
       if (/^A\.[ \t]*\S/m.test(file.content)) continue; // answered: an agent wires it in and removes the file
       const title = file.content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').trim() || entry.name.slice(0, -3);
-      items.push({ name: entry.name, project: entry.name.slice(0, -3), title, age: age(entry.mtimeMs), updated: entry.mtimeMs, hash: file.hash,
+      // O181: the project a waiting item came from is a "**Project:** <name>" line in the file, never the file's own
+      // name (that showed as a slug on the mission list). No line, no project: the row shows only its age.
+      const project = file.content.match(/^\*\*Project:\*\*[ \t]*(\S.*?)[ \t]*$/m)?.[1].slice(0, 120) ?? '';
+      items.push({ name: entry.name, project, title, age: age(entry.mtimeMs), updated: entry.mtimeMs, hash: file.hash,
         content: file.content, answerable: EMPTY_ANSWER.test(file.content) });
     }
     return items;

@@ -177,7 +177,7 @@ A **Sprint** button shows while the machine you are connected to has a sprint st
 
 - **Needs you chips** read `needs <your name>`, with the name from Settings → Your name.
 - **Robot heads** on the strip: one per running chat or result you have not seen; the tooltip names the chat, its project and its state.
-- **Waiting on you**: one card per file in your `waiting` folder.
+- **Waiting on you**: one card per file in your `waiting` folder. A `**Project:** <name>` line in a file names the project it came from and shows under its title; a file with no such line shows only its age.
 - **+ New idea**: writes a new file to the `_ideas/` folder in your workspace (`_ideas/needs-done/` for a fix to an existing project). It never replaces an existing file.
 - **Fix with Claude**: a folder list in your space with a `fix` text gives the files it opens a **Fix with Claude** button, which starts a Claude chat with that text, then the file.
 

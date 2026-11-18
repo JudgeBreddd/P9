@@ -293,7 +293,8 @@ function cardList(all) {
   // Only _tyler/ items that arrive while the app is open get a card; the ones already there, and the ones
   // he skips, wait quietly in the Notification Center. Running chats are robot heads in the panel (panel.mjs).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
-  if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), quiet: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
+  // O181: the card/bell row's sub carries the project only when the file says one (proj is '' otherwise, never a slug), so no dangling ' · '.
+  if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), quiet: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/' + (fresh[0].proj ? ' · ' + fresh[0].proj : ''), open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
   for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, quiet: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
   if (S.setup) { const d = setupDone(S.setup), rows = Object.keys(d).filter(k => k !== 'pick' && k !== 'mission' && (k !== 'terminal' || S.setup.tmux !== null)), left = rows.filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${rows.length - left.length} of ${rows.length} done`, sub: [...left.map(k => STEP_NAMES[k]), ...(d.mission ? [] : ['Mission Control'])].join(' · ') }); }
@@ -373,14 +374,14 @@ function renderModal() {
   } else if (m.kind === 'reviews') {
     if (!S.reviews.length) return closeModal();
     $('#mdlT').textContent = S.reviews.length + ' items need you';
-    body.innerHTML = `<ul class="mlist">${S.reviews.map((r, i) => row(i, `<span class="kind">${esc(r.kind)}</span>`, esc(r.txt), esc(r.proj) + ' · ' + esc(r.age) + (r.draft ? ' · draft' : ''))).join('')}</ul>`;
+    body.innerHTML = `<ul class="mlist">${S.reviews.map((r, i) => row(i, `<span class="kind">${esc(r.kind)}</span>`, esc(r.txt), esc(r.proj) + (r.proj && ' · ') + esc(r.age) + (r.draft ? ' · draft' : ''))).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'review', i: +b.dataset.i, back: m }));
   } else if (m.kind === 'review') {
     // D10-3: Save & Continue handles this item and moves on; Skip leaves it pending in _tyler/, takes its card off the stack
     // (Skip once never dismissed it) and moves on, closing after the last item
     if (!S.reviews.length) return closeModal();
     const i = m.i = Math.min(m.i, S.reviews.length - 1), r = S.reviews[i]; m.f = r.file; // O148: a card reopens this file, wherever its row is then (cardAct)
-    $('#mdlT').textContent = `${i + 1} of ${S.reviews.length} · ${r.proj}`;
+    $('#mdlT').textContent = `${i + 1} of ${S.reviews.length}` + (r.proj ? ` · ${r.proj}` : '');
     body.innerHTML = `<div class="review"><span class="kind">${esc(r.kind)} · ${esc(r.age)}</span><p>${esc(r.txt)}</p><div class="fileview" aria-label="${esc(r.file)}"><span class="mono sm muted">${esc(r.file)}</span>${fileView(r.file)}</div><label>Your answer<textarea data-answer placeholder="Write your answer. It is kept if you close this.">${esc(r.draft || '')}</textarea></label></div>`;
     const ta = body.querySelector('textarea'); ta.oninput = () => { r.draft = ta.value; };
     if (r.sel) { ta.focus(); ta.setSelectionRange(...r.sel); }

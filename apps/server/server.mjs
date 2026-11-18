@@ -66,7 +66,8 @@ const STARTER_SETTINGS = Object.freeze({ primary: 'AGENTS.md', registry: 'missio
 const STARTER_AGENTS = '# My workspace\n\nAgents working in this folder read this file first. Write here what they should know: your projects,\n'
   + 'where things live, and how you like work done.\n';
 const STARTER_WAITING = '# Needs you\n\nAgents put a note here when they need your answer or your OK. Each .md file in this folder shows\n'
-  + 'on Mission Control as an item that needs you, until it is moved or deleted.\n';
+  + 'on Mission Control as an item that needs you, until it is moved or deleted. A "**Project:** <name>" line in the file\n'
+  + 'names the project the item came from; it shows under the title on Mission Control and the phone.\n';
 const webRoot = fileURLToPath(new URL('../web/dist/', import.meta.url));
 const types = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2' };
 

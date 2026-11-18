@@ -1552,7 +1552,7 @@ async function loadMission(cached = false) {
     mission = data;
     sortQueue(data.queue as Waiting[]); // in place: an answer form's index is its place in mission.queue
     const by = queueBy(), sortPick = data.queue.length > 1 ? `<label class="queue-sort">Sort<select data-queue-sort aria-label="Sort"><option value="updated"${by === 'updated' ? ' selected' : ''}>Newest</option><option value="project"${by === 'project' ? ' selected' : ''}>Project</option></select></label>` : '';
-    const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${escape(item.project)} · ${escape(item.age)}</small>`,
+    const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${item.project ? escape(item.project) + ' · ' : ''}${escape(item.age)}</small>`,
       `<div class="md" data-waiting-text>${md.parse(item.content)}</div>` + (item.answerable
         ? `<form data-answer="${index}"><label>Your answer<textarea rows="3" required maxlength="4000"></textarea></label><button type="submit">Send answer</button><p class="muted" data-note></p></form>`
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
