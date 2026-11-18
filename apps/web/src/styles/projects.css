@@ -87,20 +87,25 @@
 .ppage .saved.on{opacity:1}
 .ppage .sh2.sp-every{margin:14px 0 0}
 .ppage .crow .tag{flex:none;font-size:11px;padding:1px 7px;border-radius:999px;background:color-mix(in oklch,var(--primary) 14%,transparent)}
-/* Sprint View (sprint-view.mjs): where a started sprint stands */
+/* Sprint View (sprint-view.mjs): where a started sprint stands — one header card (the big ring, its say, the fact
+   tiles, and the Close row kept to it by a rule), then the aligned rows and the plan's items. */
 .ppage .sv h3{margin:18px 0 6px;font-size:12px;font-weight:600;color:var(--muted-foreground)}
 .ppage .sv .muted{color:var(--muted-foreground);font-size:12px}
 .ppage .sv .tag{flex:none;font-size:11px;padding:1px 7px;border-radius:999px;background:color-mix(in oklch,var(--foreground) 9%,transparent);white-space:nowrap}
-.ppage .sv-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.ppage .sv-top{display:flex;align-items:center;gap:20px;flex-wrap:wrap;padding:18px 20px;border-radius:var(--radius);background:color-mix(in oklch,var(--foreground) 3%,transparent)}
 .ppage .sv-say{display:flex;flex-direction:column;gap:3px;flex:1 1 240px;min-width:0}
 .ppage .sv-say b{font-size:15px;font-weight:600}
 .ppage .sv-phase{font-size:12px;font-variant-numeric:tabular-nums}
-.ppage .sv-facts{display:flex;gap:18px;margin:0;flex-wrap:wrap}
-.ppage .sv-ctl{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
-.ppage .sv-facts dt{font-size:11px;color:var(--muted-foreground)}
-.ppage .sv-facts dd{margin:2px 0 0;font-size:13.5px;font-variant-numeric:tabular-nums}
+.ppage .sv-facts{display:flex;gap:8px;margin:0;flex-wrap:wrap}
+.ppage .sv-ctl{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);flex-wrap:wrap}
+.ppage .sv-ctl [data-slot="button"]{background:var(--secondary);color:var(--secondary-foreground,var(--foreground));border-color:var(--border)} /* ghost (transparent) read as plain text under the card's rule; the secondary button look instead */
+.ppage .sv-ctl [data-slot="button"]:hover{background:color-mix(in oklch,var(--secondary) 80%,var(--foreground));border-color:var(--border)}
+.ppage .sv-facts>div{display:grid;gap:3px;min-width:88px;padding:8px 12px;border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--foreground) 6%,transparent)}
+.ppage .sv-facts dt{font-size:10.5px;color:var(--muted-foreground)}
+.ppage .sv-facts dd{margin:0;font-size:13.5px;font-variant-numeric:tabular-nums}
 .ppage .sv-ring{position:relative;flex:none;width:36px;height:36px;display:grid;place-items:center}
 .ppage .sv-ring.big{width:76px;height:76px}
+.ppage .sv-ring.none::before{content:"";width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in oklch,var(--foreground) 14%,transparent)} /* a chat with no items keeps its place: an empty ring, not a hole */
 .ppage .sv-ring svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg);fill:none;stroke-width:4}
 .ppage .sv-ring .t{stroke:color-mix(in oklch,var(--foreground) 14%,transparent)}
 .ppage .sv-ring .a{stroke:var(--primary);stroke-linecap:round}
@@ -116,7 +121,9 @@
 .ppage .sv-item{color:var(--muted-foreground);font-size:12.5px}
 .ppage .sv-row:is([data-status="fix"],[data-status="asked"],[data-status="failed"]) .tag{background:color-mix(in oklch,var(--destructive) 22%,transparent)}
 .ppage .sv-row:is([data-status="working"],[data-status="ready"]) .tag{background:color-mix(in oklch,var(--primary) 18%,transparent)}
-.ppage .sv-items li{display:grid;grid-template-columns:18px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:4px 0;font-size:13px}
+.ppage .sv-items li{display:grid;grid-template-columns:18px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:5px 2px;font-size:13px}
+.ppage .sv-items .box{display:inline-grid;place-items:center;width:17px;height:17px;font-size:13px;line-height:1;color:var(--muted-foreground)}
+.ppage .sv-items li[data-review="passed"] .box{color:var(--ok)}
 .ppage .sv-items li[data-review="passed"] .tag{background:color-mix(in oklch,var(--primary) 18%,transparent)}
 @media (prefers-reduced-motion:no-preference){.ppage .saved{transition:opacity .2s}}
 @media (max-width:700px){.ppage{padding:24px 18px 40px}.ppage .ph{flex-direction:column;gap:10px}}
