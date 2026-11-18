@@ -40,7 +40,13 @@ if (process.argv.includes('--cli') || process.argv[3] === 'cli') {
     buffer += chunk;
     for (let end; (end = buffer.indexOf('\n')) >= 0; buffer = buffer.slice(end + 1)) {
       appendFileSync('fake-login-code', JSON.stringify(buffer.slice(0, end)) + '\n');
-      if (buffer.slice(0, end) === 'done') process.exit(0);
+      // O187: the window refreshes once right after the code send; that this exit can be recorded only after that
+      // refresh — leaving Retry to the next 10 s poll — is the source-supported hypothesis for two CI timeouts, not
+      // an observed order. The gate is a timed slow-exit stress case for that shape, not a proof of it.
+      if (buffer.slice(0, end) === 'done') {
+        if (existsSync('login-exit-slow')) { setTimeout(() => process.exit(0), 12000); return; }
+        process.exit(0);
+      }
     }
   });
   await new Promise(() => {});
