@@ -168,6 +168,10 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     return into.profiles.get(p.id);
   };
   let fold = fresh();
+  // O190: token counts come only from a prompted turn's reply (turn-end). A run with no prompt (a scheduled wake, a
+  // background task's notification, a compaction) reports its cost through usage_update, which costs below count, but no
+  // token counts: the adapter sends only used, size and cost for it. So every token total is labelled.
+  const TOKENS = 'prompted turns only';
   const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
   // What the adapters send (ACP, checked against claude-agent-acp 0.88.0 and 0.104.1): token counts per turn in the prompt
   // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the
@@ -268,7 +272,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       // O191: profiles, one row each: what its chats used, and costUsd, the adapter's estimate at Claude prices (never billed by Claude).
       const profiles = [...fold.profiles.values()].map((p) => ({ id: p.id, name: p.name, ...p.totals, costUsd: sum(p.costs), turns: p.samples }));
       return { state: any ? (Date.now() - latest > 15 * 60 * 1000 ? 'stale' : 'recorded') : 'unavailable',
-        updatedAt: latest || null, samples, discarded, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive, profiles };
+        updatedAt: latest || null, samples, discarded, tokens: TOKENS, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive, profiles };
     },
     // Row 716: one chat's own spend (list_chats, sprint_status). into is the fold the caller keeps (chat.mjs gauge), so each
     // call reads only that chat's usage rows after it. usage is null until the chat reports a turn's tokens or a cost.
@@ -277,7 +281,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       let costUsd = 0;
       for (const amount of into.costs.values()) costUsd += amount;
       const { inputTokens, outputTokens, cachedTokens } = into.totals;
-      return { into, usage: into.samples || into.costs.size ? { inputTokens, outputTokens, cachedTokens, costUsd, turns: into.samples } : null };
+      return { into, usage: into.samples || into.costs.size ? { inputTokens, outputTokens, cachedTokens, costUsd, turns: into.samples, tokens: TOKENS } : null };
     },
     // O35: a chat's events and row go in one transaction. Returned: what it had spent (its own fold, for the 'deleted'
     // event the caller appends next) and the photo hashes it named that no other event names now. The fold starts
