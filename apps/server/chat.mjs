@@ -959,8 +959,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // Both adapters name the chat after its first turn (session_info_update.title); kept so the tab and list show it.
         if (update?.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
           const title = update.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-          // A name the user gave (N1, the rename route's 'renamed' event) is kept.
-          if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
+          // A name the user gave (N1, the rename route's 'renamed' event) is kept. O172: so is a sprint chat's role name
+          // (a worker started under a roles.json key, titled by it; a lead, titled by its sprint): the rows and the Sprint
+          // panel say which chat is which role. The user's rename still names any chat.
+          if (title && !conversation.key && !sprintFiles.exists(conversation.id)) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
         compacted.seen(session, conversation.id, update);
         compacted(session, conversation.id, update);

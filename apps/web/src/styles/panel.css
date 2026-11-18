@@ -178,6 +178,12 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 .lpanel .bell{position:relative}
 .lpanel .bell b{position:absolute;top:3px;right:3px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:9.5px;line-height:14px;font-weight:600}
 .lpanel .bell b:empty{display:none}
+/* O159v-mark: while an agent waits on you (the top bar's own "waits on you" state), the bell glows and shakes lightly;
+   reduced motion keeps the glow only. CSS alone, from that state, so the shell's JS does not grow. The button shakes, not
+   its icon: renderCards rewrites the icon on every redraw, which would restart the shake. */
+body:has(#agentInd[data-state="waiting"]) #rBell{box-shadow:0 0 0 1px var(--primary),0 0 12px color-mix(in oklch,var(--primary) 60%,transparent);animation:bell-wait 2.4s ease-in-out infinite}
+@keyframes bell-wait{0%,10%,100%{rotate:0deg}2.5%,7.5%{rotate:-12deg}5%{rotate:12deg}}
+@media (prefers-reduced-motion:reduce){body:has(#agentInd[data-state="waiting"]) #rBell{animation:none}}
 .lpanel .p-foot [aria-pressed="true"]{color:var(--primary);background:color-mix(in oklch,var(--primary) 12%,transparent)}
 #collapse[hidden]{display:none}
 /* With a chat on screen in Chat Focus, its pane's header has the terminal button; the foot's stands in otherwise. */
