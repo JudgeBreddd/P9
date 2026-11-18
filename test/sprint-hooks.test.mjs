@@ -143,18 +143,11 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.equal((await rows(instance)).length, before, 'a refused start made a chat');
   assert.match(fs.readFileSync(path.join(s.folder, 'hooks.log'), 'utf8'), /^\S+Z \| before-start \| check \| exit 3 \| \d+ ms \| no: before-start\n$/);
   fs.rmSync(path.join(ws, 'refuse-before-start')); fs.rmSync(outFile);
-  // A switch turned while before-start runs (it may take a minute) is obeyed: nothing is recorded or made.
+  // A switch turned while before-start runs (it may take a minute) is obeyed: nothing is recorded or made. (O174: Delegation
+  // Off no longer applies to the user's own press, so the switches are turned under an agent's start_sprint below.)
   const hold = path.join(ws, 'hold-before-start'), was = (await call(instance, '/delegation')).body;
-  fs.writeFileSync(hold, '');
-  let going = press({ hooks: shown.hash }); await ran('before-start');
-  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: was.max, workers: was.workers ?? [] })).status, 200);
-  fs.rmSync(hold); got = await going;
-  assert.equal(got.body.error, 'delegate-off', JSON.stringify(got.body));
-  assert.equal((await page()).started, undefined, 'a start refused after its script left an approval record');
-  assert.equal((await rows(instance)).length, before, 'a start refused after its script made a chat');
-  assert.equal((await call(instance, '/delegation', 'POST', { start: was.start, max: was.max, workers: was.workers ?? [] })).status, 200);
-  fs.rmSync(outFile);
-  // The same for an agent's start_sprint and the agent lock: the user's yes, then the lock while the script runs.
+  let going;
+  // An agent's start_sprint and the agent lock: the user's yes, then the lock while the script runs.
   const asker = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
   await call(instance, `/chat/${asker}/prompt`, 'POST', { text: 'mcp', mode: 'Auto' });
   const A = await attach(t, instance, asker);
@@ -196,6 +189,12 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.equal(got.error, 'too-many-chats', JSON.stringify(got));
   assert.equal((await page()).started, undefined, 'a start over the lowered limit left an approval record');
   assert.equal((await rows(instance)).length, before + 2, 'a start over the lowered limit made a chat');
+  // Delegation turned Off while the script runs: an agent's start (the lead is its chat's worker) is refused.
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: was.workers ?? [] })).status, 200); // back to 2: kid holds one place
+  got = await heldStart(async () => assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 2, workers: was.workers ?? [] })).status, 200));
+  assert.equal(got.error, 'delegate-off', JSON.stringify(got));
+  assert.equal((await page()).started, undefined, 'a start refused after its script left an approval record');
+  assert.equal((await rows(instance)).length, before + 2, 'a start refused after its script made a chat');
   assert.equal((await call(instance, '/delegation', 'POST', { start: was.start, max: was.max, workers: was.workers ?? [] })).status, 200);
 
   // The press that approves: the record holds the scripts, and each run is told the sprint's state.

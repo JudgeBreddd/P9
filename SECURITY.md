@@ -848,6 +848,18 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   names still wins over the row, then the row, then the parent's own: the rows are your
   defaults, not a fence, and the tool's text tells the agent to name its own only when you asked.
   A pick the agent no longer lists, or a profile you removed, is passed over.
+- **A sprint's chats are not Delegation's (O174).** A sprint lead is a chat with a Start record: the plan
+  hash P9 keeps, in its own store and keyed by the chat's id, when you press Start or say yes to an agent's
+  `start_sprint`; a closed sprint's lead is not one. No file makes a chat a lead: `set_rules` and `sprint_setup_save`
+  let any chat, a worker included, make its own sprint folder and write its `roles.json` without asking, and that chat
+  stays Delegation's (Off, Workers per chat and its rows apply); its file only narrows it, to workers from its rows. Start
+  sprint's chats and every worker a sprint lead opens start from the sprint's role rows (§ Start sprint), and Settings
+  > Delegation does not apply to them: Off does not refuse them, Workers per chat does not count them, and they hold
+  none of its rows, so a delegate worker running beside a sprint keeps every place and row. Only the runaway guards
+  apply: at most 20 running workers per chat, 3 levels deep. A worker the lead adds mid-sprint must have its row in
+  `roles.json` first; `open_chat` then asks you as it asks for any worker (above), unless the chat runs Unrestricted.
+  A chat that calls `start_sprint` is not a sprint lead: the lead it starts is that chat's worker, under Off and
+  Workers per chat. A worker inside a sprint is not a lead either: its own workers are Delegation's.
 - **A worker's approval, shown in the parent chat.** While a worker waits on an approval or
   a question, the desktop also draws it in the chat that started it, labelled with the
   worker's title. It is the same request, not a copy: your answer there is sent as your own
@@ -1140,16 +1152,17 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   `roles.json` names (checked as `open_chat` checks a folder). Each chat starts on exactly its row's agent, model and
   effort; a row naming `claude` or `codex` never runs on a provider profile, not one from Settings > Delegation's rows
   nor the lead's own. Your press counts as the yes for each of them, so P9 does not ask again per chat. Everything else
-  `open_chat` checks still applies: the agent lock, Settings > Delegation Off, Workers per chat, 3 levels deep, and a
+  `open_chat` checks for a sprint's chat still applies: the agent lock, 20 workers, 3 levels deep, and a
   chat under the lead never runs in a wider mode than the lead. Without a mode in its row, the lead starts in its
   agent's default (Claude Auto, Codex Auto review) from your press, and in the calling chat's own mode from an agent's
   call. An agent's call never makes a lead wider than the chat that called: a wider row is refused. From an agent's
   call the lead is that chat's worker under the same limits: it takes a place under Workers per chat from before you
   are asked until it is made, a chat 3 levels deep cannot start one (nor one 2 deep a sprint with chats under its lead),
-  and after your yes P9 checks the agent lock, Delegation Off and the modes again before it makes anything.
+  and after your yes P9 checks the agent lock, Delegation Off and the modes again before it makes anything. From your
+  own press Delegation Off and Workers per chat do not apply (§ A sprint's chats are not Delegation's).
 - **Checked before anything is made.** Every row is checked first: a known key used once, a `lead` row, an agent P9 can
   start, a model that agent (or that profile) lists, an effort it lists (empty when it has none), a mode it has, and no
-  more rows under the lead than Workers per chat. A value P9 cannot start is refused by its role and field. P9 never
+  more than 20 rows under the lead. A value P9 cannot start is refused by its role and field. P9 never
   swaps it for a default, and no chat is made.
 - **Pressing again.** A press that fails halfway keeps what it made. The next press keeps the lead (by its id) and every
   chat already made (by its key) and makes the rest. A kept chat whose first message never reached its agent (no turn
@@ -1158,8 +1171,9 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   read its work twice. Two presses at the same time:
   the second is refused while the first runs.
 - **Workers a lead opens later.** A sprint's workers come only from its role rows, never from Settings > Delegation.
-  A chat is a sprint lead when New sprint made its sprint or its sprint folder has a `roles.json` (`open_chat` writes
-  neither, so a plain chat's workers stay Delegate's). Its `open_chat` must name the key of a `roles.json` row; the
+  A sprint lead, and any chat whose sprint New sprint made or whose sprint folder has a `roles.json`, starts workers
+  only from those rows (a file only narrows: Delegation's limits leave only a chat with a Start record, § A sprint's
+  chats are not Delegation's). Its `open_chat` must name the key of a `roles.json` row; the
   worker starts on exactly that row and is named for it. No key, a key with no row, a missing or broken `roles.json`
   or a row P9 cannot start is refused by its role and field before any chat is made or any worker place is taken.
   A worker the plan has no role for needs a role row in Sprint Setup first.
@@ -1233,7 +1247,7 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   Start makes nothing and records nothing, a worker is not started. The refusal carries the script's name, its exit
   and its last output line (at most 300 characters, control characters removed), to the page or to the agent's tool.
   A script's exit 0 allows nothing by itself: every other check of the action still applies after it, and
-  when `before-start` ends, Delegation off, the agent lock, Workers per chat and the modes (never wider than the
+  when `before-start` ends, the agent lock, the modes and, from an agent's call, Delegation off and Workers per chat (never wider than the
   caller is now) are all read again, before anything is recorded or made. A notice never
   delays or refuses anything; its result is only logged.
 - **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
