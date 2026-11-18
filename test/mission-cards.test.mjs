@@ -211,7 +211,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     assert.ok(['connect-src', 'img-src', 'style-src-elem'].every((d) => r.v.includes(d)), 'the frame CSP refused fetch, images and CSS: ' + r.v.join(', '));
     assert.equal(hits, 0, 'nothing reached the network server');
     assert.equal(page.url(), 'p9://app/', 'the shell is still P9');
-    if (theme === 'daylight') { // O45 (Builder, 2026-11-09): the window pulls each card's script every 30 s; an answer that did not
+    if (theme === 'daylight') { // O45: the window pulls each card's script every 30 s; an answer that did not
       // change must not draw the window again (that made every card's frame again, and a click on a card then was lost).
       await page.evaluate(() => { window.__o45 = Date.now(); new MutationObserver(rs => rs.some(r => [...r.removedNodes].some(n => n.nodeName === 'IFRAME' || n.querySelector?.('iframe'))) && (window.__o45 = Date.now()))
         .observe(document.querySelector('#mdlBody'), { childList: true, subtree: true }); });
