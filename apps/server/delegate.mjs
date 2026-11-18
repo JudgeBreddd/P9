@@ -10,7 +10,7 @@ import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
-import { MAX_FILE, hashOf, notesLine } from './sprint-files.mjs';
+import { MAX_FILE, SENT, hashOf, notesLine } from './sprint-files.mjs';
 import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
@@ -384,9 +384,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // Every worker's notes file, under its key or, with none, its chat ID; a keyed worker's role files too. Its
     // instructions and where its notes are ride with its first delivered message; its role rules with every lead message.
     const notes = chat.sprintFiles.ensureWorker(caller, args.key ?? made.conversation, Boolean(args.key));
-    const said = args.key ? (chat.sprintFiles.read(caller, `roles/${args.key}.instructions.md`) ?? '').trim() : '';
-    chat.startNote(made.conversation, (said ? `[P9: your instructions, from your sprint's roles/${args.key}.instructions.md.\n${said}]\n\n` : '')
-      + (notes ? notesLine(notes) : ''));
+    chat.startNote(made.conversation, (args.key ? chat.instructionsOf(caller, args.key) : '') + (notes ? notesLine(notes) : ''));
     const sent = await chat.prompt(made.conversation, { text: args.item ? `Item: ${args.item}\nDone means: ${args.done_means}\nChecks:\n${args.checks.map((c) => '- ' + c).join('\n')}\n\n${args.text}` : args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
     if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', chat: made.conversation, detail: 'The chat was made, but the message was not sent; send_chat can try again.' };
     return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation), ...(sprint && { sprint }) };
@@ -540,6 +538,10 @@ export function createDelegate({ chat, allowed, usage }) {
         if (no) return no;
         if ((chat.sprintFiles.read(sprint, 'hooks.json') ?? null) !== hooksText) return moved;
       }
+      // O171 (framing): the hash of each Setup file whose text P9 sends to chats, taken at the approval (the user's yes, or
+      // the press) and before any script runs, so that text reaches chats as approved by the user while it is unchanged.
+      // FIX1: a before-start script that rewrites one makes it differ from this record, so it keeps the chat's framing.
+      const files = Object.fromEntries(chat.sprintFiles.list(sprint).filter((f) => SENT.test(f.name)).map((f) => [f.name, f.hash]));
       // before-start: the scripts being approved by this very start. A refusal records nothing and makes nothing.
       const refused = await hooks.fire(sprint, 'before-start', null, file.scripts);
       if (refused) return refused;
@@ -547,8 +549,8 @@ export function createDelegate({ chat, allowed, usage }) {
       // A script may have taken a minute: every check is made again before anything is recorded or made.
       const late = again();
       if (late) return late;
-      // The press is the approval record: the plan's hash, when and by whom.
-      const started = { at: Date.now(), plan, by: caller ?? 'owner', scripts: file.scripts };
+      // The press is the approval record: the plan's hash, when and by whom, and files (taken above, before the scripts).
+      const started = { at: Date.now(), plan, by: caller ?? 'owner', scripts: file.scripts, files };
       chat.projects.recordStart(sprint, started);
       const L = roles.lead, chats = [];
       if (!lead) {
@@ -556,8 +558,8 @@ export function createDelegate({ chat, allowed, usage }) {
         if (made.status !== 201) return { error: made.error ?? 'request-refused', role: 'lead', detail: 'The lead\'s chat was not made. Nothing was made.' };
       }
       if (!chat.delivered(sprint)) {
-        const notes = chat.sprintFiles.ensureWorker(sprint, 'lead', false), own = (chat.sprintFiles.read(sprint, 'roles/lead.instructions.md') ?? '').trim();
-        chat.startNote(sprint, (own ? `[P9: your instructions, from your sprint's roles/lead.instructions.md.\n${own}]\n\n` : '')
+        const notes = chat.sprintFiles.ensureWorker(sprint, 'lead', false);
+        chat.startNote(sprint, chat.instructionsOf(sprint, 'lead')
           + `[P9: you lead this sprint. Its folder: ${chat.sprintFiles.folderOf(sprint)}. P9 is starting the chats under you now, one by one: ${roles.rest.map((r) => r.key).join(', ') || 'none'}. list_chats shows them.]\n\n` + (notes ? notesLine(notes) : ''));
         const text = (chat.sprintFiles.read(sprint, 'roles/lead.work.md') ?? '').trim() || 'Your sprint started. Read your instructions and your sprint\'s sprint.md, then lead it.';
         const sent = await chat.prompt(sprint, { text, mode: leadMode, ...(!L.profile && { model: L.model }), ...(L.effortId && { config: { [L.effortId]: L.effort } }) }, undefined, caller ?? 'p9');
@@ -1017,6 +1019,7 @@ export function createDelegate({ chat, allowed, usage }) {
       text = JSON.stringify(parsed, null, 2) + '\n';
     } else if (typeof name !== 'string' || !SETUP.test(name) || typeof text !== 'string') return refused('name: sprint.md, rules.md, roles.json or roles/<key>.instructions.md, .rules.md, .work.md; text: the whole file. hooks.json: sprint_script_save.');
     const saved = chat.sprintFiles.write(sprint, name, text, args.hash);
+    if (saved === true) chat.wrote(sprint, name, text, chat.agentOf(caller)); // O171 (framing): its writer
     if (saved === 'changed') return { error: 'sprint-file-changed', detail: `${name} changed since that hash (or "" was sent for a file that is there): read sprint_setup again.`, files: setupFiles(sprint) };
     if (saved === 'no-links') return { error: 'sprint-file-no-links' };
     if (!saved) return refused(`text: at most ${MAX_FILE} characters of well-formed text.`);

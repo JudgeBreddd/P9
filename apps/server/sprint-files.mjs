@@ -19,6 +19,11 @@ export const MAX_FILE = 32000; // as project instructions
 const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
 // What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
 export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
+// O171 (framing): the Setup files whose text P9 sends to chats. Start sprint keeps each one's hash in its record (the
+// user's approval of that text); writerKey holds { by, hash } of the last write through P9 (the Setup page: the user;
+// set_rules, open_chat rules, sprint_setup_save: the calling chat's agent). ponytail: a deleted sprint's records stay in prefs.
+export const SENT = /^(?:rules\.md|roles\/[^/]+\.(?:rules|instructions)\.md)$/;
+export const writerKey = (sprint, name) => `setup-writer:${sprint}:${name}`;
 // What a worker is told about its notes file, at its start and again after each compaction.
 export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
 // The work queue (sprint method rule 4: the item list is the chunks assigned to the worker): the

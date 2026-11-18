@@ -9,7 +9,7 @@ import { link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink } from 
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createDirectory, lockedName } from '../../packages/files/index.mjs';
-import { hashOf } from './sprint-files.mjs';
+import { SENT, hashOf, writerKey } from './sprint-files.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_NAME = 120, MAX_ABOUT = 4000, MAX_INSTRUCTIONS = 32000, MAX_FILE = 4 * 1024 * 1024, MAX_FILES = 200;
@@ -256,6 +256,8 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if (saved === 'changed') return { status: 409, error: 'sprint-file-changed', files: sprintFiles.list(body.lead) };
       if (saved === 'no-links') return refused(507, 'sprint-file-no-links');
       if (!saved) return refused(400, 'request-refused');
+      // O171 (framing): this text's writer is the user (kept for the files whose text reaches chats).
+      if (SENT.test(body.name)) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(body.lead, body.name), JSON.stringify({ by: 'the user', hash: hashOf(body.text) }));
       // The saved file as written, not as read back: a writer landing between the rename and the list would otherwise
       // become the page's base, and its next save would replace that writer's text unasked (O93).
       return { status: 200, files: sprintFiles.list(body.lead).map((f) => (f.name === body.name ? { ...f, text: body.text, hash: hashOf(body.text) } : f)) };
