@@ -193,7 +193,8 @@ export async function stageDaemon(source, share) {
 
 // The AppImage's start: copies its daemon (stageDaemon), then installs the p9-foundation unit with ~/P9 as the workspace
 // if there is none, or restarts a launcher unit onto a new version. A unit (or drop-in) that does not run the launcher is a
-// source checkout's, never touched; its command is returned as { checkout }, null when systemd's answer could not be read (O135). Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
+// source checkout's, never touched; its command is returned as { checkout, seen } (seen: systemd's exact answer, which
+// useInstalledDaemon checks again), checkout null when systemd's answer could not be read (O135). Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
 // ponytail: tmux missing means no unit (install-service.mjs refuses); the log says so, the page says daemon-unreachable.
 // AU5: the AppImage itself is kept as appimage/<version>.AppImage, with the one before it, for a rollback (p9-launch.sh).
 export async function appImageService(resources, image = process.env.APPIMAGE) {
@@ -245,7 +246,7 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
     if (program !== path.join(share, 'launcher', 'p9-launch.sh')) {
       const checkout = program ? (runs.match(/argv\[\]=(.*?) ; /)?.[1] ?? program).slice(0, 300) : null;
       await say(checkout ? "a source checkout's unit; left as it is: " + checkout : 'what the service runs could not be read; left as it is');
-      return { checkout };
+      return { checkout, ...(checkout && { seen: runs }) };
     }
     if (previous !== version) return await run('systemctl', ['--user', 'restart', 'p9-foundation.service']);
   } catch (error) { await say('failed: ' + error.message); }
@@ -277,7 +278,7 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
   const say = (text) => appendFile(path.join(share, 'service-install.log'), new Date().toISOString() + ' use the installed daemon: ' + text + '\n').catch(() => {});
   const show = () => new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'ExecStart', '--value'], { timeout: 30_000 },
     (error, stdout) => resolve(error ? null : stdout)));
-  const refuse = async (error) => { await say('refused, ' + error); return { error }; };
+  const refuse = async (error, why) => { await say('refused, ' + error + (why ? ': ' + why : '')); return { error }; };
   if (typeof checkout !== 'string' || !checkout || typeof seen !== 'string' || !seen) return refuse('checkout-required');
   if (await show() !== seen) return refuse('unit-changed');
   const where = () => new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'FragmentPath', '-p', 'DropInPaths', '-p', 'NeedDaemonReload'],
@@ -307,7 +308,7 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
   const workspace = flags['--workspace'], port = flags['--remote-port'], origin = flags['--remote-origin'];
   if (unclear || !words || pairs.length % 2 || Object.values(flags).includes(null) || typeof workspace !== 'string' || /[$%]/.test(workspace)
     || Object.keys(flags).some((flag) => !['--workspace', '--state', '--recovery', '--remote-port', '--remote-origin'].includes(flag))
-    || (port === undefined) !== (origin === undefined) || !seen.includes(' --workspace ' + workspace + ' ')) return refuse('workspace-unclear');
+    || (port === undefined) !== (origin === undefined) || !seen.includes(' --workspace ' + workspace + ' ')) return refuse('workspace-unclear', loaded.trim().split('\n').join('; ') || 'no answer from systemctl show');
   if (!(await stat(workspace).catch(() => null))?.isDirectory()) return refuse('workspace-unread');
   const version = (await readFile(path.join(share, 'daemon', 'current'), 'utf8').catch(() => '')).trim();
   const dir = path.join(share, 'daemon', version);

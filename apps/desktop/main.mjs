@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, useInstalledDaemon, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
+import { daemonOffer, keptCheckout, keepText } from './use-installed.mjs';
 import { connectServer, forwardPath, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
@@ -159,7 +160,7 @@ export async function createDesktop({ state, open } = {}) {
   const appImage = process.platform === 'linux' && app.isPackaged && Boolean(process.env.APPIMAGE);
   // O22: a system library the staged daemon node cannot load (libatomic1) is named in the status, so the window says it.
   let missingLib = null;
-  if (appImage) appImageService(process.resourcesPath).then((result) => { missingLib = result?.missing ?? null; });
+  const serviceResult = appImage ? appImageService(process.resourcesPath).then((result) => { missingLib = result?.missing ?? null; return result; }) : null;
   // Item 16 (threat model row 52): the AppImage carries the pinned editor server (package-linux.mjs) and installs it from that
   // copy, checked against the same SHA-256 as the download, when ~/.local/share/p9's is missing or another release (a first
   // start, or an update that moved the pin). Dev Focus's Install uses the copy too, so no network is needed. Logs, never throws.
@@ -434,6 +435,27 @@ export async function createDesktop({ state, open } = {}) {
   window.removeMenu();
   // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
   window.maximize();
+  // O135 part B: a service that runs another copy is moved onto the installed daemon only with the user's OK (use-installed.mjs
+  // decides whether to ask; teh.mjs useInstalledDaemon moves it, or refuses and logs why). Keep my setup is remembered for that
+  // checkout (keep-my-setup.json); Not now asks again next start. Linux AppImage only, once per launch.
+  serviceResult?.then(async (result) => {
+    const p9 = path.join(os.homedir(), '.local', 'share', 'p9'), keepFile = path.join(p9, 'keep-my-setup.json');
+    const unit = Boolean(await stat(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service')).catch(() => null));
+    const from = (await health(localState).catch(() => null))?.from;
+    if (daemonOffer({ result, from, keep: keptCheckout(await readFile(keepFile, 'utf8').catch(() => '')), unit, installed: path.join(p9, 'daemon') }) !== 'ask' || window.isDestroyed()) return;
+    const { response } = await dialog.showMessageBox(window, { type: 'question', title: 'Use the installed P9?',
+      message: 'P9\'s background service runs another copy, not P9 ' + ownVersion + '.',
+      detail: 'It runs: ' + result.checkout + '\n\nUse the installed P9 moves the service onto the copy this update installed, with the same workspace. The old service file is kept as a backup and put back if the new one does not start. Running chats, scripts and terminals stop.\n\nKeep my setup leaves it as it is and does not ask again.',
+      buttons: ['Not now', 'Keep my setup', 'Use the installed P9'], defaultId: 0, cancelId: 0, noLink: true });
+    if (response === 1) return mkdir(p9, { recursive: true, mode: 0o700 }).then(() => writeFile(keepFile, keepText(result.checkout), { mode: 0o600 })).catch(() => {});
+    if (response !== 2) return;
+    const moved = await useInstalledDaemon({ checkout: result.checkout, seen: result.seen, state: localState });
+    if (window.isDestroyed()) return;
+    await dialog.showMessageBox(window, { type: moved.done ? 'info' : 'warning', title: 'Use the installed P9',
+      message: moved.done ? 'The background service now runs P9 ' + moved.version + '.' : 'The background service was not moved (' + moved.error + ').',
+      detail: (moved.done ? 'The old service file is kept as ' + moved.backup + '.' : moved.restored === false ? 'Putting the old service back failed; the old service file is ' + moved.backup + '.'
+        : moved.restored ? 'The old service is back as it was.' : 'Nothing was changed.') + ' Details: ' + path.join(p9, 'service-install.log'), noLink: true });
+  });
   if (watched) {
     window.on('session-end', quitting);
     const ready = new Promise(resolve => window.once('ready-to-show', resolve));
