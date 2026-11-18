@@ -144,7 +144,8 @@ test('O135: a drop-in that runs a source copy is not restarted; its path is logg
   };
   const checkout = '/srv/src/p9/apps/server/main.mjs';
   const dropIn = await once(() => `{ path=/usr/bin/node ; argv[]=/usr/bin/node ${checkout} ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n`);
-  assert.deepEqual(dropIn.result, { checkout: `/usr/bin/node ${checkout}` }, 'returned for the window');
+  assert.deepEqual(dropIn.result, { checkout: `/usr/bin/node ${checkout}`, seen: `{ path=/usr/bin/node ; argv[]=/usr/bin/node ${checkout} ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n` },
+    'returned for the window, with the exact ExecStart answer useInstalledDaemon checks again');
   assert.deepEqual(dropIn.calls.filter((c) => !c.includes(' show ')), [], 'the drop-in\'s service was restarted: ' + JSON.stringify(dropIn.calls));
   assert.match(dropIn.log, new RegExp(`a source checkout's unit; left as it is: /usr/bin/node ${checkout}`));
   // FIX1 (Reviewer): no restart without a read, parsed ExecStart whose program is the launcher.

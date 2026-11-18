@@ -68,7 +68,7 @@ console.log(JSON.stringify(result));`, JSON.stringify(options)], { env: { ...pro
   const read = (file) => readFile(file, 'utf8').catch(() => null);
   const state = async () => ({ unit: await read(path.join(units, 'p9-foundation.service')), dropins: (await readdir(path.join(units, 'p9-foundation.service.d'))).sort(),
     backups: (await readdir(units)).filter((name) => name.includes('.bak-')), installed: JSON.parse(await read(path.join(bin, 'installed')) ?? 'null'),
-    stopped: !!await stat(path.join(bin, 'stopped')).catch(() => null), calls: (await read(path.join(bin, 'calls')) ?? '').trim().split('\n').filter((c) => c && !c.includes(' show ')) });
+    stopped: !!await stat(path.join(bin, 'stopped')).catch(() => null), log: await read(path.join(home, '.local', 'share', 'p9', 'service-install.log')) ?? '', calls: (await read(path.join(bin, 'calls')) ?? '').trim().split('\n').filter((c) => c && !c.includes(' show ')) });
   return { use, state, seen, workspace, units, unitText, dropins };
 }
 
@@ -112,6 +112,8 @@ test('O135 use installed: an override systemd applies from outside the files rea
     assert.equal(after.unit, m.unitText, why + ': unit rewritten');
     assert.deepEqual(after.dropins, m.dropins, why + ': drop-ins moved');
     assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], why + ': something ran');
+    // Part B: the log says what systemd answered, so a unit file found under another path (a symlinked folder) shows up.
+    if (why === 'a vendor unit file') assert.match(after.log, /refused, workspace-unclear: FragmentPath=\/usr\/lib\/systemd\/user\/p9-foundation\.service; DropInPaths=/, 'the log: ' + after.log);
   }
 });
 
