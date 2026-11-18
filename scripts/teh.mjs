@@ -251,6 +251,131 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
   } catch (error) { await say('failed: ' + error.message); }
 }
 
+// O135 "use the installed daemon": a service whose unit (or a drop-in) runs another copy (appImageService's { checkout }) is
+// moved onto the launcher, with the user's OK (the caller's dialog; this has no caller of its own yet). seen is the ExecStart
+// line (systemctl show) the user was shown; a unit changed since then, or no checkout, is refused and nothing is touched.
+// The workspace and phone flags are read from the unit file's own ExecStart (the unit, then its drop-ins in name order; an
+// empty ExecStart= resets; only [Service] lines, written ExecStart, with any indentation and spaces round '='; an
+// ExecStart-looking line in another section, in another case, or in a file with a line continuation is refused, and every
+// drop-in with an ExecStart line is moved aside), split with systemd's quoting, because systemctl show prints argv unquoted and a space in a path
+// cannot be told from the next argument there. After the program the words must be flag/value pairs of the flags
+// install-service writes (--workspace, --state, --recovery, --remote-port with --remote-origin), each once, and the workspace
+// must appear in seen, and systemd's own FragmentPath and DropInPaths (systemctl show) must name only the unit file and drop-ins read
+// here (an override in a runtime, vendor or system dir, or either property missing, is refused: its quoted workspace could
+// start with a local one), NeedDaemonReload must be exactly no (disk edited since the last reload is not what runs), only
+// listed files are parsed (an unlisted file with an ExecStart line is refused), and that answer must be unchanged right before
+// running work is stopped (else unit-changed); anything else ($ or % in the workspace, a line continuation, an unknown flag, a lone phone flag) is
+// refused as workspace-unclear, never guessed. The unit is copied to p9-foundation.service.bak-<time> and each drop-in that
+// sets ExecStart is renamed <name>.bak-<time> (Environment-only drop-ins stay); the staged daemon's install-service.mjs writes
+// the launcher unit with the old workspace and phone flags. A failure at any step from the backup copy on (backup-failed,
+// install-failed, or a daemon that never answers with this version within ms) puts every file back, reloads, enables and
+// restarts the old service. Logs to service-install.log. Returns { done, version, backup } or { error, reason?, restored, backup }.
+// probe, stop and move: how /health is asked, how running work is stopped first, how a drop-in is moved (the tests pass their own).
+export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, probe = () => health(state), stop = () => daemonRequest(state, 'POST', '/stop-all', {}), move = rename } = {}) {
+  const share = path.join(os.homedir(), '.local', 'share', 'p9'), units = path.join(os.homedir(), '.config', 'systemd', 'user');
+  const unit = path.join(units, 'p9-foundation.service'), dropins = unit + '.d';
+  const say = (text) => appendFile(path.join(share, 'service-install.log'), new Date().toISOString() + ' use the installed daemon: ' + text + '\n').catch(() => {});
+  const show = () => new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'ExecStart', '--value'], { timeout: 30_000 },
+    (error, stdout) => resolve(error ? null : stdout)));
+  const refuse = async (error) => { await say('refused, ' + error); return { error }; };
+  if (typeof checkout !== 'string' || !checkout || typeof seen !== 'string' || !seen) return refuse('checkout-required');
+  if (await show() !== seen) return refuse('unit-changed');
+  const where = () => new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'FragmentPath', '-p', 'DropInPaths', '-p', 'NeedDaemonReload'],
+    { timeout: 30_000 }, (error, stdout) => resolve(error ? '' : stdout)));
+  const loaded = await where(), listed = loaded.match(/^DropInPaths=(.*)$/m)?.[1].split(' ').filter(Boolean);
+  let lines = [], unclear = loaded.match(/^FragmentPath=(.*)$/m)?.[1] !== unit || !listed || !/^NeedDaemonReload=no$/m.test(loaded);
+  const execDropins = [], read = [];
+  for (const [file, name] of [[unit], ...(await readdir(dropins).catch(() => [])).filter((n) => n.endsWith('.conf')).sort().map((n) => [path.join(dropins, n), n])]) {
+    read.push(file);
+    const all = (await readFile(file, 'utf8').catch(() => '')).split('\n'), continued = all.some((line) => /\\\s*$/.test(line));
+    let section = null;
+    for (const line of all) {
+      const header = line.match(/^\s*\[([^\]]*)\]\s*$/);
+      if (header) { section = header[1]; continue; }
+      if (!/^\s*execstart\s*=/i.test(line)) continue;
+      if (name && !listed?.includes(file)) { unclear = true; continue; }
+      const value = line.match(/^\s*ExecStart\s*=\s*(.*?)\s*$/)?.[1];
+      if (value === undefined || section !== 'Service' || continued) { unclear = true; continue; }
+      lines = value ? [...lines, value] : [];
+      if (name && !execDropins.includes(name)) execDropins.push(name);
+    }
+  }
+  if (listed?.some((file) => !read.includes(file))) unclear = true;
+  const words = lines.length === 1 ? systemdWords(lines[0].replace(/^[-@:+!]+/, '')) : null;
+  const first = words?.findIndex((word) => word.startsWith('--')) ?? -1, pairs = first < 0 ? [] : words.slice(first), flags = {};
+  for (let i = 0; i + 1 < pairs.length; i += 2) flags[pairs[i]] = pairs[i] in flags ? null : pairs[i + 1];
+  const workspace = flags['--workspace'], port = flags['--remote-port'], origin = flags['--remote-origin'];
+  if (unclear || !words || pairs.length % 2 || Object.values(flags).includes(null) || typeof workspace !== 'string' || /[$%]/.test(workspace)
+    || Object.keys(flags).some((flag) => !['--workspace', '--state', '--recovery', '--remote-port', '--remote-origin'].includes(flag))
+    || (port === undefined) !== (origin === undefined) || !seen.includes(' --workspace ' + workspace + ' ')) return refuse('workspace-unclear');
+  if (!(await stat(workspace).catch(() => null))?.isDirectory()) return refuse('workspace-unread');
+  const version = (await readFile(path.join(share, 'daemon', 'current'), 'utf8').catch(() => '')).trim();
+  const dir = path.join(share, 'daemon', version);
+  if (!version || !await stat(path.join(dir, '.complete')).catch(() => null)) return refuse('no-installed-daemon');
+  if (await where() !== loaded) return refuse('unit-changed');
+  await stop().catch(() => {});
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-'), backup = unit + '.bak-' + stamp, moved = [];
+  let copied = false, error, reason;
+  try {
+    await copyFile(unit, backup);
+    copied = true;
+    for (const name of execDropins) {
+      await move(path.join(dropins, name), path.join(dropins, name + '.bak-' + stamp));
+      moved.push(name);
+    }
+  } catch (failed) { error = 'backup-failed'; reason = failed.message; }
+  if (!error) {
+    await say('backup ' + backup + (moved.length ? ', drop-ins moved aside: ' + moved.join(' ') : '') + '; installing ' + version);
+    const args = [path.join(dir, 'scripts', 'install-service.mjs'), workspace, ...(port === undefined ? [] : ['--remote-port', port, '--remote-origin', origin])];
+    const installed = await new Promise((resolve) => execFile(path.join(dir, 'node'), args, { timeout: 120_000 },
+      (failed, stdout, stderr) => say('install-service: ' + (failed ? 'failed ' : 'ok ') + (stdout + stderr).trim()).then(() => resolve(!failed))));
+    let answers = false;
+    for (const end = Date.now() + ms; installed && !answers && Date.now() < end; ) {
+      answers = await probe().then((h) => h?.version === version, () => false);
+      if (!answers) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (answers) { await say('done, the service runs ' + version); return { done: true, version, backup }; }
+    error = installed ? 'version-not-answering' : 'install-failed';
+  }
+  const why = reason ? { reason } : {};
+  try {
+    if (copied) await copyFile(backup, unit);
+    for (const name of moved) await rename(path.join(dropins, name + '.bak-' + stamp), path.join(dropins, name));
+    for (const step of [['daemon-reload'], ['enable', 'p9-foundation.service'], ['restart', 'p9-foundation.service']]) {
+      if (!await new Promise((resolve) => execFile('systemctl', ['--user', ...step], { timeout: 60_000 }, (failed) => resolve(!failed)))) throw new Error(step[0] + ' failed');
+    }
+    await say(error + (reason ? ' (' + reason + ')' : '') + '; the old service is back');
+    return { error, ...why, restored: true, backup: copied ? backup : null };
+  } catch (failed) {
+    await say(error + '; putting the old service back failed: ' + failed.message + (copied ? '; the old unit is ' + backup : ''));
+    return { error, ...why, restored: false, backup: copied ? backup : null };
+  }
+}
+
+// One ExecStart value split into words the way systemd does: whitespace separates; a word may be "double" or 'single' quoted
+// as a whole; \\ \" \' \s and \t are escapes; %% is % and $$ is $. A line continuation, an unclosed quote, a quote inside a
+// word or another escape gives null (the caller refuses rather than guess). Specifiers (%t) and $VARS stay as written.
+export function systemdWords(line) {
+  const words = [], escapes = { '\\': '\\', '"': '"', "'": "'", s: ' ', t: '\t' };
+  let i = 0;
+  while (i < line.length) {
+    if (/\s/.test(line[i])) { i++; continue; }
+    const quote = line[i] === '"' || line[i] === "'" ? line[i++] : null;
+    let word = '';
+    for (;;) {
+      if (i >= line.length) { if (quote) return null; break; }
+      const c = line[i];
+      if (quote ? c === quote : /\s/.test(c)) { if (quote && i + 1 < line.length && !/\s/.test(line[i + 1])) return null; i += quote ? 1 : 0; break; }
+      if (!quote && (c === '"' || c === "'")) return null;
+      if (c === '\\') { if (!(line[i + 1] in escapes)) return null; word += escapes[line[i + 1]]; i += 2; continue; }
+      if ((c === '%' || c === '$') && line[i + 1] === c) { word += c; i += 2; continue; }
+      word += c; i++;
+    }
+    words.push(word);
+  }
+  return words;
+}
+
 // RS1: a restart is done when /health answers with a boot other than the one before it (the old daemon's, or none when it
 // was not answering); a service that started but never answers is reported, not called restarted. Up to 90 s, the most a
 // first start has taken on CI (Wait-Daemon). Resolves { restarted: true } or { error }.
