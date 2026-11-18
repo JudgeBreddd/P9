@@ -189,6 +189,28 @@ test('usage reads each usage row once and never parses agent chunks', (t) => {
   assert.equal(parsed, 0, 'a call with no new rows parses nothing');
 });
 
+// O191: a chat on a provider profile is stored as provider claude, but spends neither the Claude plan nor the Claude
+// bill. Its turns and the cost its adapter estimates go to the profile's own row, also once the chat is deleted.
+test('a provider profile chat is not in the Claude totals; it is its own row', () => {
+  const ledger = openLedger(':memory:'), db = ledger.db;
+  db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  for (const id of ['c', 'g']) db.prepare("INSERT INTO conversations (id, provider, title, state, created) VALUES (?, 'claude', ?, 'stopped', 0)").run(id, id);
+  db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('profile:g', JSON.stringify({ id: 'p1', name: 'Far Cloud', model: 'glm-5.3' }));
+  const used = (amount) => ({ sessionUpdate: 'usage_update', used: 1, size: 10, cost: { amount, currency: 'USD' } });
+  ledger.append('c', 'turn-end', { usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 2 } }); ledger.append('c', 'update', used(0.5));
+  ledger.append('g', 'turn-end', { usage: { inputTokens: 1000, outputTokens: 500, cachedReadTokens: 200 } }); ledger.append('g', 'update', used(47.42));
+  const claude = { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 };
+  const far = [{ id: 'p1', name: 'Far Cloud', inputTokens: 1000, outputTokens: 500, cachedTokens: 200, costUsd: 47.42, turns: 1 }];
+  let usage = ledger.usage();
+  assert.deepEqual([usage.totals, usage.samples, usage.profiles], [claude, 1, far], 'the profile turn is outside the Claude total');
+  // As chat.mjs deletes: the ledger first (its 'deleted' event carries the spend), then the chat's prefs.
+  ledger.append('g', 'deleted', { usage: ledger.remove('g').usage });
+  db.prepare('DELETE FROM prefs WHERE key = ?').run('profile:g');
+  usage = ledger.usage();
+  assert.deepEqual([usage.totals, usage.profiles], [claude, far], 'a deleted profile chat stays on its own row');
+  console.log('PASS O191: a profile chat (1000 in, $47.42) stays out of the Claude totals (10 in, $0.50) and is its own row, before and after its delete');
+});
+
 // E2: the desktop replays only the chats that are not stopped at launch, and loads a stopped one's history on its own.
 test('ledger.of reads only the chats asked for, up to until, and says how far it got', () => {
   const ledger = openLedger(':memory:');
