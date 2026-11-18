@@ -98,6 +98,8 @@
 .ppage .sv-phase{font-size:12px;font-variant-numeric:tabular-nums}
 .ppage .sv-facts{display:flex;gap:8px;margin:0;flex-wrap:wrap}
 .ppage .sv-ctl{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);flex-wrap:wrap}
+.ppage .sv-ctl [data-slot="button"]{background:var(--secondary);color:var(--secondary-foreground,var(--foreground));border-color:var(--border)} /* ghost (transparent) read as plain text under the card's rule; the secondary button look instead */
+.ppage .sv-ctl [data-slot="button"]:hover{background:color-mix(in oklch,var(--secondary) 80%,var(--foreground));border-color:var(--border)}
 .ppage .sv-facts>div{display:grid;gap:3px;min-width:88px;padding:8px 12px;border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--foreground) 6%,transparent)}
 .ppage .sv-facts dt{font-size:10.5px;color:var(--muted-foreground)}
 .ppage .sv-facts dd{margin:0;font-size:13.5px;font-variant-numeric:tabular-nums}
