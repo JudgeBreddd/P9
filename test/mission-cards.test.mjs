@@ -458,3 +458,52 @@ test('O148 Continue reopens the review by its file after the queue moved, and ne
   assert.equal(await opened(), '_waiting/a-newer.md', 'a gone file opens the row\'s own item, never another file');
   console.log('PASS O148: Continue reopens the review by its file after the queue moved; a gone file opens the row\'s own item');
 });
+
+// O152 (Window, 2026-11-17): an open Mission window was written with innerHTML on every redraw (a poll's changed answer, about
+// every 30 s), so the node under the pointer, focus and open state were replaced while the owner read or clicked it. Now the
+// section window and a panel window (Usage) are patched in place: after a redraw the same nodes are there, and focus stays.
+test('O152 an open Mission section or Usage window keeps its nodes and focus across a redraw', { timeout: 120000 }, async (t) => {
+  let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, 9); } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  // A redraw: the section's text changes on disk and the rail's Mission button reads the space again. #mdlT is set on each
+  // modal draw, so its mutations count the draws.
+  const redraw = async (text) => {
+    const n = await page.evaluate(() => window.__o152 ?? 0);
+    await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [{ ...space().sections[0], text }] }));
+    await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+    for (const end = Date.now() + 10000; Date.now() < end && await page.evaluate(() => window.__o152 ?? 0) === n; await sleep(100));
+    assert.ok(await page.evaluate(() => window.__o152 ?? 0) > n, 'the open window was drawn again');
+  };
+  await page.evaluate(() => new MutationObserver(() => { window.__o152 = (window.__o152 ?? 0) + 1; }).observe(document.querySelector('#mdlT'), { childList: true, characterData: true, subtree: true }));
+  await page.click('#fMission [data-group="Home"]');
+  const plain = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Plain row' });
+  await plain.waitFor({ timeout: 10000 });
+  await plain.focus();
+  await page.evaluate(() => { window.__row = document.activeElement; });
+  await redraw('Custom cards, drawn again.');
+  await page.locator('#mdlBody [data-space-text]', { hasText: 'Custom cards, drawn again.' }).waitFor({ timeout: 10000 });
+  assert.deepEqual(await page.evaluate(() => [window.__row.isConnected, document.activeElement === window.__row]), [true, true], 'the section window kept the row and its focus');
+  // A window with a footer (a script's Run) and then one without: the old footer and its handlers are gone (#298 FIX1).
+  const run = page.locator('#mdlFoot [data-run]');
+  await plain.click(); await run.waitFor({ timeout: 10000 });
+  await page.click('#mdlBack'); await plain.waitFor({ timeout: 10000 });
+  assert.equal(await run.count(), 0, 'Back to the section window leaves no Run button in the footer');
+  await plain.click(); await run.waitFor({ timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await page.click('#rUsage');
+  await page.locator('#mdl[open] #mdlBody > *').first().waitFor({ timeout: 10000 });
+  await sleep(2000); // Usage's own first read
+  await page.evaluate(() => { window.__win = document.querySelector('#mdlBody').firstElementChild; });
+  await redraw('Custom cards, Usage open.');
+  assert.equal(await run.count(), 0, 'Usage opened after a script window has no Run button in the footer');
+  assert.equal(await page.evaluate(() => window.__win.isConnected), true, 'the Usage window kept its panel node');
+  console.log('PASS O152: an open Mission section or Usage window keeps its nodes and focus across a redraw');
+});
