@@ -123,3 +123,40 @@ test('Chat state: pets off in every focus mode loads no pet sheet at startup; tu
   for (let i = 0; i < 50 && !(await app.evaluate(() => globalThis.sheets.length)); i++) await page.waitForTimeout(200);
   assert.ok((await app.evaluate(() => globalThis.sheets)).includes('skipper'), 'pets on: the sheet loads');
 });
+
+// O159v-mark: while an agent waits on you, the bell glows and its icon shakes lightly; with reduced motion it only glows;
+// nothing waits, no mark.
+test('Chat state: the bell glows and shakes while an approval waits, glow only with reduced motion, nothing once none waits', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = await profileWith('bell-wait', { chat: look(false), dev: look(false), mission: look(false) });
+  const chat = async (text) => { const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation; await call(instance, `/chat/${id}/prompt`, 'POST', { text }); return id; };
+  const idle = await chat('hello');
+  const { page } = await launch(t, instance, profile);
+  const bell = () => page.evaluate(() => { const b = document.querySelector('#rBell'), icon = b.querySelector('svg');
+    return { glow: getComputedStyle(b).boxShadow, shake: document.getAnimations().filter((a) => a.effect?.target === icon && a.playState === 'running').length }; });
+  // The button's own box-shadow transition: read the glow once it has finished fading in or out.
+  const settled = () => page.waitForFunction(() => !document.getAnimations().some((a) => a instanceof CSSTransition && a.effect?.target?.id === 'rBell'));
+  await page.locator(`#navList .row[data-chat="${idle}"] .mk-run:not([data-busy])`).waitFor({ timeout: 15000 });
+  assert.deepEqual(await bell(), { glow: 'none', shake: 0 }, 'nothing waits: no mark');
+
+  const waiting = await chat('permission');
+  await page.locator('#agentInd[data-state="waiting"]').waitFor({ timeout: 15000 });
+  await settled();
+  const on = await bell();
+  assert.notEqual(on.glow, 'none', 'an approval waits: the bell glows ' + JSON.stringify(on));
+  assert.equal(on.shake, 1, 'an approval waits: the icon shakes ' + JSON.stringify(on));
+  await page.mouse.move(0, 0);
+  await shot(page.locator('#nav .p-foot'), 'bell-waiting');
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const still = await bell();
+  assert.equal(still.glow, on.glow, 'reduced motion: the same glow ' + JSON.stringify(still));
+  assert.equal(still.shake, 0, 'reduced motion: no shake ' + JSON.stringify(still));
+  await shot(page.locator('#nav .p-foot'), 'bell-waiting-reduced');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+  await call(instance, `/chat/${waiting}/cancel`, 'POST');
+  await page.locator('#agentInd[data-state="waiting"]').waitFor({ state: 'detached', timeout: 15000 });
+  await settled();
+  assert.deepEqual(await bell(), { glow: 'none', shake: 0 }, 'none waits again: the mark stops');
+});
