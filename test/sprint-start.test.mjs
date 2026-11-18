@@ -116,7 +116,7 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
     assert.deepEqual([press.body.error, press.body.role, press.body.field], ['role-refused', role, field], JSON.stringify(press.body));
     assert.match(press.body.detail, new RegExp('^Role ' + role + ', ' + field));
   }
-  await save('roles.json', roles([lead, ...Array.from({ length: 6 }, (_, i) => ({ ...w2, key: 'x' + i }))]));
+  await save('roles.json', roles([lead, ...Array.from({ length: 21 }, (_, i) => ({ ...w2, key: 'x' + i }))]));
   press = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
   assert.deepEqual([press.status, press.body.error], [400, 'too-many-roles']);
   assert.equal((await rows(instance)).length, before, 'a refused press made a chat');
@@ -383,4 +383,51 @@ test('Sprint roles: a worker the lead opens for a role starts on its roles.json 
   assert.equal(plain.error, undefined, JSON.stringify(plain));
   assert.match(await config(instance, plain.chat), /^config:model=opus,effort=high,/, 'a plain chat\'s worker did not start on its Delegation row');
   console.log('PASS Sprint roles: phone and window started on their roles.json row (haiku/low) under Delegation rows of opus/high, named for the role; opus and high for window were refused by field with nothing made; no key, a key with no row, a bad row, a broken and a missing roles.json were refused with nothing made and no place taken; a plain chat\'s worker took its Delegation row');
+});
+
+// O174: a sprint's chats are not Delegation's. Off, Workers per chat and the Delegation rows do not apply to Start sprint
+// or to a sprint lead's workers (only the runaway guards do); a plain chat's workers keep all three.
+test('Sprint O174: Start and a sprint lead\'s workers go ahead under Delegation Off and past Workers per chat, on their role rows; a plain chat beside it keeps Off, its limit and its rows', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Beside' })).body;
+  const write = (name, body) => fs.writeFileSync(path.join(s.folder, name), body);
+  const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  write('roles.json', JSON.stringify({ roles: [row('lead'), row('review')] })); write('roles/lead.work.md', 'mcp');
+  // Delegation Off: the user's press still starts the sprint, every chat on its row.
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 1, workers: [] })).status, 200);
+  const press = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(press.status, 200, 'Start was refused under Delegation Off: ' + JSON.stringify(press.body));
+  assert.deepEqual(press.body.chats.map((c) => [c.key, c.model, c.effort, c.existing]), [['lead', 'haiku', 'low', false], ['review', 'haiku', 'low', false]]);
+  const L = await attach(t, instance, s.sprint);
+  write('roles.json', JSON.stringify({ roles: ['lead', 'review', 'w1', 'w2', 'w3'].map(row) }));
+  // A role added mid-sprint, opened by the lead while Off.
+  const w1 = await L.tool('open_chat', { text: 'config', key: 'w1' });
+  assert.equal(w1.error, undefined, 'Off refused the sprint lead\'s worker: ' + JSON.stringify(w1));
+  assert.match(await config(instance, w1.chat), /^config:model=haiku,effort=low,/);
+  // Workers per chat 1 on an opus/high row: the lead (review and w1 already running) still opens w2 on its own row.
+  const opus = { agent: 'claude', model: 'opus', effort: 'high' };
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: [opus] })).status, 200);
+  const w2 = await L.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.equal(w2.error, undefined, 'Workers per chat refused the sprint lead\'s worker: ' + JSON.stringify(w2));
+  assert.match(await config(instance, w2.chat), /^config:model=haiku,effort=low,/, 'the sprint\'s worker took a Delegation row');
+  // A plain chat beside it: its worker takes Delegation's row; a second one is over its Workers per chat.
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const P = await attach(t, instance, first);
+  const d1 = await P.tool('open_chat', { text: 'config' });
+  assert.equal(d1.error, undefined, JSON.stringify(d1));
+  assert.match(await config(instance, d1.chat), /^config:model=opus,effort=high,/, 'the plain chat\'s worker did not take its Delegation row');
+  const d2 = await P.tool('open_chat', { text: 'config' });
+  assert.equal(d2.error, 'too-many-chats', 'a plain chat passed Workers per chat: ' + JSON.stringify(d2));
+  // Off again: the plain chat is refused, the sprint lead is not.
+  assert.equal((await P.tool('stop_chat', { chat: d1.chat, close: true })).error, undefined);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 1, workers: [opus] })).status, 200);
+  assert.equal((await P.tool('open_chat', { text: 'config' })).error, 'delegate-off');
+  const w3 = await L.tool('open_chat', { text: 'config', key: 'w3' });
+  assert.equal(w3.error, undefined, 'Off refused the sprint lead\'s worker: ' + JSON.stringify(w3));
+  console.log('PASS Sprint O174: Start and w1 under Off, w2 past Workers per chat 1, all on haiku/low; the plain chat took opus/high, its second worker was too-many-chats and Off refused it; w3 opened under Off');
 });
