@@ -508,14 +508,15 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
 // PD-1 (b): every process the server starts is given childEnv() as its environment, read from the source. On top of it
 // only launchTree (process-tree.mjs) adds names it is handed for one child (O48: a profile chat's model names); any other
 // start may add only the fixed flags below. PD-2: the build and the update (TOOLS below) alone may pass child-env.mjs's
-// TOOL_NAMES too (proxy, CA certificates, pnpm's and corepack's homes), the agents fetch alone FETCH_NAMES (those and P9_AGENTS_FROM). KNOWN is empty: a start that
+// TOOL_NAMES too (proxy, CA certificates, pnpm's and corepack's homes), the agents fetch alone FETCH_NAMES (those and P9_AGENTS_FROM);
+// the update's run() takes its list as `names` (TOOL_NAMES, or INSTALL_NAMES for the pnpm install: tool-child-env.test.mjs). KNOWN is empty: a start that
 // cannot follow the rule yet goes there by file with its exact shape, so a new one fails, a changed one fails, and a fixed one must leave the list.
 test('every process the server starts gets childEnv(); only launchTree adds names to it, others only fixed flags', async () => {
   const FIXED = { P9_PHONE: 'terminal opened from the phone', P9_NO_GREETING: 'terminal welcome hidden',
     GIT_TERMINAL_PROMPT: 'git never asks', GIT_OPTIONAL_LOCKS: 'git status takes no lock', SSH_ASKPASS_REQUIRE: 'git never asks', GIT_PAGER: 'git never pages',
     PATH: 'toolPath(): the daemon\'s own node folder too, for pnpm', CI: 'the update\'s pnpm runs non-interactive' };
   const WITH = (list) => 'childEnv(process.env, process.platform, ' + list + ')';
-  const TOOLS = { 'server.mjs': WITH('TOOL_NAMES'), 'update.mjs': WITH('TOOL_NAMES'), 'setup-routes.mjs': WITH('FETCH_NAMES') };
+  const TOOLS = { 'server.mjs': WITH('TOOL_NAMES'), 'update.mjs': WITH('names'), 'setup-routes.mjs': WITH('FETCH_NAMES') };
   const KNOWN = []; // [file, words in the start's line, what is wrong with it exactly]: open question, held to that shape
   // The text of the value after `key:` (a balanced { }, a call with flat arguments, or one token), or null.
   const value = (text, at) => {

@@ -18,12 +18,19 @@ export const TOOL_NAMES = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy'
 // the registry (the tests; the same checksums apply). The build's and the update's children read none (pnpm build's
 // astro, scripts/frame-runtimes.mjs and vite; the update's tar, pnpm, scripts/deps.mjs, and update-swap.mjs via systemd-run).
 export const FETCH_NAMES = [...TOOL_NAMES, 'P9_AGENTS_FROM'];
+// The update's pnpm install (update.mjs) runs Electron's install script on a desktop checkout, which downloads Electron
+// through @electron/get. The settings those two read from the environment alone, by name (an .npmrc's electron_* lines
+// still reach it: pnpm itself turns them into npm_config_electron_* for the script): ELECTRON_GET_USE_PROXY (without it
+// @electron/get ignores HTTPS_PROXY), the mirror's ELECTRON_MIRROR, ELECTRON_NIGHTLY_MIRROR, ELECTRON_CUSTOM_DIR,
+// ELECTRON_CUSTOM_FILENAME, and install.js's electron_config_cache and electron_use_remote_checksums.
+export const INSTALL_NAMES = [...TOOL_NAMES, 'ELECTRON_GET_USE_PROXY', 'ELECTRON_MIRROR', 'ELECTRON_NIGHTLY_MIRROR', 'ELECTRON_CUSTOM_DIR',
+  'ELECTRON_CUSTOM_FILENAME', 'electron_config_cache', 'electron_use_remote_checksums'];
 
 export const allowed = (key, platform = process.platform, extra = []) => platform === 'win32'
   ? [...ALLOW, ...extra].some((name) => name.toLowerCase() === key.toLowerCase())
   : ALLOW.has(key) || extra.includes(key);
 
-// extra: more names to pass when set (only TOOL_NAMES, from the three starts above).
+// extra: more names to pass when set (only the lists above, from the three starts they name).
 export function childEnv(source = process.env, platform = process.platform, extra = []) {
   const env = Object.fromEntries(Object.entries(source).filter(([key]) => allowed(key, platform, extra)));
   // A unit from before install-service recorded the installer's PATH starts with systemd's bare PATH after a reboot,
