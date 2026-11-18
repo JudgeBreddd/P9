@@ -250,18 +250,24 @@ const dialogs = await getService(IFileDialogService);
 // Closing a dirty tab asks Save / Don't Save / Cancel. The stub's showSaveConfirm throws, and the dialog service behind modal
 // messages is the standalone one (window.confirm: two buttons, only the first runs), so the three-way choice is a <dialog>.
 // It answers the workbench's ConfirmResult: 0 save, 1 don't save (the tab reverts to disk), 2 cancel (the draft stays open; also Escape).
-const saveConfirm = names => new Promise(done => {
-  const box = document.createElement('dialog');
-  box.className = 'p9-save-confirm';
-  box.innerHTML = '<p></p><p class="detail">Your changes will be lost if you don\'t save them.</p>'
-    + '<div><button value="0">Save</button><button value="1">Don\'t Save</button><button value="2">Cancel</button></div>';
-  box.firstChild.textContent = names.length === 1 ? `Save changes to ${names[0]}?` : `Save changes to ${names.length} files?`;
-  box.addEventListener('click', event => { if (event.target.value) box.close(event.target.value); });
-  box.addEventListener('close', () => { box.remove(); done(Number(box.returnValue || 2)); });
-  (document.querySelector('.monaco-workbench') ?? document.body).append(box);
-  box.showModal();
-  box.querySelector('button').focus();
-});
+// One dialog at a time: a second close request waits for the first answer, then asks about its own files.
+let confirming = Promise.resolve();
+const saveConfirm = names => {
+  const answer = confirming.then(() => new Promise(done => {
+    const box = document.createElement('dialog');
+    box.className = 'p9-save-confirm';
+    box.innerHTML = '<p></p><p class="detail">Your changes will be lost if you don\'t save them.</p>'
+      + '<div><button value="0">Save</button><button value="1">Don\'t Save</button><button value="2">Cancel</button></div>';
+    box.firstChild.textContent = names.length === 1 ? `Save changes to ${names[0]}?` : `Save changes to ${names.length} files?`;
+    box.addEventListener('click', event => { if (event.target.value) box.close(event.target.value); });
+    box.addEventListener('close', () => { box.remove(); done(Number(box.returnValue || 2)); });
+    (document.querySelector('.monaco-workbench') ?? document.body).append(box);
+    box.showModal();
+    box.querySelector('button').focus();
+  }));
+  confirming = answer.catch(() => {});
+  return answer;
+};
 Object.defineProperties(dialogs, { pickFolderAndOpen: { value: () => openFolder() }, pickFileFolderAndOpen: { value: () => openFolder() },
   showSaveConfirm: { value: saveConfirm } });
 // Revert, in sight: shown while the open file has unsaved changes, it puts the tab back to what is on disk.
@@ -275,6 +281,7 @@ const showRevert = () => { if (v.window.activeTextEditor?.document.isDirty) reve
 v.window.onDidChangeActiveTextEditor(showRevert);
 v.workspace.onDidChangeTextDocument(showRevert);
 v.workspace.onDidSaveTextDocument(showRevert);
+showRevert();
 const button = v.window.createStatusBarItem(v.StatusBarAlignment.Right, 100);
 Object.assign(button, { text: '$(link-external) Open in VS Code', tooltip: 'Open this file at this line in VS Code (logged)', command: 'p9.openInVSCode' });
 button.show();
