@@ -1617,6 +1617,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
     activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
+    // O176: the run ready may report from. A prompted turn's own ID; with no prompt open (Claude Code works on after a
+    // compaction or a plugin's prompt, which P9 never sent) a live agent calling a tool is in a run of its own: one ID
+    // for that session, so a prompted turn starting meanwhile (its own ID) or a new session is not the same run.
+    ownRun: (id) => { const session = live.get(id); return session && !session.solo && !session.stopping ? session.turn ?? (session.unprompted ??= randomUUID()) : null; },
     sprint: sprintOf,
     // S13 (delegate.mjs pause_sprint / resume_sprint and the project page's buttons). pause: false when already paused.
     paused: (lead) => pausedOf(lead) !== null,

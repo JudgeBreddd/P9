@@ -673,9 +673,11 @@ export function createDelegate({ chat, allowed, usage }) {
     const next = !mine.task && chat.queue?.(caller)?.items.find((i) => i.state !== 'passed');
     const task = mine.task ?? (next && { item: next.id, checks: null });
     if (!info?.parent || !task) return { error: 'no-task' };
-    const turn = chat.activeTaskTurn(caller);
-    if (info.state !== 'turn' || !turn) return { error: 'no-active-turn' };
-    const stillCurrent = () => chat.info(caller)?.state === 'turn' && chat.activeTaskTurn(caller) === turn;
+    // O176: from any turn of its own: a prompted one, or the run the agent works on with no prompt open (after a
+    // compaction or a plugin's prompt). Never from a turn answering another chat (solo) or a stopping agent.
+    const prompted = chat.activeTaskTurn(caller), turn = prompted ?? chat.ownRun?.(caller) ?? null;
+    if (!turn || (prompted ? info.state !== 'turn' : !['running', 'turn'].includes(info.state))) return { error: 'no-active-turn' };
+    const stillCurrent = () => (prompted ? chat.info(caller)?.state === 'turn' && chat.activeTaskTurn(caller) === turn : ['running', 'turn'].includes(chat.info(caller)?.state) && chat.ownRun(caller) === turn);
     // The field at fault, by name only: never what was sent (dogfood 3.5: three bare refusals told the worker nothing).
     const fault = !text(args.commit, 200) ? 'commit: 1 to 200 characters'
       : !task.checks ? (!Array.isArray(args.results) || !args.results.length || args.results.length > 20 || args.results.some((r) => !(typeof r?.check === 'string' && text(r.check.trim(), 200))) ? 'results: 1 to 20 { check, result }, each check 1 to 200 characters, the checks your item names' : null)
@@ -722,7 +724,9 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!stillCurrent()) return { error: 'no-active-turn' };
     const was = mine.reviews?.[task.item];
     chat.setSprint(caller, { ready: value, verdict: null, idleSince: null, reviews: { ...mine.reviews, [task.item]: { state: 'queued', commit: value.commit, fixes: was?.fixes ?? 0, at: value.at } } });
-    readyTurns.set(caller, turn);
+    // A prompted turn's report waits for its end, which carries the turn's tokens. A run P9 never prompted has no end
+    // P9 can wait on and reports no usage: its report is pinned now.
+    if (prompted) readyTurns.set(caller, turn); else pinReport(caller, null);
     trail(info.parent);
     // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
     const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
@@ -1141,14 +1145,17 @@ export function createDelegate({ chat, allowed, usage }) {
   chat.turnEnded?.((id, turn, solo, usage) => {
     if (solo || readyTurns.get(id) !== turn) return;
     readyTurns.delete(id);
+    const tokens = Number.isSafeInteger(usage?.inputTokens) && usage.inputTokens >= 0 && Number.isSafeInteger(usage?.outputTokens) && usage.outputTokens >= 0 ? { input: usage.inputTokens, output: usage.outputTokens, cachedRead: count(usage.cachedReadTokens), cachedWrite: count(usage.cachedWriteTokens) } : null;
+    pinReport(id, tokens);
+  });
+  function pinReport(id, tokens) {
     const info = chat.info(id), state = chat.sprint(id);
     if (!info?.parent || !state.task || !state.ready) return;
-    const tokens = Number.isSafeInteger(usage?.inputTokens) && usage.inputTokens >= 0 && Number.isSafeInteger(usage?.outputTokens) && usage.outputTokens >= 0 ? { input: usage.inputTokens, output: usage.outputTokens, cachedRead: count(usage.cachedReadTokens), cachedWrite: count(usage.cachedWriteTokens) } : null;
     const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(state.task, state.ready, tokens) });
     if (data.error) return;
     chat.pin(info.parent, data);
     chat.note(info.parent, '[p9] Ready report pinned for ' + state.task.item + '.', 'p9').catch(() => {});
-  });
+  }
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
   // § Delegate). Only a parent whose agent is running: an idle-since-start, stopped or archived chat is never started by this.

@@ -1134,6 +1134,46 @@ test('Delegate ready emits one parent report after the worker turn ends', { time
   assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'note' && e.data.text?.includes('Ready report pinned for B4.')).length, 1, 'a peer answer must not send a second ready note');
 });
 
+// O176: a worker whose turn P9 never prompted (Claude Code works on after a compaction or a plugin's prompt) can still
+// call ready. Its run has no end P9 waits on and reports no usage, so its report is pinned at once.
+test('Delegate O176: ready is accepted from a run the worker started itself, with no prompt open, and its report is pinned', { timeout: 120000 }, async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Own', work: { kind: 'new', parent: '', name: 'own' } })).body.project.id;
+  const a = await agent(t, instance, { project });
+  const made = await a.tool('open_chat', { text: 'first', item: 'B6', done_means: 'reported', checks: ['check'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', made.folder]);
+  execFileSync('git', ['-C', made.folder, 'add', '.']);
+  execFileSync('git', ['-C', made.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', made.folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  // "background quiet": the turn ends, then the agent works on with no prompt open, as after a compaction.
+  await a.tool('send_chat', { chat: made.chat, text: 'background quiet' });
+  await a.done(made.chat);
+  const ended = (await events(instance, made.chat)).filter((e) => e.type === 'turn-end').length;
+  await until(instance, (e) => e.conversation === made.chat && JSON.stringify(e.data ?? {}).includes('Background task 1'));
+  assert.notEqual((await rows(instance)).find((c) => c.id === made.chat).state, 'turn', 'P9 took the unprompted run for a turn it prompted');
+  const result = await kid.tool('ready', { commit: head, results: [{ check: 'check', result: 'passed' }], weakest: 'own run' });
+  assert.ok(result.ready, 'ready refused from the worker\'s own run: ' + JSON.stringify(result));
+  assert.equal(result.ready.commit, head);
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).ready.commit, head);
+  const reports = async () => (await events(instance, a.conversation)).filter((e) => e.type === 'card' && e.data.id === 'ready-' + made.chat).map((e) => e.data.text);
+  for (let i = 0; i < 40 && !(await reports()).length; i += 1) await pause(50);
+  const cards = await reports();
+  assert.equal(cards.length, 1, 'the report was not pinned');
+  assert.match(cards[0], /B6/);
+  assert.match(cards[0], /Weakest part: own run/);
+  assert.match(cards[0], /Tokens used: Not reported/);
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'turn-end').length, ended, 'the report waited for a turn end');
+  assert.equal((await a.tool('stop_chat', { chat: made.chat, close: true })).error, undefined);
+  console.log('PASS Delegate O176: ready from the worker\'s own run accepted, report pinned at once');
+});
+
 // O147 (1): ready records the commit the worker sent, not the start folder's HEAD; git must know it; the dirty check
 // guards only a commit that is HEAD; the changed files are main...commit.
 test('Delegate O147: ready records the sent commit, refuses one git does not know, keeps the dirty check for HEAD, and lists main...commit', { timeout: 120000 }, async (t) => {
