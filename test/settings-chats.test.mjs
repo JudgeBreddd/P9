@@ -529,7 +529,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
     await mkdir(path.join(w, '_tyler'), { recursive: true }); await mkdir(path.join(w, 'hub'), { recursive: true });
     await writeFile(path.join(w, 'hub/registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
     await writeFile(path.join(w, 'AGENTS.md'), '# Projects\n');
-    await writeFile(path.join(w, '_tyler/old-question.md'), '# Old question\n\nA.\n');
+    await writeFile(path.join(w, '_tyler/old-question.md'), '# Old question\n\nA.\n\n**Project:** Example Project\n');
     await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ waiting: '_tyler', registry: 'hub/registry.json', primary: 'AGENTS.md' }));
     return { args: ['--acp-override', fake, '--settings', path.join(paths.directory, 'settings.json')] };
   });
@@ -578,6 +578,16 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   assert.doesNotMatch(bell, /needs you/, 'the skipped item still has its own row');
   assert.doesNotMatch(bell, /rss-report|restic snapshot/, 'sample notices in the live bell');
   await shot('cards-skipped.png');
+  // O181 (coordinator's call): an item whose file names a project keeps "project · age" in its row and the
+  // project in its modal title; the one with no project line shows the age alone and "N of M" alone.
+  await page.click('#rBell');
+  await page.locator('#mdlBody .mlist [data-i]', { hasText: '2 items in _tyler/' }).click();
+  assert.match(await page.locator('#mdlBody .mlist [data-i]', { hasText: 'Old question' }).innerText(), /Example Project · /, 'a projected item\'s row shows "project · age"');
+  assert.doesNotMatch(await page.locator('#mdlBody .mlist [data-i]', { hasText: 'Made by the chat' }).innerText(), / · /, 'the empty-project item\'s row shows the age alone');
+  await page.locator('#mdlBody .mlist [data-i]', { hasText: 'Old question' }).click();
+  assert.match(await page.locator('#mdlT').innerText(), /^\d+ of \d+ · Example Project$/, 'a projected item\'s modal title ends with its project');
+  await page.keyboard.press('Escape');
+  if (await page.locator('#mdl[open]').count()) await page.keyboard.press('Escape');
   // Sort Waiting on you by newest or by project, the file name's <project>- prefix (an optional sorter
   // for the items, by project or date updated). old-question.md is touched last, so the two orders differ.
   await utimes(path.join(instance.workspace, '_tyler/old-question.md'), new Date(), new Date(Date.now() + 60000));
