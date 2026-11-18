@@ -602,6 +602,7 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.workspace, 'site'));
   const p = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project;
+  const { profile } = await call(instance, '/profiles', 'POST', { name: 'Far Cloud', baseUrl: 'https://models.example.test/api/', models: ['glm-5.3', 'kimi-k3:cloud'], key: 'sk-profile-test-0f3a9c71d2e84b56' });
   const { app, page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
   await page.locator('[data-pj="spnew"]').click();
@@ -623,12 +624,17 @@ test('projects: New sprint makes a prep whose roles and role files are edited on
   // swap): a poll reads that as null, which no check below takes as done.
   const polled = () => roles().catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
   assert.deepEqual(await page.locator('[data-role-row]').evaluateAll((r) => r.map((x) => x.dataset.roleRow)), ['lead', 'review']);
-  assert.deepEqual(await page.locator('[data-spr="agent"][data-role="lead"] option').evaluateAll((o) => o.map((x) => x.value)), ['', 'claude', 'codex'], 'the same agents Settings > Delegation offers, empty first');
+  assert.deepEqual(await page.locator('[data-spr="agent"][data-role="lead"] option').evaluateAll((o) => o.map((x) => x.value)), ['', 'claude', 'codex', 'profile:' + profile.id], 'the same agents Settings > Delegation offers, empty first');
   // The lead's agent: written to roles.json, the model and effort it had cleared.
   await pick('lead', 'codex');
   await until(async () => (await polled())?.[0]?.provider === 'codex', 'the lead\'s agent saved to roles.json');
   assert.deepEqual((await roles())[0], { key: 'lead', provider: 'codex', model: '', effort: '' });
   await page.locator('[data-spr="model"][data-role="lead"]').waitFor({ timeout: 5000 });
+  // O170: a role put on a provider profile, Model left alone, holds the profile's first model, and the pick shows it.
+  await pick('review', 'profile:' + profile.id);
+  await until(async () => (await polled())?.[1]?.provider === 'profile:' + profile.id, 'the review role\'s profile saved to roles.json');
+  assert.deepEqual((await roles())[1], { key: 'review', provider: 'profile:' + profile.id, model: 'glm-5.3', effort: '' });
+  await until(async () => (await page.locator('[data-spr="model"][data-role="review"]').inputValue()) === 'glm-5.3', 'the review role\'s Model shows the saved model');
   // A worker: a name P9 refuses changes nothing; a good one adds its row, and its three files are listed before they exist.
   const keyBox = page.locator('[data-sp-newkey]');
   await keyBox.fill('Bad Key'); await page.locator('[data-pj="sprole-add"]').click();
