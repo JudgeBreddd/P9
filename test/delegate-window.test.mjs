@@ -191,7 +191,15 @@ test('Delegate window: workers indented under their chat and folded past three; 
   const kid = await tools(t, instance, kids[0]);
   assert.match((await kid.tool('send_chat', { chat: parent, text: 'The branch is pushed and the tests pass.', when: 'note' })).sent ?? '', /^as a note/);
   await row(parent).click();
-  const who = page.locator(`.pane[data-id="${parent}"] .msg.user .who`).last();
+  // The losing order, every time: P9's own end line for Kid 1's 'mcp' turn reaches the parent as a note about 3 s after
+  // the kid's note (the end line is held first), and the pane draws it below the kid's note. Wait for both, so the
+  // check below never depends on catching the kid's note while it is still the newest one.
+  const endLine = (e) => e.type === 'note' && e.data.from === 'p9' && e.data.text.startsWith('[p9] Kid 1 ended its turn: mcp');
+  await until(async () => (await events(instance, parent)).some(endLine), 'P9\'s end line for Kid 1\'s mcp turn');
+  const drawn = (await events(instance, parent)).filter((e) => e.type === 'note' || e.type === 'user').length;
+  await until(async () => await page.locator(`.pane[data-id="${parent}"] .msg.user`).count() >= drawn, 'the end line drawn in the parent pane');
+  // The kid's note by its own text, not the pane's newest note (that is P9's end line by now).
+  const who = page.locator(`.pane[data-id="${parent}"] .msg.user:has-text("The branch is pushed and the tests pass.") .who`);
   // O58 (j): a CI run timed out here with no cause named (run 44197851093, linux (6), n=1; the rerun passed). The record
   // below keeps what a timeout saw, so the next one narrows the candidates: the parent pane's .who texts say whether the
   // note rendered as 'Note from another chat' (the sender's title lookup missed, chat-view.mjs:284) or is absent from the
