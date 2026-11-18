@@ -607,7 +607,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       : result.error ? result : { error: result.reason ?? 'save-failed', code: result.code };
   }
 
-  const { ownerStart, ownerClose, ownerDone, ownerScripts, ownerPause, ownerResume, ...delegateCalls } = createDelegate({ chat, allowed, usage }); // ownerDone: the Sprint View's own click (not a tool)
+  const { ownerStart, ownerClose, ownerDone, ownerScripts, ownerPause, ownerResume, scriptSay, ...delegateCalls } = createDelegate({ chat, allowed, usage }); // ownerDone: the Sprint View's own click (not a tool)
   const calls = {
     ...delegateCalls,
     describe_mission: () => describeMission(),
@@ -808,5 +808,5 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const reg = read(registry), spc = read(space), lists = (data, key) => (Array.isArray(data[key]) ? data[key].filter(object) : []);
     return { registry: registry.hash, space: space?.hash ?? null, protection: protection(), records: { scripts: lists(reg, 'scripts'), apps: lists(reg, 'apps'), pages: lists(reg, 'pages'), sections: lists(spc, 'sections') } };
   }
-  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates, ownerStart, ownerClose, ownerDone, ownerScripts, ownerPause, ownerResume };
+  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates, ownerStart, ownerClose, ownerDone, ownerScripts, ownerPause, ownerResume, scriptSay };
 }

@@ -553,7 +553,8 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
 test('every process the server starts gets childEnv(); only launchTree adds names to it, others only fixed flags', async () => {
   const FIXED = { P9_PHONE: 'terminal opened from the phone', P9_NO_GREETING: 'terminal welcome hidden',
     GIT_TERMINAL_PROMPT: 'git never asks', GIT_OPTIONAL_LOCKS: 'git status takes no lock', SSH_ASKPASS_REQUIRE: 'git never asks', GIT_PAGER: 'git never pages',
-    PATH: 'toolPath(): the daemon\'s own node folder too, for pnpm', CI: 'the update\'s pnpm runs non-interactive' };
+    PATH: 'toolPath(): the daemon\'s own node folder too, for pnpm', CI: 'the update\'s pnpm runs non-interactive',
+    P9_SCRIPT_SOCKET: 'O189: a sprint script\'s run, the desktop socket', P9_SCRIPT_TOKEN: 'O189: a sprint script\'s run, its own token' };
   const WITH = (list) => 'childEnv(process.env, process.platform, ' + list + ')';
   const TOOLS = { 'server.mjs': WITH('TOOL_NAMES'), 'update.mjs': WITH('names'), 'setup-routes.mjs': WITH('FETCH_NAMES') };
   const KNOWN = []; // [file, words in the start's line, what is wrong with it exactly]: open question, held to that shape
