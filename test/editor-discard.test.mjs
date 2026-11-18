@@ -73,5 +73,21 @@ test('O173 Discard: a real file\'s modal drops the draft, shows the disk copy, w
   assert.equal(await ta().inputValue(), await disk(), 'after the held save the view shows what is on disk');
   assert.equal(await disk(), 'kept\n', 'the saved text is on disk');
   assert.deepEqual(held, { shown: true, disabled: true }, 'Discard is disabled while a save is on its way');
+  // The same through Ctrl S, with the modal closed and the file reopened while the save is held: the reopen is a new modal on
+  // the same shared draft, so it must see the save on its way too, and the save's answer redraws the reopened modal.
+  await app.evaluate(() => { globalThis.o173 = { held: 0 }; globalThis.o173.gate = new Promise((go) => { globalThis.o173.go = go; }); });
+  await ta().fill('reopened\n');
+  await page.keyboard.press('Control+s');
+  await settle(() => app.evaluate(() => globalThis.o173.held === 1), 'the Ctrl S save is held in main');
+  await page.keyboard.press('Escape');
+  await openFile();
+  const again = await page.evaluate(() => { const b = document.querySelector('#mdlFoot [data-discard]'); b?.click(); return { shown: !!b, disabled: !!b?.disabled }; });
+  await page.waitForTimeout(800);
+  await app.evaluate(() => globalThis.o173.go());
+  await settle(async () => (await disk()) === 'reopened\n', 'the held Ctrl S save writes');
+  await page.waitForTimeout(800);
+  assert.equal(await ta().inputValue(), await disk(), 'after a close and reopen, the held save leaves the view on what is on disk');
+  assert.equal(await page.locator('#mdlFoot [data-savefile]').count(), 0, 'the reopened modal redraws as saved when the save answers');
+  assert.deepEqual(again, { shown: true, disabled: true }, 'a reopened modal sees the save on its way: Discard disabled');
   console.log('PASS O173 discard live');
 });
