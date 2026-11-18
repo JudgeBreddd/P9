@@ -22,7 +22,7 @@ import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
-import { createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
+import { SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -559,7 +559,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const keptPref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? 'null'); } catch { return null; } };
   const approved = (sprint, name, raw) => typeof raw === 'string' && typeof keptPref('sprint-start:' + sprint)?.files?.[name] === 'string' && keptPref('sprint-start:' + sprint).files[name] === hashOf(raw);
   const writerOf = (sprint, name, raw) => { const w = keptPref(writerKey(sprint, name)); return w && w.hash === hashOf(raw) && typeof w.by === 'string' ? w.by : 'unknown (changed outside P9\'s Setup tools)'; };
-  const wrote = (sprint, name, text, by) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(sprint, name), JSON.stringify({ by, hash: hashOf(text) }));
+  const wrote = (sprint, name, text, by) => SENT.test(name) && db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(sprint, name), JSON.stringify({ by, hash: hashOf(text) }));
   // A chat's agent as a writer: its provider, or its profile, and model; never its title (a chat can rename itself).
   const agentOf = (id) => { const c = row(id); if (!c) return 'an agent'; const p = profileOf(id), model = live.get(id)?.models?.current ?? p?.model ?? '';
     return ('an agent: ' + (p ? 'profile ' + p.name : c.provider) + (model ? ' ' + model : '')).replace(/[[\]\r\n]+/g, ' ').slice(0, 120); };
