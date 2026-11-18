@@ -86,8 +86,10 @@ const petBox = p => p.querySelector('.composer')?.getBoundingClientRect();
 function cardAct(c, what) {
   if (!c) return;
   if (c.key === 'welcome') return what === 'x' ? outer.skipWelcome() : outer.welcome();
-  // D10-6: a card reopens where you left it, unless that item is already handled
-  const k = c.key.split(':')[0] + (c.id || ''), r = outer.S.resume[k]; openModal(r && !(k === 'asks' && !outer.S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k);
+  // D10-6: a card reopens where you left it, unless that item is already handled. O148: a review by its file, not its row
+  // number (the queue may have moved since); a file that is gone opens the card as new, never another file.
+  const k = c.key.split(':')[0] + (c.id || ''), r = outer.S.resume[k]; if (r?.f) r.i = outer.S.reviews.findIndex(x => x.file === r.f);
+  openModal(r && !(r.i < 0) && !(k === 'asks' && !outer.S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k);
 }
 // Dev Focus: the editor is a native view above this page, so the cards are drawn by their own overlay view (apps/desktop/cards-page.mjs).
 // This page's own stack stays in the layout, hidden, so the overlay lands where the stack would be.
