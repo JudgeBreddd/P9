@@ -15,8 +15,8 @@ import { daemon, root } from './helpers.mjs';
 
 const dist = path.join(root, 'apps/web/dist');
 // ponytail: one fixed budget, raw bytes of JS parsed at startup (827844 after window-5; 841636 with @xterm/xterm 6.1.0-beta.337,
-// the terminal chunk +6957; about 1.5% headroom); raise it on purpose. 855412: O173 B's Discard button and its per-file save guard (+423 on 854989). 855468: O181 waiting-project rows and the separator fixup (+56 on 855412).
-const BUDGET = 855468;
+// the terminal chunk +6957; about 1.5% headroom); raise it on purpose. 855412: O173 B's Discard button and its per-file save guard (+423 on 854989). 855468: O181 waiting-project rows and the separator fixup (+56 on 855412). 855480: O136 a profile chat's Claude row shows Claude's start (+12 on 855468).
+const BUDGET = 855480;
 
 test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 300000 }, async (t) => {
   const html = readFileSync(path.join(dist, 'index.html'), 'utf8');
