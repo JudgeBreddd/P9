@@ -806,7 +806,10 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   `[p9] <title> has been stopped 10 min: <last line>`, which starts its turn, or waits for the
   running one to end and then goes with the notes that waited. That line is text the worker wrote, so the parent reads
   it as a report, not as an instruction from you. A worker whose agent dies mid-turn is reported
-  at once as `[p9] <title> failed`, a message that starts the parent's turn. Each is sent only to a parent that is running; none starts
+  at once as `[p9] <title> failed`, a message that starts the parent's turn. A worker that starts waiting on an approval or a
+  question gives its parent one note at once (O84), `[p9] <title> is waiting on an approval: <what it asks>. answer_chat request
+  "<id>" with ...`, naming the option ids or the form's fields; it starts no turn and is not sent while the parent is in
+  `wait_chat` on that worker. The approval's text is the worker's, read as a report like the end line. Each is sent only to a parent that is running; none starts
   a stopped chat.
 - **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
   receiving agent with one line in front, added by P9: it says the message is from another chat's

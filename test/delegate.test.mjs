@@ -122,6 +122,9 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   // sent to a Codex worker) is refused at once with those options, before the user is asked about it.
   const options = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
   assert.deepEqual(waits.options, options);
+  // O84: a parent not waiting on it learns at once, as a note from P9 (no turn), with what answer_chat needs.
+  const heard = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('is waiting on an approval'));
+  assert.equal(heard.hit.data.text, `[p9] Kid is waiting on an approval: Write marker. answer_chat request "${waits.request}" with { "optionId": one of "allow", "reject" }.`);
   for (const wrong of [{ action: 'accept' }, { action: 'accept', content: { optionId: 'allow' } }, { optionId: 'allow_once' }]) {
     const refused = await Promise.race([a.tool('answer_chat', { chat: made.chat, request: waits.request, answer: wrong }), pause(3000).then(() => ({ error: 'the user was asked' }))]);
     assert.deepEqual([refused.error, refused.options], ['request-refused', options], JSON.stringify(wrong));
@@ -139,6 +142,14 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   await answer(asked.hit.data.request, 'allow');
   assert.deepEqual(await pending, { chat: made.chat, action: 'answered' });
   assert.equal((await a.done(made.chat)).last, 'permission:allow');
+  // O84: a question gets the same note, naming the form's fields.
+  const before = (await call(instance, '/chat/events?after=0')).body.cursor;
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'ask' });
+  const quiz = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('is waiting on a question'), before);
+  const quizWait = (await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).waiting;
+  assert.equal(quiz.hit.data.text, `[p9] Kid is waiting on a question: Pick a colour. answer_chat request "${quizWait.request}" with { "action": "accept", "content": { "colour": ... } } or { "action": "decline" }.`);
+  assert.deepEqual(await a.tool('answer_chat', { chat: made.chat, request: quizWait.request, answer: { action: 'accept', content: { colour: 'red' } } }), { chat: made.chat, action: 'answered' });
+  await a.done(made.chat);
   // The HTTP route cannot name a parent: lineage comes only from the tool.
   const typed = await call(instance, '/chat', 'POST', { provider: 'claude', parent: a.conversation, key: 'x' });
   assert.ok(typed.status !== 201 || !(await rows(instance)).find((c) => c.id === typed.body.conversation).parent, 'a request body set a parent');
@@ -1362,8 +1373,9 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
   const secret = 'SENT-TEXT-' + 'z'.repeat(8);
   const cases = [
-    [{ commit: head, weakest: 'w' }, /results/],
-    [{ commit: head, results: [{ check: secret, result: 'ok' }], weakest: 'w' }, /results\[\]\.check/],
+    // O84: the count and name refusals also say which checks the task has.
+    [{ commit: head, weakest: 'w' }, /results.*Your task's checks: "tests pass"\./],
+    [{ commit: head, results: [{ check: secret, result: 'ok' }], weakest: 'w' }, /results\[\]\.check.*Your task's checks: "tests pass"\./],
     [{ commit: head, results: [{ check: 'tests pass', result: ' ' }], weakest: 'w' }, /results\[\]\.result/],
     [{ commit: head, results: [{ check: 'tests pass', result: 'ok' }], weakest: ' ' }, /weakest/],
     [{ results: [{ check: 'tests pass', result: 'ok' }], weakest: 'w' }, /commit/],
