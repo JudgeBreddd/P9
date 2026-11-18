@@ -24,11 +24,14 @@ function phaseLine(s, esc) {
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
 // out() is called once the press is going out.
 export const closedAbout = 'This sprint is closed. Its record is first: what it built and its numbers, as they stood at Close; an agent reads the same with sprint_status. Its roles and files are below.';
-export async function closePress(lead, confirmIt, call, out) {
+// b: the pressed button. One with data-item is the Close on one of the owner's own lines (O164 part (3)): it closes only
+// that line, with no confirm (nothing stops) and no out(); P9 records the click, no merge or review is involved.
+export async function closePress(b, confirmIt, call, out) {
+  const lead = b.dataset.lead, item = b.dataset.item, said = r => r.status === 200 ? '' : 'Not closed: ' + (r.body?.detail || r.body?.error || r.status || 'no answer');
+  if (item) return said(await call('ownerDone', { sprint: lead, item }, { quiet: true }).catch(() => ({})));
   if (!await confirmIt({ title: 'Close this sprint?', body: 'Every chat of this sprint is stopped, its record is kept and its scripts are turned off. Nothing is deleted. A closed sprint is not started again.', ok: 'Close sprint', danger: true })) return null;
   out();
-  const r = await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({}));
-  return r.status === 200 ? '' : 'Not closed: ' + (r.body?.detail || r.body?.error || r.status || 'no answer');
+  return said(await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})));
 }
 export function statusHtml(s, esc, opts = {}) {
   const d = s.done, legacy = d.merged === undefined, dn = d.merged ?? d.passed ?? 0,
@@ -54,7 +57,9 @@ export function statusHtml(s, esc, opts = {}) {
         <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? 'No item taken yet' : 'No items in the plan for this role'))}</span>
         <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>
-    ${s.items.length ? `<h3>Plan items</h3><ul class="sv-items">${s.items.map(i => `<li data-sv-item="${esc(i.id)}" data-review="${esc(i.review?.state ?? '')}"><span class="box" aria-hidden="true">${i.ticked ? '☑' : '☐'}</span><span class="sv-text">${esc(i.text)}</span><span class="muted">${esc(i.role ?? 'no role')}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.fixes ? ` · ${n(i.review.fixes, 'fix', 'fixes')}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : ''}
+    ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
+      <ul class="sv-items">${s.owner.items.map(i => `<li data-sv-item="${esc(i.id)}" data-owner="${i.done ? 'closed' : 'open'}"><span class="sv-text">${esc(i.text)}</span>${i.done ? '<span class="tag">Closed by you</span>' : end ? '<span class="tag">Open at Close</span>' : `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}" data-item="${esc(i.id)}" title="Closes this item. It is yours: no review and no merge is involved, and the plan's box stays as it is.">Close</button>`}</li>`).join('')}</ul></li></ul>` : ''}
+    ${s.items.length ? `<h3>Plan items</h3><ul class="sv-items">${s.items.filter(i => i.role !== 'owner').map(i => `<li data-sv-item="${esc(i.id)}" data-review="${esc(i.review?.state ?? '')}"><span class="box" aria-hidden="true">${i.ticked ? '☑' : '☐'}</span><span class="sv-text">${esc(i.text)}</span><span class="muted">${esc(i.role ?? 'no role')}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.fixes ? ` · ${n(i.review.fixes, 'fix', 'fixes')}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : ''}
   </section>`;
 }
 

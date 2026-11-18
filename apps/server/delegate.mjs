@@ -10,7 +10,7 @@ import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
-import { MAX_FILE, SENT, hashOf, notesLine } from './sprint-files.mjs';
+import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
 import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
@@ -611,6 +611,24 @@ export function createDelegate({ chat, allowed, usage }) {
       starting.delete(sprint);
       if (reserved) { const left = holding.get(caller).filter((n) => n !== reserved); if (left.length) holding.set(caller, left); else holding.delete(caller); }
     }
+  }
+  // O164 part (3) (Role: owner on a v line): the owner's click closes it — P9's own record, on the lead's sprint state
+  // like a review record, never the plan's tick (a say-so). No merge is involved, so nothing here looks for one.
+  // Desktop only (the Sprint View's press, setup-routes.mjs); no agent tool does this — it is the owner's own call.
+  function ownerDone(sprint, item) {
+    if (!ID.test(sprint ?? '') || typeof item !== 'string' || !item.trim() || item.length > 200) return { error: 'request-refused' };
+    const lead = chat.info(sprint), prep = chat.projects.prepOf(sprint);
+    if (!chat.sprintFiles.exists(sprint) || (!lead && !prep)) return { error: 'unknown-sprint' };
+    const id = item.trim();
+    if (!chat.projects.started(sprint)) return { error: 'sprint-not-started', detail: 'Only a started sprint has its owner\'s items closed.' };
+    if (chat.projects.closed(sprint)) return { error: 'sprint-closed', detail: 'A closed sprint keeps its record as it stood at Close.' };
+    // Only a line the plan itself says is the owner's closes here: a worker's line, or one nobody owns, is refused.
+    const mine = planItems(chat.sprintFiles.read(sprint, 'sprint.md')).filter((i) => i.role === 'owner');
+    if (!mine.some((i) => i.id === id)) return { error: 'not-the-owners', detail: 'Only a plan line with Role: owner closes on your click.' };
+    const now = chat.sprint(sprint).ownerDone ?? {};
+    if (now[id]) return {}; // already closed: the click changed nothing, and saying so is fine
+    chat.setSprint(sprint, { ownerDone: { ...now, [id]: true } });
+    return {};
   }
   // Close sprint (sprint spec S16; SECURITY.md § Close sprint): the owner's press (caller null) or an agent's
   // close_sprint from a chat of the sprint or of its project, asked first in every mode. In order: before-close (may
@@ -1294,5 +1312,7 @@ export function createDelegate({ chat, allowed, usage }) {
     ownerStart: (sprint, signal, hooksHash) => startSprint(sprint, null, signal, hooksHash),
     // Not a tool: the Sprint View's Close sprint button (setup-routes.mjs), the owner's press.
     ownerClose: (sprint) => closeSprint(sprint, null),
+    // Not a tool (O164 part (3)): the Sprint View's click on a v line (Role: owner), closing the owner's own item.
+    ownerDone: (sprint, item) => ownerDone(sprint, item),
   };
 }
