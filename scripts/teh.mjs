@@ -251,6 +251,65 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
   } catch (error) { await say('failed: ' + error.message); }
 }
 
+// O135 "use the installed daemon": a service whose unit (or a drop-in) runs another copy (appImageService's { checkout }) is
+// moved onto the launcher, with the user's OK (the caller's dialog; this has no caller of its own yet). seen is the ExecStart
+// line (systemctl show) the user was shown; a unit changed since then, or no checkout, is refused and nothing is touched.
+// The unit is copied to p9-foundation.service.bak-<time> and each drop-in that sets ExecStart is renamed <name>.bak-<time>
+// (Environment-only drop-ins stay); the staged daemon's install-service.mjs writes the launcher unit with the old unit's
+// workspace and phone flags. A failure, or a daemon that never answers with this version within ms, puts the backups back,
+// reloads and restarts the old service. Logs to service-install.log. Returns { done, version, backup } or { error, restored, backup }.
+// probe and stop: how /health is asked and how running work is stopped first (the tests pass their own).
+// ponytail: systemctl show prints argv unquoted, so a workspace path containing " --" is cut short there; that path is refused
+// (not a folder) rather than guessed.
+export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, probe = () => health(state), stop = () => daemonRequest(state, 'POST', '/stop-all', {}) } = {}) {
+  const share = path.join(os.homedir(), '.local', 'share', 'p9'), units = path.join(os.homedir(), '.config', 'systemd', 'user');
+  const unit = path.join(units, 'p9-foundation.service'), dropins = unit + '.d';
+  const say = (text) => appendFile(path.join(share, 'service-install.log'), new Date().toISOString() + ' use the installed daemon: ' + text + '\n').catch(() => {});
+  const show = () => new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'ExecStart', '--value'], { timeout: 30_000 },
+    (error, stdout) => resolve(error ? null : stdout)));
+  const refuse = async (error) => { await say('refused, ' + error); return { error }; };
+  if (typeof checkout !== 'string' || !checkout || typeof seen !== 'string' || !seen) return refuse('checkout-required');
+  if (await show() !== seen) return refuse('unit-changed');
+  const argv = seen.match(/argv\[\]=(.*?) ; /)?.[1] ?? '';
+  const workspace = argv.match(/ --workspace (.+?)(?= --[a-z-]+(?: |$)|$)/)?.[1];
+  const port = argv.match(/ --remote-port (\S+)/)?.[1], origin = argv.match(/ --remote-origin (\S+)/)?.[1];
+  if (!workspace || !(await stat(workspace).catch(() => null))?.isDirectory()) return refuse('workspace-unread');
+  const version = (await readFile(path.join(share, 'daemon', 'current'), 'utf8').catch(() => '')).trim();
+  const dir = path.join(share, 'daemon', version);
+  if (!version || !await stat(path.join(dir, '.complete')).catch(() => null)) return refuse('no-installed-daemon');
+  await stop().catch(() => {});
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-'), backup = unit + '.bak-' + stamp, moved = [];
+  await copyFile(unit, backup);
+  for (const name of await readdir(dropins).catch(() => [])) {
+    if (!name.endsWith('.conf') || !/^ExecStart=/m.test(await readFile(path.join(dropins, name), 'utf8').catch(() => ''))) continue;
+    await rename(path.join(dropins, name), path.join(dropins, name + '.bak-' + stamp));
+    moved.push(name);
+  }
+  await say('backup ' + backup + (moved.length ? ', drop-ins moved aside: ' + moved.join(' ') : '') + '; installing ' + version);
+  const args = [path.join(dir, 'scripts', 'install-service.mjs'), workspace, ...(port && origin ? ['--remote-port', port, '--remote-origin', origin] : [])];
+  const installed = await new Promise((resolve) => execFile(path.join(dir, 'node'), args, { timeout: 120_000 },
+    (error, stdout, stderr) => say('install-service: ' + (error ? 'failed ' : 'ok ') + (stdout + stderr).trim()).then(() => resolve(!error))));
+  let answers = false;
+  for (const end = Date.now() + ms; installed && !answers && Date.now() < end; ) {
+    answers = await probe().then((h) => h?.version === version, () => false);
+    if (!answers) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (answers) { await say('done, the service runs ' + version); return { done: true, version, backup }; }
+  const error = installed ? 'version-not-answering' : 'install-failed';
+  try {
+    await copyFile(backup, unit);
+    for (const name of moved) await rename(path.join(dropins, name + '.bak-' + stamp), path.join(dropins, name));
+    for (const step of [['daemon-reload'], ['enable', 'p9-foundation.service'], ['restart', 'p9-foundation.service']]) {
+      if (!await new Promise((resolve) => execFile('systemctl', ['--user', ...step], { timeout: 60_000 }, (failed) => resolve(!failed)))) throw new Error(step[0] + ' failed');
+    }
+    await say(error + '; the old service is back');
+    return { error, restored: true, backup };
+  } catch (failed) {
+    await say(error + '; putting the old service back failed: ' + failed.message + '; the old unit is ' + backup);
+    return { error, restored: false, backup };
+  }
+}
+
 // RS1: a restart is done when /health answers with a boot other than the one before it (the old daemon's, or none when it
 // was not answering); a service that started but never answers is reported, not called restarted. Up to 90 s, the most a
 // first start has taken on CI (Wait-Daemon). Resolves { restarted: true } or { error }.
