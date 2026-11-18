@@ -1174,6 +1174,58 @@ test('Delegate O176: ready is accepted from a run the worker started itself, wit
   console.log('PASS Delegate O176: ready from the worker\'s own run accepted, report pinned at once');
 });
 
+// O176 review: a prompted turn ends the unprompted run. A ready begun in that run, held in its git check while a whole
+// prompted turn comes and goes, is refused and writes nothing (before, the run's ID came back once the turn ended).
+test('Delegate O176 ABA: a ready from the own run, held across a whole prompted turn, is refused and writes nothing', { timeout: 120000 }, async (t) => {
+const { execFileSync } = await import('node:child_process');
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Own', work: { kind: 'new', parent: '', name: 'own' } })).body.project.id;
+  const a = await agent(t, instance, { project });
+  const made = await a.tool('open_chat', { text: 'first', item: 'B6', done_means: 'reported', checks: ['check'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', made.folder]);
+  execFileSync('git', ['-C', made.folder, 'add', '.']);
+  execFileSync('git', ['-C', made.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', made.folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  // "background quiet": the turn ends, then the agent works on with no prompt open, as after a compaction.
+  await a.tool('send_chat', { chat: made.chat, text: 'background quiet' });
+  await a.done(made.chat);
+  const ended = (await events(instance, made.chat)).filter((e) => e.type === 'turn-end').length;
+  await until(instance, (e) => e.conversation === made.chat && JSON.stringify(e.data ?? {}).includes('Background task 1'));
+  assert.notEqual((await rows(instance)).find((c) => c.id === made.chat).state, 'turn', 'P9 took the unprompted run for a turn it prompted');
+  // A clean filter in the folder's own git config holds ready's dirty check (git status) until the test lets it go.
+  const gitDir = path.join(made.folder, '.git'), held = path.join(gitDir, 'held'), go = path.join(gitDir, 'go');
+  fs.writeFileSync(path.join(gitDir, 'slow.sh'), `touch '${held}'; i=0; while [ ! -f '${go}' ] && [ $i -lt 80 ]; do sleep 0.1; i=$((i+1)); done; cat\n`);
+  fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
+  fs.writeFileSync(path.join(gitDir, 'info', 'attributes'), '* filter=slow\n');
+  execFileSync('git', ['-C', made.folder, 'config', 'filter.slow.clean', `sh '${path.join(gitDir, 'slow.sh')}'`]);
+  const later = new Date(Date.now() + 60000);
+  fs.utimesSync(path.join(made.folder, '.gitignore'), later, later);
+  const pending = kid.tool('ready', { commit: head, results: [{ check: 'check', result: 'passed' }], weakest: 'stale run' });
+  for (let i = 0; i < 100 && !fs.existsSync(held); i += 1) await pause(50);
+  assert.ok(fs.existsSync(held), 'ready never reached its git check');
+  // A whole prompted turn while ready waits; then the agent works on unprompted again, as before it.
+  await a.tool('send_chat', { chat: made.chat, text: 'config' });
+  await a.done(made.chat);
+  const after = (await events(instance, made.chat)).filter((e) => e.type === 'turn-end').length;
+  assert.ok(after > ended, 'the prompted turn did not end');
+  for (let i = 0; i < 100 && (await rows(instance)).find((c) => c.id === made.chat).state !== 'running'; i += 1) await pause(50);
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).state, 'running', 'the agent did not work on unprompted');
+  fs.writeFileSync(go, '');
+  const result = await pending;
+  assert.equal(result.error, 'no-active-turn', 'a ready from before a whole prompted turn was accepted: ' + JSON.stringify(result));
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).ready ?? null, null, 'the stale ready was written');
+  await pause(300);
+  assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'card' && e.data.id === 'ready-' + made.chat).length, 0, 'a stale report was pinned');
+  assert.equal((await a.tool('stop_chat', { chat: made.chat, close: true })).error, undefined);
+  console.log('PASS Delegate O176 ABA: ready held across a prompted turn refused no-active-turn, nothing written or pinned');
+});
+
 // O147 (1): ready records the commit the worker sent, not the start folder's HEAD; git must know it; the dirty check
 // guards only a commit that is HEAD; the changed files are main...commit.
 test('Delegate O147: ready records the sent commit, refuses one git does not know, keeps the dirty check for HEAD, and lists main...commit', { timeout: 120000 }, async (t) => {
