@@ -225,13 +225,18 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
       const dock = document.querySelector('#dock'), shell = document.querySelector('.shell'), t0 = performance.now(), log = [];
       let hid = false; // set when the dock is observed going from visible to hidden (the attribute set; its removal restores it)
       const add = list => { for (const m of list) { log.push(`${Math.round(performance.now() - t0)} ms ${m.target === dock ? '#dock' : 'S.focus'} ${m.attributeName} was ${JSON.stringify(m.oldValue)}`);
-        if (m.target === dock && m.attributeName === 'hidden' && m.newValue !== null) hid = true; } }, obs = new MutationObserver(add);
+        if (m.target === dock && m.attributeName === 'hidden' && m.oldValue === null) hid = true; } }, obs = new MutationObserver(add); // a record has no newValue: oldValue null is absent-to-present (a hide), "" is the restore
       obs.observe(dock, { attributes: true, attributeOldValue: true, attributeFilter: ['hidden', 'class', 'style'] });
       obs.observe(shell, { attributes: true, attributeOldValue: true, attributeFilter: ['data-focus'] });
-      return { hidSince: () => { add(obs.takeRecords()); const out = hid; hid = false; return out; },
+      const hidSince = () => { add(obs.takeRecords()); const out = hid; hid = false; return out; };
+      return { hidSince,
+        // the gate on a still dock, all in one task so nothing is drawn: a no-op removal, a batched hide and restore, and a restore alone (its hide read before)
+        selfCheck: () => { const out = []; dock.removeAttribute('hidden'); out.push(hidSince()); dock.hidden = true; dock.hidden = false; out.push(hidSince());
+          dock.hidden = true; hidSince(); dock.hidden = false; out.push(hidSince()); log.length = 0; return out; },
         stop: () => { add(obs.takeRecords()); obs.disconnect();
           return [...log, `now: #dock hidden ${dock.hidden}, class ${JSON.stringify(dock.className)}, style ${JSON.stringify(dock.getAttribute('style'))}, S.focus ${shell.dataset.focus}`].join('\n'); } };
     });
+    assert.deepEqual(await record.evaluate(r => r.selfCheck()), [false, true, false], 'a drag is redone only on a real hide: none on a no-op removal, one on a batched hide and restore, none on a restore alone');
     const dragBy = async (gw, gh) => { const b = await dockBox(); await page.mouse.move(b.x + b.width - 3, b.y + b.height - 3); await page.mouse.down(); await page.mouse.move(b.x + b.width + gw - 3, b.y + b.height + gh - 3, { steps: 6 }); await page.mouse.up(); return await dockBox(); };
     let d2 = await dragBy(120, 80), drags = 1, why = '';
     while (drags < 3 && (Math.round(d2.width - d1.width) !== 120 || Math.round(d2.height - d1.height) !== 80)) {
