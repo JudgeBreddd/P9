@@ -1280,9 +1280,13 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   `POST /script` on that socket (or the Windows pipe; never the phone's listener) with the token in `x-p9-script`
   sends a note (starts no turn) or a queued prompt (never a steer) to the sprint's lead, a chat under it, or the lead's
   parent; any other chat is refused, and so is a closed sprint. Both arrive as P9's, with a first line
-  `[P9: from sprint script <name>, not from the user.]`. A run makes at most 20 calls; the token stops working when the
-  run ends, and P9 keeps no copy of it anywhere else: not in the database, not in `hooks.log` (a script that prints
-  it is logged with `[token]` in its place), not in the status. Who can call: any process of your user that holds a
+  `[P9: from sprint script <name>, not from the user.]`. A run makes at most 20 well-formed calls (a malformed one is
+  refused without counting). The token stops working the moment the script itself exits, is killed or times out, not
+  when its output is done, so a program the script started and left running cannot use it after. P9 keeps the live
+  token in memory only: not in the database, not in `hooks.log` (a script that prints it is logged with `[token]` in
+  its place), not in the status, and a text that holds a live token is refused, so it never enters a chat's history
+  or a parked note. A script can still send its token's bytes split or encoded; that is its own doing, and the token
+  is dead when the run ends. Who can call: any process of your user that holds a
   live token. The socket is yours alone (0600), but agents run as your user too, so the socket does not keep them
   out: the token is the only barrier, and a process of your user can read a running script's environment (on Linux,
   `/proc/<pid>/environ`). What that buys such a process is limited: only while an approved script runs, only that

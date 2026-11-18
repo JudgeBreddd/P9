@@ -52,14 +52,18 @@ export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : '
 
 // One run: no shell, the allow-list environment, input on stdin, the last KEEP bytes of output kept. Never throws.
 // -> { exit (the code, or null), reason (null | 'timeout' | 'not-started' | 'killed'), ms, line (the last output line) }.
-// say: O189's { socket, token } for this run, given as P9_SCRIPT_SOCKET and P9_SCRIPT_TOKEN. The token is cut out of the output kept,
-// so a script that prints it does not put it in hooks.log or a refusal.
+// say: O189's { socket, token, ended } for this run, given as P9_SCRIPT_SOCKET and P9_SCRIPT_TOKEN. The token is cut out of
+// the output kept, so a script that prints it does not put it in hooks.log or a refusal. ended() revokes it the moment the
+// script itself exits, is killed or cannot start: not after the output drains, so a program the script left holding
+// its output (and its environment) cannot use the token past the script's own end.
 export function run(command, input, { cwd, timeout, say }) {
   const began = Date.now();
   return new Promise((resolve) => {
     const argv = command.split(/\s+/).filter(Boolean); // ponytail: split on spaces, no quoting; a path with a space needs a wrapper script
     let child, out = Buffer.alloc(0), late = false, done = false, drain;
+    const ended = () => { try { say?.ended?.(); } catch { /* revoking never fails the run */ } };
     const end = (exit, reason) => {
+      ended();
       if (done) return; done = true; clearTimeout(timer); clearTimeout(drain);
       // The pipes are let go here: a program the script started may hold them open long after it.
       for (const pipe of [child?.stdin, child?.stdout, child?.stderr]) { try { pipe?.destroy(); } catch { /* closed */ } }
@@ -75,7 +79,7 @@ export function run(command, input, { cwd, timeout, say }) {
     child.stdout.on('data', keep); child.stderr.on('data', keep);
     child.on('error', () => end(null, 'not-started'));
     // The script's own end settles the run: 'close' alone would wait for every program holding its output.
-    child.on('exit', (code) => { drain = setTimeout(() => end(late ? null : code, late ? 'timeout' : code === null ? 'killed' : null), DRAIN); });
+    child.on('exit', (code) => { ended(); drain = setTimeout(() => end(late ? null : code, late ? 'timeout' : code === null ? 'killed' : null), DRAIN); });
     child.on('close', (code) => end(late ? null : code, late ? 'timeout' : code === null ? 'killed' : null));
     child.stdin.on('error', () => {}); // a script that never reads its input
     child.stdin.end(input);
@@ -98,7 +102,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     if (!chat.socketPath) return go(undefined); // no daemon socket (tests without one): nothing to call
     const token = randomBytes(32).toString('hex');
     callers.set(token, { sprint, name, calls: 0 });
-    try { return await go({ socket: chat.socketPath, token }); } finally { callers.delete(token); }
+    try { return await go({ socket: chat.socketPath, token, ended: () => callers.delete(token) }); } finally { callers.delete(token); }
   };
   // note: starts no turn. prompt: always a queued message, never a steer. Only to the sprint's lead, a chat under it or
   // the lead's parent; both are P9's, with a first line naming the script, never the user's. At most SAY_CALLS per run.
@@ -106,10 +110,13 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     let at = null;
     if (typeof token === 'string' && /^[0-9a-f]{64}$/.test(token)) for (const [t, c] of callers) if (timingSafeEqual(Buffer.from(t), Buffer.from(token))) at = c;
     if (!at) return { status: 401, error: 'login-required' };
-    if ((at.calls += 1) > SAY_CALLS) return { status: 429, error: 'too-many-calls', detail: `A script run sends at most ${SAY_CALLS} notes and prompts.` };
     const { action, chat: to, text } = body && typeof body === 'object' ? body : {};
     if (!['note', 'prompt'].includes(action) || !ID.test(typeof to === 'string' ? to : '') || typeof text !== 'string' || !text.trim() || text.length > SAY_MAX)
       return { status: 400, error: 'request-refused', detail: `{ action: "note" or "prompt", chat: a chat id, text: 1 to ${SAY_MAX} characters }` };
+    // A live token never goes into a chat's history or a parked note: refused, not scrubbed.
+    for (const t of callers.keys()) if (text.includes(t)) return { status: 400, error: 'request-refused', detail: 'The text holds a script token.' };
+    // Counted once the request is well formed, so a malformed one does not use the run's budget up.
+    if ((at.calls += 1) > SAY_CALLS) return { status: 429, error: 'too-many-calls', detail: `A script run sends at most ${SAY_CALLS} notes and prompts.` };
     if (chat.projects.closed(at.sprint)) return { status: 409, error: 'sprint-closed' };
     const family = chat.family(), parent = family.find((c) => c.id === at.sprint)?.parent;
     if (to !== at.sprint && to !== parent && !family.some((c) => c.id === to && c.parent === at.sprint))

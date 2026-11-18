@@ -110,19 +110,28 @@ test('script-say: a sprint script\'s token sends its lead a note and a queued pr
   assert.deepEqual([other.status, other.body.error], [422, 'not-this-sprints']);
   assert.equal((await say(env.socket, env.token, { action: 'steer', chat: sprint, text: 'now' })).status, 400);
 
-  // At most 20 calls per run (the 6 above count): 14 more go through, the next is 429.
-  for (let i = 0; i < 14; i += 1) assert.equal((await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'n' + i })).status, 200, 'call ' + (i + 7));
+  // A text holding the live token is refused, never put in a chat (Reviewer FIX1 on 0609479, P2 (2)).
+  const leak = await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'my token: ' + env.token });
+  assert.deepEqual([leak.status, leak.body.error], [400, 'request-refused']);
+  // At most 20 calls per run, counted once a request is well formed (P2 (3)): the 5 above that were (2 notes, a prompt,
+  // a note to the worker, the 422) count, the 2 refused with 400 do not. 15 more go through, the next is 429.
+  for (let i = 0; i < 15; i += 1) assert.equal((await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'n' + i })).status, 200, 'call ' + (i + 6));
   const capped = await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'one too many' });
   assert.deepEqual([capped.status, capped.body.error], [429, 'too-many-calls']);
 
   // The run ends: its token stops working, and it is in neither hooks.log nor any of P9's state files.
   fs.writeFileSync(path.join(s.folder, 'script-go'), '');
+  // A program the script started, holding its output and its environment, calls right after the script exits: the
+  // token was revoked at the script's own exit, not when its output drained (P2 (1)).
+  const late = await wait(() => fs.existsSync(path.join(s.folder, 'late-status')) && fs.readFileSync(path.join(s.folder, 'late-status'), 'utf8'), 'the late program\'s call');
+  assert.equal(late, '401', 'a program left behind by the script used its token after the script ended');
   const log = await wait(() => { const l = fs.existsSync(path.join(s.folder, 'hooks.log')) && fs.readFileSync(path.join(s.folder, 'hooks.log'), 'utf8'); return l && l.includes('| say |') ? l : null; }, 'the run in hooks.log');
   assert.equal(log.includes(env.token), false, 'the token is in hooks.log: ' + log);
   assert.match(log, /my token is \[token\]/);
   assert.equal((await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'late' })).status, 401);
   const status = await call(instance, `/sprints/${sprint}/status`);
   assert.equal(JSON.stringify(status.body ?? '').includes(env.token), false, 'the token is in the sprint status');
+  assert.equal(JSON.stringify(await events(sprint)).includes(env.token), false, 'the token is in the lead\'s history');
   for (const file of filesUnder(instance.state ?? path.dirname(env.socket))) assert.equal(fs.readFileSync(file).includes(env.token), false, 'the token is in ' + path.basename(file));
-  console.log('PASS script-say: token in the run\'s env only; note (no turn), prompt (once, marked), a worker and the lead\'s parent reached, 422 for another chat, 429 at call 21, 401 after the run; never in hooks.log, status or state files');
+  console.log('PASS script-say: token in the run\'s env only; note (no turn), prompt (once, marked), a worker and the lead\'s parent reached, 422 for another chat, 400 for the token as text (not counted), 429 at call 21, 401 after the run and for a program it left behind; never in hooks.log, status or state files');
 });
