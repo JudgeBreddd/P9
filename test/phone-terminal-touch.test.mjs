@@ -161,8 +161,25 @@ test('Item 4: Paste wraps in the bracketed-paste markers only when the program t
   };
   // What a program does: sets bracketed paste (DEC mode 2004) on or off and keeps the terminal (cat just echoes, so nothing
   // pasted here runs). A shell is no good for "off": its line editor turns the mode back on at every prompt.
-  const program = async (mode) => {
-    await page.click('#screen'); await page.keyboard.press('Control+c');
+  // O184: cat is ended with Ctrl+D (EOF), never Ctrl+C. Typing at machine speed straight after Ctrl+C, under load, once
+  // left the shell running "rintf" for "printf" (the page's own record shows the whole line left the page), so the marker
+  // never printed and the wait below timed out. The leading explanation, consistent with that, is the interrupt's input
+  // flush / line-editor reset eating input queued in the same window; the exact loss point between page and shell is not
+  // instrumented. Either way the fix is the same: EOF ends cat with no signal and no flush, and the prompt-at-the-bottom
+  // wait is what says the shell is reading again.
+  const prompt = () => page.waitForFunction(() => {
+    const rows = [...document.querySelectorAll('#screen .xterm-rows > div')];
+    for (let i = rows.length - 1; i >= 0; i--) { const text = rows[i].textContent; if (text.trim()) return /\$$/.test(text.trim()); }
+    return false;
+  }, null, { timeout: 10000 });
+  const program = async (mode, escape) => {
+    if (escape) {
+      // Twice: in canonical mode the first Ctrl+D only delivers the paste's last, unterminated line to cat; the second,
+      // on an empty line, is the EOF that ends it. (An extra Ctrl+D when nothing is pending is just EOF again.)
+      await page.click('#screen'); await page.keyboard.press('Control+d'); await page.keyboard.press('Control+d');
+      await prompt();
+    }
+    await page.click('#screen');
     // PD-1 (c): the mode is on only once the screen has read the printf; a fixed wait may have lost that race in CI (belief
     // from 2 logs, not reproduced: the paste came back whole but plain). The marker is printed after the mode and is not in the typed line (%s), so seeing it means
     // the terminal has the mode.
@@ -172,7 +189,7 @@ test('Item 4: Paste wraps in the bracketed-paste markers only when the program t
   const two = 'first line\nsecond line';
   await program('l');
   assert.equal(await pasted(two), 'first line\rsecond line', 'mode off: plain text, newline as Enter');
-  await program('h');
+  await program('h', true);
   assert.equal(await pasted(two), '\x1b[200~first line\rsecond line\x1b[201~', 'mode on: one bracketed paste');
   const hostile = await pasted('safe\x1b[201~rm -rf /tmp/x');
   assert.equal(hostile, '\x1b[200~saferm -rf /tmp/x\x1b[201~', 'the pasted text closed the bracket early');

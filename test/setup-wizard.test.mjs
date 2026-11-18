@@ -57,6 +57,9 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   assert.equal(made.status, 201, JSON.stringify(made.body));
   assert.deepEqual(made.body.created, ['mission/registry.json', 'needs-you/AGENTS.md', file]);
   assert.equal(await readFile(path.join(instance.workspace, 'AGENTS.md'), 'utf8'), 'mine');
+  // O186: the starter waiting file says what the folder is for, and no longer advises a "**Project:** line format
+  // (the reader still shows a project when a file happens to have one; that is the file writer's own choice).
+  assert.doesNotMatch(await readFile(path.join(instance.workspace, 'needs-you/AGENTS.md'), 'utf8'), /\*\*Project:\*\*/);
   assert.deepEqual(JSON.parse(await readFile(path.join(instance.workspace, 'mission/registry.json'), 'utf8')), { scripts: [], apps: [], pages: [] });
   assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', 'mission', 'needs-you', 'note.txt']);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), STARTER);
