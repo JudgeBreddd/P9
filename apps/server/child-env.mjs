@@ -13,8 +13,10 @@ const ALLOW = new Set(['HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LANG
 // need on top: the owner's proxy and extra CA certificates, and where pnpm and corepack keep themselves. By name, never
 // npm_config_*: that would pass npm_config__authToken. Registry logins stay in the home folder's .npmrc.
 export const TOOL_NAMES = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'PNPM_HOME', 'COREPACK_HOME'];
-// The agents fetch (setup-routes.mjs) also passes what scripts/agents.mjs reads: P9_AGENTS_FROM, a folder to take the
-// packages from instead of the registry (the tests; the same checksums apply).
+// The P9_* names a child reads, one by one, never a prefix (the daemon's own P9_GITHUB_TOKEN, P9_MCP_TOKEN stay behind):
+// P9_AGENTS_FROM: scripts/agents.mjs, the agents fetch (setup-routes.mjs); a folder to take the packages from instead of
+// the registry (the tests; the same checksums apply). The build's and the update's children read none (pnpm build's
+// astro, scripts/frame-runtimes.mjs and vite; the update's tar, pnpm, scripts/deps.mjs, and update-swap.mjs via systemd-run).
 export const FETCH_NAMES = [...TOOL_NAMES, 'P9_AGENTS_FROM'];
 
 export const allowed = (key, platform = process.platform, extra = []) => platform === 'win32'

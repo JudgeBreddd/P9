@@ -15,7 +15,8 @@ import { createUpdate } from '../apps/server/update.mjs';
 import * as childEnvModule from '../apps/server/child-env.mjs';
 
 const skip = process.platform === 'win32' ? 'the update and the rebuild are Linux only' : false;
-const PLANTED = { npm_config__authToken: 'planted-token', GIT_DIR: '/nonexistent/planted-git-dir', HTTPS_PROXY: 'http://127.0.0.1:9' };
+const PLANTED = { npm_config__authToken: 'planted-token', GIT_DIR: '/nonexistent/planted-git-dir', HTTPS_PROXY: 'http://127.0.0.1:9',
+  P9_GITHUB_TOKEN: 'planted-github', P9_MCP_TOKEN: 'planted-mcp' };
 // A node stand-in (no shell) that writes the environment it was given to `out` and fails, so nothing builds for real.
 async function standIn(file, out) {
   await writeFile(file, '#!' + process.execPath + '\nrequire("fs").writeFileSync(' + JSON.stringify(out) + ', JSON.stringify(process.env)); process.exit(1);\n');
@@ -31,6 +32,7 @@ const seen = async (out) => {
 const check = (env, what) => {
   assert.equal(env.npm_config__authToken, undefined, what + ': the daemon\'s npm token stayed behind');
   assert.equal(env.GIT_DIR, undefined, what + ': the daemon\'s GIT_DIR stayed behind');
+  for (const name of ['P9_GITHUB_TOKEN', 'P9_MCP_TOKEN']) assert.equal(env[name], undefined, what + ': the daemon\'s ' + name + ' stayed behind');
   assert.equal(env.HTTPS_PROXY, PLANTED.HTTPS_PROXY, what + ': the owner\'s proxy reached it');
 };
 
@@ -60,7 +62,7 @@ test('the update\'s pnpm gets childEnv() plus the tool names: no npm token, no G
   const env = await seen(out);
   check(env, 'update');
   assert.equal(env.CI, '1', 'update: CI=1 as before');
-  console.log('PASS tool child env: the update\'s pnpm got no npm_config__authToken and no GIT_DIR; HTTPS_PROXY and CI=1 reached it');
+  console.log('PASS tool child env: the update\'s pnpm got no npm_config__authToken, GIT_DIR, P9_GITHUB_TOKEN or P9_MCP_TOKEN; HTTPS_PROXY and CI=1 reached it');
 });
 
 test('the phone\'s Rebuild + reload gets childEnv() plus the tool names: no npm token, no GIT_DIR, the proxy kept', { skip, timeout: 120000 }, async (t) => {
@@ -77,7 +79,7 @@ test('the phone\'s Rebuild + reload gets childEnv() plus the tool names: no npm 
   const built = await server.remote('/rebuild', { method: 'POST', session, body: {} });
   assert.equal(built.status, 500, 'the stand-in fails on purpose');
   check(await seen(out), 'rebuild');
-  console.log('PASS tool child env: the rebuild got no npm_config__authToken and no GIT_DIR; HTTPS_PROXY reached it');
+  console.log('PASS tool child env: the rebuild got no npm_config__authToken, GIT_DIR, P9_GITHUB_TOKEN or P9_MCP_TOKEN; HTTPS_PROXY reached it');
 });
 
 // CI on the first head: the fetch was given TOOL_NAMES alone, so scripts/agents.mjs lost P9_AGENTS_FROM, went for the real
@@ -95,5 +97,5 @@ test('the agents fetch keeps the P9_* names scripts/agents.mjs reads, and drops 
   const env = childEnvModule.childEnv(source, 'linux', childEnvModule[list]);
   for (const name of reads) assert.equal(env[name], '/from', 'the fetch keeps ' + name);
   check(env, 'agents fetch');
-  console.log('PASS tool child env: the agents fetch keeps ' + reads.join(', ') + ' and HTTPS_PROXY, drops the npm token and GIT_DIR');
+  console.log('PASS tool child env: the agents fetch keeps ' + reads.join(', ') + ' and HTTPS_PROXY, drops the npm token, GIT_DIR, P9_GITHUB_TOKEN and P9_MCP_TOKEN');
 });
