@@ -189,6 +189,22 @@ test('usage reads each usage row once and never parses agent chunks', (t) => {
   assert.equal(parsed, 0, 'a call with no new rows parses nothing');
 });
 
+// O190: a run with no prompt (a scheduled wake, a background task's notification, a compaction) reports its cost through
+// usage_update but no token counts (the adapter's result carries only used, size and cost), so token totals are prompted
+// turns only. They say so; the cost counts the run.
+test('token totals say they are prompted turns only; a run with no prompt counts in the cost', () => {
+  const ledger = openLedger(':memory:');
+  const used = (n, amount, more) => ({ sessionUpdate: 'usage_update', used: n, size: 200000, cost: { amount, currency: 'USD' }, ...more });
+  ledger.append('c', 'user', { text: 'go' }); ledger.append('c', 'update', used(1000, 0.5));
+  ledger.append('c', 'turn-end', { usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 900 } });
+  // A wake with no prompt: no user event and no turn-end, only the run's usage_update with the session's new cost.
+  ledger.append('c', 'update', used(1500, 0.9, { _meta: { '_claude/origin': { kind: 'task-notification' } } }));
+  const spent = ledger.spent('c').usage, usage = ledger.usage();
+  assert.deepEqual(spent, { inputTokens: 10, outputTokens: 5, cachedTokens: 900, costUsd: 0.9, turns: 1, tokens: 'prompted turns only' });
+  assert.deepEqual([usage.tokens, usage.totals.cachedTokens, usage.totals.costUsd], ['prompted turns only', 900, 0.9]);
+  console.log('PASS O190: spent and /usage name their tokens prompted turns only; the unprompted run is in the cost (0.9), not the tokens');
+});
+
 // O191: a chat on a provider profile is stored as provider claude, but spends neither the Claude plan nor the Claude
 // bill. Its turns and the cost its adapter estimates go to the profile's own row, also once the chat is deleted.
 test('a provider profile chat is not in the Claude totals; it is its own row', () => {
