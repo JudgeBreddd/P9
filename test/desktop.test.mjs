@@ -213,19 +213,39 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await page.mouse.move(...grab); await page.mouse.down(); await page.mouse.move(grab[0] - 75, grab[1] + 40, { steps: 8 }); await page.mouse.move(grab[0] - 100, grab[1] + 60, { steps: 4 }); await page.mouse.up();
     const d1 = await dockBox();
     assert.deepEqual([Math.round(d1.x - d0.x), Math.round(d1.y - d0.y), await page.evaluate(() => getSelection().toString())], [-100, 60, ''], 'moves with the cursor, selects nothing');
-    // O111/O144: CI twice lost the corner drag after 2 or 3 of its 6 moves. Blink ends a CSS resize when the resizing box goes away
-    // (a one-frame #dock hide at move 2 gives CI's [40,26]); the trigger is not named yet, so a failure lists every change to the
-    // dock's hidden, class and style and to the focus (setFocus mirrors S.focus on .shell data-focus) during the drag.
+    // O111/O144: CI twice ended the corner resize mid-drag, both at exact step counts of the 6-move drag (2/6 and 3/6 of the
+    // growth) — consistent with interrupted motion, not with a lag (which catches up) or an edge cap (one fixed size). Forcing
+    // #dock hidden for one frame mid-drag ends Blink's CSS resize the same way, so that mechanism is demonstrated; the natural CI
+    // trigger is unproven, and this closure is mitigation, not a proven cause fix. The record below lists every change to the
+    // dock's hidden, class and style and to the focus (setFocus mirrors S.focus on .shell data-focus) during the drag, and a drag
+    // is redone ONLY on an independently observed interruption: #dock actually became hidden during that drag (a visible-to-hidden
+    // transition seen in the record, and the dock back now). Any other undershoot fails the unchanged [120,80] assertion, and a
+    // completed retry prints the record, which may narrow the causes on the next CI red.
     const record = await page.evaluateHandle(() => {
       const dock = document.querySelector('#dock'), shell = document.querySelector('.shell'), t0 = performance.now(), log = [];
-      const add = list => { for (const m of list) log.push(`${Math.round(performance.now() - t0)} ms ${m.target === dock ? '#dock' : 'S.focus'} ${m.attributeName} was ${JSON.stringify(m.oldValue)}`); }, seen = new MutationObserver(add);
-      seen.observe(dock, { attributes: true, attributeOldValue: true, attributeFilter: ['hidden', 'class', 'style'] });
-      seen.observe(shell, { attributes: true, attributeOldValue: true, attributeFilter: ['data-focus'] });
-      return { stop: () => { add(seen.takeRecords()); seen.disconnect();
-        return [...log, `now: #dock hidden ${dock.hidden}, class ${JSON.stringify(dock.className)}, style ${JSON.stringify(dock.getAttribute('style'))}, S.focus ${shell.dataset.focus}`].join('\n'); } };
+      let hid = false; // set when the dock is observed going from visible to hidden (the attribute set; its removal restores it)
+      const add = list => { for (const m of list) { log.push(`${Math.round(performance.now() - t0)} ms ${m.target === dock ? '#dock' : 'S.focus'} ${m.attributeName} was ${JSON.stringify(m.oldValue)}`);
+        if (m.target === dock && m.attributeName === 'hidden' && m.oldValue === null) hid = true; } }, obs = new MutationObserver(add); // a record has no newValue: oldValue null is absent-to-present (a hide), "" is the restore
+      obs.observe(dock, { attributes: true, attributeOldValue: true, attributeFilter: ['hidden', 'class', 'style'] });
+      obs.observe(shell, { attributes: true, attributeOldValue: true, attributeFilter: ['data-focus'] });
+      const hidSince = () => { add(obs.takeRecords()); const out = hid; hid = false; return out; };
+      return { hidSince,
+        // the gate on a still dock, all in one task so nothing is drawn: a no-op removal, a batched hide and restore, and a restore alone (its hide read before)
+        selfCheck: () => { const out = []; dock.removeAttribute('hidden'); out.push(hidSince()); dock.hidden = true; dock.hidden = false; out.push(hidSince());
+          dock.hidden = true; hidSince(); dock.hidden = false; out.push(hidSince()); log.length = 0; return out; },
+        stop: () => { add(obs.takeRecords()); obs.disconnect();
+          return [...log, `now: #dock hidden ${dock.hidden}, class ${JSON.stringify(dock.className)}, style ${JSON.stringify(dock.getAttribute('style'))}, S.focus ${shell.dataset.focus}`].join('\n'); } };
     });
-    await page.mouse.move(d1.x + d1.width - 3, d1.y + d1.height - 3); await page.mouse.down(); await page.mouse.move(d1.x + d1.width + 117, d1.y + d1.height + 77, { steps: 6 }); await page.mouse.up();
-    const d2 = await dockBox(), changes = await record.evaluate(r => r.stop());
+    assert.deepEqual(await record.evaluate(r => r.selfCheck()), [false, true, false], 'a drag is redone only on a real hide: none on a no-op removal, one on a batched hide and restore, none on a restore alone');
+    const dragBy = async (gw, gh) => { const b = await dockBox(); await page.mouse.move(b.x + b.width - 3, b.y + b.height - 3); await page.mouse.down(); await page.mouse.move(b.x + b.width + gw - 3, b.y + b.height + gh - 3, { steps: 6 }); await page.mouse.up(); return await dockBox(); };
+    let d2 = await dragBy(120, 80), drags = 1, why = '';
+    while (drags < 3 && (Math.round(d2.width - d1.width) !== 120 || Math.round(d2.height - d1.height) !== 80)) {
+      if (!(await record.evaluate(r => r.hidSince())) || await page.evaluate(() => document.querySelector('#dock').hidden)) break;
+      why = 'the dock became hidden mid-drag and came back';
+      d2 = await dragBy(120 - (d2.width - d1.width), 80 - (d2.height - d1.height)); drags++;
+    }
+    const changes = await record.evaluate(r => r.stop());
+    if (drags > 1) console.log('the corner resize was cut short (' + why + ') and completed on drag ' + drags + '; changes during the drag:\n' + changes);
     assert.deepEqual([Math.round(d2.width - d1.width), Math.round(d2.height - d1.height)], [120, 80], 'the corner resizes it; changes during the drag:\n' + changes);
     if (process.env.P9_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.P9_SCREENSHOTS, 'terminal-float.png') });
     if (!wasFloat) await page.click('#dFloat'); await page.keyboard.press('Control+Backquote');
