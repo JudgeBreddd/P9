@@ -58,14 +58,10 @@ async function openCopyScreen(t) {
   await tile.click();
   const copyBtn = page.locator(`#mdl [data-copies] [data-copy="${ID}"]`);
   await copyBtn.waitFor({ timeout: 10000 });
-  // The sprint window refreshes its own markup while it is open, and a refresh that lands between a press's check and its
-  // click leaves the press on a node that is no longer the window's. A press that opened nothing is pressed again, on the
-  // node that is in the window now, up to the refresh's own pace.
+  // One real click, then a bounded wait for the modal. A press sometimes opened nothing in earlier runs; cause not found.
   await copyBtn.click({ timeout: 10000 });
-  for (let i = 0; i < 5 && await page.locator('#mdlT').innerText().catch(() => '') !== 'Folder sprint'; i++) {
-    await page.evaluate((id) => { const b = document.querySelector(`#mdl [data-copies] [data-copy="${id}"]`); if (typeof b?.onclick === 'function') b.click(); }, ID);
-    await page.waitForTimeout(700);
-  }
+  await page.locator('#mdlT', { hasText: 'Folder sprint' }).waitFor({ timeout: 10000 })
+    .catch(async (error) => { console.log('P9_YESNO first click lost: ' + JSON.stringify(await page.evaluate(() => ({ title: document.querySelector('#mdlT')?.innerText, open: [...document.querySelectorAll('dialog[open]')].map((d) => d.id), body: document.querySelector('#mdlBody')?.innerText.slice(0, 300), copies: document.querySelector('#mdl [data-copies]')?.innerText.slice(0, 200) })))); throw error; });
   await page.waitForFunction(() => !/Loading/.test(document.querySelector('#mdlBody').innerText), null, { timeout: 15000 });
   return { solo, sprintDir, page };
 }
