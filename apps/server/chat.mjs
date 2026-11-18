@@ -1473,6 +1473,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session, body);
       const turn = session.turn = randomUUID();
+      // O176: a prompted turn ends the unprompted run; the agent's next one has a new ID (ownRun), never the old one back.
+      session.unprompted = null;
       // A worker on a work queue has no task but a ready: its next message ends that report too (its reviews stay).
       if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
@@ -1617,6 +1619,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
     activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
+    // O176: the run ready may report from. A prompted turn's own ID; with no prompt open (Claude Code works on after a
+    // compaction or a plugin's prompt, which P9 never sent) a live agent calling a tool is in a run of its own: one ID
+    // until a prompted turn starts (which clears it), so a prompted turn meanwhile, even one already ended, or a new session is not the same run.
+    ownRun: (id) => { const session = live.get(id); return session && !session.solo && !session.stopping ? session.turn ?? (session.unprompted ??= randomUUID()) : null; },
     sprint: sprintOf,
     // S13 (delegate.mjs pause_sprint / resume_sprint and the project page's buttons). pause: false when already paused.
     paused: (lead) => pausedOf(lead) !== null,
