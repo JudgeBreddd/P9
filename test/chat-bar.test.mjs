@@ -112,9 +112,11 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   await shot(page, 'menu-model');
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'Haiku');
   await page.keyboard.press('Enter');
-  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor();
-  assert.deepEqual(await menuState(page), [true, 'Model: Haiku']);
+  // O133: the pill names the model the chat runs until its config reports the pick; the pick is pending meanwhile.
+  await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended), Haiku pending"]').waitFor();
+  assert.deepEqual(await menuState(page), [true, 'Model: Default (recommended), Haiku pending']);
   await send('model'); await said('model:haiku'); await idle();
+  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 10000 });
   // Review minor (2026-11-05): an open menu follows its chat. With the Model menu open, a prompt from elsewhere (the phone,
   // with its own model pick) changes the model: the check moves to Opus while the menu stays open with its focus.
   await pillOf(pane, 'Model').click(); await menu.waitFor();
@@ -147,7 +149,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   await shot(page, 'menu-effort-streaming');
   assert.deepEqual(await menuState(page), [false, 'Medium (Default)'], 'the menu is open and focused through the streaming');
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
-  await pane.locator('[data-pill="Effort"][aria-label="Effort: High"]').waitFor();
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default), High pending"]').waitFor(); // O133: pending mid-turn
   // A mode picked mid-turn shows at once, labelled queued; it applies when the turn ends.
   await choose(page, pane, 'Mode', 'Plan');
   await pane.locator('[data-pill="Mode"][aria-label="Mode: Plan"] .mode-q').waitFor();
@@ -178,6 +180,30 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   await shot(page, 'pills-narrow');
   assert.deepEqual(errors, []);
   console.log('PASS pills: four menu pills in the bar, keyboard and roles as specified, open through streaming, queued mid-turn, one line at 280 px');
+});
+
+// O133 window half: the Model and Effort pills name what the chat runs (its last config), not the last pick. A pick the
+// agent has not taken yet is shown as pending beside it, and the pill moves only when a config reports the pick.
+test('O133: a model and effort picked mid-turn show as pending; the pills keep naming the running ones until the config reports the pick', { timeout: 120000 }, async (t) => {
+  const { instance, pane, page, send, said, idle, errors } = await setup(t, 'pending');
+  await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
+  await send('gate'); await said('gating');
+  const tall = () => pane.locator('.composer .bar').evaluate((b) => b.offsetHeight), before = await tall();
+  await choose(page, pane, 'Model', 'Opus'); await choose(page, pane, 'Effort', 'High');
+  assert.equal(await tall(), before, 'the pending picks keep the bar on its mid-turn height');
+  assert.deepEqual([await pillValue(pane, 'Model'), await pillValue(pane, 'Effort')], ['Default (recommended), Opus pending', 'Medium (Default), High pending'], 'mid-turn: the running ones, the picks pending');
+  assert.deepEqual(await pane.locator('.composer .bar .pill .pick-q').evaluateAll((l) => l.map((x) => x.textContent)), ['→ Opus', '→ High']);
+  const bar = async (name) => { const png = await pane.locator('.composer .bar').screenshot({ type: 'png' }); if (process.env.P9_EVIDENCE) fs.writeFileSync(path.join(process.env.P9_EVIDENCE, name + '.png'), png); else if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  await bar('o133-pending');
+  fs.writeFileSync(path.join(instance.workspace, 'go'), ''); await said('gated'); await idle();
+  assert.equal(await pillValue(pane, 'Model'), 'Default (recommended), Opus pending', 'the turn ended with no config for the pick: still pending');
+  await send('config'); await said('config:model=opus,effort=high');
+  await pane.locator('[data-pill="Model"][aria-label="Model: Opus"]').waitFor({ timeout: 10000 });
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: High"]').waitFor({ timeout: 10000 });
+  assert.equal(await pane.locator('.composer .bar .pill .pick-q').count(), 0, 'nothing pending once the config reports the picks');
+  await bar('o133-taken');
+  assert.deepEqual(errors, []);
+  console.log('PASS O133: picks pending mid-turn and after a turn with no config; the pills name Opus and High once the config reports them');
 });
 
 test('Codex: Plan in the Mode menu is the plan collaboration mode, on top of the sandbox mode picked before; any other mode turns it off; the separate picker is gone', { timeout: 150000 }, async (t) => {
@@ -245,7 +271,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   await pane.locator('.hist', { hasText: 'config:model=haiku,effort=high,fast=off,sandbox=on' }).waitFor({ timeout: 20000 });
   // A pick inside the chat changes only that chat.
   await choose(page, pane, 'Effort', 'Low');
-  await pane.locator('[data-pill="Effort"][aria-label="Effort: Low"]').waitFor();
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: High (Default), Low pending"]').waitFor(); // O133: pending until the agent reports it
   assert.deepEqual((await call(instance, '/start-defaults')).claude, { model: 'haiku', effort: 'high' });
   // A chat made elsewhere (the phone, a card) keeps the agent's own: only chats started here get the defaults.
   const other = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;

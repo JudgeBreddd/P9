@@ -660,7 +660,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   // Flashing: a turn updates the pane and its panel row in place; rebuilt ones restart every animation.
   await pane.evaluate((el) => { el.kept = 'yes'; }); await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => { el.kept = 'yes'; });
   await choose(page, pane, 'Model', 'Opus');
-  assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the pick at once');
+  assert.equal(await pillValue(pane, 'Model'), 'Default (recommended), Opus pending', 'O133: the pill names the running model, the pick pending');
   await ta.click(); await page.keyboard.type('model'); await page.keyboard.press('Enter');
   await pane.getByText('model:opus').waitFor({ timeout: 15000 });
   await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
