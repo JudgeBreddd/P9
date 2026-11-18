@@ -18,11 +18,12 @@ const OVERRIDE = '[Service]\nExecStart=\nExecStart=/usr/bin/node /srv/src/p9/app
 const ENV = '[Service]\nEnvironment=P9_EXAMPLE=1\n';
 
 // One machine: a unit plus two drop-ins, daemon 5.0.0 staged, and what systemctl show answers. health: what /health says
-// ({ version } or null for no answer); installFails: the stand-in installer fails as the real one does (unit removed).
-async function machine({ health = { version: '5.0.0' }, installFails = false } = {}) {
+// ({ version } or null for no answer); installFails: the stand-in installer fails as the real one does (unit removed);
+// name: the workspace folder's name. A folder 'my' always exists too, where a name like 'my --x w' would be cut.
+async function machine({ health = { version: '5.0.0' }, installFails = false, name = 'my work' } = {}) {
   const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-home-'))), bin = await mkdtemp(path.join(os.tmpdir(), 'p9-bin-'));
-  const workspace = path.join(home, 'my work'), units = path.join(home, '.config', 'systemd', 'user'), dir = path.join(home, '.local', 'share', 'p9', 'daemon', '5.0.0');
-  for (const folder of [workspace, path.join(units, 'p9-foundation.service.d'), path.join(dir, 'scripts')]) await mkdir(folder, { recursive: true });
+  const workspace = path.join(home, name), units = path.join(home, '.config', 'systemd', 'user'), dir = path.join(home, '.local', 'share', 'p9', 'daemon', '5.0.0');
+  for (const folder of [workspace, path.join(home, 'my'), path.join(units, 'p9-foundation.service.d'), path.join(dir, 'scripts')]) await mkdir(folder, { recursive: true });
   await writeFile(path.join(units, 'p9-foundation.service'), OLD_UNIT);
   await writeFile(path.join(units, 'p9-foundation.service.d', 'override.conf'), OVERRIDE);
   await writeFile(path.join(units, 'p9-foundation.service.d', 'env.conf'), ENV);
@@ -64,6 +65,17 @@ test('O135 use installed: refused without the checkout or when the unit changed 
     assert.equal(after.unit, OLD_UNIT, why + ': unit rewritten');
     assert.deepEqual(after.dropins, ['env.conf', 'override.conf'], why + ': drop-ins moved');
     assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], why + ': something ran');
+  }
+});
+
+test('O135 use installed: a workspace path systemctl show cannot print unambiguously is refused, even when the cut path is a real folder', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+  for (const name of ['my --x w', 'my --state w', 'my -x']) {
+    const m = await machine({ name });
+    assert.deepEqual(await m.use({ checkout: '/usr/bin/node x', seen: m.seen }), { error: 'workspace-unclear' }, name);
+    const after = await m.state();
+    assert.equal(after.unit, OLD_UNIT, name + ': unit rewritten');
+    assert.deepEqual(after.dropins, ['env.conf', 'override.conf'], name + ': drop-ins moved');
+    assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], name + ': something ran');
   }
 });
 

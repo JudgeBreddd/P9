@@ -259,8 +259,11 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
 // workspace and phone flags. A failure, or a daemon that never answers with this version within ms, puts the backups back,
 // reloads and restarts the old service. Logs to service-install.log. Returns { done, version, backup } or { error, restored, backup }.
 // probe and stop: how /health is asked and how running work is stopped first (the tests pass their own).
-// ponytail: systemctl show prints argv unquoted, so a workspace path containing " --" is cut short there; that path is refused
-// (not a folder) rather than guessed.
+// systemctl show prints argv unquoted, so a space inside the workspace path cannot be told apart from the next argument. The
+// workspace is read as the words after --workspace up to the first word that starts with '-'; that word and every later one
+// that starts with '-' must be one of the flags install-service writes (--state, --recovery, --remote-port, --remote-origin),
+// each at most once, and --workspace must appear once. Anything else (a path with " -" in it, or a flag this does not know) is
+// refused as workspace-unclear and nothing is touched, rather than guessed.
 export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, probe = () => health(state), stop = () => daemonRequest(state, 'POST', '/stop-all', {}) } = {}) {
   const share = path.join(os.homedir(), '.local', 'share', 'p9'), units = path.join(os.homedir(), '.config', 'systemd', 'user');
   const unit = path.join(units, 'p9-foundation.service'), dropins = unit + '.d';
@@ -270,9 +273,12 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
   const refuse = async (error) => { await say('refused, ' + error); return { error }; };
   if (typeof checkout !== 'string' || !checkout || typeof seen !== 'string' || !seen) return refuse('checkout-required');
   if (await show() !== seen) return refuse('unit-changed');
-  const argv = seen.match(/argv\[\]=(.*?) ; /)?.[1] ?? '';
-  const workspace = argv.match(/ --workspace (.+?)(?= --[a-z-]+(?: |$)|$)/)?.[1];
-  const port = argv.match(/ --remote-port (\S+)/)?.[1], origin = argv.match(/ --remote-origin (\S+)/)?.[1];
+  const argv = seen.match(/argv\[\]=(.*?) ; /)?.[1] ?? '', words = argv.split(' '), at = words.indexOf('--workspace');
+  const rest = words.slice(at + 1), cut = rest.findIndex((word) => word.startsWith('-')), flags = rest.filter((word) => word.startsWith('-'));
+  if (at < 0 || words.lastIndexOf('--workspace') !== at || new Set(flags).size !== flags.length
+    || flags.some((flag) => !['--state', '--recovery', '--remote-port', '--remote-origin'].includes(flag))) return refuse('workspace-unclear');
+  const workspace = rest.slice(0, cut < 0 ? rest.length : cut).join(' '), after = (flag) => rest[rest.indexOf(flag) + 1];
+  const port = flags.includes('--remote-port') ? after('--remote-port') : undefined, origin = flags.includes('--remote-origin') ? after('--remote-origin') : undefined;
   if (!workspace || !(await stat(workspace).catch(() => null))?.isDirectory()) return refuse('workspace-unread');
   const version = (await readFile(path.join(share, 'daemon', 'current'), 'utf8').catch(() => '')).trim();
   const dir = path.join(share, 'daemon', version);
