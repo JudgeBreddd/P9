@@ -413,9 +413,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const row = (id) => db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
   const setState = (id, state) => db.prepare('UPDATE conversations SET state = ? WHERE id = ?').run(state, id);
+  // O134: a config event written before O130 from a helper agent's settings lists only the helper's one model and no pickers
+  // (ledger 596370, 66468657: Haiku; all 18 such events in 4 chats); it is skipped, never rewritten. Every chat's own config
+  // has a picker, so a real one-model list (a profile chat, O48, or a shorter list at a later start, O130) is kept.
+  // ponytail: a chat's own one-model, no-picker config after a longer list would be skipped too; no agent reports one today.
+  const helperConfig = " AND NOT (json_array_length(data, '$.model.options') = 1 AND json_array_length(data, '$.pickers') = 0 AND EXISTS (SELECT 1 FROM events x WHERE x.conversation = events.conversation AND x.type = 'config' AND json_array_length(x.data, '$.model.options') > 1))";
+  // Read on resume (lastOf, below) and by list_chats' model (gauge), so neither shows a helper's model.
   const gauge = (id) => {
     if (!gauges.has(id)) {
-      const newest = (type, has) => { try { return JSON.parse(db.prepare('SELECT data FROM events WHERE conversation = ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1').get(id, type, has)?.data ?? 'null'); } catch { return null; } };
+      const newest = (type, has) => { try { return JSON.parse(db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ? AND instr(data, ?) > 0${type === 'config' ? helperConfig : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type, has)?.data ?? 'null'); } catch { return null; } };
       gauges.set(id, { model: newest('config', '"model"')?.model?.current ?? null, context: contextOf(newest('update', '"usage_update"')), fold: undefined });
     }
     // Row 716: spent is what the chat has used so far (its turns' tokens, its reported cost), topped up from the ledger on each read.
@@ -733,11 +739,6 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // model (the model in its settings.json outranks the transcript's), so a chat on another model came back on that one.
   // The one place for this: resume calls it, and so must any new session started for an existing chat. A value the agent
   // no longer offers, or one it refuses, is left; the config event after it says what the session is really on.
-  // O134: a config event written before O130 from a helper agent's settings lists only the helper's one model and no pickers
-  // (ledger 596370, 66468657: Haiku; all 18 such events in 4 chats); it is skipped, never rewritten. Every chat's own config
-  // has a picker, so a real one-model list (a profile chat, O48, or a shorter list at a later start, O130) is kept.
-  // ponytail: a chat's own one-model, no-picker config after a longer list would be skipped too; no agent reports one today.
-  const helperConfig = " AND NOT (json_array_length(data, '$.model.options') = 1 AND json_array_length(data, '$.pickers') = 0 AND EXISTS (SELECT 1 FROM events x WHERE x.conversation = events.conversation AND x.type = 'config' AND json_array_length(x.data, '$.model.options') > 1))";
   const lastOf = (id, type) => {
     const found = db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ?${type === 'mode' ? " AND COALESCE(json_extract(data, '$.lock'), 0) = 0" : type === 'config' ? helperConfig : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type);
     try { return found ? JSON.parse(found.data) : null; } catch { return null; }
