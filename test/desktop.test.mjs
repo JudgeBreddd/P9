@@ -214,31 +214,30 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     const d1 = await dockBox();
     assert.deepEqual([Math.round(d1.x - d0.x), Math.round(d1.y - d0.y), await page.evaluate(() => getSelection().toString())], [-100, 60, ''], 'moves with the cursor, selects nothing');
     // O111/O144: CI twice ended the corner resize mid-drag, both at exact step counts of the 6-move drag (2/6 and 3/6 of the
-    // growth). Forcing #dock hidden for one frame ends Blink's CSS resize the same way, so that mechanism is demonstrated; the
-    // natural CI trigger is unproven, and this closure is mitigation, not a proven cause fix. The record below lists every change
-    // to the dock's hidden, class and style and to the focus (setFocus mirrors S.focus on .shell data-focus) during the drag, and
-    // a drag is redone ONLY on positive evidence that it was interrupted: the record shows the dock hiding or re-classing during
-    // that drag, or the resize stopped at an exact step of the drag's own 6 moves. Any other undershoot fails the unchanged
-    // [120,80] assertion, and a completed retry prints the record, which may narrow the causes on the next CI red.
+    // growth) — consistent with interrupted motion, not with a lag (which catches up) or an edge cap (one fixed size). Forcing
+    // #dock hidden for one frame mid-drag ends Blink's CSS resize the same way, so that mechanism is demonstrated; the natural CI
+    // trigger is unproven, and this closure is mitigation, not a proven cause fix. The record below lists every change to the
+    // dock's hidden, class and style and to the focus (setFocus mirrors S.focus on .shell data-focus) during the drag, and a drag
+    // is redone ONLY on an independently observed interruption: #dock actually became hidden during that drag (a visible-to-hidden
+    // transition seen in the record, and the dock back now). Any other undershoot fails the unchanged [120,80] assertion, and a
+    // completed retry prints the record, which may narrow the causes on the next CI red.
     const record = await page.evaluateHandle(() => {
       const dock = document.querySelector('#dock'), shell = document.querySelector('.shell'), t0 = performance.now(), log = [];
-      const add = list => { for (const m of list) log.push(`${Math.round(performance.now() - t0)} ms ${m.target === dock ? '#dock' : 'S.focus'} ${m.attributeName} was ${JSON.stringify(m.oldValue)}`); }, obs = new MutationObserver(add);
+      let hid = false; // set when the dock is observed going from visible to hidden (the attribute set; its removal restores it)
+      const add = list => { for (const m of list) { log.push(`${Math.round(performance.now() - t0)} ms ${m.target === dock ? '#dock' : 'S.focus'} ${m.attributeName} was ${JSON.stringify(m.oldValue)}`);
+        if (m.target === dock && m.attributeName === 'hidden' && m.newValue !== null) hid = true; } }, obs = new MutationObserver(add);
       obs.observe(dock, { attributes: true, attributeOldValue: true, attributeFilter: ['hidden', 'class', 'style'] });
       obs.observe(shell, { attributes: true, attributeOldValue: true, attributeFilter: ['data-focus'] });
-      let told = 0;
-      return { since: () => { add(obs.takeRecords()); const out = log.slice(told); told = log.length; return out.join('\n'); },
+      return { hidSince: () => { add(obs.takeRecords()); const out = hid; hid = false; return out; },
         stop: () => { add(obs.takeRecords()); obs.disconnect();
           return [...log, `now: #dock hidden ${dock.hidden}, class ${JSON.stringify(dock.className)}, style ${JSON.stringify(dock.getAttribute('style'))}, S.focus ${shell.dataset.focus}`].join('\n'); } };
     });
     const dragBy = async (gw, gh) => { const b = await dockBox(); await page.mouse.move(b.x + b.width - 3, b.y + b.height - 3); await page.mouse.down(); await page.mouse.move(b.x + b.width + gw - 3, b.y + b.height + gh - 3, { steps: 6 }); await page.mouse.up(); return await dockBox(); };
-    let dragAsk = [120, 80], prev = d1, d2 = await dragBy(120, 80), drags = 1, why = '';
+    let d2 = await dragBy(120, 80), drags = 1, why = '';
     while (drags < 3 && (Math.round(d2.width - d1.width) !== 120 || Math.round(d2.height - d1.height) !== 80)) {
-      const news = await record.evaluate(r => r.since());
-      const hid = /#dock (hidden|class)/.test(news);
-      const step = [1, 2, 3, 4, 5].find(k => Math.abs(d2.width - prev.width - k * dragAsk[0] / 6) <= 1 && Math.abs(d2.height - prev.height - k * dragAsk[1] / 6) <= 1);
-      if (!hid && !step) break;
-      why = hid ? (step ? 'the dock hid or re-classed and the resize stopped at an exact step' : 'the dock hid or re-classed') : 'the resize stopped at an exact step';
-      dragAsk = [120 - (d2.width - d1.width), 80 - (d2.height - d1.height)]; prev = d2; d2 = await dragBy(dragAsk[0], dragAsk[1]); drags++;
+      if (!(await record.evaluate(r => r.hidSince())) || await page.evaluate(() => document.querySelector('#dock').hidden)) break;
+      why = 'the dock became hidden mid-drag and came back';
+      d2 = await dragBy(120 - (d2.width - d1.width), 80 - (d2.height - d1.height)); drags++;
     }
     const changes = await record.evaluate(r => r.stop());
     if (drags > 1) console.log('the corner resize was cut short (' + why + ') and completed on drag ' + drags + '; changes during the drag:\n' + changes);
