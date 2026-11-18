@@ -1276,6 +1276,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return usage;
     } });
   const api = {
+    socketPath, // O189: what a sprint script is given to reach its sprint's chats (sprint-hooks.mjs say); undefined without the daemon
     db, // O140: the schedules table (schedules.mjs) lives in the ledger's database
     login: loginRoutes,
     // The watcher (telemetry.mjs) reads a live chat's CPU and peak memory from its systemd scope: the unit, or null.

@@ -4,7 +4,7 @@
 // that copy runs. Each run gets the sprint's state as JSON on stdin (state() below is the contract, field by field) and
 // leaves one line in hooks.log.
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { childEnv } from './child-env.mjs';
 import { hashOf, phasesOf, planItems } from './sprint-files.mjs';
 
@@ -17,6 +17,8 @@ export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'work
 export const MAX_SCRIPTS = 12, MAX_LIBRARY = 100, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
 const TIMEOUT = { blocking: 60_000, notice: 300_000 }; // ponytail: fixed, no per-script setting; add one when a real script needs longer
 const KEEP = 64 * 1024;
+// O189: what one script run may send its sprint's chats through POST /script (say, below): calls per run, characters per text.
+const SAY_CALLS = 20, SAY_MAX = 20_000;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 // One line of text safe for the page, the log and a tool result: no control characters, no table bar, single spaces, at most LINE.
 export const clean = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029|\s]+/g, ' ').trim().slice(0, LINE);
@@ -50,7 +52,9 @@ export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : '
 
 // One run: no shell, the allow-list environment, input on stdin, the last KEEP bytes of output kept. Never throws.
 // -> { exit (the code, or null), reason (null | 'timeout' | 'not-started' | 'killed'), ms, line (the last output line) }.
-export function run(command, input, { cwd, timeout }) {
+// env: what P9 adds for this run (O189: P9_SCRIPT_SOCKET, P9_SCRIPT_TOKEN). The token is cut out of the output kept,
+// so a script that prints it does not put it in hooks.log or a refusal.
+export function run(command, input, { cwd, timeout, env }) {
   const began = Date.now();
   return new Promise((resolve) => {
     const argv = command.split(/\s+/).filter(Boolean); // ponytail: split on spaces, no quoting; a path with a space needs a wrapper script
@@ -59,12 +63,13 @@ export function run(command, input, { cwd, timeout }) {
       if (done) return; done = true; clearTimeout(timer); clearTimeout(drain);
       // The pipes are let go here: a program the script started may hold them open long after it.
       for (const pipe of [child?.stdin, child?.stdout, child?.stderr]) { try { pipe?.destroy(); } catch { /* closed */ } }
-      const last = out.toString('utf8').split(/\r?\n/).map((l) => clean(l)).filter(Boolean).at(-1) ?? '';
+      const token = env?.P9_SCRIPT_TOKEN, kept = out.toString('utf8');
+      const last = (token ? kept.replaceAll(token, '[token]') : kept).split(/\r?\n/).map((l) => clean(l)).filter(Boolean).at(-1) ?? '';
       resolve({ exit, reason, ms: Date.now() - began, line: last });
     };
     // ponytail: the child alone is ended; a program it started is not followed (SECURITY.md § Sprint scripts).
     const timer = setTimeout(() => { late = true; try { child?.kill('SIGKILL'); } catch { /* gone */ } end(null, 'timeout'); }, timeout);
-    try { child = spawn(argv[0], argv.slice(1), { cwd, env: childEnv(), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); }
+    try { child = spawn(argv[0], argv.slice(1), { cwd, env: { ...childEnv(), ...env }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); }
     catch { end(null, 'not-started'); return; }
     const keep = (chunk) => { out = Buffer.concat([out, chunk]); if (out.length > KEEP) out = out.subarray(out.length - KEEP); };
     child.stdout.on('data', keep); child.stderr.on('data', keep);
@@ -86,6 +91,34 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // as the exact row the owner approved since Start (kept in the start record as extra). A row approved at Start runs
   // until the next Start, whatever the file says. running: what fire and Run now use, and nothing else decides it.
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // O189: a running script's way to its sprint's chats (POST /script, server.mjs; SECURITY.md § Sprint scripts). One
+  // token per run, made just before the spawn and dropped when the run ends, so it works only while that run runs.
+  const callers = new Map(); // token -> { sprint, name, calls }
+  const speaking = async (sprint, name, go) => {
+    if (!chat.socketPath) return go(undefined); // no daemon socket (tests without one): nothing to call
+    const token = randomBytes(32).toString('hex');
+    callers.set(token, { sprint, name, calls: 0 });
+    try { return await go({ P9_SCRIPT_SOCKET: chat.socketPath, P9_SCRIPT_TOKEN: token }); } finally { callers.delete(token); }
+  };
+  // note: starts no turn. prompt: always a queued message, never a steer. Only to the sprint's lead, a chat under it or
+  // the lead's parent; both are P9's, with a first line naming the script, never the user's. At most SAY_CALLS per run.
+  async function say(token, body) {
+    let at = null;
+    if (typeof token === 'string' && /^[0-9a-f]{64}$/.test(token)) for (const [t, c] of callers) if (timingSafeEqual(Buffer.from(t), Buffer.from(token))) at = c;
+    if (!at) return { status: 401, error: 'login-required' };
+    if ((at.calls += 1) > SAY_CALLS) return { status: 429, error: 'too-many-calls', detail: `A script run sends at most ${SAY_CALLS} notes and prompts.` };
+    const { action, chat: to, text } = body && typeof body === 'object' ? body : {};
+    if (!['note', 'prompt'].includes(action) || !ID.test(typeof to === 'string' ? to : '') || typeof text !== 'string' || !text.trim() || text.length > SAY_MAX)
+      return { status: 400, error: 'request-refused', detail: `{ action: "note" or "prompt", chat: a chat id, text: 1 to ${SAY_MAX} characters }` };
+    if (chat.projects.closed(at.sprint)) return { status: 409, error: 'sprint-closed' };
+    const family = chat.family(), parent = family.find((c) => c.id === at.sprint)?.parent;
+    if (to !== at.sprint && to !== parent && !family.some((c) => c.id === to && c.parent === at.sprint))
+      return { status: 422, error: 'not-this-sprints', detail: 'A script reaches its own sprint\'s lead, the chats under it and the lead\'s parent.' };
+    const line = `[P9: from sprint script ${at.name}, not from the user.]\n\n` + text;
+    const r = action === 'note' ? await chat.note(to, line, 'p9') : await chat.prompt(to, { text: line, when: 'queue' }, undefined, 'p9');
+    if (r?.error || r?.status >= 400) return { status: r.status >= 400 ? r.status : 409, error: r.error ?? 'not-sent' };
+    return { status: 200, chat: to, sent: action === 'note' ? 'note' : 'queued' };
+  }
   const extras = (sprint) => { const s = chat.projects.started(sprint)?.extra; return Array.isArray(s) ? s : []; };
   // text: the hooks.json a caller has already read (and hashed), so its rows and its hash are of the same bytes;
   // left out, the file is read here.
@@ -154,7 +187,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     let base; try { base = await state(sprint, point, subject); } catch { base = { contract: 1, point, error: 'state-unavailable' }; }
     for (const s of due) {
       const blocking = s.blocking && BLOCKING.includes(point);
-      const going = run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice })
+      const going = speaking(sprint, s.name, (env) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, env }))
         .then((r) => { record(sprint, s, r); return r; });
       if (!blocking) { going.catch(() => {}); continue; }
       const r = await going;
@@ -310,7 +343,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   async function runNow(sprint, script, by, still) {
     let base; try { base = await state(sprint, script.point, { manual: true, by }); } catch { base = { contract: 1, point: script.point, error: 'state-unavailable' }; }
     const no = still?.(); if (no) return no;
-    const r = await run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking });
+    const r = await speaking(sprint, script.name, (env) => run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking, env }));
     record(sprint, { ...script, point: script.point + ' (run now)' }, r);
     return { sprint, script: script.name, point: script.point, exit: r.exit, reason: r.reason, ms: r.ms, line: r.line };
   }
@@ -395,5 +428,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       return script.error ? script : runNow(sprint, script, 'owner', still);
     },
   };
-  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where };
+  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say };
 }

@@ -587,6 +587,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const answer = await mcp.handle(conversation, message, ended.signal);
     return answer ? c.json(answer) : c.body(null, 204);
   });
+  // O189: a running sprint script's note or queued prompt to its sprint's chats (sprint-hooks.mjs say), with its run's
+  // token instead of the desktop cookie. Like /mcp: the desktop socket or pipe only, never the phone's listener.
+  app.post('/script', hardening, limit, async (c) => {
+    if (!['unix', 'pipe'].includes(transport)) return c.json({ error: 'login-required' }, 401);
+    let body = null;
+    try { body = await c.req.json(); } catch { /* say answers 400 after the token check */ }
+    return reply(c, await mcp.scriptSay(c.req.header('x-p9-script'), body));
+  });
   app.use('*', async (c, next) => {
     const status = authorize(Object.fromEntries(c.req.raw.headers), c.req.method, transport, credentials);
     if (status) return c.json({ error: status === 401 ? 'login-required' : 'request-refused' }, status);

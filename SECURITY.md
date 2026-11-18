@@ -1275,6 +1275,18 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   the answer the desktop's Sprint View page reads (`GET /sprints/<id>/status`, desktop only, no phone route): what
   a script is told, without the parts about one script run, plus the counts the page draws. Nothing in it is more
   than the project page and `list_chats` already show for that sprint, and it changes nothing.
+- **A script can reach its own sprint's chats (O189).** For each run P9 makes a new random token (32 bytes) and puts
+  it in the script's environment as `P9_SCRIPT_TOKEN`, with the desktop socket's path as `P9_SCRIPT_SOCKET`. A
+  `POST /script` on that socket (or the Windows pipe; never the phone's listener) with the token in `x-p9-script`
+  sends a note (starts no turn) or a queued prompt (never a steer) to the sprint's lead, a chat under it, or the lead's
+  parent; any other chat is refused, and so is a closed sprint. Both arrive as P9's, with a first line
+  `[P9: from sprint script <name>, not from the user.]`. A run makes at most 20 calls; the token stops working when the
+  run ends, and P9 keeps no copy of it anywhere else: not in the database, not in `hooks.log` (a script that prints
+  it is logged with `[token]` in its place), not in the status. Who can call: any process of your user that holds a
+  live token. The socket is yours alone (0600), but agents run as your user too, so the socket does not keep them
+  out: the token is the only barrier, and a process of your user can read a running script's environment (on Linux,
+  `/proc/<pid>/environ`). What that buys such a process is limited: only while an approved script runs, only that
+  sprint's lead, its chats and the lead's parent, at most 20 messages, each marked as not from you.
 - **The library.** Scripts you want in more than one sprint are kept in a library: rows of the same four fields, at
   most 100, held in P9's database (the `prefs` table, key `sprint-scripts`), not in a file, so no agent's file tools
   reach it and one library serves every project. It is the same list the Macro card will read. The Sprint scripts

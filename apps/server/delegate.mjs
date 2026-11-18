@@ -1314,5 +1314,7 @@ export function createDelegate({ chat, allowed, usage }) {
     ownerClose: (sprint) => closeSprint(sprint, null),
     // Not a tool (O164 part (3)): the Sprint View's click on a v line (Role: owner), closing the owner's own item.
     ownerDone: (sprint, item) => ownerDone(sprint, item),
+    // Not a tool (O189): a running sprint script's POST /script (server.mjs), by its run's token.
+    scriptSay: (token, body) => hooks.say(token, body),
   };
 }
