@@ -1169,6 +1169,7 @@ test('Delegate O147: ready records the sent commit, refuses one git does not kno
   }
   fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n'); // unsaved change to a tracked file
   assert.equal((await send(head)).error, 'dirty-folder', 'a commit that is HEAD keeps the dirty check');
+  assert.equal((await send('0123abcd')).error, 'dirty-folder', 'the older refusal comes first: an unknown commit from a dirty folder reads dirty-folder');
   const other = await send(work);
   assert.equal(other.ready?.commit, work, 'a commit other than HEAD is a fixed tree: unsaved work in the folder is not in it ' + JSON.stringify(other));
   await a.tool('stop_chat', { chat: made.chat });

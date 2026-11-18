@@ -698,11 +698,12 @@ export function createDelegate({ chat, allowed, usage }) {
       try { facts = await gitFacts(folder, args.commit.trim()); } catch { return { error: 'git-unavailable' }; }
       if (!stillCurrent()) return { error: 'no-active-turn' };
       if (!facts?.head) return { error: 'git-unavailable' };
+      // Unsaved changes only matter when the commit is what is checked out: then they would be work the commit leaves out.
+      // A named commit other than HEAD is a fixed tree; the folder's own unsaved work is not in it either way. The older
+      // refusal comes first, so an unknown commit sent from a dirty folder still reads dirty-folder.
+      if (facts.dirty && (!facts.commit || facts.commit === facts.head)) return { error: 'dirty-folder' };
       if (!facts.commit) return { error: 'unknown-commit', detail: 'The start folder\'s repository has no commit by that id. Send the full commit id of the pushed work.' };
       if (!Array.isArray(facts.changed)) return { error: 'git-unavailable' };
-      // Unsaved changes only matter when the commit is what is checked out: then they would be work the commit leaves out.
-      // A named commit other than HEAD is a fixed tree; the folder's own unsaved work is not in it either way.
-      if (facts.commit === facts.head && facts.dirty) return { error: 'dirty-folder' };
     } else {
       let changed;
       try { changed = (await git('git', ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', 'status', '--porcelain'], { cwd: folder, timeout: 10000, env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } })).stdout; }
