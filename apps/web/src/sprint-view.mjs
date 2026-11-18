@@ -16,8 +16,9 @@ const REVIEW = { passed: 'Passed', fix: 'Fix asked', ready: 'In review' };
 function phaseLine(s, esc) {
   const ps = s.phases ?? [], now = ps[s.phase_now];
   if (!ps.length) return '';
-  const done = ps.filter(p => p.passed >= p.total).length;
-  return `<span class="sv-phase" data-sv-phase>${now ? `${now.passed} of ${now.total} steps in ${esc(now.title)}, ` : 'Every phase passed its review: '}${done} of ${ps.length} phases</span>`;
+  // A record saved before done meant merged (FIX1) carries passed counts, not merged ones: read either, never rewrite the record.
+  const m = p => p.merged ?? p.passed ?? 0, done = ps.filter(p => m(p) >= p.total).length;
+  return `<span class="sv-phase" data-sv-phase>${now ? `${m(now)} of ${now.total} steps in ${esc(now.title)}, ` : s.done.merged === undefined ? 'Every phase passed review: ' : 'Every phase merged: '}${done} of ${ps.length} phases</span>`;
 }
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
@@ -30,7 +31,9 @@ export async function closePress(lead, confirmIt, call, out) {
   return r.status === 200 ? '' : 'Not closed: ' + (r.body?.detail || r.body?.error || r.status || 'no answer');
 }
 export function statusHtml(s, esc, opts = {}) {
-  const d = s.done, open = s.items.filter(i => i.review?.state !== 'passed'), n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const d = s.done, legacy = d.merged === undefined, dn = d.merged ?? d.passed ?? 0,
+    open = legacy ? s.items.filter(i => i.review?.state !== 'passed') : s.items.filter(i => i.review?.merged !== true),
+    n = (k, one, many) => `${k} ${k === 1 ? one : many}`, doneWord = legacy ? 'passed review' : 'merged';
   // closed: the answer is the sprint's record, as it stood at Close. opts.closing: a Close press is out; opts.said: why the last one was refused.
   const end = s.closed, when = end ? new Date(end.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const facts = [
@@ -39,15 +42,15 @@ export function statusHtml(s, esc, opts = {}) {
     ['chats', 'Chats', String(s.workers.length)],
     ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running)]]; // running already counts the additional ones
   return `<section class="sec sv" data-sv="${end ? 'closed' : 'open'}" aria-label="${end ? 'Closed sprint' : 'Sprint View'}: ${esc(s.sprint.title ?? '')}">
-    <div class="sv-top">${ring(d.passed, d.total, `${d.passed} of ${d.total} items passed review`, 'big')}
-      <div class="sv-say"><b data-sv-done>${d.total ? `${d.passed} of ${n(d.total, 'item', 'items')} passed review` : 'The plan has no items yet'}</b>
-        <span class="muted">${d.total ? (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its review passes, not when its box is ticked.` : 'Every item passed its review.') : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}</span>${phaseLine(s, esc)}</div>
+    <div class="sv-top">${ring(dn, d.total, `${dn} of ${d.total} items ${doneWord}`, 'big')}
+      <div class="sv-say"><b data-sv-done>${d.total ? `${dn} of ${n(d.total, 'item', 'items')} ${doneWord}` : 'The plan has no items yet'}</b>
+        <span class="muted">${d.total ? (legacy ? `This record was saved before done meant merged: these counts are its reviews, not merge evidence.${open.length ? ` ${n(open.length, 'item', 'items')} never passed review.` : ''}` : (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its work reaches the main line, not when its box is ticked or its review passes.` : 'Every item\'s work is in the main line.')) : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}${d.unproven ? ` ${n(d.unproven, 'item', 'items')} cannot be proven merged: P9 holds no clone or copy of this repo.` : ''}</span>${phaseLine(s, esc)}</div>
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
     ${end ? `<p class="hint" data-sv-closed>Closed ${esc(when)} by ${end.by === 'owner' ? 'you' : 'a chat\'s agent, on your yes'}. This is its record: everything here is as it stood at Close and no longer changes. Its chats are stopped; its files and worker folders are kept.</p>`
       : `<div class="sv-ctl"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}"${opts.closing ? ' disabled' : ''} title="Stops every chat of this sprint, keeps its record and turns its scripts off. Nothing is deleted. An agent does the same with close_sprint, after asking you.">${opts.closing ? 'Closing…' : 'Close sprint'}</button>${opts.said ? `<span class="hint" data-sv-said role="status">${esc(opts.said)}</span>` : ''}</div>`}
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
-      return `<li><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items passed review`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
+      return `<li><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
         <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? 'No item taken yet' : 'No items in the plan for this role'))}</span>
         <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>

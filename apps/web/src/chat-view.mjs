@@ -332,7 +332,7 @@ const shelved = id => outer.S.sessions.some(k => k.archived && 'ready-' + k.id =
 const ageOf = (at, now = Date.now()) => { const m = Math.max(0, Math.floor((now - at) / 60000)); return m < 1 ? '<1 min' : m < 60 ? m + ' min' : m < 1440 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + m % 60 + ' min' : '') : Math.floor(m / 1440) + ' d'; };
 const since = at => at ? `<time data-since="${at}">${ageOf(at)}</time>` : '';
 const ring = (status, done, total) => { const R = 10, C = +(2 * Math.PI * R).toFixed(2), f = total ? done / total : 0;
-  return `<span class="sp-ring" data-status="${status}" role="img" aria-label="${done} of ${total} items passed"><svg viewBox="0 0 28 28" aria-hidden="true"><circle class="t" cx="14" cy="14" r="${R}"/><circle class="a" cx="14" cy="14" r="${R}" stroke-dasharray="${+(C * f).toFixed(2)} ${C}"/></svg><b>${done}/${total}</b></span>`; };
+  return `<span class="sp-ring" data-status="${status}" role="img" aria-label="${done} of ${total} items merged"><svg viewBox="0 0 28 28" aria-hidden="true"><circle class="t" cx="14" cy="14" r="${R}"/><circle class="a" cx="14" cy="14" r="${R}" stroke-dasharray="${+(C * f).toFixed(2)} ${C}"/></svg><b>${done}/${total}</b></span>`; };
 // A worker's own open request, with when it came (the event's time; F3: how long it has waited).
 const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e && { k, e, kind: k.pending, at: e.at ?? null }; };
 function sprintCard(s) {

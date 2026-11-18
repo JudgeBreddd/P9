@@ -308,6 +308,33 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     return true;
   }
 
+  // O164 (done means merged): whether P9 holds a repository a merge can be proven in — the sprint's copy (never
+  // fetched; its own main line answers), else its clone, else nothing. null is why a count cannot be proven, not 0.
+  async function repoOf(sprint) {
+    if (!home || !ID.test(sprint ?? '')) return null;
+    if (await realDir(path.join(dirOf(sprint), 'copy'), 2)) return 'copy';
+    if (await realDir(path.join(dirOf(sprint), 'clone'), 2)) return 'clone';
+    return null;
+  }
+
+  // O164 (done means merged): P9's own evidence that a reviewed head reached the sprint's main line, for each commit
+  // asked about. One fetch first, best effort (as cleanNow: offline, the main line known so far); a copy is never
+  // fetched. Then landed: the commit is in the main line, or, after a squash merge, merging it in changes nothing.
+  // A commit this repository does not have, a missing clone or any other failure reads as not merged (fail closed):
+  // an unproven commit is left for the next look, never recorded as merged.
+  async function merged(sprint, commits) {
+    const out = new Map();
+    if (!home || !ID.test(sprint ?? '') || !Array.isArray(commits)) return out;
+    const repo = await repoOf(sprint);
+    if (!repo) return out;
+    const clone = path.join(dirOf(sprint), repo);
+    if (repo === 'clone') await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 15_000 }); // FIX1: a slow remote must not hold an answer for minutes; the record stands until the next look
+    const main = await mainOf(clone);
+    if (!main) return out;
+    for (const commit of commits) if (typeof commit === 'string' && HEX.test(commit)) out.set(commit, await landed(clone, main, commit));
+    return out;
+  }
+
   // The owner's consent (folder-copy.mjs): preview is read-only; apply runs in the sprint's queue, so it never races a clean.
   async function preview(sprint) {
     if (!home || !ID.test(sprint ?? '')) return { refused: 'request-refused' };
@@ -332,5 +359,5 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     }
     return { copies: out };
   }
-  return { make, where, clean, preview, apply, close, copies };
+  return { make, where, clean, preview, apply, close, copies, merged, repoOf };
 }

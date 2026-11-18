@@ -1126,9 +1126,9 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await btn(run.sprint).click();
   await view.waitFor({ timeout: 10000 });
   const st = await call(instance, `/sprints/${run.sprint}/status`);
-  assert.deepEqual([st.status, st.done, st.items.length, st.workers.map((w) => w.key)], [200, { passed: 0, ticked: 1, total: 3 }, 3, ['lead']], JSON.stringify(st).slice(0, 600));
+  assert.deepEqual([st.status, st.done, st.items.length, st.workers.map((w) => w.key)], [200, { merged: 0, ticked: 1, unproven: 0, total: 3 }, 3, ['lead']], JSON.stringify(st).slice(0, 600));
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Sprint View');
-  assert.equal(await page.locator('[data-sv-done]').textContent(), `${st.done.passed} of ${st.done.total} items passed review`);
+  assert.equal(await page.locator('[data-sv-done]').textContent(), `${st.done.merged} of ${st.done.total} items merged`);
   assert.deepEqual([await fact('ticked'), await fact('chats'), await fact('scripts')], [`${st.done.ticked} of ${st.done.total}`, String(st.workers.length), '1']);
   await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base'), script('later'), script('unseen')] }));
   assert.match(await fact('time'), /^(under a minute|\d+ min)$/);
@@ -1168,7 +1168,7 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await lead.click();
   await until(async () => await page.locator('#projPage').isHidden(), 'the lead\'s row never opened its chat');
   assert.deepEqual(errors, []);
-  console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items passed, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
+  console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items merged, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
 });
 
 // Close sprint (sprint spec S16): the Sprint View's button asks once, a script that refuses is said beside it, and a

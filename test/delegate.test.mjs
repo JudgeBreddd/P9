@@ -1348,7 +1348,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   console.log('PASS Delegate dogfood 3.5');
 });
 
-test('Work queue on the chat list: a keyed worker carries its role\'s items from the plan, done counted by P9 (0 until a pass), none for a chat with no key', { timeout: 120000 }, async (t) => {
+test('Work queue on the chat list: a keyed worker carries its role\'s items from the plan, done counted by P9 (0 until a merge — a ticked box is not done), none for a chat with no key', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: open_chat does not ask
   const a = await agent(t, instance);
@@ -1362,7 +1362,7 @@ test('Work queue on the chat list: a keyed worker carries its role\'s items from
   fs.writeFileSync(path.join(sprint, 'sprint.md'), '# Plan\n\n## Items\n- [x] d1: one. Role: daemon.\n- [ ] w1: other. Role: window.\n- [ ] d2: two; role daemon\n');
   const list = await rows(instance);
   const row = list.find((r) => r.id === made.chat);
-  assert.deepEqual(row.queue, { done: 0, total: 2, items: [{ id: 'd1', text: 'd1: one. Role: daemon.', state: 'todo', fixes: 0 }, { id: 'd2', text: 'd2: two; role daemon', state: 'todo', fixes: 0 }] });
+  assert.deepEqual(row.queue, { done: 0, total: 2, items: [{ id: 'd1', text: 'd1: one. Role: daemon.', state: 'todo', fixes: 0, merged: false }, { id: 'd2', text: 'd2: two; role daemon', state: 'todo', fixes: 0, merged: false }] }, 'the ticked d1 is not done: a box is a say-so, done is P9\'s own merge evidence');
   assert.equal(list.find((r) => r.id === loose.chat).queue, undefined);
   assert.equal(row.key, undefined, 'the list started showing keys');
   console.log('PASS Work queue on the chat list');
@@ -1396,8 +1396,24 @@ test('Work queue on the daemon: a pass moves a queue worker to its next item; it
   await a.done(w.chat);
   assert.match((await notices(instance, w.chat)).join('\n'), /\[p9\] d1 passed review/);
   assert.equal((await reviewer.tool('verdict', { chat: w.chat, commit: first.ready.commit, result: 'fix', note: 'late' })).error, 'not-ready');
+  // O164: a pass is a review, not a merge — the ring stays empty until the work reaches the main line.
+  const after = (await rows(instance)).find((c) => c.id === w.chat);
+  assert.deepEqual([after.queue.done, after.queue.total, after.queue.items.map((i) => i.state)], [0, 2, ['passed', 'todo']], 'a pass does not fill the ring');
+  // With no clone or copy of the repo, the count says why it is 0: the reviewed item cannot be proven merged.
+  let looked = await a.tool('sprint_status', { sprint: path.basename(sprint) });
+  assert.equal(looked.error, undefined, JSON.stringify(looked));
+  assert.deepEqual(looked.done, { merged: 0, ticked: 0, unproven: 1, total: 2 }, 'a sprint with no clone names what it cannot prove');
+  // The merge: the reviewed head reaches a main line (a bare remote the sprint's clone fetches), and P9's own look —
+  // one more sprint_status read — records the evidence that moves the ring and clears the unproven count.
+  const remote = path.join(instance.workspace, 'queue-remote.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+  execFileSync('git', ['-C', w.folder, 'push', '-q', remote, 'HEAD:main']);
+  execFileSync('git', ['-C', instance.workspace, 'clone', '-q', '--no-checkout', remote, path.join(sprint, 'clone')]);
+  looked = await a.tool('sprint_status', { sprint: path.basename(sprint) });
+  assert.equal(looked.error, undefined, JSON.stringify(looked));
+  assert.deepEqual(looked.done, { merged: 1, ticked: 0, unproven: 0, total: 2 }, 'the merge is proven now');
   const row = (await rows(instance)).find((c) => c.id === w.chat);
-  assert.deepEqual([row.queue.done, row.queue.total, row.queue.items.map((i) => i.state)], [1, 2, ['passed', 'todo']]);
+  assert.deepEqual([row.queue.done, row.queue.total, row.queue.items.map((i) => i.state)], [1, 2, ['passed', 'todo']], 'the merge moved the ring, the review stays recorded');
   assert.equal((await ready()).ready?.item, 'd2');
   assert.match(fs.readFileSync(path.join(sprint, 'review-trail.md'), 'utf8'), /\| d1 \| Daemon \| .+ \| passed \| 0 \|/);
   console.log('PASS Work queue on the daemon');
