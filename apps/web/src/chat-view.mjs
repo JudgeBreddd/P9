@@ -443,13 +443,14 @@ const listNote = s => { const st = s.live && outer.listState[s.agent], n = outer
   return st === 'loading' ? `Reading ${n}'s models…` : st === 'failed' ? (has ? `Could not read ${n}'s models just now. This is the last list it reported.` : `Could not read ${n}'s models. Is ${n} signed in?`) : ''; };
 // O29: the Agent pill. Each row says what a chat on that agent runs with: this chat's own, or the
 // other agent's start (its saved mode, and the Default model and effort from Settings when it still offers them).
+// O136: a profile chat's agent is claude, but its mode, model and effort are the profile's, so its Claude row shows Claude's start.
 // A chat with messages keeps its agent (its session is that agent's): the other row is shown, disabled, and says why.
 const started = s => !!(s.sent || s.session || s.queue?.length || s.events.some(e => e.t === 'user'));
 const STAYS = 'This chat has messages, so it stays on its agent. New chat (+) starts one on the other.';
 const startsOn = a => { const m = outer.defaultModel(a), e = outer.defaultEffort(a), p = outer.lastPickers[a]?.find(x => outer.pickerKind(x) === 'effort');
   return [outer.startMode(a), outer.lastModels[a]?.options.find(o => o.value === m)?.name || 'Default model', p?.options.find(o => o.value === e)?.name].filter(Boolean); };
 const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes).map(a => mi(outer.names[a], a === s.agent && !s.profile, `data-agent="${esc(a)}"`, (a !== s.agent || s.profile) && started(s) && STAYS)
-  .replace('<span class="truncate">', '<span class="truncate">' + agentDot(a)).replace(/<\/button>$/, `<span class="muted">${esc((a === s.agent ? [modeShown(s), modelName(s), effortName(s)] : startsOn(a)).join(' · '))}</span></button>`)).join('')
+  .replace('<span class="truncate">', '<span class="truncate">' + agentDot(a)).replace(/<\/button>$/, `<span class="muted">${esc((a === s.agent && !s.profile ? [modeShown(s), modelName(s), effortName(s)] : startsOn(a)).join(' · '))}</span></button>`)).join('')
   + outer.profiles.map(p => mi(p.name || 'Claude 3rd party', s.profile?.id === p.id, `data-profile="${esc(p.id)}"`, started(s) && s.profile?.id !== p.id && STAYS).replace('<span class="truncate">', '<span class="truncate">' + agentDot('profile')).replace('</span></button>', ' <small class="muted">runs on Claude</small></span><span class="muted">' + esc([outer.startMode('claude'), p.models[0], outer.defaultEffort('claude')].filter(Boolean).join(' · ')) + '</span></button>')).join('')
   + (started(s) ? `<p class="pm-note muted">${STAYS}</p>` : '');
 function pillMenuHtml(s, kind) {

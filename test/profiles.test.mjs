@@ -299,3 +299,33 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), []);
   console.log('PASS window: profile in Settings, in the New chat menu, fixed model, key not held, removed profile said');
 });
+
+// O136: on a profile chat the Agent menu shows every row's name whole, and its Claude row shows Claude's start, not the
+// profile's model. A long model name is what squeezed the names to nothing.
+test('window: O136 a profile chat\'s Agent menu names every row, and its Claude row shows Claude\'s start', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const LONG = 'deepseek-v4.1-flash-preview-0915:cloud';
+  assert.equal((await call(instance, '/profiles', 'POST', { ...PROFILE, models: [LONG], key: KEY })).status, 200);
+  const { page, errors } = await launch(t, instance, path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'p9-prof-')), 'profile'));
+  await page.click('#newBtn'); await page.locator('.pane:visible [data-pill="Agent"]').first().click();
+  await page.locator('#pillMenu [data-profile]').first().click();
+  let id; await until(async () => (id = (await call(instance, '/chat')).conversations.find((c) => c.profile)?.id), 'the chat was made on the profile');
+  const pane = page.locator('.pane[data-id="' + id + '"]');
+  await pane.locator('[data-pill="Agent"]').click(); await page.locator('#pillMenu:not([hidden]) .item').first().waitFor();
+  const rows = await page.locator('#pillMenu .item').evaluateAll((items) => items.map((item) => { const name = item.querySelector(':scope > .truncate'), detail = item.querySelector(':scope > .muted');
+    return { name: name.textContent.trim(), shown: name.clientWidth, whole: name.scrollWidth <= name.clientWidth + 1, detail: detail?.textContent ?? '' }; }));
+  const sideways = await page.locator('#pillMenu').evaluate((menu) => menu.scrollWidth > menu.clientWidth + 1);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o136-agent-menu ' + (await page.screenshot()).toString('base64'));
+  console.log('O136 rows ' + JSON.stringify(rows));
+  assert.ok(rows.length >= 2, 'the agents and the profile are listed');
+  for (const row of rows) assert.ok(row.whole && row.shown > 0, `the row name "${row.name}" is shown whole (${row.shown} px)`);
+  assert.equal(sideways, false, 'the menu has no sideways scroll');
+  const claude = rows.find((row) => row.name === 'Claude');
+  assert.ok(claude, 'a Claude row');
+  assert.ok(!claude.detail.includes(LONG), `the Claude row shows Claude's start, not the profile's model: "${claude.detail}"`);
+  assert.match(claude.detail, /Default model/, 'Claude\'s start names its Default model');
+  assert.ok(rows.find((row) => row.name.startsWith('Far Cloud')).detail.includes(LONG), 'the profile row shows its own model');
+  await page.keyboard.press('Escape');
+  assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), []);
+  console.log('PASS O136 agent menu on a profile chat');
+});
