@@ -55,7 +55,8 @@ test('Sprint O171: a lead started from the Setup page gets its instructions and 
   const leadPrompt = await settle(() => prompts(dirs).find((p) => p.some((b) => b.includes('you lead this sprint'))));
   assert.ok(leadPrompt, 'the lead\'s agent was never sent its start block');
   const joined = leadPrompt.join('');
-  assert.match(joined, /\[P9: your instructions, from your sprint's roles\/lead\.instructions\.md\.\nPrint LEAD-LINE-O171 first\.\]/);
+  // O171 framing: a Setup file at Start is framed as approved by the user, with its writer named.
+  assert.match(joined, /\[P9: your instructions, approved by the user when they started this sprint: roles\/lead\.instructions\.md, written by the user\.\nPrint LEAD-LINE-O171 first\.\]/);
   assert.ok(joined.includes(`Its folder: ${prep.body.folder}.`), 'the sprint folder is not named: ' + joined.slice(0, 400));
   assert.ok(fs.existsSync(path.join(prep.body.folder, 'sprint.md')), 'sprint.md is not in the folder the lead is told');
   assert.ok(!joined.includes('sprint rules from the chat that started you'), 'a lead with no parent got parent rules');
