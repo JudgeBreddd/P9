@@ -58,14 +58,17 @@ async function landed(dir, main, commit) {
 // A7, the contract chunk 2 calls: null when folder is not a git repository. changed is null and inMain answers null when
 // P9 cannot find a main line (unknown is open, never a guess). inMain(commit): the commit is in the main line, or, after a
 // squash merge (which makes a new commit), merging it into the main line would change nothing there.
-export async function gitFacts(folder) {
+// at (O147): the commit a worker named, read instead of HEAD; commit is null when it is not a commit id this repository
+// has (only hex is passed to git, so nothing in it reads as an option). head is always HEAD, for the caller's dirty check.
+export async function gitFacts(folder, at) {
   if (await one(folder, ['rev-parse', '--is-inside-work-tree']) !== 'true') return null;
-  const commit = await one(folder, ['rev-parse', '-q', '--verify', 'HEAD^{commit}']);
+  const head = await one(folder, ['rev-parse', '-q', '--verify', 'HEAD^{commit}']);
+  const commit = at === undefined ? head : typeof at === 'string' && HEX.test(at) ? await one(folder, ['rev-parse', '-q', '--verify', at + '^{commit}']) : null;
   const main = await mainOf(folder);
   const status = await git(folder, ['status', '--porcelain=v1', '--untracked-files=normal']);
   const changed = main && commit ? await names(folder, ['diff', '--no-ext-diff', '--name-only', main + '...' + commit]) : null;
   return {
-    commit, main, dirty: status.code !== 0 || status.out.trim() !== '', changed,
+    commit, head, main, dirty: status.code !== 0 || status.out.trim() !== '', changed,
     async inMain(asked) {
       if (!main) return null;
       if (typeof asked !== 'string' || !HEX.test(asked) || !await one(folder, ['rev-parse', '-q', '--verify', asked + '^{commit}'])) return false;

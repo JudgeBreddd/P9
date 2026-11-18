@@ -63,7 +63,7 @@ export const DELEGATE_TOOLS = (input) => {
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
       folder: { type: 'string', description: 'Where it starts, relative to the workspace. With worktree, every worker of your sprint comes from one repository: a folder of another is refused.' },
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
-    ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
+    ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string', description: 'The commit id of the work to review, as git in your start folder\'s repository knows it; it is recorded as sent (unknown-commit if that repository does not have it).' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
     ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. P9 sends the worker your note, counts its fixes, and asks the lead for a larger model at the third fix. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
     ['schedule_prompt', 'Have P9 send a prompt later, once (at) or every so many minutes (every), to this chat (your own wake-up) or to a chat send_chat reaches. '
       + 'P9 sends it like send_chat with when: queue, so a chat that is working gets it when its turn ends. It is kept across a P9 restart; a run missed while P9 was down goes once when it is back. '
@@ -693,10 +693,16 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!stillCurrent()) return { error: 'no-active-turn' };
     let facts;
     if (gitFacts) {
-      try { facts = await gitFacts(folder); } catch { return { error: 'git-unavailable' }; }
+      // O147: the commit the worker sent is the one recorded and reviewed, not whatever the start folder has checked out
+      // (a worker may build in another clone or worktree). One git cannot resolve is refused, never swapped for HEAD.
+      try { facts = await gitFacts(folder, args.commit.trim()); } catch { return { error: 'git-unavailable' }; }
       if (!stillCurrent()) return { error: 'no-active-turn' };
-      if (!facts?.commit || !Array.isArray(facts.changed)) return { error: 'git-unavailable' };
-      if (facts.dirty) return { error: 'dirty-folder' };
+      if (!facts?.head) return { error: 'git-unavailable' };
+      if (!facts.commit) return { error: 'unknown-commit', detail: 'The start folder\'s repository has no commit by that id. Send the full commit id of the pushed work.' };
+      if (!Array.isArray(facts.changed)) return { error: 'git-unavailable' };
+      // Unsaved changes only matter when the commit is what is checked out: then they would be work the commit leaves out.
+      // A named commit other than HEAD is a fixed tree; the folder's own unsaved work is not in it either way.
+      if (facts.commit === facts.head && facts.dirty) return { error: 'dirty-folder' };
     } else {
       let changed;
       try { changed = (await git('git', ['-c', 'core.hooksPath=' + os.devNull, '-c', 'core.fsmonitor=false', 'status', '--porcelain'], { cwd: folder, timeout: 10000, env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } })).stdout; }
