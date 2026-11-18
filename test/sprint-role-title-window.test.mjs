@@ -25,6 +25,10 @@ test('Sprint O172 window: chats of a sprint started with the window open keep th
   await call(instance, '/file-protection', 'POST', { on: false });
   const ws = instance.workspace, repo = path.join(ws, 'repo');
   fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  // One plain chat first: its session reads claude's model list, which a sprint role's model is checked against (as #304's test).
+  const plain = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'hi' });
+  await settle(async () => (await events(instance, plain)).some((e) => e.type === 'turn-end'), 'the plain chat\'s turn');
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
   const prep = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'test 1' })).body;
   const file = (name) => path.join(prep.folder, name);
