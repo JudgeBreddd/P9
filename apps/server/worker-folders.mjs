@@ -328,7 +328,7 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     const repo = await repoOf(sprint);
     if (!repo) return out;
     const clone = path.join(dirOf(sprint), repo);
-    if (repo === 'clone') await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 });
+    if (repo === 'clone') await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 15_000 }); // FIX1: a slow remote must not hold an answer for minutes; the record stands until the next look
     const main = await mainOf(clone);
     if (!main) return out;
     for (const commit of commits) if (typeof commit === 'string' && HEX.test(commit)) out.set(commit, await landed(clone, main, commit));

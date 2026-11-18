@@ -504,8 +504,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // plan's tick stays a say-so. The git read runs in the sprint's own clone, never the owner's repository. Nothing it
   // cannot prove is recorded, so the next look asks again. Returns the repository the proof runs in ('copy' | 'clone',
   // null when P9 holds none — the status then says the count cannot be proven). The fetch runs for a sprint at most
-  // once every 30 s (FETCH_MS): Sprint View re-reads every 5 s while its page shows, and a slow fetch must not hold
-  // up the answer — the evidence already recorded answers meanwhile, and the next look after the window fetches again.
+  // once every 30 s (FETCH_MS): Sprint View re-reads every 5 s while its page shows. The first look in a window can be
+  // held up by its fetch — capped at 15 s (worker-folders merged), and offline it fails closed: the evidence already
+  // recorded answers meanwhile, and the next look after the window fetches again.
   const fetchedAt = new Map();
   const FETCH_MS = 30_000;
   async function mergedNow(lead) {
