@@ -1134,6 +1134,48 @@ test('Delegate ready emits one parent report after the worker turn ends', { time
   assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'note' && e.data.text?.includes('Ready report pinned for B4.')).length, 1, 'a peer answer must not send a second ready note');
 });
 
+// O147 (1): ready records the commit the worker sent, not the start folder's HEAD; git must know it; the dirty check
+// guards only a commit that is HEAD; the changed files are main...commit.
+test('Delegate O147: ready records the sent commit, refuses one git does not know, keeps the dirty check for HEAD, and lists main...commit', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Commit', work: { kind: 'new', parent: '', name: 'commit' } })).body.project.id;
+  const a = await agent(t, instance, { project });
+  const made = await a.tool('open_chat', { text: 'first', item: 'C1', done_means: 'reported', checks: ['check'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  const { execFileSync } = await import('node:child_process');
+  const g = (...args) => execFileSync('git', ['-C', made.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n!.gitignore\n!w.txt\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', made.folder]);
+  g('add', '.'); g('commit', '-qm', 'base');
+  const head = g('rev-parse', 'HEAD');
+  g('checkout', '-qb', 'work'); fs.writeFileSync(path.join(made.folder, 'w.txt'), 'w\n'); g('add', 'w.txt'); g('commit', '-qm', 'work');
+  const work = g('rev-parse', 'HEAD');
+  g('checkout', '-q', 'main'); // the start folder has main checked out; the work is on another branch (a worker's other clone, pushed)
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working');
+  const send = (commit) => kid.tool('ready', { commit, results: [{ check: 'check', result: 'passed' }], weakest: 'w' });
+  const sent = await send(work);
+  assert.ok(sent.ready, JSON.stringify(sent));
+  assert.equal(sent.ready.commit, work, 'the commit the worker sent is recorded, not the start folder\'s HEAD ' + head);
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).ready.commit, work);
+  assert.deepEqual(sent.ready.files, ['w.txt'], 'the changed files are main...commit');
+  for (const commit of ['0123abcd', '--upload-pack=x', 'main']) {
+    const got = await send(commit);
+    assert.equal(got.error, 'unknown-commit', commit + ': ' + JSON.stringify(got));
+  }
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n'); // unsaved change to a tracked file
+  assert.equal((await send(head)).error, 'dirty-folder', 'a commit that is HEAD keeps the dirty check');
+  assert.equal((await send('0123abcd')).error, 'dirty-folder', 'the older refusal comes first: an unknown commit from a dirty folder reads dirty-folder');
+  const other = await send(work);
+  assert.equal(other.ready?.commit, work, 'a commit other than HEAD is a fixed tree: unsaved work in the folder is not in it ' + JSON.stringify(other));
+  await a.tool('stop_chat', { chat: made.chat });
+  await a.done(made.chat);
+});
+
 // Dogfood 3.5, second attempt: each refusal a lead or worker met says what to do.
 test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready says not-ready, then passes from a sibling; a steer into a turn without steering names queue; too-many-chats names close: true', { timeout: 180000 }, async (t) => {
   const instance = await start(t);

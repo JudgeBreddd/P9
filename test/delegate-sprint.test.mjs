@@ -55,7 +55,8 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
     note: async (...args) => notes.push(args), pin: (_, data) => cards.push(data), turnEnded: (fn) => { endTurn ??= fn; }, settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
   const hasGitFacts = existsSync(fileURLToPath(new URL('../apps/server/worker-folders.mjs', import.meta.url)));
-  const valid = { commit: 'claimed-commit', results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
+  // O147: ready records the commit sent, so it must be one the folder's git has (head); without worker-folders.mjs it is a claim.
+  const valid = { commit: hasGitFacts ? head : 'claimed-commit', results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
   assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
   assert.equal((await createDelegate({ chat: { ...chat, info: () => ({ parent, state: 'running' }) } }).ready(valid, worker)).error, 'no-active-turn');
   assert.equal((await createDelegate({ chat: { ...chat, startFolder: async () => null } }).ready(valid, worker)).error, 'folder-unavailable');
