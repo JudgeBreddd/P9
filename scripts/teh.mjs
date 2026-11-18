@@ -260,7 +260,9 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
 // drop-in with an ExecStart line is moved aside), split with systemd's quoting, because systemctl show prints argv unquoted and a space in a path
 // cannot be told from the next argument there. After the program the words must be flag/value pairs of the flags
 // install-service writes (--workspace, --state, --recovery, --remote-port with --remote-origin), each once, and the workspace
-// must appear in seen; anything else ($ or % in the workspace, a line continuation, an unknown flag, a lone phone flag) is
+// must appear in seen, and systemd's own FragmentPath and DropInPaths (systemctl show) must name only the unit file and drop-ins read
+// here (an override in a runtime, vendor or system dir, or either property missing, is refused: its quoted workspace could
+// start with a local one); anything else ($ or % in the workspace, a line continuation, an unknown flag, a lone phone flag) is
 // refused as workspace-unclear, never guessed. The unit is copied to p9-foundation.service.bak-<time> and each drop-in that
 // sets ExecStart is renamed <name>.bak-<time> (Environment-only drop-ins stay); the staged daemon's install-service.mjs writes
 // the launcher unit with the old workspace and phone flags. A failure at any step from the backup copy on (backup-failed,
@@ -277,8 +279,9 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
   if (typeof checkout !== 'string' || !checkout || typeof seen !== 'string' || !seen) return refuse('checkout-required');
   if (await show() !== seen) return refuse('unit-changed');
   let lines = [], unclear = false;
-  const execDropins = [];
+  const execDropins = [], read = [];
   for (const [file, name] of [[unit], ...(await readdir(dropins).catch(() => [])).filter((n) => n.endsWith('.conf')).sort().map((n) => [path.join(dropins, n), n])]) {
+    read.push(file);
     const all = (await readFile(file, 'utf8').catch(() => '')).split('\n'), continued = all.some((line) => /\\\s*$/.test(line));
     let section = null;
     for (const line of all) {
@@ -291,6 +294,10 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
       if (name && !execDropins.includes(name)) execDropins.push(name);
     }
   }
+  const where = await new Promise((resolve) => execFile('systemctl', ['--user', 'show', 'p9-foundation.service', '-p', 'FragmentPath', '-p', 'DropInPaths'], { timeout: 30_000 },
+    (error, stdout) => resolve(error ? '' : stdout)));
+  const listed = where.match(/^DropInPaths=(.*)$/m)?.[1];
+  if (where.match(/^FragmentPath=(.*)$/m)?.[1] !== unit || listed === undefined || listed.split(' ').some((file) => file && !read.includes(file))) unclear = true;
   const words = lines.length === 1 ? systemdWords(lines[0].replace(/^[-@:+!]+/, '')) : null;
   const first = words?.findIndex((word) => word.startsWith('--')) ?? -1, pairs = first < 0 ? [] : words.slice(first), flags = {};
   for (let i = 0; i + 1 < pairs.length; i += 2) flags[pairs[i]] = pairs[i] in flags ? null : pairs[i + 1];

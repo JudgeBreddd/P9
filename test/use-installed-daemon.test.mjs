@@ -23,8 +23,10 @@ const ENV = '[Service]\nEnvironment=P9_EXAMPLE=1\n';
 // name: the workspace folder's name. A folder 'my' always exists too, where a name like 'my --x w' would be cut. quoted: the
 // drop-in quotes the workspace as install-service does; phone: the drop-in carries the phone flags; second: a second drop-in
 // that sets ExecStart (zz.conf). base(workspace): the unit's own text instead of OLD_UNIT; spaced: the drop-in writes
-// 'ExecStart =' with indentation and spaces round '=' and carries phone flags 9443 and https://b.example.
-async function machine({ health = { version: '5.0.0' }, installFails = false, name = 'my work', quoted = true, phone = true, second = false, base, spaced = false } = {}) {
+// 'ExecStart =' with indentation and spaces round '=' and carries phone flags 9443 and https://b.example. local: false writes no
+// override.conf (only env.conf); paths(unit, dropins): what systemctl show says for FragmentPath and DropInPaths instead of the
+// files written here.
+async function machine({ health = { version: '5.0.0' }, installFails = false, name = 'my work', quoted = true, phone = true, second = false, base, spaced = false, local = true, paths } = {}) {
   const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-home-'))), bin = await mkdtemp(path.join(os.tmpdir(), 'p9-bin-'));
   const workspace = path.join(home, name), units = path.join(home, '.config', 'systemd', 'user'), dir = path.join(home, '.local', 'share', 'p9', 'daemon', '5.0.0');
   for (const folder of [workspace, path.join(home, 'my'), path.join(units, 'p9-foundation.service.d'), path.join(dir, 'scripts')]) await mkdir(folder, { recursive: true });
@@ -32,7 +34,7 @@ async function machine({ health = { version: '5.0.0' }, installFails = false, na
   await writeFile(path.join(units, 'p9-foundation.service'), unitText);
   const flags = ' --state %t/p9-foundation --recovery /r' + (!phone ? '' : spaced ? ' --remote-port 9443 --remote-origin https://b.example' : ' --remote-port 8443 --remote-origin https://phone.example');
   const override = `[Service]\n${spaced ? 'ExecStart =\n  ExecStart = ' : 'ExecStart=\nExecStart='}/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${quoted ? quote(workspace) : workspace}${flags}\n`;
-  await writeFile(path.join(units, 'p9-foundation.service.d', 'override.conf'), override);
+  if (local) await writeFile(path.join(units, 'p9-foundation.service.d', 'override.conf'), override);
   if (second) await writeFile(path.join(units, 'p9-foundation.service.d', 'zz.conf'), override);
   await writeFile(path.join(units, 'p9-foundation.service.d', 'env.conf'), ENV);
   await writeFile(path.join(dir, '..', 'current'), '5.0.0\n');
@@ -45,8 +47,11 @@ if (${installFails}) { rmSync(unit); process.exit(1); }
 writeFileSync(unit, '[Service]\\nExecStart=/launcher/p9-launch.sh node main.mjs\\n');\n`);
   const seen = `{ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${workspace}${flags.replace('%t', '/run/user/1000')} ; ignore_errors=no ; pid=0 }\n`;
   await writeFile(path.join(bin, 'shows'), seen);
+  const dropins = ['env.conf', ...(local ? ['override.conf'] : []), ...(second ? ['zz.conf'] : [])], unitFile = path.join(units, 'p9-foundation.service');
+  const written = dropins.map((n) => path.join(units, 'p9-foundation.service.d', n));
+  await writeFile(path.join(bin, 'paths'), paths ? paths(unitFile, written) : `FragmentPath=${unitFile}\nDropInPaths=${written.join(' ')}\n`);
   await writeFile(path.join(bin, 'health'), JSON.stringify(health));
-  await writeFile(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${bin}/calls"\n[ "$2" = show ] && cat "${bin}/shows"\nexit 0\n`, { mode: 0o755 });
+  await writeFile(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${bin}/calls"\n[ "$2" = show ] && [ "$5" = ExecStart ] && cat "${bin}/shows"\n[ "$2" = show ] && [ "$5" = FragmentPath ] && cat "${bin}/paths"\nexit 0\n`, { mode: 0o755 });
   const use = async (options) => {
     const { stdout } = await run(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(teh)});
 const { readFile, rename, writeFile } = await import('node:fs/promises');
@@ -63,7 +68,7 @@ console.log(JSON.stringify(result));`, JSON.stringify(options)], { env: { ...pro
   const state = async () => ({ unit: await read(path.join(units, 'p9-foundation.service')), dropins: (await readdir(path.join(units, 'p9-foundation.service.d'))).sort(),
     backups: (await readdir(units)).filter((name) => name.includes('.bak-')), installed: JSON.parse(await read(path.join(bin, 'installed')) ?? 'null'),
     stopped: !!await stat(path.join(bin, 'stopped')).catch(() => null), calls: (await read(path.join(bin, 'calls')) ?? '').trim().split('\n').filter((c) => c && !c.includes(' show ')) });
-  return { use, state, seen, workspace, units, unitText, dropins: second ? ['env.conf', 'override.conf', 'zz.conf'] : ['env.conf', 'override.conf'] };
+  return { use, state, seen, workspace, units, unitText, dropins };
 }
 
 test('O135 use installed: refused without the checkout or when the unit changed since the dialog, and nothing is touched', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
@@ -88,6 +93,21 @@ test('O135 use installed: an unquoted workspace that is not one clean word, or a
     assert.equal(after.unit, m.unitText, name + ': unit rewritten');
     assert.deepEqual(after.dropins, ['env.conf', 'override.conf'], name + ': drop-ins moved');
     assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], name + ': something ran');
+  }
+});
+
+test('O135 use installed: an override systemd applies from outside the files read, a unit file other than the one read, or no paths from systemctl is refused, and nothing is touched', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+  const runtime = '/run/user/1000/systemd/user/p9-foundation.service.d/50-x.conf';
+  const prefix = (workspace) => `[Service]\nExecStart=/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${quote(path.join(path.dirname(workspace), 'my'))} --state %t/p9-foundation --recovery /r\n`;
+  for (const [why, setup] of [['local /my, the active override /my w', { name: 'my w', phone: false, local: false, base: prefix, paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${[...d, runtime].join(' ')}\n` }], ['a runtime drop-in', { paths: (unit, d) => `FragmentPath=${unit}\nDropInPaths=${[...d, runtime].join(' ')}\n` }],
+    ['a vendor unit file', { paths: (unit, d) => `FragmentPath=/usr/lib/systemd/user/p9-foundation.service\nDropInPaths=${d.join(' ')}\n` }],
+    ['no DropInPaths', { paths: (unit) => `FragmentPath=${unit}\n` }], ['no answer', { paths: () => '' }]]) {
+    const m = await machine(setup);
+    assert.deepEqual(await m.use({ checkout: '/usr/bin/node x', seen: m.seen }), { error: 'workspace-unclear' }, why);
+    const after = await m.state();
+    assert.equal(after.unit, m.unitText, why + ': unit rewritten');
+    assert.deepEqual(after.dropins, m.dropins, why + ': drop-ins moved');
+    assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], why + ': something ran');
   }
 });
 
