@@ -123,6 +123,9 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   // E2: one chat's events (or a few chats') without reading the rest. An index, not a schema change: an older build
   // opens the file unchanged and SQLite keeps the index up to date for it, so it stays outside MIGRATIONS.
   db.exec('CREATE INDEX IF NOT EXISTS events_conversation ON events (conversation, cursor)');
+  // O191: the usage read joins a chat's provider profile (prefs profile:<chat>, O48). The same table chat.mjs makes, outside
+  // MIGRATIONS as it is there, so a ledger opened without chat.mjs can prepare the read.
+  db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   const statements = {
     append: db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)'),
     after: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE cursor > ? ORDER BY cursor LIMIT ?'),
@@ -131,7 +134,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     // E5: only rows after the last fold, and only updates that can be usage (or are malformed: those count as discarded).
     // Agent chunks, images included, are skipped in SQL instead of parsed. JSON.stringify never escapes 'usage_update'.
     // O35: a deleted chat's 'deleted' event carries what it had spent, so the totals keep it once its own rows are gone.
-    usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
+    usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, p.value AS profile, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
+      + " LEFT JOIN prefs p ON p.key = 'profile:' || e.conversation"
       + " WHERE e.cursor > ? AND (e.type IN ('turn-end', 'deleted') OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
     spent: db.prepare("SELECT cursor, conversation, type, NULL AS provider, data, at FROM events WHERE conversation = ? AND cursor > ?"
       + " AND (type = 'turn-end' OR type = 'update' AND (instr(data, 'usage_update') > 0 OR NOT json_valid(data))) ORDER BY cursor"),
@@ -152,7 +156,17 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     finish: db.prepare("UPDATE operations SET state = 'done', status = ?, body = ? WHERE id = ?"),
   };
   const fresh = () => ({ cursor: 0, totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }, contexts: new Map(), costs: new Map(),
-    latest: 0, discarded: 0, samples: 0, claudeLive: null });
+    latest: 0, discarded: 0, samples: 0, claudeLive: null, profiles: new Map() });
+  // O191: a chat on a provider profile is stored as provider claude but spends neither the Claude plan nor its bill. Its
+  // tokens, turns and the cost its adapter estimates at Claude prices go to the profile's own row, never into totals.
+  // The profile comes from the usage read's join, or, once the chat is deleted, from its 'deleted' event (remove below).
+  const bucket = (into, row, data) => {
+    let p = null;
+    try { p = row.type === 'deleted' ? data?.usage?.profile : row.profile && JSON.parse(row.profile); } catch {}
+    if (!p || typeof p.id !== 'string') return into;
+    if (!into.profiles.has(p.id)) into.profiles.set(p.id, { id: p.id, name: String(p.name), totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }, costs: new Map(), samples: 0 });
+    return into.profiles.get(p.id);
+  };
   let fold = fresh();
   const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
   // What the adapters send (ACP, checked against claude-agent-acp 0.88.0 and 0.104.1): token counts per turn in the prompt
@@ -163,13 +177,14 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     into.cursor = row.cursor;
     let data;
     try { data = JSON.parse(row.data); } catch { into.discarded += 1; return; }
+    const to = bucket(into, row, data);
     if (row.type === 'deleted') {
       // O35: spent stays spent. The chat's own fold, taken as it was deleted; its context meter goes with it.
       const spent = data?.usage;
       if (!spent || !SPENT.every((key) => Number.isFinite(spent[key]) && spent[key] >= 0)) return;
-      into.totals.inputTokens += spent.inputTokens; into.totals.outputTokens += spent.outputTokens; into.totals.cachedTokens += spent.cachedTokens;
-      into.samples += spent.samples; into.discarded += spent.discarded;
-      if (spent.costUsd) into.costs.set(row.conversation, spent.costUsd);
+      to.totals.inputTokens += spent.inputTokens; to.totals.outputTokens += spent.outputTokens; to.totals.cachedTokens += spent.cachedTokens;
+      to.samples += spent.samples; into.discarded += spent.discarded;
+      if (spent.costUsd) to.costs.set(row.conversation, spent.costUsd);
       into.latest = Math.max(into.latest, spent.latest);
       return;
     }
@@ -177,8 +192,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       const usage = data?.usage;
       if (usage === undefined) return;
       if (!usage || !['inputTokens', 'outputTokens', 'cachedReadTokens'].every((key) => count(usage[key]))) { into.discarded += 1; return; }
-      into.totals.inputTokens += usage.inputTokens ?? 0; into.totals.outputTokens += usage.outputTokens ?? 0;
-      into.totals.cachedTokens += usage.cachedReadTokens ?? 0; into.samples += 1;
+      to.totals.inputTokens += usage.inputTokens ?? 0; to.totals.outputTokens += usage.outputTokens ?? 0;
+      to.totals.cachedTokens += usage.cachedReadTokens ?? 0; to.samples += 1;
     } else {
       if (data?.sessionUpdate !== 'usage_update') return;
       // claude-agent-acp (0.88.0 to 0.106.0, on ACP 1 and 2 alike) attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
@@ -189,7 +204,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         || data.cost.currency === 'USD' && Number.isFinite(data.cost.amount) && data.cost.amount >= 0;
       if (!context || !cost) { into.discarded += 1; return; }
       into.contexts.set(row.conversation, { conversation: row.conversation, provider: row.provider ?? 'unknown', used: data.used, size: data.size });
-      if (data.cost) into.costs.set(row.conversation, data.cost.amount);
+      if (data.cost) to.costs.set(row.conversation, data.cost.amount);
     }
     into.latest = Math.max(into.latest, row.at);
   };
@@ -248,11 +263,12 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     usage() {
       for (const row of statements.usage.all(fold.cursor)) add(fold, row);
       const { totals, contexts, costs, latest, samples, discarded, claudeLive } = fold;
-      let costUsd = 0;
-      for (const amount of costs.values()) costUsd += amount;
-      const any = samples || contexts.size;
+      const sum = (map) => { let n = 0; for (const amount of map.values()) n += amount; return n; };
+      const costUsd = sum(costs), any = samples || contexts.size;
+      // O191: profiles, one row each: what its chats used, and costUsd, the adapter's estimate at Claude prices (never billed by Claude).
+      const profiles = [...fold.profiles.values()].map((p) => ({ id: p.id, name: p.name, ...p.totals, costUsd: sum(p.costs), turns: p.samples }));
       return { state: any ? (Date.now() - latest > 15 * 60 * 1000 ? 'stale' : 'recorded') : 'unavailable',
-        updatedAt: latest || null, samples, discarded, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive };
+        updatedAt: latest || null, samples, discarded, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive, profiles };
     },
     // Row 716: one chat's own spend (list_chats, sprint_status). into is the fold the caller keeps (chat.mjs gauge), so each
     // call reads only that chat's usage rows after it. usage is null until the chat reports a turn's tokens or a cost.
@@ -274,6 +290,9 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       let costUsd = 0;
       for (const amount of own.costs.values()) costUsd += amount;
       const hashes = statements.photos.all(id).map((row) => row.hash).filter((hash) => typeof hash === 'string');
+      // O191: the 'deleted' event carries the chat's profile, so its spend stays on the profile's row (chat.mjs drops its prefs next).
+      let profile = null;
+      try { const p = JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('profile:' + id)?.value ?? 'null'); if (typeof p?.id === 'string') profile = { id: p.id, name: String(p.name) }; } catch {}
       let unused;
       db.exec('BEGIN');
       try {
@@ -285,7 +304,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
       fold = fresh();
-      return { usage: { ...totals, costUsd, samples, discarded, latest }, unused };
+      return { usage: { ...totals, costUsd, samples, discarded, latest, ...(profile && { profile }) }, unused };
     },
     operation: (id) => statements.operation.get(id),
     recent: (login, since) => statements.recent.get(login, since).n,
