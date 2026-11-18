@@ -1,7 +1,7 @@
 // PD-2 (second half): the update's pnpm and the phone's Rebuild + reload start with childEnv() plus child-env.mjs's
 // TOOL_NAMES, not the daemon's whole environment. A token the daemon holds (npm_config__authToken) or a GIT_DIR from a
-// git hook stays behind; the owner's proxy (HTTPS_PROXY) still reaches pnpm. The agents fetch (setup-routes.mjs) uses the
-// same call but runs only in a daemon bundle (agents.json beside it), so it is checked from the source (chat.test.mjs PD-1 (b)).
+// git hook stays behind; the owner's proxy (HTTPS_PROXY) still reaches pnpm. The agents fetch (setup-routes.mjs) runs only in
+// a daemon bundle (agents.json beside it; slim-bundle.test.mjs drives it), so here its list is read from the source.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { createUpdate } from '../apps/server/update.mjs';
+import * as childEnvModule from '../apps/server/child-env.mjs';
 
 const skip = process.platform === 'win32' ? 'the update and the rebuild are Linux only' : false;
 const PLANTED = { npm_config__authToken: 'planted-token', GIT_DIR: '/nonexistent/planted-git-dir', HTTPS_PROXY: 'http://127.0.0.1:9' };
@@ -77,4 +78,22 @@ test('the phone\'s Rebuild + reload gets childEnv() plus the tool names: no npm 
   assert.equal(built.status, 500, 'the stand-in fails on purpose');
   check(await seen(out), 'rebuild');
   console.log('PASS tool child env: the rebuild got no npm_config__authToken and no GIT_DIR; HTTPS_PROXY reached it');
+});
+
+// CI on the first head: the fetch was given TOOL_NAMES alone, so scripts/agents.mjs lost P9_AGENTS_FROM, went for the real
+// download, and slim-bundle.test.mjs hung on its FIFO. Whatever list the fetch's start names must keep every P9_* name the
+// script reads, and still drop the planted token and GIT_DIR.
+test('the agents fetch keeps the P9_* names scripts/agents.mjs reads, and drops the npm token and GIT_DIR', async () => {
+  const route = await readFile(new URL('../apps/server/setup-routes.mjs', import.meta.url), 'utf8');
+  const start = route.slice(route.indexOf("'/setup/agents-fetch'"));
+  const list = /execFile\(process\.execPath, \[script[^\n]*env: childEnv\(process\.env, process\.platform, (\w+)\)/.exec(start)?.[1];
+  assert.ok(list && Array.isArray(childEnvModule[list]), 'the fetch starts with childEnv() and a list child-env.mjs exports: ' + list);
+  const script = await readFile(new URL('../scripts/agents.mjs', import.meta.url), 'utf8');
+  const reads = [...new Set([...script.matchAll(/process\.env\.(P9_\w+)/g)].map(([, name]) => name))];
+  assert.ok(reads.includes('P9_AGENTS_FROM'), 'agents.mjs reads P9_AGENTS_FROM');
+  const source = { HOME: '/h', PATH: '/usr/bin', ...PLANTED, ...Object.fromEntries(reads.map((name) => [name, '/from'])) };
+  const env = childEnvModule.childEnv(source, 'linux', childEnvModule[list]);
+  for (const name of reads) assert.equal(env[name], '/from', 'the fetch keeps ' + name);
+  check(env, 'agents fetch');
+  console.log('PASS tool child env: the agents fetch keeps ' + reads.join(', ') + ' and HTTPS_PROXY, drops the npm token and GIT_DIR');
 });
