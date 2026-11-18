@@ -3,7 +3,7 @@
 export const loginPage = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
   + '<meta name="viewport" content="width=device-width, initial-scale=1"><title>P9 login</title>'
   + '<style>body{font:16px system-ui;margin:0 auto;max-width:28rem;padding:1rem;background:#0b0d12;color:#e8eaf0}'
-  + 'button,input{font:inherit;width:100%;padding:.75rem;margin:.25rem 0;border-radius:.5rem;border:1px solid #39404f;background:#161a22;color:inherit}'
+  + 'button,input{box-sizing:border-box;font:inherit;width:100%;padding:.75rem;margin:.25rem 0;border-radius:.5rem;border:1px solid #39404f;background:#161a22;color:inherit}'
   + 'button{background:#2f5bd3;border:0}#code{font-size:2rem;letter-spacing:.3rem;text-align:center}</style></head><body>'
   + '<h1>P9</h1><button id="login">Log in with passkey</button>'
   + '<h2>New device</h2><input id="name" placeholder="Device name" maxlength="40" autocomplete="off">'
