@@ -10,6 +10,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { formSpec } from '../apps/server/chat.mjs';
+import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
+import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 import { zElicitationSchema } from '../node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/zod.gen.js';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -1138,6 +1140,39 @@ test('O134 FIX1: a chat\'s own one-model config after a longer list is kept on r
   await until(second, (e) => e.type === 'turn-end' && e.conversation === id && e.cursor > first.cursor, 0);
   assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > first.cursor, 0)).hit.data.content.text, 'config:model=opus,effort=low,fast=off,sandbox=on', 'the chat\'s own one-model config was skipped');
   console.log('PASS O134 FIX1: the chat\'s own one-model config with low effort was kept; the resume is on opus, low');
+});
+
+// O134 gauge: list_chats reads a chat's model from its newest config event (chat.mjs gauge) and skips a helper's the way
+// a resume does: one model listed, no pickers, in a chat that lists more. A chat's own one-model config has its pickers and
+// is still the model shown. Planted while the daemon runs, before anything has read either chat's gauge.
+test('O134 gauge: list_chats skips a stored helper config and still shows a chat\'s own one-model config', async (t) => {
+  const instance = await start(t);
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const lead = await create(instance);
+  assert.equal((await call(instance, `/chat/${lead}/prompt`, 'POST', { text: 'mcp' })).status, 202);
+  const [entry] = JSON.parse((await until(instance, said(lead, 'mcp:'))).hit.data.content.text.slice(4));
+  const client = new Client({ name: 'p9-test', version: '1' });
+  await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => client.close());
+  const tool = async (name, args = {}) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  const helped = (await tool('open_chat', { text: 'hello', title: 'Helped' })).chat;
+  const own = (await tool('open_chat', { text: 'hello', title: 'Own' })).chat;
+  for (const id of [helped, own]) await until(instance, (e) => e.type === 'turn-end' && e.conversation === id);
+  const events = (await json(call(instance, '/chat/events?after=0'))).body.events;
+  const reported = events.filter((e) => e.conversation === helped && e.type === 'config').at(-1)?.data;
+  assert.ok(reported?.model?.options?.length > 1 && reported.model.current !== 'haiku', 'the worker\'s own config: ' + JSON.stringify(reported));
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  const plant = (id, data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'config', JSON.stringify(data), Date.now());
+  plant(helped, { model: { current: 'haiku', options: [{ value: 'haiku', name: 'Haiku' }] }, pickers: [] });
+  const effort = { id: 'effort', name: 'Effort', current: 'low', category: 'thought_level', options: ['low', 'high'].map((value) => ({ value, name: value })) };
+  plant(own, { model: { current: 'sonnet', options: [{ value: 'sonnet', name: 'Sonnet' }] }, pickers: [effort] });
+  db.close();
+  const listed = (await tool('list_chats')).chats;
+  const model = (id) => listed.find((c) => c.id === id)?.model;
+  assert.equal(model(helped), reported.model.current, 'list_chats showed a helper\'s model');
+  assert.equal(model(own), 'sonnet', 'list_chats skipped the chat\'s own one-model config');
+  console.log(`PASS O134 gauge: a planted helper Haiku config was skipped (${model(helped)}); the chat's own one-model config shows (sonnet)`);
 });
 
 // O39: the adapter is started with the chat's own model named, so a resume never leaves that model: P9 sets no model on it.
