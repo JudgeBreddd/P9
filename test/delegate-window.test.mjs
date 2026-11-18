@@ -191,7 +191,18 @@ test('Delegate window: workers indented under their chat and folded past three; 
   assert.match((await kid.tool('send_chat', { chat: parent, text: 'The branch is pushed and the tests pass.', when: 'note' })).sent ?? '', /^as a note/);
   await row(parent).click();
   const who = page.locator(`.pane[data-id="${parent}"] .msg.user .who`).last();
-  await until(async () => (await who.innerText()).startsWith('Note from Kid 1 · information only'), 'the note under its sender\'s name');
+  // O58 (j): a CI run timed out here with no cause named (run 44197851093, linux (6), n=1; the rerun passed). The record
+  // below keeps what a timeout saw, so the next one names it: the parent pane's .who texts say whether the note rendered
+  // as 'Note from another chat' (the sender's title lookup missed, chat-view.mjs:284) or never reached the pane at all
+  // (the daemon's ledger holding the note while the pane does not says the window's event poll dropped it).
+  try {
+    await until(async () => (await who.innerText()).startsWith('Note from Kid 1 · information only'), 'the note under its sender\'s name');
+  } catch (e) {
+    const whos = await page.locator(`.pane[data-id="${parent}"] .msg.user .who`).allInnerTexts();
+    const ledger = (await events(instance, parent)).filter((v) => ['note', 'user'].includes(v.type)).slice(-4);
+    assert.fail(e.message + ' — record: window .who texts ' + JSON.stringify(whos.slice(-4)) +
+      ' · daemon note/user events ' + JSON.stringify(ledger));
+  }
   await who.scrollIntoViewIfNeeded();
   await shot(page, 'note-from-worker');
   assert.deepEqual(errors, [], 'page errors: ' + errors.join(' | '));
