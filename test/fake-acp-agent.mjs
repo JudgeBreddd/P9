@@ -452,10 +452,18 @@ const connection = acp.connectAgent(stream, {
     }
     // plan decline: Claude's plan approval in its real shape (ledger, adapter 0.106.0), then the failure it gave after "No, keep
     // planning" in phone-1 (2026-11-15). It fails whatever the answer, so a test can show only the decline is turned into a cancel.
+    // The turn's teardown races the decline message's steering (whichever stdio read comes first), as the real adapter's prompt
+    // failing right after the approval's cancel does. Two gate files force each interleaving, so a test can run both on purpose:
     if (text === 'plan decline') {
+      // The teardown wins: the turn is gone before the approval is even answered, so the decline message's steering —
+      // which can only be sent after that answer — reads no turn and answers promptRequired (the 409 shape).
+      if (existsSync('plan-decline-ends-first')) turns.delete(sessionId);
       await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'plan-1', kind: 'switch_mode', title: 'Approve Plan', status: 'pending' },
         options: [{ optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' }, { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_always' },
           { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' }] });
+      // The steering wins: hold the turn open until the decline message is delivered into it, then fail the prompt as before.
+      if (existsSync('plan-decline-waits-for-steer'))
+        while (((inbox.get(sessionId)?.length) ?? 0) === 0) await new Promise((resolve) => setTimeout(resolve, 5));
       throw acp.RequestError.internalError(undefined, '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use');
     }
     // plan approve: Claude's plan approval as adapter 0.106.0 sends it (ledger, phone-2, 2026-11-13): an empty "Approve Plan"

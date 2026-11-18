@@ -101,17 +101,41 @@ test('declining the plan ends the turn as cancelled, not as an error', async (t)
 
 // O183: a plan can also be declined by message (a message sent while the approval is open cancels it, chat.mjs
 // decline()); it must end the same way as the reject option, not as the raw plan diagnostic.
+// O185: which receipt the decline message gets is the agent's timing, not a promise: the fake ends its turn the moment
+// the approval is resolved (as the real adapter's plan diagnostic does), so the steering is either taken into the
+// still-running turn (202 steered) or arrives past that turn's end and is answered 409 turn-running (seen twice on
+// CI). Both receipts are correct only if the approval was declined, the turn ended cancelled, and the message is not
+// lost. The fake's gate files force each interleaving, so both run on purpose; the first pass takes the natural race.
 test('declining the plan by message ends the turn as cancelled, not as an error', async (t) => {
   const instance = await start(t);
-  const id = await create(instance);
-  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'plan decline' });
-  const { hit: approval, cursor } = await until(instance, (event) => event.conversation === id && event.type === 'approval');
-  assert.equal(approval.data.toolCall.kind, 'switch_mode');
-  const steered = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'not this plan' }));
-  assert.deepEqual([steered.status, steered.body.steered], [202, true], steered.text); // the message declines the open approval
-  const end = await until(instance, (event) => event.conversation === id && (event.type === 'turn-end' || event.type === 'error'), cursor);
-  assert.ok(end.seen.some((event) => event.type === 'answered' && event.data.answer?.outcome?.outcome === 'cancelled')); // declined, not answered
-  assert.deepEqual([end.hit.type, end.hit.data.stopReason], ['turn-end', 'cancelled'], JSON.stringify(end.hit));
+  for (const gate of [null, 'plan-decline-waits-for-steer', 'plan-decline-ends-first']) {
+    if (gate) await writeFile(path.join(instance.workspace, gate), '');
+    const id = await create(instance);
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'plan decline' });
+    const { hit: approval, cursor } = await until(instance, (event) => event.conversation === id && event.type === 'approval');
+    assert.equal(approval.data.toolCall.kind, 'switch_mode');
+    const sent = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'not this plan' }));
+    if (gate) assert.equal(sent.status, gate === 'plan-decline-waits-for-steer' ? 202 : 409, gate + ': ' + sent.text); // the gate forces its interleaving
+    const end = await until(instance, (event) => event.conversation === id && (event.type === 'turn-end' || event.type === 'error'), cursor);
+    assert.ok(end.seen.some((event) => event.type === 'answered' && event.data.answer?.outcome?.outcome === 'cancelled'), 'declined, not answered: ' + JSON.stringify(end.seen.filter((event) => event.type === 'answered')));
+    assert.deepEqual([end.hit.type, end.hit.data.stopReason], ['turn-end', 'cancelled'], JSON.stringify(end.hit));
+    if (sent.status === 202) {
+      // Steered into the still-running turn, and the agent got it inside that turn.
+      assert.deepEqual([sent.status, sent.body.steered], [202, true], sent.text);
+      assert.ok(end.seen.some(said(id, 'got:not this plan')), 'the decline message was delivered into the turn: ' + JSON.stringify(end.seen));
+    } else {
+      // The turn had just ended (the decline's cancel ends it): 409 turn-running, the window's queue answer. The
+      // message is not lost: sent again as the next prompt it reaches the agent, which replies to it.
+      assert.deepEqual([sent.status, sent.body.error], [409, 'turn-running'], sent.text);
+      const again = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'not this plan' }));
+      assert.equal(again.status, 202, again.text);
+      const done = await until(instance, (event) => event.conversation === id && event.type === 'turn-end'
+        && event.data.stopReason === 'end_turn', end.cursor);
+      assert.ok(done.seen.some(said(id, 'echo:not this plan')), 'the decline message reached the agent as the next prompt: '
+        + JSON.stringify(done.seen.filter((event) => event.conversation === id)));
+    }
+    if (gate) await unlink(path.join(instance.workspace, gate));
+  }
 });
 
 test('approvals and questions are answered only with options and fields the agent offered', async (t) => {
