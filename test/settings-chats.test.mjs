@@ -559,7 +559,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   // Replied: nothing stays on the stack for the chat or the item.
   assert.equal(await page.locator('#cards .card:not([data-key="welcome"])').count(), 0, 'a new item made a staying card');
   await shot('cards-new-item.png');
-  assert.match(await center(), /1 item needs you\n_tyler\/ · /, 'the new item is a bell row');
+  assert.match(await center(), /1 item needs you\n_tyler\/\n/, 'the new item is a bell row, its sub the folder alone (no project line in the file, so no " · " and no slug)');
   // Another turn redraws everything; the item is not new again, so no second notice.
   await turn(id, 'again');
   assert.equal(await notice.count(), 1, 'one notice per new item, not one per redraw');
@@ -567,6 +567,8 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   // Skip from its bell row: it waits in the bell with the old one.
   await page.click('#rBell');
   await page.locator('#mdlBody .mlist [data-i]', { hasText: '1 item needs you' }).click();
+  // O181: the review modal's title carries the project only when the file says one; this one does not, so no trailing ' · '.
+  assert.match(await page.locator('#mdlT').innerText(), /^\d+ of \d+$/, 'the empty-project review modal title has no dangling separator');
   await page.locator('#mdlFoot [data-skip]').click();
   if (await page.locator('#mdl[open]').count()) await page.keyboard.press('Escape');
   // No sample notices in the bell on a live daemon (they were sample data); they toasted 2.5 s and 5.5 s after load.
