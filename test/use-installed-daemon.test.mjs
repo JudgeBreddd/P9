@@ -22,14 +22,16 @@ const ENV = '[Service]\nEnvironment=P9_EXAMPLE=1\n';
 // ({ version } or null for no answer); installFails: the stand-in installer fails as the real one does (unit removed);
 // name: the workspace folder's name. A folder 'my' always exists too, where a name like 'my --x w' would be cut. quoted: the
 // drop-in quotes the workspace as install-service does; phone: the drop-in carries the phone flags; second: a second drop-in
-// that sets ExecStart (zz.conf).
-async function machine({ health = { version: '5.0.0' }, installFails = false, name = 'my work', quoted = true, phone = true, second = false } = {}) {
+// that sets ExecStart (zz.conf). base(workspace): the unit's own text instead of OLD_UNIT; spaced: the drop-in writes
+// 'ExecStart =' with indentation and spaces round '=' and carries phone flags 9443 and https://b.example.
+async function machine({ health = { version: '5.0.0' }, installFails = false, name = 'my work', quoted = true, phone = true, second = false, base, spaced = false } = {}) {
   const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-home-'))), bin = await mkdtemp(path.join(os.tmpdir(), 'p9-bin-'));
   const workspace = path.join(home, name), units = path.join(home, '.config', 'systemd', 'user'), dir = path.join(home, '.local', 'share', 'p9', 'daemon', '5.0.0');
   for (const folder of [workspace, path.join(home, 'my'), path.join(units, 'p9-foundation.service.d'), path.join(dir, 'scripts')]) await mkdir(folder, { recursive: true });
-  await writeFile(path.join(units, 'p9-foundation.service'), OLD_UNIT);
-  const flags = ' --state %t/p9-foundation --recovery /r' + (phone ? ' --remote-port 8443 --remote-origin https://phone.example' : '');
-  const override = `[Service]\nExecStart=\nExecStart=/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${quoted ? quote(workspace) : workspace}${flags}\n`;
+  const unitText = base ? base(workspace) : OLD_UNIT;
+  await writeFile(path.join(units, 'p9-foundation.service'), unitText);
+  const flags = ' --state %t/p9-foundation --recovery /r' + (!phone ? '' : spaced ? ' --remote-port 9443 --remote-origin https://b.example' : ' --remote-port 8443 --remote-origin https://phone.example');
+  const override = `[Service]\n${spaced ? 'ExecStart =\n  ExecStart = ' : 'ExecStart=\nExecStart='}/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${quoted ? quote(workspace) : workspace}${flags}\n`;
   await writeFile(path.join(units, 'p9-foundation.service.d', 'override.conf'), override);
   if (second) await writeFile(path.join(units, 'p9-foundation.service.d', 'zz.conf'), override);
   await writeFile(path.join(units, 'p9-foundation.service.d', 'env.conf'), ENV);
@@ -61,7 +63,7 @@ console.log(JSON.stringify(result));`, JSON.stringify(options)], { env: { ...pro
   const state = async () => ({ unit: await read(path.join(units, 'p9-foundation.service')), dropins: (await readdir(path.join(units, 'p9-foundation.service.d'))).sort(),
     backups: (await readdir(units)).filter((name) => name.includes('.bak-')), installed: JSON.parse(await read(path.join(bin, 'installed')) ?? 'null'),
     stopped: !!await stat(path.join(bin, 'stopped')).catch(() => null), calls: (await read(path.join(bin, 'calls')) ?? '').trim().split('\n').filter((c) => c && !c.includes(' show ')) });
-  return { use, state, seen, workspace, units, dropins: second ? ['env.conf', 'override.conf', 'zz.conf'] : ['env.conf', 'override.conf'] };
+  return { use, state, seen, workspace, units, unitText, dropins: second ? ['env.conf', 'override.conf', 'zz.conf'] : ['env.conf', 'override.conf'] };
 }
 
 test('O135 use installed: refused without the checkout or when the unit changed since the dialog, and nothing is touched', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
@@ -70,18 +72,20 @@ test('O135 use installed: refused without the checkout or when the unit changed 
     const m = await machine();
     assert.deepEqual(await m.use(options(m.seen)), { error }, why);
     const after = await m.state();
-    assert.equal(after.unit, OLD_UNIT, why + ': unit rewritten');
+    assert.equal(after.unit, m.unitText, why + ': unit rewritten');
     assert.deepEqual(after.dropins, ['env.conf', 'override.conf'], why + ': drop-ins moved');
     assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], why + ': something ran');
   }
 });
 
-test('O135 use installed: an unquoted workspace in the unit that is not one clean word is refused, even when the cut path is a real folder', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
-  for (const [name, setup] of [['my --x w', {}], ['my --state w', {}], ['my --remote-port 9443', { phone: false }], ['my $HOME', {}]]) {
+test('O135 use installed: an unquoted workspace that is not one clean word, or an ExecStart outside Service, in another case or continued, is refused, even when the cut path is a real folder', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+  for (const [name, setup] of [['my --x w', {}], ['my --state w', {}], ['my --remote-port 9443', { phone: false }], ['my $HOME', {}],
+    ['ExecStart in [Unit]', { quoted: true, base: () => '[Unit]\nExecStart=/usr/bin/node x\n' + OLD_UNIT }], ['lower-case execstart', { quoted: true, base: () => OLD_UNIT + 'execstart=/usr/bin/node x\n' }],
+    ['a continued ExecStart', { quoted: true, base: () => '[Service]\nExecStart=/usr/bin/node \\\n  /srv/src/p9/apps/server/main.mjs\n' }]]) {
     const m = await machine({ name, quoted: false, ...setup });
     assert.deepEqual(await m.use({ checkout: '/usr/bin/node x', seen: m.seen }), { error: 'workspace-unclear' }, name);
     const after = await m.state();
-    assert.equal(after.unit, OLD_UNIT, name + ': unit rewritten');
+    assert.equal(after.unit, m.unitText, name + ': unit rewritten');
     assert.deepEqual(after.dropins, ['env.conf', 'override.conf'], name + ': drop-ins moved');
     assert.deepEqual([after.backups, after.installed, after.stopped, after.calls], [[], null, false, []], name + ': something ran');
   }
@@ -93,12 +97,23 @@ test('O135 use installed: the unit is backed up, the ExecStart drop-in moved asi
   assert.equal(result.done, true, JSON.stringify(result));
   assert.equal(result.version, '5.0.0');
   const after = await m.state();
-  assert.equal(await readFile(result.backup, 'utf8'), OLD_UNIT, 'the backup is the old unit');
+  assert.equal(await readFile(result.backup, 'utf8'), m.unitText, 'the backup is the old unit');
   assert.match(after.unit, /p9-launch\.sh/, 'the unit runs the launcher');
   assert.equal(after.dropins.length, 2);
   assert.ok(after.dropins.includes('env.conf') && after.dropins.some((name) => name.startsWith('override.conf.bak-')), 'drop-ins: ' + after.dropins);
   assert.deepEqual(after.installed, [m.workspace, '--remote-port', '8443', '--remote-origin', 'https://phone.example'], 'install-service got the old workspace and phone flags');
   assert.ok(after.stopped, 'running work was not stopped first');
+});
+
+test('O135 use installed: a drop-in written ExecStart = (spaced, indented) wins over the base unit: its phone flags are carried and it is moved aside', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+  const base = (workspace) => `[Service]\nExecStart=/usr/bin/node /srv/src/p9/apps/server/main.mjs --workspace ${quote(workspace)} --state %t/p9-foundation --recovery /r --remote-port 7443 --remote-origin https://a.example\n`;
+  const m = await machine({ base, spaced: true });
+  const result = await m.use({ checkout: '/usr/bin/node /srv/src/p9/apps/server/main.mjs', seen: m.seen });
+  assert.equal(result.done, true, JSON.stringify(result));
+  const after = await m.state();
+  assert.deepEqual(after.installed, [m.workspace, '--remote-port', '9443', '--remote-origin', 'https://b.example'], 'the base unit\'s stale phone flags were carried');
+  assert.ok(after.dropins.includes('env.conf') && after.dropins.some((name) => name.startsWith('override.conf.bak-')), 'the spaced override was not moved: ' + after.dropins);
+  assert.equal(await readFile(result.backup, 'utf8'), m.unitText, 'the backup is the old unit');
 });
 
 test('O135 use installed: a failed drop-in move, a failed install or a daemon that never answers with the new version puts the old service back', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
@@ -109,9 +124,9 @@ test('O135 use installed: a failed drop-in move, a failed install or a daemon th
     assert.deepEqual([result.error, result.restored], [error, true], why + ': ' + JSON.stringify(result));
     if (failMove) assert.deepEqual([result.reason, (await m.state()).installed], ['planted move failure', null], why + ': not the original error, or install ran');
     const after = await m.state();
-    assert.equal(after.unit, OLD_UNIT, why + ': the old unit is not back');
+    assert.equal(after.unit, m.unitText, why + ': the old unit is not back');
     assert.deepEqual(after.dropins, m.dropins, why + ': the drop-ins are not back');
     assert.deepEqual(after.calls, ['--user daemon-reload', '--user enable p9-foundation.service', '--user restart p9-foundation.service'], why + ': the old service was not reloaded and restarted');
-    assert.equal(await readFile(result.backup, 'utf8'), OLD_UNIT, why + ': the backup is kept');
+    assert.equal(await readFile(result.backup, 'utf8'), m.unitText, why + ': the backup is kept');
   }
 });

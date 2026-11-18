@@ -255,7 +255,9 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
 // moved onto the launcher, with the user's OK (the caller's dialog; this has no caller of its own yet). seen is the ExecStart
 // line (systemctl show) the user was shown; a unit changed since then, or no checkout, is refused and nothing is touched.
 // The workspace and phone flags are read from the unit file's own ExecStart (the unit, then its drop-ins in name order; an
-// empty ExecStart= resets), split with systemd's quoting, because systemctl show prints argv unquoted and a space in a path
+// empty ExecStart= resets; only [Service] lines, written ExecStart, with any indentation and spaces round '='; an
+// ExecStart-looking line in another section, in another case, or in a file with a line continuation is refused, and every
+// drop-in with an ExecStart line is moved aside), split with systemd's quoting, because systemctl show prints argv unquoted and a space in a path
 // cannot be told from the next argument there. After the program the words must be flag/value pairs of the flags
 // install-service writes (--workspace, --state, --recovery, --remote-port with --remote-origin), each once, and the workspace
 // must appear in seen; anything else ($ or % in the workspace, a line continuation, an unknown flag, a lone phone flag) is
@@ -274,11 +276,18 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
   const refuse = async (error) => { await say('refused, ' + error); return { error }; };
   if (typeof checkout !== 'string' || !checkout || typeof seen !== 'string' || !seen) return refuse('checkout-required');
   if (await show() !== seen) return refuse('unit-changed');
-  let lines = [];
+  let lines = [], unclear = false;
   const execDropins = [];
   for (const [file, name] of [[unit], ...(await readdir(dropins).catch(() => [])).filter((n) => n.endsWith('.conf')).sort().map((n) => [path.join(dropins, n), n])]) {
-    for (const [, value] of (await readFile(file, 'utf8').catch(() => '')).matchAll(/^ExecStart=(.*)$/gm)) {
-      lines = value.trim() ? [...lines, value.trim()] : [];
+    const all = (await readFile(file, 'utf8').catch(() => '')).split('\n'), continued = all.some((line) => /\\\s*$/.test(line));
+    let section = null;
+    for (const line of all) {
+      const header = line.match(/^\s*\[([^\]]*)\]\s*$/);
+      if (header) { section = header[1]; continue; }
+      if (!/^\s*execstart\s*=/i.test(line)) continue;
+      const value = line.match(/^\s*ExecStart\s*=\s*(.*?)\s*$/)?.[1];
+      if (value === undefined || section !== 'Service' || continued) { unclear = true; continue; }
+      lines = value ? [...lines, value] : [];
       if (name && !execDropins.includes(name)) execDropins.push(name);
     }
   }
@@ -286,7 +295,7 @@ export async function useInstalledDaemon({ checkout, seen, state, ms = 90_000, p
   const first = words?.findIndex((word) => word.startsWith('--')) ?? -1, pairs = first < 0 ? [] : words.slice(first), flags = {};
   for (let i = 0; i + 1 < pairs.length; i += 2) flags[pairs[i]] = pairs[i] in flags ? null : pairs[i + 1];
   const workspace = flags['--workspace'], port = flags['--remote-port'], origin = flags['--remote-origin'];
-  if (!words || pairs.length % 2 || Object.values(flags).includes(null) || typeof workspace !== 'string' || /[$%]/.test(workspace)
+  if (unclear || !words || pairs.length % 2 || Object.values(flags).includes(null) || typeof workspace !== 'string' || /[$%]/.test(workspace)
     || Object.keys(flags).some((flag) => !['--workspace', '--state', '--recovery', '--remote-port', '--remote-origin'].includes(flag))
     || (port === undefined) !== (origin === undefined) || !seen.includes(' --workspace ' + workspace + ' ')) return refuse('workspace-unclear');
   if (!(await stat(workspace).catch(() => null))?.isDirectory()) return refuse('workspace-unread');
