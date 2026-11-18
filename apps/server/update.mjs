@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendPiece, checkStaged, validPiece } from './pieces.mjs';
 import { unitOf } from './windows.mjs';
+import { childEnv, INSTALL_NAMES, TOOL_NAMES } from './child-env.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, HASH = /^[0-9a-f]{64}$/, COMMIT = /^[0-9a-f]{40}$/;
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
@@ -74,8 +75,9 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
   const staged = (id) => path.join(folder, id + '.tar.gz');
 
   async function log(text) { if (job) { job.log = (job.log + text).slice(-LOG_TAIL); await writeFile(path.join(folder, job.id + '.log'), job.log, { mode: 0o600 }).catch(() => {}); } }
-  function run(command, args, cwd, timeout = BUILD_MS) {
-    return new Promise((resolve) => execFile(command, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PATH: toolPath(), CI: '1' } },
+  // names: child-env.mjs's TOOL_NAMES, or INSTALL_NAMES for the pnpm install alone.
+  function run(command, args, cwd, timeout = BUILD_MS, names = TOOL_NAMES) {
+    return new Promise((resolve) => execFile(command, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...childEnv(process.env, process.platform, names), PATH: toolPath(), CI: '1' } },
       async (error, stdout, stderr) => { await log('$ ' + [command, ...args].join(' ') + '\n' + stdout + stderr); resolve({ ok: !error, stdout }); }));
   }
 
@@ -99,7 +101,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       if (unpacked?.version !== job.version) return fail('version-mismatch', { found: unpacked?.version ?? null });
       // install.sh's steps: --ignore-scripts skips Electron's download, which only a desktop install has.
       const electron = existsSync(path.join(root, 'node_modules', 'electron', 'dist'));
-      if (!(await run('pnpm', ['install', '--frozen-lockfile', ...(electron ? [] : ['--ignore-scripts'])], next)).ok) return fail('build-failed');
+      if (!(await run('pnpm', ['install', '--frozen-lockfile', ...(electron ? [] : ['--ignore-scripts'])], next, BUILD_MS, INSTALL_NAMES)).ok) return fail('build-failed');
       if (!(await run('pnpm', ['build'], next)).ok) return fail('build-failed');
       // The new version's own dependency check (scripts/deps.mjs, from 0.1.6), in a child so its code never loads here.
       // It never runs sudo; what it cannot place comes back as { id, why, command } for the laptop to show. The window's
