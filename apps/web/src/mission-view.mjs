@@ -492,8 +492,9 @@ function missionLive() {
 }
 // Waiting on you and Notifications as lists; at is the attribute each row's button carries (a section's widgets use their own, W-I).
 // O181: the project (a waiting file's "**Project:** <name>" line) shows only when the file says one; with none, the age
-// stands alone — never the file's own name, which used to show as a slug.
-const reviewList = at => outer.S.reviews.length ? `<ul class="plist">${outer.S.reviews.map((r, i) => `<li><button ${at}="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted">${r.proj ? ' · ' : ''}${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>';
+// stands alone — never the file's own name, which used to show as a slug. proj is always a string ('' when the file says
+// no project), so `proj && ' · '` renders the separator only with one.
+const reviewList = at => outer.S.reviews.length ? `<ul class="plist">${outer.S.reviews.map((r, i) => `<li><button ${at}="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted">${r.proj && ' · '}${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>';
 const noteList = (notes, at) => notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button ${at}="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`;
 // A section's widgets (W-I): P9's own panels inside the section, on the page and in its window. sectionBody draws each empty and
 // calls this; missionLive calls it again, so a new notification or waiting item shows where the section is. back: what a row returns to.
