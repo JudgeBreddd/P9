@@ -112,8 +112,17 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.equal((await until(() => readFile(opened, 'utf8').catch(() => ''), 'the open')).trim(), 'https://claude.com/cai/oauth/authorize?fake=1');
   assert.ok(!(await page.content()).includes('oauth'), 'the page never holds the URL');
   // "done" ends the fake CLI without a credentials file: the cause, and Retry in place of Sign in.
+  // O187: whether the window's one immediate refresh after the code send beats that exit is timing, not a promise
+  // (CI saw the refresh win twice, and the Retry state then waits for the next 10 s poll, BL5 — a 10 s wait from the
+  // click can expire on that boundary). The fake's login-exit-slow gate forces the slow side on purpose, and the
+  // waits follow the real state: first the daemon's own login record (the CLI really ended), then one poll period
+  // for the window to catch up — not a longer timeout from the click.
+  await writeFile(path.join(instance.workspace, 'login-exit-slow'), '');
   await page.fill('#welCode', 'done'); await page.click('[data-act="code:claude"]');
-  await page.locator('[data-act="start:claude"]', { hasText: 'Retry' }).waitFor({ timeout: 10000 });
+  for (let i = 0; i < 60; i++) { const s = await call(instance, '/setup/login'); if (s.claude && !s.claude.running && s.claude.exit !== null) break; await new Promise((r) => setTimeout(r, 500)); }
+  const ended = await call(instance, '/setup/login');
+  assert.ok(ended.claude && !ended.claude.running && ended.claude.exit !== null, 'the daemon recorded the sign-in end: ' + JSON.stringify(ended));
+  await page.locator('[data-act="start:claude"]', { hasText: 'Retry' }).waitFor({ timeout: 12000 }); // one 10 s poll (BL5) plus slack
   assert.match(await body(), /Claude sign-in ended without signing in/);
   await shot('wizard-2-ended.png');
   // The credentials file appears: shown within a refresh, never read.
