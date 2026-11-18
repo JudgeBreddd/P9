@@ -56,8 +56,10 @@ const SPRINT = '[P9: sprint rules';
 const FROM = '[P9: from another chat';
 const NOTE = '[P9: a note from another chat'; // a note's sender line; a note that waited is one block, line and text // the sender label, to from.log the same way
 const sprintRules = (prompt) => { for (const block of prompt) if (block.type === 'text') { if (block.text.startsWith(SPRINT)) appendFileSync('rules.log', JSON.stringify(block.text) + '\n'); if (block.text.startsWith(FROM)) appendFileSync('from.log', JSON.stringify(block.text) + '\n'); } };
+// O171: a start block with no rules block before it (a lead started from the Setup page gets it with P9's message).
+const START = ['[P9: your instructions', '[P9: you lead this sprint', '[P9: your notes file'];
 const LINES = ['[P9: from the user, in this chat.]\n\n', '[P9: a line from P9 itself, not from the user.]\n\n']; // a sender line as its own block (O109)
-const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
+const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || START.some((s) => block.text.startsWith(s)) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.
 const png = (w, h) => {
   const chunk = (type, data) => { const head = Buffer.alloc(4), tail = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
