@@ -429,6 +429,15 @@ const connection = acp.connectAgent(stream, {
     }
     // A coordinator's background tasks (2026-10-24): each report wakes the agent with no prompt, so after this turn ends
     // it works on with no end and no closing usage_update, and asks once on its tenth step ("background quiet" never asks).
+    // O188 FIX1: "bg-tool" ends its turn, then on its own starts one tool call a second later and completes it 1.5 s after.
+    if (text === 'bg-tool') {
+      setTimeout(async () => {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'late-1', title: 'Late tool', kind: 'execute', status: 'in_progress' } });
+        setTimeout(() => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'late-1', status: 'completed' } }), 1500);
+      }, 1000);
+      await say('bg-tool reply');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'background' || text === 'background quiet') {
       background.add(sessionId);
       setTimeout(async () => {

@@ -1201,6 +1201,8 @@ export function createDelegate({ chat, allowed, usage }) {
   // FIX3 (CI, sprint-pause): whether the parent was running at the end is read at the end, like waited. A parent that was
   // stopped then (after a restart, say) and started within END_HOLD_MS gets no end line steered into its new turn.
   chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), live = Boolean(at && ['running', 'turn'].includes(chat.info(at)?.state)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
+    // O188 FIX1 (Reviewer): the activity count is read at the end, not after the hold, so a tool the worker starts inside the hold still cancels the wake.
+    const acts = chat.acts(id);
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
     if (first !== null && NOTHING_FOR.test(first) && !chat.sprint(id).ready) return void chat.setSprint(id, { endNote: { at: Date.now(), text: first } });
@@ -1218,7 +1220,6 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!ok) return void wake(parent, id, '[p9] ' + child.title + ' failed; read_chat shows why.');
     // O188: the end itself is a note (starts no turn); the parent is prompted only if the worker is still stopped WAKE_AFTER_MS later.
     chat.note(parent.id, '[p9] ' + child.title + ' ended its turn: ' + last, 'p9').catch(() => {});
-    const acts = chat.acts(id);
     setTimeout(() => {
       const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
       if (endGen.get(id) !== gen || !child || child.state === 'turn' || child.compacting || chat.acts(id) !== acts || chat.sprint(id).ready || chat.activeTaskTurn(id)) return;

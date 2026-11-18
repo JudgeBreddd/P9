@@ -279,6 +279,25 @@ test('O188: a worker\'s end is a note to its running parent; still stopped after
   console.log('PASS O188: end note with no parent turn; one wake after ' + WAKE + ' ms; a new turn and its stop woke nobody; a failed turn prompted at once');
 });
 
+// O188 FIX1 (Reviewer): a tool call the worker starts on its own inside the end hold (no new turn), and completes before
+// the wake, is activity since its end: the end is still one note, and the parent is never prompted.
+test('O188 FIX1: a worker that starts a tool inside the end hold and finishes it before the wake prompts nobody', { timeout: 120000 }, async (t) => {
+  const WAKE = 6000, instance = await start(t, { P9_WAKE_AFTER_MS: String(WAKE) });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const turns = async () => (await events(instance, a.conversation)).filter((e) => e.type === 'turn-end').length;
+  const had = await turns();
+  const made = await a.tool('open_chat', { text: 'bg-tool', title: 'Kid' });
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9');
+  const tools = (await events(instance, made.chat)).filter((e) => e.type === 'update' && e.data?.toolCallId === 'late-1').map((e) => e.data.status);
+  assert.ok(tools.includes('in_progress'), 'the tool started inside the hold: ' + JSON.stringify(tools));
+  await pause(WAKE + 4000);
+  assert.ok((await events(instance, made.chat)).some((e) => e.type === 'update' && e.data?.toolCallId === 'late-1' && e.data.status === 'completed'), 'the tool completed before the wake');
+  assert.deepEqual(await told(instance, a.conversation), ['[p9] Kid ended its turn: bg-tool reply'], 'a worker active since its end woke its parent');
+  assert.equal(await turns(), had, 'the parent ran a turn');
+  console.log('PASS O188 FIX1: a tool started 1 s after the end (inside the 3 s hold) and completed at 2.5 s cancelled the ' + WAKE + ' ms wake; one note, no parent turn');
+});
+
 test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
