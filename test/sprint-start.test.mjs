@@ -148,7 +148,10 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   const plan = createHash('sha256').update(fs.readFileSync(path.join(prep.body.folder, 'sprint.md'), 'utf8') + '\0' + text).digest('hex');
   listed = (await call(instance, '/projects/' + project)).body.project.sprints.find((s) => s.lead === sprint);
   assert.equal(listed.prep, false);
-  assert.deepEqual({ ...listed.started, at: typeof listed.started.at }, { at: 'number', plan, by: 'owner', scripts: [] });
+  // O171 (framing): and the hash of each Setup file whose text reaches chats (here the role files, made empty).
+  const { files, ...record } = listed.started, EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  assert.deepEqual({ ...record, at: typeof record.at }, { at: 'number', plan, by: 'owner', scripts: [] });
+  assert.deepEqual(files, Object.fromEntries(['roles/lead.instructions.md', 'roles/lead.rules.md', 'roles/review.instructions.md', 'roles/review.rules.md'].map((n) => [n, EMPTY])));
   assert.deepEqual(press.body.started, listed.started);
 
   // Pressing again: everything is kept, nothing is made or sent again.

@@ -3,7 +3,7 @@
 // the hooks panel.mjs asks for (o.openProject, o.newProject, o.chatMenuItems, o.renderPage). The page lives in #projPage
 // beside #chats; o.S.view says which shows ({ kind: 'project', id }, { kind: 'archived' } or null for the chats).
 // Every change goes through the daemon's project routes (p9:chat); nothing here reads or writes a folder.
-import { svg, esc } from './helpers.mjs';
+import { svg, esc, profileModel } from './helpers.mjs';
 import { PANEL_ICONS, LABEL, listedChats, stateOf } from './panel.mjs';
 
 const ERR = { 'folder-exists': 'A folder with that name is already there. Change the name or the parent.', 'folder-refused': 'P9 can\'t use that folder. Pick another.',
@@ -416,7 +416,7 @@ export function installProjects(o, api) {
   page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-spr]')) return;
     const { lead, role, spr } = x.dataset, value = x.value;
     saveRoles(lead, rs => { const r = rs.find(y => y.key === role); if (!r) return false;
-      if (spr === 'agent') { Object.assign(r, { provider: value, model: '', effort: '' }); delete r.mode; } else if (spr === 'mode' && !value) delete r.mode; else r[spr] = value; }); });
+      if (spr === 'agent') { Object.assign(r, { provider: value, model: profileModel(o, value), effort: '' }); delete r.mode; } else if (spr === 'mode' && !value) delete r.mode; else r[spr] = value; }); });
   // What a role owns: saved when the box is left or Enter is pressed, emptied = the key removed.
   page.addEventListener('change', e => { const x = e.target; if (!x.matches?.('[data-sp-owns]')) return;
     const { lead, role } = x.dataset, value = x.value.trim();

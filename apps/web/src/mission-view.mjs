@@ -210,7 +210,7 @@ const launchTile = (name, title, data, id, page, icon, shown = {}) => `<button c
 const winTop = {};
 const winCard = id => { const w = outer.wins[id], [big, line, lvl] = w.card();
   return `<button class="win${lvl === 'bad' ? ' bad fx-halo' : ''}" data-win="${id}"><h4><span class="lvl" data-l="${lvl}"></span>${esc(w.title())}</h4><b class="big${id === 'mprimary' ? ' fx-title' : ''}">${esc(big)}</b><span class="line">${esc(line)}</span></button>`; };
-// Usage and Apps sit open on the page and scroll on their own, like Waiting on you (Builder, 2026-10-18 #3); the heading still
+// Usage and Apps sit open on the page and scroll on their own, like Waiting on you; the heading still
 // opens the full window.
 const PANELS = ['musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(outer.wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
@@ -498,6 +498,7 @@ const noteList = (notes, at) => notes.length ? `<ul class="plist">${notes.map((a
 function fillWidgets(root, back) {
   root?.querySelectorAll('.wdg[data-widget]').forEach(box => {
     const w = box.dataset.widget, b = box.querySelector('.wbody'), notes = allNotes();
+    outer.written.delete(b); // O152: a patched section keeps this node but empties it, so its last fill is no longer on screen
     if (w === 'notifications') outer.setHTML(b, noteList(notes, 'data-wnote')).querySelectorAll('[data-wnote]').forEach(x => x.onclick = () => outer.openModal({ kind: 'alert', a: notes[+x.dataset.wnote], back: back ?? outer.S.modal }));
     else if (w === 'waiting') outer.setHTML(b, reviewList('data-wreview')).querySelectorAll('[data-wreview]').forEach(x => x.onclick = () => outer.openModal({ kind: 'review', i: +x.dataset.wreview }, 'reviews'));
     else if (w === 'usage') outer.setHTML(b, outer.wins.musage.inline());
@@ -744,7 +745,7 @@ function sectionBody(m, body, g, o) {
   });
   const lv = ['bad', 'warn'].find(l => runs.some(r => tileLevel(m.tiles[r.id]) === l)) || '';
   if ((secLv[g] || '') !== lv) { secLv[g] = lv; outer.setTimeout(outer.renderMission); }
-  // O45 (Builder, 2026-11-09): the 30 s pull redrew on every answer, and the window draws whole, so each card's frame was made
+  // O45: the 30 s pull redrew on every answer, and the window draws whole, so each card's frame was made
   // again six times a tick with nothing new; a click in a card at that moment was lost. Only a changed answer draws again.
   const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { const a = tileAnswer(r.status, r.body);
     if (JSON.stringify(a) === JSON.stringify(m.tiles[d.id])) return; m.tiles[d.id] = a; if (o.shown()) o.redraw(); });
@@ -792,14 +793,14 @@ function missionModal(m, body, row) {
   if (m.kind === 'win') {
     const w = outer.wins[m.id]; if (!w || (w.show && !w.show() && !m.any)) return outer.closeModal(); // any: the panel's Usage button opens it whatever the space shows
     outer.$('#mdlT').textContent = w.title();
-    body.innerHTML = panel(m.id, esc(w.title()), w.body()); outer.addHalos(body);
+    outer.setHTML(body, panel(m.id, esc(w.title()), w.body())); // O152: patched in place, so a redraw keeps the node under the pointer
     bindWin(body, m); missionLive();
     body.onscroll = () => { winTop[m.id] = body.scrollTop; };
   } else if (m.kind === 'scripts') {
     if (!outer.M.scripts[m.g]) return outer.closeModal();
     const n = sectionRows(m.g, outer.M.scripts[m.g]), word = n > outer.M.scripts[m.g].length ? 'item' : 'script';
     outer.$('#mdlT').textContent = `${gTitle(m.g)} · ${n} ${word}${n === 1 ? '' : 's'}`;
-    sectionBody(m, body, m.g, { write: (el, html) => { el.innerHTML = html; return true; }, shown: () => outer.S.modal === m, seen: () => !document.hidden, redraw: outer.renderModal, back: m });
+    sectionBody(m, body, m.g, { write: writeKeep, shown: () => outer.S.modal === m, seen: () => !document.hidden, redraw: outer.renderModal, back: m });
   } else if (m.kind === 'folder') {
     outer.$('#mdlT').textContent = m.f.title;
     if (m.list === undefined) { m.list = null; window.p9.mission('folder', { id: m.f.id }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (outer.S.modal === m) outer.renderModal(); }); }

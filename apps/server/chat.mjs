@@ -22,7 +22,7 @@ import { createMove, movedNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
-import { createSprintFiles, itemsOf, notesLine } from './sprint-files.mjs';
+import { SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
@@ -500,7 +500,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
   // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
-  // and sent after the rules of each message from its parent until one is confirmed to have reached the agent
+  // and sent after the rules of each message from its parent or from P9 itself (O171) until one is confirmed to have reached the agent
   // (startSent: the prompt's turn ended, or the steer was injected). sending: chats whose block is on its way; the
   // messages sent meanwhile leave it out, and a failure (startLost) frees it for the next one. A failed start, a failed
   // prompt or a daemon restart before confirmation keeps it. ponytail: a restart while a turn that already read it is
@@ -552,12 +552,38 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.compacting = null;
     if (ran && live.get(id) === session && !session.turn && !session.stopping && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true); } catch {} }
   };
+  // O171 (framing): a Setup file's text the user approved by pressing Start sprint (the Start record holds each sent
+  // file's hash) reaches a chat as that, naming who wrote it; a file changed since, or a sprint started before Start kept
+  // these hashes, keeps the framing as the sending chat's. Either way "[P9:" in the text is quoted, so it cannot pass
+  // as a block of P9's own. Its writer: the last write through P9 if the file still has that text, else unknown.
+  const keptPref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? 'null'); } catch { return null; } };
+  const approved = (sprint, name, raw) => typeof raw === 'string' && typeof keptPref('sprint-start:' + sprint)?.files?.[name] === 'string' && keptPref('sprint-start:' + sprint).files[name] === hashOf(raw);
+  const writerOf = (sprint, name, raw) => { const w = keptPref(writerKey(sprint, name)); return w && w.hash === hashOf(raw) && typeof w.by === 'string' ? w.by : 'unknown (changed outside P9\'s Setup tools)'; };
+  const wrote = (sprint, name, text, by) => SENT.test(name) && db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(sprint, name), JSON.stringify({ by, hash: hashOf(text) }));
+  // A chat's agent as a writer: its provider, or its profile, and model; never its title (a chat can rename itself).
+  const agentOf = (id) => { const c = row(id); if (!c) return 'an agent'; const p = profileOf(id), model = live.get(id)?.models?.current ?? p?.model ?? '';
+    return ('an agent: ' + (p ? 'profile ' + p.name : c.provider) + (model ? ' ' + model : '')).replace(/[[\]\r\n]+/g, ' ').slice(0, 120); };
+  const instructionsOf = (sprint, key) => {
+    const name = `roles/${key}.instructions.md`, raw = sprintFiles.read(sprint, name), said = (raw ?? '').trim();
+    if (!said) return '';
+    return approved(sprint, name, raw) ? `[P9: your instructions, approved by the user when they started this sprint: ${name}, written by ${writerOf(sprint, name, raw)}.\n${quoted(said)}]\n\n`
+      : `[P9: your instructions, from your sprint's ${name}.\n${quoted(said)}]\n\n`;
+  };
   const rulesFor = (conversation, body) => {
-    const mine = conversation?.parent && (senders.get(body) === conversation.parent || Boolean(mixed.get(body)?.includes(conversation.parent)));
-    const own = mine && conversation.key ? (sprintFiles.read(conversation.parent, `roles/${conversation.key}.rules.md`) ?? '').trim() : '';
-    const text = mine ? [rulesOf(conversation.parent), own].filter(Boolean).join('\n\n') : '';
-    const start = mine && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
-    const all = (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
+    const by = (who) => senders.get(body) === who || Boolean(mixed.get(body)?.includes(who));
+    const mine = conversation?.parent && by(conversation.parent);
+    const lead = conversation?.parent, ownName = `roles/${conversation?.key}.rules.md`, raw = mine ? sprintFiles.read(lead, 'rules.md') : null;
+    const ownRaw = mine && conversation.key ? sprintFiles.read(lead, ownName) : null;
+    // [name, file text as read, text sent]: rules.md or, with none, the rules kept in prefs or P9's default (never approved).
+    const parts = mine ? [['rules.md', raw, raw ?? rulesOf(lead)], [ownName, ownRaw, (ownRaw ?? '').trim()]].filter(([, , t]) => t) : [];
+    const ok = parts.filter(([name, r]) => approved(lead, name, r)), rest = parts.filter((p) => !ok.includes(p));
+    const text = rest.map(([, , t]) => quoted(t)).join('\n\n');
+    const yes = ok.map(([name, r, t]) => `${name}, written by ${writerOf(lead, name, r)}:\n${quoted(t)}`).join('\n\n');
+    // O171: the start block also rides with a message P9 itself sends: a lead started from the Setup page has no parent,
+    // and its first message is P9's. The sprint rules stay with the parent's messages only.
+    const start = (mine || by('p9')) && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
+    const all = (yes ? `[P9: sprint rules the user approved when they started this sprint. They hold for all your work here.\n${yes}]\n\n` : '')
+      + (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
     return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
   };
   // A message another chat's agent sent (send_chat, open_chat) says so to the agent that gets it, as its own leading block:
@@ -933,8 +959,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // Both adapters name the chat after its first turn (session_info_update.title); kept so the tab and list show it.
         if (update?.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
           const title = update.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-          // A name the user gave (N1, the rename route's 'renamed' event) is kept.
-          if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
+          // A name the user gave (N1, the rename route's 'renamed' event) is kept. O172: so is a sprint chat's role name
+          // (a worker started under a roles.json key, titled by it; a lead, titled by its sprint): the rows and the Sprint
+          // panel say which chat is which role. The user's rename still names any chat.
+          if (title && !conversation.key && !sprintFiles.exists(conversation.id)) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
         compacted.seen(session, conversation.id, update);
         compacted(session, conversation.id, update);
@@ -1689,7 +1717,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
     setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },
     setDelegation(value) { db.prepare("INSERT INTO prefs (key, value) VALUES ('delegation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(value)); return this.delegation(); },
-    setRules: (id, text) => { if (sprintFiles.write(id, 'rules.md', text)) db.prepare('DELETE FROM prefs WHERE key = ?').run('rules:' + id);
+    setRules: (id, text) => { if (sprintFiles.write(id, 'rules.md', text)) { wrote(id, 'rules.md', text, agentOf(id)); db.prepare('DELETE FROM prefs WHERE key = ?').run('rules:' + id); }
       else db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); }, // no state folder: prefs, as before
     sprintFiles,
     // The window's Notes button: this worker's notes file as it is now, read by the same rules as the project page.
@@ -1697,6 +1725,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Start sprint: a chat's first message reached its agent (a turn ended, or one is running now). The user event alone
     // says nothing: prompt writes it before the agent is started and configured.
     delivered: (id) => Boolean(live.get(id)?.turn) || Boolean(db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'turn-end' LIMIT 1").get(id)),
+    instructionsOf,
+    wrote,
+    agentOf,
     startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
     startFolder: (id) => startOf(row(id)).catch(() => null),

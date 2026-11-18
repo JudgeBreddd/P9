@@ -1,5 +1,5 @@
 // Settings and the setup wizard. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
-import { esc, info, modes, LOOSE, runnerPicks } from './helpers.mjs';
+import { esc, info, modes, LOOSE, runnerPicks, profileModel } from './helpers.mjs';
 import { missionKeys, missionShown, missionValue, PATH_KEYS } from './mission-files.mjs';
 import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts } from './security.mjs';
 import { maintenanceGroup, MAINTENANCE } from './maintenance.mjs';
@@ -237,10 +237,10 @@ function bindDelegation() {
   if (!delegation && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('delegation', {}).then(r => { if (r?.status === 200) { delegation = r.body; drawDelegation(); } }).catch(() => {}); }
   const v = q => el.querySelector(q)?.value ?? '';
   el.querySelectorAll('select, [data-dg-setup]').forEach(x => { x.onchange = async () => {
-    // A row whose agent just changed starts with no model or effort: the old ones belonged to the other agent.
+    // A row whose agent just changed starts with no model or effort (a profile: its first model, O170): the old ones belonged to the other agent.
     const max = Number(v('[data-dg-max]')), changed = x.dataset.dgAgent;
     const want = { start: v('[data-dg-start]'), max, setup: v('[data-dg-setup]'), workers: Array.from({ length: max }, (_, i) => { const agent = v(`[data-dg-agent="${i}"]`), keep = agent && String(i) !== changed;
-      return { agent, model: keep ? v(`[data-dg-model="${i}"]`) : '', effort: keep ? v(`[data-dg-effort="${i}"]`) : '' }; }) };
+      return { agent, model: keep ? v(`[data-dg-model="${i}"]`) : profileModel(outer, agent), effort: keep ? v(`[data-dg-effort="${i}"]`) : '' }; }) };
     const r = await window.p9.chat('delegation', want).catch(() => null);
     if (r?.status === 200) { delegation = r.body; delegationNote = ''; } else delegationNote = 'Not saved: P9 did not take it. Try again in a moment.';
     drawDelegation();

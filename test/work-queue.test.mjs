@@ -54,18 +54,18 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
   // ready with no task: the first item of its queue; checks are its own (1 to 20).
   assert.equal((await tools.ready({ ...report, results: [] }, worker)).error, 'request-refused');
   const c1 = commit('one');
-  const r1 = await tools.ready(report, worker);
+  const r1 = await tools.ready({ ...report, commit: c1 }, worker); // O147: ready records the commit sent; git must have it
   assert.equal(r1.ready?.item, 'daemon-1', JSON.stringify(r1));
   assert.equal(r1.queued, reviewer);
   assert.deepEqual(sent.at(-1).slice(0, 2), [reviewer, `[p9] Ready for review: daemon-1, by Daemon (chat ${worker}), commit ${c1}. Read its report, then call verdict with that chat and commit.`]);
   assert.equal(sent.at(-1)[2], 'queue');
   // Not passed yet: ready again is the same item, never the next one.
-  assert.equal((await tools.ready(report, worker)).ready.item, 'daemon-1');
+  assert.equal((await tools.ready({ ...report, commit: c1 }, worker)).ready.item, 'daemon-1');
 
   // Three fixes: each counted from the verdict, the worker told, and at the third the lead asked for a larger model.
   for (const n of [1, 2, 3]) {
     const at = commit('fix ' + n);
-    assert.equal((await tools.ready(report, worker)).ready.item, 'daemon-1');
+    assert.equal((await tools.ready({ ...report, commit: at }, worker)).ready.item, 'daemon-1');
     const v = tools.verdict({ chat: worker, commit: at, result: 'fix', note: 'finding ' + n }, reviewer);
     assert.deepEqual([v.review.state, v.review.fixes, v.review.larger ?? false], ['fix', n, n === 3]);
     // One verdict per ready: the same fix again counts nothing and sends nothing.
@@ -77,7 +77,7 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
   }
   assert.deepEqual(sent.filter((s) => s[0] === lead).map((s) => s[1]), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Opus or Fable).']);
   const c2 = commit('passed');
-  await tools.ready(report, worker);
+  await tools.ready({ ...report, commit: c2 }, worker);
   assert.equal(tools.verdict({ chat: worker, commit: c2, result: 'pass', note: 'ok' }, reviewer).review.state, 'passed');
   assert.equal(sprintOf(worker).reviews['daemon-1'].fixes, 3, 'a pass reset the fix count');
   assert.match(sent.at(-1)[1], /^\[p9\] daemon-1 passed review at [0-9a-f]+\. Start your next item\.$/);
@@ -87,8 +87,8 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
   // Passed: the next ready is the next item; a new message to the worker (chat.mjs clears ready: the daemon test in
   // delegate.test.mjs checks that) keeps the record.
   states.set(worker, { ...sprintOf(worker), ready: null, verdict: null });
-  commit('two');
-  assert.equal((await tools.ready(report, worker)).ready.item, 'daemon-2');
+  const c3 = commit('two');
+  assert.equal((await tools.ready({ ...report, commit: c3 }, worker)).ready.item, 'daemon-2');
   assert.equal(sprintOf(worker).reviews['daemon-1'].state, 'passed');
 
   // The trail: one file, P9 its only writer; the project page's save is refused.

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 // --require-terms fails when that variable is empty; CI passes it on PRs from this repo (a fork PR gets no secrets,
 // so there the run says the names were not checked instead of passing quietly).
 const ok = '(?!(?:user|me|someone|runner)/)';
-// The one exception (owner-approved, 2026-11-10): P9's own places in the home folder are the same on every machine,
+// The one exception (approved): P9's own places in the home folder are the same on every machine,
 // so they are product strings: its install folder, the default workspace by itself (never a folder inside it), and
 // the named dot folders of the tools P9 works with. Any other home path is a maintainer's folder. The registry's
 // workspace token is allowed on added code lines only, and also by itself.

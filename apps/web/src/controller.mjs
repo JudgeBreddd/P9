@@ -352,7 +352,7 @@ function renderModal() {
   }
   const key = m.kind === 'win' ? 'win:' + m.id : m.kind;
   const top = m.kind === 'win' ? winTop[m.id] || 0 : body.dataset.kind === key ? body.scrollTop : 0;
-  body.onscroll = null; body.dataset.kind = key; $('#mdlFoot').innerHTML = '';
+  body.onscroll = null; if (body.dataset.kind !== key) written.delete(body); body.dataset.kind = key; $('#mdlFoot').innerHTML = ''; // O152: other kinds write the body with innerHTML
   $('#mdlBack').hidden = !m.back; $('#mdlPrimary').hidden = m.kind !== 'chat' && m.kind !== 'file' || m.live;
   const row = listRow;
   if (m.kind === 'chat') {
