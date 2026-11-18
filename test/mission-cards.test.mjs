@@ -491,12 +491,19 @@ test('O152 an open Mission section or Usage window keeps its nodes and focus acr
   await redraw('Custom cards, drawn again.');
   await page.locator('#mdlBody [data-space-text]', { hasText: 'Custom cards, drawn again.' }).waitFor({ timeout: 10000 });
   assert.deepEqual(await page.evaluate(() => [window.__row.isConnected, document.activeElement === window.__row]), [true, true], 'the section window kept the row and its focus');
+  // A window with a footer (a script's Run) and then one without: the old footer and its handlers are gone (#298 FIX1).
+  const run = page.locator('#mdlFoot [data-run]');
+  await plain.click(); await run.waitFor({ timeout: 10000 });
+  await page.click('#mdlBack'); await plain.waitFor({ timeout: 10000 });
+  assert.equal(await run.count(), 0, 'Back to the section window leaves no Run button in the footer');
+  await plain.click(); await run.waitFor({ timeout: 10000 });
   await page.keyboard.press('Escape');
   await page.click('#rUsage');
   await page.locator('#mdl[open] #mdlBody > *').first().waitFor({ timeout: 10000 });
   await sleep(2000); // Usage's own first read
   await page.evaluate(() => { window.__win = document.querySelector('#mdlBody').firstElementChild; });
   await redraw('Custom cards, Usage open.');
+  assert.equal(await run.count(), 0, 'Usage opened after a script window has no Run button in the footer');
   assert.equal(await page.evaluate(() => window.__win.isConnected), true, 'the Usage window kept its panel node');
   console.log('PASS O152: an open Mission section or Usage window keeps its nodes and focus across a redraw');
 });
