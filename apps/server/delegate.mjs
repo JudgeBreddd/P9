@@ -203,13 +203,20 @@ export function createDelegate({ chat, allowed, usage }) {
   const OFF = { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
   const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' });
   const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
+  // O174: a sprint lead is a chat with a Start record (sprint-start:<id>, its plan hash), open and not closed. Its chats are
+  // the sprint's, not Delegation's: Settings > Delegation's Off, Workers per chat and rows (places) do not apply to them,
+  // only the runaway guards. FIX1: only startSprint writes that record, after the user's Start press or the user's yes to
+  // an agent's start_sprint (approveRows only adds to one that exists). It is in P9's own store, keyed by the chat's id,
+  // so no file write (set_rules, sprint_setup_save, a worker's folder) can make a chat a lead: a roles.json alone does not.
+  const sprintLead = (id) => Boolean(chat.projects.started(id)?.plan) && !chat.projects.closed(id);
+  const tooManySprint = { error: 'too-many-chats', detail: 'At most ' + MAX_CHILDREN + ' running workers per sprint chat, ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' };
   const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
   // daemon-7: a stopped worker started again (send_chat, ask_chat) takes a place under Workers per chat from the check
   // until its start is through, held like open_chat's, so two starts at once never pass the limit together. Its own row
   // is the one held. Returns tooMany, or the place with its release.
   const take = (parent, id) => {
-    const set = chat.delegation(), row = chat.slot(id);
-    if (running(parent, chat.family()) + (holding.get(parent)?.length ?? 0) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
+    const set = chat.delegation(), row = chat.slot(id), lead = sprintLead(parent);
+    if (running(parent, chat.family()) + (holding.get(parent)?.length ?? 0) >= (lead ? MAX_CHILDREN : Math.min(set.max, MAX_CHILDREN))) return lead ? tooManySprint : tooMany(set);
     holding.set(parent, [...(holding.get(parent) ?? []), row]);
     return { release: () => { const left = holding.get(parent); left.splice(left.indexOf(row), 1); if (!left.length) holding.delete(parent); } };
   };
@@ -235,25 +242,29 @@ export function createDelegate({ chat, allowed, usage }) {
     const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
     if (same) return { chat: same.id, existing: true, title: same.title, state: stateOf(chat.info(same.id)), folder: await chat.startFolder(same.id) };
-    // Settings > Delegation, Who may start workers: Off refuses every new worker.
-    if (set.start === 'off') return OFF;
+    // A sprint call: Start sprint's own (it passes the role's profile) or a sprint lead's (O174).
+    const sprintCall = opts.profile !== undefined || sprintLead(caller);
+    // Settings > Delegation, Who may start workers: Off refuses every new delegate worker; a sprint's chats are not Delegation's.
+    if (set.start === 'off' && !sprintCall) return OFF;
     let depth = 0;
     for (let at = family.find((c) => c.id === caller); at?.parent && depth < 50; at = family.find((c) => c.id === at.parent)) depth += 1;
     // A call still being started (the user is being asked, the chat is being made) counts as a worker: two calls at once
     // never pass the limit together.
-    if (depth >= MAX_DEPTH || running(caller, family) + (holding.get(caller)?.length ?? 0) >= Math.min(set.max, MAX_CHILDREN)) return tooMany(set);
+    if (depth >= MAX_DEPTH || running(caller, family) + (holding.get(caller)?.length ?? 0) >= (sprintCall ? MAX_CHILDREN : Math.min(set.max, MAX_CHILDREN))) return sprintCall ? tooManySprint : tooMany(set);
     const kids = family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state));
     // Settings > Delegation has one row per worker. A new worker takes the first row no running worker of this chat holds.
+    // A sprint's chat holds none (-1, what chat.slot reads for a chat that never had one).
     const taken = new Set([...kids.map((c) => chat.slot(c.id)), ...(holding.get(caller) ?? [])]);
     let at = 0; while (taken.has(at)) at += 1;
+    if (sprintCall) at = -1;
     // A sprint's workers come only from its role rows, never from Settings > Delegation (OPEN-ITEMS 0.1.9: "the parent
-    // cannot create an unapproved worker"). A sprint lead is a chat whose sprint New sprint made (P9 keeps prep:<id>) or
-    // whose sprint folder has a roles.json; open_chat writes neither, so a plain chat's workers stay Delegate's. Its
-    // worker names the key of a valid roles.json row and starts as that row, named for it (the role is the chat
+    // cannot create an unapproved worker"). A sprint lead's (sprintLead above) worker names the key of a valid roles.json row and starts as that row, named for it (the role is the chat
     // name, so each worker is easy to tell apart); anything else is refused before a chat or a slot
     // is taken. A provider, model or effort named that the row does not start is refused by field.
+    // FIX1: a file may tighten, never widen: a chat whose folder has a roles.json starts workers only from its rows (as
+    // before O174), while Delegation's limits still apply to it unless it is a sprint lead (a Start record, above).
     const roles = opts.profile === undefined && chat.sprintFiles.exists(caller) ? chat.sprintFiles.read(caller, 'roles.json') : undefined;
-    if (opts.profile === undefined && (chat.projects.prepOf(caller) || (roles !== undefined && roles !== null))) {
+    if (opts.profile === undefined && (sprintCall || chat.projects.prepOf(caller) || (roles !== undefined && roles !== null))) {
       let parsed; try { parsed = JSON.parse(roles ?? 'null'); } catch { parsed = null; }
       const file = 'roles.json in ' + (chat.sprintFiles.folderOf(caller) ?? 'the sprint folder');
       if (!Array.isArray(parsed?.roles)) return { error: 'role-refused', role: args.key ?? null, field: 'roles.json', detail: `${file} is ${roles == null ? 'missing' : 'not { "roles": [ ... ] }'}: a sprint's workers start only from its role rows. Fix the file in Sprint Setup.` };
@@ -291,8 +302,9 @@ export function createDelegate({ chat, allowed, usage }) {
       args = { ...args, provider: undefined, model: undefined, effort: undefined };
     }
     holding.set(caller, [...(holding.get(caller) ?? []), at]);
-    try { return await startWorker(caller, args, signal, { me, family, set, depth, at, ...opts }); }
-    finally { const left = holding.get(caller).filter((n) => n !== at); if (left.length) holding.set(caller, left); else holding.delete(caller); }
+    try { return await startWorker(caller, args, signal, { me, family, set, depth, at, sprintCall, ...opts }); }
+    // One entry out, not every equal one: a sprint call holds -1, and two may be starting at once.
+    finally { const left = holding.get(caller); left.splice(left.indexOf(at), 1); if (!left.length) holding.delete(caller); }
   }
   // What a worker starts on: from a Settings row (args empty), or from what the call named (Start sprint's role rows).
   function pick(row = { agent: '', model: '', effort: '' }, me, args, named) {
@@ -321,7 +333,7 @@ export function createDelegate({ chat, allowed, usage }) {
   }
   // The provider, model and effort a pick sends, as a parent would name them.
   const seen = (w) => ({ provider: w.provider, model: w.profile ? w.profile.model : w.model, effort: w.effortId ? w.effort : undefined });
-  async function startWorker(caller, args, signal, { me, family, set, depth, at, approved = false, profile: named }) {
+  async function startWorker(caller, args, signal, { me, family, set, depth, at, sprintCall = false, approved = false, profile: named }) {
     const { provider, rowProfile, mine, profile, model, effortId, effort } = pick(set.workers[at], me, args, named);
     const picked = modeFor(caller, { provider, mode: null }, args.mode);
     if (picked.error) return picked;
@@ -345,8 +357,8 @@ export function createDelegate({ chat, allowed, usage }) {
       if (shut()) return shut();
       if (chat.paused(caller)) return PAUSED; // a Pause pressed while the user was asked or the folder was made
       const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
-      if (now.start === 'off') return OFF;
-      if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
+      if (now.start === 'off' && !sprintCall) return OFF;
+      if (running(caller, chat.family()) + holding.get(caller).length - 1 >= (sprintCall ? MAX_CHILDREN : Math.min(now.max, MAX_CHILDREN))) return sprintCall ? tooManySprint : tooMany(now);
       if (again.error) return again;
       if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
       return null;
@@ -425,8 +437,9 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!rows.some((r) => r.key === 'lead')) return { error: 'role-refused', role: 'lead', field: 'key', detail: 'Role lead, key: roles.json has no row with key lead.' };
     const profiles = chat.profiles.list().profiles, checked = [];
     for (const r of rows) { const got = roleOf(r, profiles); if (got.error) return got; checked.push({ key: r.key, ...got }); }
-    const set = chat.delegation(), rest = checked.filter((r) => r.key !== 'lead');
-    if (rest.length > Math.min(set.max, MAX_CHILDREN)) return { error: 'too-many-roles', detail: `${rest.length} chats under the lead; at most ${Math.min(set.max, MAX_CHILDREN)} running workers per chat (Settings > Delegation).` };
+    // O174: a sprint's chats are not Delegation's, so Workers per chat does not cap them; the runaway guard does.
+    const rest = checked.filter((r) => r.key !== 'lead');
+    if (rest.length > MAX_CHILDREN) return { error: 'too-many-roles', detail: `${rest.length} chats under the lead; at most ${MAX_CHILDREN} running workers per sprint chat.` };
     return { folder: parsed.folder, lead: checked.find((r) => r.key === 'lead'), rest };
   }
   // The sprint's scripts (sprint-hooks.mjs). A notice never delays or refuses: fire starts it and comes back.
@@ -483,7 +496,8 @@ export function createDelegate({ chat, allowed, usage }) {
     starting.add(sprint);
     let reserved = null;
     try {
-      if (chat.delegation().start === 'off') return OFF;
+      // O174: Delegation Off refuses an agent's call (the lead is that chat's worker), never the user's own press.
+      if (caller && chat.delegation().start === 'off') return OFF;
       const roles = rolesOf(sprint);
       if (roles.error) return roles;
       // Modes, before any chat is made and again after the user's answer: from an agent's call the lead is never wider
@@ -521,7 +535,7 @@ export function createDelegate({ chat, allowed, usage }) {
         if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
         if (chat.paused(sprint) || (caller && chat.paused(caller))) return PAUSED;
         const now = chat.delegation();
-        if (now.start === 'off') return OFF;
+        if (caller && now.start === 'off') return OFF;
         // A lower Workers per chat: the place held is this start's own, so it does not count against it.
         if (reserved && running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
         ({ leadMode, ...refusal } = modes());
