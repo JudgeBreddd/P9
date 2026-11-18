@@ -34,8 +34,10 @@ export async function closePress(b, confirmIt, call, out) {
   return said(await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})));
 }
 export function statusHtml(s, esc, opts = {}) {
-  const d = s.done, legacy = d.merged === undefined, dn = d.merged ?? d.passed ?? 0,
-    open = legacy ? s.items.filter(i => i.review?.state !== 'passed') : s.items.filter(i => i.review?.merged !== true),
+  // O164 part (3) FIX1: owner lines leave the worker counts and the Plan list only where the record has its owner
+  // projection (s.owner); a record saved before it keeps every row as it stood.
+  const d = s.done, legacy = d.merged === undefined, dn = d.merged ?? d.passed ?? 0, plan = s.owner ? s.items.filter(i => i.role !== 'owner') : s.items,
+    open = legacy ? plan.filter(i => i.review?.state !== 'passed') : plan.filter(i => i.review?.merged !== true),
     n = (k, one, many) => `${k} ${k === 1 ? one : many}`, doneWord = legacy ? 'passed review' : 'merged';
   // closed: the answer is the sprint's record, as it stood at Close. opts.closing: a Close press is out; opts.said: why the last one was refused.
   const end = s.closed, when = end ? new Date(end.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
@@ -59,7 +61,7 @@ export function statusHtml(s, esc, opts = {}) {
         <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
       <ul class="sv-items">${s.owner.items.map(i => `<li data-sv-item="${esc(i.id)}" data-owner="${i.done ? 'closed' : 'open'}"><span class="sv-text">${esc(i.text)}</span>${i.done ? '<span class="tag">Closed by you</span>' : end ? '<span class="tag">Open at Close</span>' : `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}" data-item="${esc(i.id)}" title="Closes this item. It is yours: no review and no merge is involved, and the plan's box stays as it is.">Close</button>`}</li>`).join('')}</ul></li></ul>` : ''}
-    ${s.items.length ? `<h3>Plan items</h3><ul class="sv-items">${s.items.filter(i => i.role !== 'owner').map(i => `<li data-sv-item="${esc(i.id)}" data-review="${esc(i.review?.state ?? '')}"><span class="box" aria-hidden="true">${i.ticked ? '☑' : '☐'}</span><span class="sv-text">${esc(i.text)}</span><span class="muted">${esc(i.role ?? 'no role')}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.fixes ? ` · ${n(i.review.fixes, 'fix', 'fixes')}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : ''}
+    ${plan.length ? `<h3>Plan items</h3><ul class="sv-items">${plan.map(i => `<li data-sv-item="${esc(i.id)}" data-review="${esc(i.review?.state ?? '')}"><span class="box" aria-hidden="true">${i.ticked ? '☑' : '☐'}</span><span class="sv-text">${esc(i.text)}</span><span class="muted">${esc(i.role ?? 'no role')}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.fixes ? ` · ${n(i.review.fixes, 'fix', 'fixes')}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : ''}
   </section>`;
 }
 
