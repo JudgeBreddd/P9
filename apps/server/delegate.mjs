@@ -487,7 +487,8 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!ID.test(sprint ?? '')) return { error: 'request-refused' };
     const prep = chat.projects.prepOf(sprint), lead = chat.info(sprint);
     if (!chat.sprintFiles.exists(sprint) || (!prep && !lead)) return { error: 'unknown-sprint' };
-    const project = lead?.project ?? prep.project;
+    // A lead chat may have no project (SECURITY.md § Delegation's setup command); only then is prep's read.
+    const project = lead ? lead.project ?? null : prep.project;
     if (caller && (chat.info(caller)?.project ?? null) !== project) return { error: 'unknown-sprint' };
     if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (chat.projects.closed(sprint)) return { error: 'sprint-closed', detail: 'This sprint is closed. Make a new sprint to go on.' };
