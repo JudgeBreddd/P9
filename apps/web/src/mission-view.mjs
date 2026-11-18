@@ -583,19 +583,27 @@ function imageModal(m, body) {
   body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
     : `<div class="file-image"><img src="${i.src}" alt="${esc(name)}"></div>`;
 }
+// O173: with a draft, Discard drops it and reads the file from disk again, so closing and reopening shows no draft. Not while
+// a save is on its way: that save still writes, so Discard is disabled until it answers (it cannot cancel a sent save).
+// The flag is per file, not per modal: the draft is shared by every modal on live:<name>, and a reopened file is a new modal.
+const liveSaving = new Set();
+const showing = name => outer.S.modal?.kind === 'file' && outer.S.modal.live && outer.S.modal.name === name ? outer.S.modal : null;
 function liveFoot(m) {
-  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.saveBtn(liveKey(m.name))}`;
+  const key = liveKey(m.name), busy = liveSaving.has(key);
+  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.dirty(key) ? `<button data-slot="button" data-variant="outline" data-size="sm" data-discard${busy ? ' disabled' : ''}>Discard</button>` : ''}${outer.saveBtn(key)}`;
   const b = outer.$('#mdlFoot [data-savefile]'); if (b) b.onclick = () => saveLive(m);
+  const x = outer.$('#mdlFoot [data-discard]'); if (x) x.onclick = () => { if (liveSaving.has(key)) return; delete outer.S.docs[key]; m.asked = m.conflict = null; outer.renderModal(); };
 }
 async function saveLive(m, hash) {
-  const key = liveKey(m.name), d = outer.S.docs[key]; if (!d || m.saving || (!hash && !outer.dirty(key))) return;
-  m.saving = true; const text = d.text;
+  const key = liveKey(m.name), d = outer.S.docs[key]; if (!d || liveSaving.has(key) || (!hash && !outer.dirty(key))) return;
+  liveSaving.add(key); const text = d.text; if (showing(m.name)) liveFoot(showing(m.name));
   const r = await window.p9.mission('save', { path: m.name, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
-  m.saving = false;
-  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; outer.toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
-  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; outer.toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
+  liveSaving.delete(key);
+  const at = showing(m.name) ?? m; // the modal that shows this file now: the one that saved, or the same file reopened meanwhile
+  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; at.conflict = null; outer.toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
+  else if (r.status === 409) { at.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; outer.toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
   else outer.toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + outer.saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
-  if (outer.S.modal === m) outer.renderModal();
+  if (showing(m.name)) outer.renderModal();
 }
 function noteFoot(m) {
   const key = noteKey(m.root, m.path), base = m.path.split('/').pop();
