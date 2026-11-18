@@ -10,6 +10,7 @@ import { _electron } from '@playwright/test';
 import { daemon, root, openFiles } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
+const settle = async (check, what, ms = 10000) => { for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (await check()) return; assert.fail('timed out: ' + what); };
 
 test('O173 Discard: a real file\'s modal drops the draft, shows the disk copy, writes nothing, and a reopen shows no draft', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async (paths) => {
@@ -54,5 +55,23 @@ test('O173 Discard: a real file\'s modal drops the draft, shows the disk copy, w
   await openFile();
   assert.equal(await ta().inputValue(), 'on disk\n', 'a reopen shows the disk copy, no draft');
   assert.equal(await disk(), 'on disk\n');
+  // A save on its way cannot be called back, so Discard waits for it: main holds the save before it reaches the daemon, a
+  // Discard clicked meanwhile does nothing, and once the save lands the disk and the view both hold the saved text.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:mission'); ipcMain.removeHandler('p9:mission');
+    globalThis.o173 = { held: 0 }; globalThis.o173.gate = new Promise((go) => { globalThis.o173.go = go; });
+    ipcMain.handle('p9:mission', async (e, action, ...rest) => { if (action === 'save') { globalThis.o173.held++; await globalThis.o173.gate; } return h(e, action, ...rest); });
+  });
+  await ta().fill('kept\n');
+  await page.locator('#mdlFoot [data-savefile]').click();
+  await settle(() => app.evaluate(() => globalThis.o173.held === 1), 'the save is held in main');
+  const held = await page.evaluate(() => { const b = document.querySelector('#mdlFoot [data-discard]'); b?.click(); return { shown: !!b, disabled: !!b?.disabled }; });
+  await page.waitForTimeout(800);
+  await app.evaluate(() => globalThis.o173.go());
+  await settle(async () => (await disk()) === 'kept\n', 'the held save writes');
+  await page.waitForTimeout(800);
+  assert.equal(await ta().inputValue(), await disk(), 'after the held save the view shows what is on disk');
+  assert.equal(await disk(), 'kept\n', 'the saved text is on disk');
+  assert.deepEqual(held, { shown: true, disabled: true }, 'Discard is disabled while a save is on its way');
   console.log('PASS O173 discard live');
 });

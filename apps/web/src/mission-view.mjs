@@ -583,16 +583,17 @@ function imageModal(m, body) {
   body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
     : `<div class="file-image"><img src="${i.src}" alt="${esc(name)}"></div>`;
 }
-// O173: with a draft, Discard drops it and reads the file from disk again, so closing and reopening shows no draft.
+// O173: with a draft, Discard drops it and reads the file from disk again, so closing and reopening shows no draft. Not while
+// a save is on its way: that save still writes, so Discard is disabled until it answers (it cannot cancel a sent save).
 function liveFoot(m) {
   const key = liveKey(m.name);
-  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.dirty(key) ? '<button data-slot="button" data-variant="outline" data-size="sm" data-discard>Discard</button>' : ''}${outer.saveBtn(key)}`;
+  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.dirty(key) ? `<button data-slot="button" data-variant="outline" data-size="sm" data-discard${m.saving ? ' disabled' : ''}>Discard</button>` : ''}${outer.saveBtn(key)}`;
   const b = outer.$('#mdlFoot [data-savefile]'); if (b) b.onclick = () => saveLive(m);
-  const x = outer.$('#mdlFoot [data-discard]'); if (x) x.onclick = () => { delete outer.S.docs[key]; m.asked = m.conflict = null; outer.renderModal(); };
+  const x = outer.$('#mdlFoot [data-discard]'); if (x) x.onclick = () => { if (m.saving) return; delete outer.S.docs[key]; m.asked = m.conflict = null; outer.renderModal(); };
 }
 async function saveLive(m, hash) {
   const key = liveKey(m.name), d = outer.S.docs[key]; if (!d || m.saving || (!hash && !outer.dirty(key))) return;
-  m.saving = true; const text = d.text;
+  m.saving = true; const text = d.text; if (outer.S.modal === m) liveFoot(m);
   const r = await window.p9.mission('save', { path: m.name, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; outer.toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
