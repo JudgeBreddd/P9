@@ -431,3 +431,104 @@ test('Sprint O174: Start and a sprint lead\'s workers go ahead under Delegation 
   assert.equal(w3.error, undefined, 'Off refused the sprint lead\'s worker: ' + JSON.stringify(w3));
   console.log('PASS Sprint O174: Start and w1 under Off, w2 past Workers per chat 1, all on haiku/low; the plain chat took opus/high, its second worker was too-many-chats and Off refused it; w3 opened under Off');
 });
+
+// O174 FIX1: a sprint lead is a chat with a Start record, which only Start writes (the user's press, or the user's yes to
+// an agent's start_sprint). A roles.json is a file an agent can write: set_rules makes the chat's own sprint folder and
+// sprint_setup_save writes the file there, asking nobody. A plain chat, and a worker, that write their own are still
+// Delegation's: Off refuses them, Workers per chat counts them. The file only tightens: workers from its rows.
+test('Sprint O174 FIX1: a plain chat or a worker that writes its own roles.json is not a sprint lead: Off and Workers per chat still refuse it', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const P = await attach(t, instance, first);
+  const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  const opus = { agent: 'claude', model: 'opus', effort: 'high' };
+  const promote = async (A) => {
+    assert.equal((await A.tool('set_rules', { rules: 'Mine.' })).error, undefined);
+    const saved = await A.tool('sprint_setup_save', { name: 'roles.json', text: JSON.stringify({ roles: ['lead', 'w1', 'w2'].map(row) }), hash: '' });
+    assert.equal(saved.error, undefined, 'the chat could not write its own roles.json: ' + JSON.stringify(saved));
+  };
+  await promote(P);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 1, workers: [opus] })).status, 200);
+  const off = await P.tool('open_chat', { text: 'config', key: 'w1' });
+  assert.equal(off.error, 'delegate-off', 'a plain chat\'s own roles.json made it a sprint lead under Off: ' + JSON.stringify(off));
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: [opus] })).status, 200);
+  // The file still narrows: no key, no worker.
+  assert.equal((await P.tool('open_chat', { text: 'config' })).error, 'role-refused');
+  const d1 = await P.tool('open_chat', { text: 'mcp', key: 'w1' });
+  assert.equal(d1.error, undefined, JSON.stringify(d1));
+  const d2 = await P.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.equal(d2.error, 'too-many-chats', 'a plain chat\'s own roles.json took it past Workers per chat: ' + JSON.stringify(d2));
+  assert.match(d2.detail, /Settings > Delegation/);
+  // A worker that writes its own: the same.
+  const W = await attach(t, instance, d1.chat);
+  await promote(W);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 1, workers: [opus] })).status, 200);
+  const woff = await W.tool('open_chat', { text: 'config', key: 'w1' });
+  assert.equal(woff.error, 'delegate-off', 'a worker\'s own roles.json made it a sprint lead under Off: ' + JSON.stringify(woff));
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 1, workers: [opus] })).status, 200);
+  const k1 = await W.tool('open_chat', { text: 'config', key: 'w1' });
+  assert.equal(k1.error, undefined, JSON.stringify(k1));
+  const k2 = await W.tool('open_chat', { text: 'config', key: 'w2' });
+  assert.equal(k2.error, 'too-many-chats', 'a worker\'s own roles.json took it past Workers per chat: ' + JSON.stringify(k2));
+  console.log('PASS Sprint O174 FIX1: own roles.json, plain chat and worker: Off refused, Workers per chat refused the second, no key role-refused');
+});
+
+// O174 FIX1: what a sprint lead skips is Delegation; the runaway guards still hold on that path: 20 running workers
+// (two calls at once included: each holds a place while it starts) and 3 levels deep.
+test('Sprint O174 FIX1: a sprint lead past Delegation still stops at 20 running workers, two calls at once included, and at 3 levels deep', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  const opus = { agent: 'claude', model: 'opus', effort: 'high' };
+  // 20 running: the press makes 19 under the lead (Off, Workers per chat 1: neither applies to the sprint).
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Wide' })).body;
+  const write = (name, body) => fs.writeFileSync(path.join(s.folder, name), body);
+  const keys = Array.from({ length: 19 }, (_, i) => 'x' + i);
+  // Each role but review gets its own worker folder, cloned from the plan's repository.
+  const repo = path.join(instance.workspace, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  write('roles.json', JSON.stringify({ folder: 'repo', roles: ['lead', ...keys].map(row) })); write('roles/lead.work.md', 'mcp');
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 1, workers: [opus] })).status, 200);
+  // 19 worker folders take longer than call's 10 s.
+  const press = await http({ socketPath: instance.credentials.socketPath, route: `/sprints/${s.sprint}/start`, method: 'POST', timeout: 180000,
+    headers: { ...authenticated(instance.credentials), 'content-type': 'application/json' }, body: '{}' }).then((r) => ({ status: r.status, body: JSON.parse(r.text) }));
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  assert.equal(press.body.chats.length, 20);
+  const L = await attach(t, instance, s.sprint);
+  write('roles.json', JSON.stringify({ folder: 'repo', roles: ['lead', ...keys, 'y0', 'y1', 'y2'].map(row) }));
+  // Two at once with 19 running: one place is left, so exactly one starts; the other is refused while the first holds it.
+  const both = await Promise.all([L.tool('open_chat', { text: 'config', key: 'y0' }), L.tool('open_chat', { text: 'config', key: 'y1' })]);
+  assert.deepEqual(both.map((r) => r.error ?? 'ok').sort(), ['ok', 'too-many-chats'], 'two calls at once passed 20: ' + JSON.stringify(both));
+  assert.match(both.find((r) => r.error).detail, /At most 20 running workers per sprint chat, 3 levels deep/);
+  const third = await L.tool('open_chat', { text: 'config', key: 'y2' });
+  assert.equal(third.error, 'too-many-chats', 'a 21st worker started: ' + JSON.stringify(third));
+  assert.equal((await rows(instance)).filter((c) => c.parent === s.sprint && !['stopped', 'moved'].includes(c.state)).length, 20);
+  // 3 deep: a chain of plain workers, then the user's Start press makes the one at depth 3 a sprint lead.
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill(opus) })).status, 200);
+  // In the project, as a sprint's chats are.
+  let at = await agent(t, instance, project), id;
+  for (let depth = 1; depth <= 3; depth += 1) {
+    const made = await at.tool('open_chat', { text: 'mcp' });
+    assert.equal(made.error, undefined, 'depth ' + depth + ': ' + JSON.stringify(made));
+    id = made.chat; at = await attach(t, instance, id);
+  }
+  assert.equal((await at.tool('set_rules', { rules: 'Deep.' })).error, undefined);
+  assert.equal((await at.tool('sprint_setup_save', { name: 'roles.json', text: JSON.stringify({ roles: [row('lead')] }), hash: '' })).error, undefined);
+  const deep = await call(instance, `/sprints/${id}/start`, 'POST', {});
+  assert.equal(deep.status, 200, JSON.stringify(deep.body));
+  const files = (await at.tool('sprint_setup')).files;
+  assert.equal((await at.tool('sprint_setup_save', { name: 'roles.json', text: JSON.stringify({ roles: ['lead', 'z'].map(row) }), hash: files.find((f) => f.name === 'roles.json').hash })).error, undefined);
+  // Off: a plain chat would get delegate-off; this lead skips Off and stops at the depth guard.
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: Array(5).fill(opus) })).status, 200);
+  const tooDeep = await at.tool('open_chat', { text: 'config', key: 'z' });
+  assert.equal(tooDeep.error, 'too-many-chats', 'a sprint lead 3 deep started a worker: ' + JSON.stringify(tooDeep));
+  console.log('PASS Sprint O174 FIX1: 20 running held (two at once: one started, one refused; a 21st refused) and a lead 3 deep refused under Off');
+});

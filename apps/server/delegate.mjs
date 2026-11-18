@@ -203,10 +203,12 @@ export function createDelegate({ chat, allowed, usage }) {
   const OFF = { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
   const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' });
   const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
-  // O174: a sprint lead is a chat whose sprint New sprint made (P9 keeps prep:<id>) or whose sprint folder has a
-  // roles.json; open_chat writes neither, so a plain chat's workers stay Delegate's. Its chats are the sprint's, not
-  // Delegation's: Settings > Delegation's Off, Workers per chat and rows (places) do not apply to them, only the runaway guards.
-  const sprintLead = (id) => Boolean(chat.projects.prepOf(id)) || (chat.sprintFiles.exists(id) && chat.sprintFiles.read(id, 'roles.json') != null);
+  // O174: a sprint lead is a chat with a Start record (sprint-start:<id>, its plan hash), open and not closed. Its chats are
+  // the sprint's, not Delegation's: Settings > Delegation's Off, Workers per chat and rows (places) do not apply to them,
+  // only the runaway guards. FIX1: only startSprint writes that record, after the user's Start press or the user's yes to
+  // an agent's start_sprint (approveRows only adds to one that exists). It is in P9's own store, keyed by the chat's id,
+  // so no file write (set_rules, sprint_setup_save, a worker's folder) can make a chat a lead: a roles.json alone does not.
+  const sprintLead = (id) => Boolean(chat.projects.started(id)?.plan) && !chat.projects.closed(id);
   const tooManySprint = { error: 'too-many-chats', detail: 'At most ' + MAX_CHILDREN + ' running workers per sprint chat, ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' };
   const holding = new Map(); // parent -> Settings rows being started right now, so two calls at once never take one row
   // daemon-7: a stopped worker started again (send_chat, ask_chat) takes a place under Workers per chat from the check
@@ -259,8 +261,10 @@ export function createDelegate({ chat, allowed, usage }) {
     // cannot create an unapproved worker"). A sprint lead's (sprintLead above) worker names the key of a valid roles.json row and starts as that row, named for it (the role is the chat
     // name, so each worker is easy to tell apart); anything else is refused before a chat or a slot
     // is taken. A provider, model or effort named that the row does not start is refused by field.
-    if (opts.profile === undefined && sprintCall) {
-      const roles = chat.sprintFiles.read(caller, 'roles.json');
+    // FIX1: a file may tighten, never widen: a chat whose folder has a roles.json starts workers only from its rows (as
+    // before O174), while Delegation's limits still apply to it unless it is a sprint lead (a Start record, above).
+    const roles = opts.profile === undefined && chat.sprintFiles.exists(caller) ? chat.sprintFiles.read(caller, 'roles.json') : undefined;
+    if (opts.profile === undefined && (sprintCall || chat.projects.prepOf(caller) || (roles !== undefined && roles !== null))) {
       let parsed; try { parsed = JSON.parse(roles ?? 'null'); } catch { parsed = null; }
       const file = 'roles.json in ' + (chat.sprintFiles.folderOf(caller) ?? 'the sprint folder');
       if (!Array.isArray(parsed?.roles)) return { error: 'role-refused', role: args.key ?? null, field: 'roles.json', detail: `${file} is ${roles == null ? 'missing' : 'not { "roles": [ ... ] }'}: a sprint's workers start only from its role rows. Fix the file in Sprint Setup.` };
