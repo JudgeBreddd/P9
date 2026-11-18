@@ -500,7 +500,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const rulesOf = (parent) => sprintFiles.read(parent, 'rules.md') ?? db.prepare('SELECT value FROM prefs WHERE key = ?').get('rules:' + parent)?.value ?? DEFAULT_RULES;
   // A worker's instructions and notes path (open_chat, SECURITY.md § Sprint files), kept in prefs under start:<chat>
-  // and sent after the rules of each message from its parent until one is confirmed to have reached the agent
+  // and sent after the rules of each message from its parent or from P9 itself (O171) until one is confirmed to have reached the agent
   // (startSent: the prompt's turn ended, or the steer was injected). sending: chats whose block is on its way; the
   // messages sent meanwhile leave it out, and a failure (startLost) frees it for the next one. A failed start, a failed
   // prompt or a daemon restart before confirmation keeps it. ponytail: a restart while a turn that already read it is
@@ -570,7 +570,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       : `[P9: your instructions, from your sprint's ${name}.\n${quoted(said)}]\n\n`;
   };
   const rulesFor = (conversation, body) => {
-    const mine = conversation?.parent && (senders.get(body) === conversation.parent || Boolean(mixed.get(body)?.includes(conversation.parent)));
+    const by = (who) => senders.get(body) === who || Boolean(mixed.get(body)?.includes(who));
+    const mine = conversation?.parent && by(conversation.parent);
     const lead = conversation?.parent, ownName = `roles/${conversation?.key}.rules.md`, raw = mine ? sprintFiles.read(lead, 'rules.md') : null;
     const ownRaw = mine && conversation.key ? sprintFiles.read(lead, ownName) : null;
     // [name, file text as read, text sent]: rules.md or, with none, the rules kept in prefs or P9's default (never approved).
@@ -578,7 +579,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const ok = parts.filter(([name, r]) => approved(lead, name, r)), rest = parts.filter((p) => !ok.includes(p));
     const text = rest.map(([, , t]) => quoted(t)).join('\n\n');
     const yes = ok.map(([name, r, t]) => `${name}, written by ${writerOf(lead, name, r)}:\n${quoted(t)}`).join('\n\n');
-    const start = mine && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
+    // O171: the start block also rides with a message P9 itself sends: a lead started from the Setup page has no parent,
+    // and its first message is P9's. The sprint rules stay with the parent's messages only.
+    const start = (mine || by('p9')) && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
     const all = (yes ? `[P9: sprint rules the user approved when they started this sprint. They hold for all your work here.\n${yes}]\n\n` : '')
       + (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
     return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
