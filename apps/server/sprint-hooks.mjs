@@ -52,9 +52,9 @@ export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : '
 
 // One run: no shell, the allow-list environment, input on stdin, the last KEEP bytes of output kept. Never throws.
 // -> { exit (the code, or null), reason (null | 'timeout' | 'not-started' | 'killed'), ms, line (the last output line) }.
-// env: what P9 adds for this run (O189: P9_SCRIPT_SOCKET, P9_SCRIPT_TOKEN). The token is cut out of the output kept,
+// say: O189's { socket, token } for this run, given as P9_SCRIPT_SOCKET and P9_SCRIPT_TOKEN. The token is cut out of the output kept,
 // so a script that prints it does not put it in hooks.log or a refusal.
-export function run(command, input, { cwd, timeout, env }) {
+export function run(command, input, { cwd, timeout, say }) {
   const began = Date.now();
   return new Promise((resolve) => {
     const argv = command.split(/\s+/).filter(Boolean); // ponytail: split on spaces, no quoting; a path with a space needs a wrapper script
@@ -63,13 +63,13 @@ export function run(command, input, { cwd, timeout, env }) {
       if (done) return; done = true; clearTimeout(timer); clearTimeout(drain);
       // The pipes are let go here: a program the script started may hold them open long after it.
       for (const pipe of [child?.stdin, child?.stdout, child?.stderr]) { try { pipe?.destroy(); } catch { /* closed */ } }
-      const token = env?.P9_SCRIPT_TOKEN, kept = out.toString('utf8');
+      const token = say?.token, kept = out.toString('utf8');
       const last = (token ? kept.replaceAll(token, '[token]') : kept).split(/\r?\n/).map((l) => clean(l)).filter(Boolean).at(-1) ?? '';
       resolve({ exit, reason, ms: Date.now() - began, line: last });
     };
     // ponytail: the child alone is ended; a program it started is not followed (SECURITY.md § Sprint scripts).
     const timer = setTimeout(() => { late = true; try { child?.kill('SIGKILL'); } catch { /* gone */ } end(null, 'timeout'); }, timeout);
-    try { child = spawn(argv[0], argv.slice(1), { cwd, env: { ...childEnv(), ...env }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); }
+    try { child = spawn(argv[0], argv.slice(1), { cwd, env: { ...childEnv(), ...(say ? { P9_SCRIPT_SOCKET: say.socket, P9_SCRIPT_TOKEN: say.token } : {}) }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); }
     catch { end(null, 'not-started'); return; }
     const keep = (chunk) => { out = Buffer.concat([out, chunk]); if (out.length > KEEP) out = out.subarray(out.length - KEEP); };
     child.stdout.on('data', keep); child.stderr.on('data', keep);
@@ -98,7 +98,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     if (!chat.socketPath) return go(undefined); // no daemon socket (tests without one): nothing to call
     const token = randomBytes(32).toString('hex');
     callers.set(token, { sprint, name, calls: 0 });
-    try { return await go({ P9_SCRIPT_SOCKET: chat.socketPath, P9_SCRIPT_TOKEN: token }); } finally { callers.delete(token); }
+    try { return await go({ socket: chat.socketPath, token }); } finally { callers.delete(token); }
   };
   // note: starts no turn. prompt: always a queued message, never a steer. Only to the sprint's lead, a chat under it or
   // the lead's parent; both are P9's, with a first line naming the script, never the user's. At most SAY_CALLS per run.
@@ -187,7 +187,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     let base; try { base = await state(sprint, point, subject); } catch { base = { contract: 1, point, error: 'state-unavailable' }; }
     for (const s of due) {
       const blocking = s.blocking && BLOCKING.includes(point);
-      const going = speaking(sprint, s.name, (env) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, env }))
+      const going = speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, say }))
         .then((r) => { record(sprint, s, r); return r; });
       if (!blocking) { going.catch(() => {}); continue; }
       const r = await going;
@@ -343,7 +343,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   async function runNow(sprint, script, by, still) {
     let base; try { base = await state(sprint, script.point, { manual: true, by }); } catch { base = { contract: 1, point: script.point, error: 'state-unavailable' }; }
     const no = still?.(); if (no) return no;
-    const r = await speaking(sprint, script.name, (env) => run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking, env }));
+    const r = await speaking(sprint, script.name, (say) => run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking, say }));
     record(sprint, { ...script, point: script.point + ' (run now)' }, r);
     return { sprint, script: script.name, point: script.point, exit: r.exit, reason: r.reason, ms: r.ms, line: r.line };
   }
