@@ -99,6 +99,21 @@ test('declining the plan ends the turn as cancelled, not as an error', async (t)
   }
 });
 
+// O183: a plan can also be declined by message (a message sent while the approval is open cancels it, chat.mjs
+// decline()); it must end the same way as the reject option, not as the raw plan diagnostic.
+test('declining the plan by message ends the turn as cancelled, not as an error', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'plan decline' });
+  const { hit: approval, cursor } = await until(instance, (event) => event.conversation === id && event.type === 'approval');
+  assert.equal(approval.data.toolCall.kind, 'switch_mode');
+  const steered = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'not this plan' }));
+  assert.deepEqual([steered.status, steered.body.steered], [202, true], steered.text); // the message declines the open approval
+  const end = await until(instance, (event) => event.conversation === id && (event.type === 'turn-end' || event.type === 'error'), cursor);
+  assert.ok(end.seen.some((event) => event.type === 'answered' && event.data.answer?.outcome?.outcome === 'cancelled')); // declined, not answered
+  assert.deepEqual([end.hit.type, end.hit.data.stopReason], ['turn-end', 'cancelled'], JSON.stringify(end.hit));
+});
+
 test('approvals and questions are answered only with options and fields the agent offered', async (t) => {
   const instance = await start(t);
   const id = await create(instance);

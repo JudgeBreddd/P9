@@ -1094,6 +1094,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const decline = (id, session, body) => {
     if (senders.has(body)) return;
     for (const [request, pending] of session.pending) {
+      // O183: a message that declines the plan approval arms planDeclined like the reject option does in answer(),
+      // so the prompt that fails with the adapter's plan diagnostic reads as a cancelled turn, not a raw error.
+      if (pending.kind === 'approval' && pending.request.toolCall?.kind === 'switch_mode') session.planDeclined = session.turn;
       const answer = pending.kind === 'approval' ? { outcome: { outcome: 'cancelled' } } : { action: 'cancel' };
       pending.resolve(answer);
       emit(id, 'answered', { request, answer });
