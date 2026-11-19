@@ -24,6 +24,7 @@ import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
+import { counted } from './ledger.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -1632,8 +1633,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const shared = told.length > 0 && !mixed.has(body);
       const prompt = bare ? blocks(body.text, []) : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
       if (rules?.started) sending.add(id);
-      // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-      const done = (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
+      // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
+      // the reply's model_usage, compactions included) when the reply has it.
+      const done = (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
       // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
       new Promise((resolve) => resolve(session.agent.prompt({ sessionId: session.sessionId, prompt }))).then(
         done,

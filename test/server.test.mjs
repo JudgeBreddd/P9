@@ -9,6 +9,7 @@ import net from 'node:net';
 import { createListener } from '../apps/server/server.mjs';
 import { agentDirs, planLimits } from '../apps/server/limits.mjs';
 import { openLedger } from '../apps/server/ledger.mjs';
+import * as ledgers from '../apps/server/ledger.mjs';
 import { limitLine } from '../apps/web/src/helpers.mjs';
 import { ROUTES } from '../packages/protocol/index.mjs';
 import { daemon, http, authenticated, root } from './helpers.mjs';
@@ -203,6 +204,35 @@ test('token totals name what they count; a run with no usage event counts in the
   assert.deepEqual(spent, { inputTokens: 10, outputTokens: 5, cachedTokens: 900, costUsd: 0.9, turns: 1, tokens: "prompted turns and Claude Code's own runs" });
   assert.deepEqual([usage.tokens, usage.totals.cachedTokens, usage.totals.costUsd], ["prompted turns and Claude Code's own runs", 900, 0.9]);
   console.log('PASS O190: spent and /usage name what their tokens count; the run with no usage event is in the cost (0.9), not the tokens');
+});
+
+// O190 remainder: a compaction's tokens. claude-agent-acp 0.106.0 answers a /compact turn with usage all 0 and puts the
+// compaction's spend in _meta.quota.model_usage (seen live, evidence o190). counted() takes the rows; the ledger counts it.
+test('O190 compaction: a turn counts its model_usage (a /compact turn is not 0); a reply without it, or with a bad row, counts its usage', () => {
+  assert.equal(typeof ledgers.counted, 'function', 'no counted: a /compact turn counts 0 tokens (the reply usage), its model_usage is dropped');
+  const { counted } = ledgers;
+  const zero = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 };
+  const row = (model, inputTokens, cachedInputTokens, cachedWriteTokens, outputTokens) => ({ model, token_count: { inputTokens, cachedInputTokens, cachedWriteTokens, outputTokens } });
+  const reply = (usage, model_usage) => ({ stopReason: 'end_turn', usage, ...(model_usage && { _meta: { quota: { model_usage } } }) });
+  // The live /compact reply: usage 0, one model row. Two models add up.
+  assert.deepEqual(counted(reply(zero, [row('h', 2242, 33491, 81, 692)])), { inputTokens: 2242, outputTokens: 692, cachedReadTokens: 33491, cachedWriteTokens: 81 });
+  assert.deepEqual(counted(reply(zero, [row('h', 2242, 33491, 81, 692), row('s', 8, 100, 0, 8)])), { inputTokens: 2250, outputTokens: 700, cachedReadTokens: 33591, cachedWriteTokens: 81 });
+  // Never below the reply's own usage in a field (a resumed session's first reply seeds model_usage from usage).
+  assert.deepEqual(counted(reply({ inputTokens: 9, outputTokens: 1, cachedReadTokens: 5000, cachedWriteTokens: 0 }, [row('h', 2, 400, 3, 7)])), { inputTokens: 9, outputTokens: 7, cachedReadTokens: 5000, cachedWriteTokens: 3 });
+  // No reply usage at all: the rows alone. A missing counter is 0.
+  assert.deepEqual(counted(reply(undefined, [{ model: 'h', token_count: { inputTokens: 4, outputTokens: 2 } }])), { inputTokens: 4, outputTokens: 2, cachedReadTokens: 0, cachedWriteTokens: 0 });
+  // No model_usage (Codex, an older adapter, no _meta), an empty list, or any row not plain counts: null, the reply's usage counts.
+  for (const bad of [undefined, [], [row('h', -1, 0, 0, 0)], [row('h', 1.5, 0, 0, 0)], [{ model: 'h' }], [row('h', '3', 0, 0, 0)], [null], 'rows'])
+    assert.equal(counted(bad === undefined ? reply(zero) : { usage: zero, _meta: { quota: { model_usage: bad } } }), null, JSON.stringify(bad));
+  assert.equal(counted({ stopReason: 'cancelled' }), null);
+  // The ledger counts a turn-end's counted when it has one, its usage when not; a turn-end with neither counts nothing.
+  const ledger = openLedger(':memory:');
+  ledger.append('c', 'turn-end', { usage: zero, counted: counted(reply(zero, [row('h', 2242, 33491, 81, 692)])) });
+  ledger.append('c', 'turn-end', { usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 900 } });
+  ledger.append('c', 'turn-end', { stopReason: 'cancelled' });
+  const totals = ledger.usage().totals;
+  assert.deepEqual([totals.inputTokens, totals.outputTokens, totals.cachedTokens, ledger.usage().samples], [2252, 697, 34391, 2]);
+  console.log('PASS O190 compaction: a /compact reply with usage 0 counts its model_usage (' + JSON.stringify(totals) + '); a reply without model_usage or with a bad row counts its usage');
 });
 
 // O191: a chat on a provider profile is stored as provider claude, but spends neither the Claude plan nor the Claude
