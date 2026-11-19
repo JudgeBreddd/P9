@@ -340,10 +340,11 @@ test('O131 label: (Default) marks the Settings default effort and model when one
   await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 10000 });
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High'], 'none set: the agent\'s own');
   await pickDefaults(page, instance, 'claude', { model: 'haiku', effort: 'high' });
+  assert.equal(await pillValue(pane, 'Effort'), 'Medium', 'the pill is drawn again when the save is answered, not at the next event'); // CI: waited on an unrelated redraw
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium ✓', 'High (Default)'], 'the Settings default is marked');
   assert.deepEqual((await pillItems(page, pane, 'Model')).slice(0, 3), ['Default (recommended) ✓', 'Opus', 'Haiku (Default)']);
-  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium"]').waitFor({ timeout: 5000 });
   await pickDefaults(page, instance, 'claude', { model: '', effort: '' });
+  assert.equal(await pillValue(pane, 'Effort'), 'Medium (Default)', 'cleared: drawn again at once');
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High'], 'cleared: the agent\'s own again');
   assert.deepEqual((await pillItems(page, pane, 'Model')).slice(0, 3), ['Default (recommended) ✓', 'Opus', 'Haiku']);
   assert.deepEqual(errors, []);
