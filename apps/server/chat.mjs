@@ -584,6 +584,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const compacting = (session, id) => {
     if (session.compacting) return;
+    clearTimeout(session.quiet); session.quiet = null; // O192 FIX1: the compaction's end is the unprompted run's one end
     const timer = setTimeout(() => compacted.end(session, id, true), COMPACT_QUIET_MS);
     timer.unref?.();
     session.compacting = { cost: null, timer };

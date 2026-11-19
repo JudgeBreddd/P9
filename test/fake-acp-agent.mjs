@@ -442,6 +442,21 @@ const connection = acp.connectAgent(stream, {
       await say('bg-run reply');
       return { stopReason: 'end_turn' };
     }
+    // O192 FIX1: "bg-compact" is resumed with no prompt 4 s after its end (a reply), and 200 ms later compacts; the
+    // compaction ends (a higher cost) well before that reply's quiet time is up. Then nothing more.
+    if (text === 'bg-compact') {
+      setTimeout(async () => {
+        const cost = (amount) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount, currency: 'USD' } } });
+        await say('bg-compact done');
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-bg', title: 'Compact conversation', kind: 'think', status: 'completed' } });
+        await cost(1);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await cost(2);
+      }, 4000);
+      await say('bg-compact reply');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'bg-tool') {
       setTimeout(async () => {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'late-1', title: 'Late tool', kind: 'execute', status: 'in_progress' } });
