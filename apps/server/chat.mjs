@@ -577,16 +577,27 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const unpromptedEnd = (session, id) => {
     if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true, 'unprompted'); } catch {} }
   };
-  const unprompted = (session, id, update) => {
-    if (session.turn || session.solo || session.stopping || session.compacting || session.marked) return;
-    if (!session.quiet && !['tool_call', 'tool_call_update', 'agent_message_chunk'].includes(update?.sessionUpdate)) return;
+  // O194 FIX1: a marked run whose end mark never comes (the adapter crashed mid-run, a lost update) falls back to the
+  // quiet-time end after UNPROMPTED_MARK_MS with no update and no tool call open. 5 min is 5 times the quiet time: inside
+  // a live marked run every step streams an update (a reply or thought chunk, a tool call), and an open tool call already
+  // holds the run, so a silent gap that long means the mark was lost; it caps a lost mark at 5 min instead of until the
+  // next prompt. The fallback drops the mark, so a late end mark ends nothing a second time.
+  const UNPROMPTED_MARK_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_MARK_MS) > 0 ? Number(process.env.P9_UNPROMPTED_MARK_MS) : 300000;
+  const quiet = (session, id) => {
     clearTimeout(session.quiet);
+    const ms = () => (session.marked ? UNPROMPTED_MARK_MS : UNPROMPTED_QUIET_MS);
     session.quiet = setTimeout(function end() {
-      if (session.tools.size) { session.quiet = setTimeout(end, UNPROMPTED_QUIET_MS); session.quiet.unref?.(); return; }
+      if (session.tools.size) { session.quiet = setTimeout(end, ms()); session.quiet.unref?.(); return; }
       session.quiet = null;
+      session.marked = null;
       unpromptedEnd(session, id);
-    }, UNPROMPTED_QUIET_MS);
+    }, ms());
     session.quiet.unref?.();
+  };
+  const unprompted = (session, id, update) => {
+    if (session.turn || session.solo || session.stopping || session.compacting) return;
+    if (!session.quiet && !['tool_call', 'tool_call_update', 'agent_message_chunk'].includes(update?.sessionUpdate)) return;
+    quiet(session, id);
   };
   // O194: with asyncTasks advertised (clientCapabilities), claude-agent-acp marks that run: an async_task_spawned of taskType
   // 'turn' opens it and the same task's async_task_state_update to a final state ends it. A marked run ends there, with no
@@ -596,8 +607,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (update?.sessionUpdate === 'async_task_spawned' && update.taskType === 'turn') {
       if (session.turn || session.solo || session.stopping || session.compacting) return;
       session.marked = update.asyncTaskId;
-      clearTimeout(session.quiet); session.quiet = null;
+      quiet(session, id);
     } else if (update?.sessionUpdate === 'async_task_state_update' && update.asyncTaskId === session.marked && ['completed', 'failed', 'stopped'].includes(update.state)) {
+      clearTimeout(session.quiet); session.quiet = null;
       session.marked = null;
       unpromptedEnd(session, id);
     }

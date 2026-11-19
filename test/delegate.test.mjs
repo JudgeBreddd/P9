@@ -343,6 +343,34 @@ test('O194: an unprompted run with the adapter marks ends at its end mark, not a
   console.log('PASS O194: the marked run ended ' + took + ' ms after its last line (quiet time ' + QUIET + ' ms); no second end');
 });
 
+// O194 FIX1: a marked run whose end mark never comes ends at the bound (no update for P9_UNPROMPTED_MARK_MS), not never;
+// an end mark that comes after that fallback ends nothing a second time.
+const lostMark = async (t, text) => {
+  const QUIET = 30000, BOUND = 5000, instance = await start(t, { P9_UNPROMPTED_QUIET_MS: String(QUIET), P9_UNPROMPTED_MARK_MS: String(BOUND) });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text, title: 'Kid' });
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes(text + ' reply'));
+  const done = await until(instance, (e) => e.conversation === made.chat && e.type === 'update' && e.data?.sessionUpdate === 'agent_message_chunk' && e.data.content?.text === text + ' done');
+  const at = Date.now();
+  const second = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes(text + ' done'), done.cursor);
+  const took = Date.now() - at;
+  assert.equal(second.hit.data.text, '[p9] Kid ended its turn: ' + text + ' done');
+  assert.ok(took >= BOUND && took < QUIET, 'the run ended ' + took + ' ms after its last line, not at the ' + BOUND + ' ms bound');
+  return { instance, a, took, BOUND };
+};
+test('O194 FIX1: a marked run whose end mark never comes ends at the bound', { timeout: 120000 }, async (t) => {
+  const { took, BOUND } = await lostMark(t, 'bg-lost-mark');
+  console.log('PASS O194 FIX1: no end mark; the run ended ' + took + ' ms after its last line (bound ' + BOUND + ' ms)');
+});
+test('O194 FIX1: an end mark after the bound ended the run ends nothing a second time', { timeout: 120000 }, async (t) => {
+  const { instance, a, took } = await lostMark(t, 'bg-late-mark');
+  assert.ok(took < 12000, 'the bound, not the late end mark, ended the run: ' + took + ' ms');
+  await pause(12000 - took + 6000); // the late mark comes 12 s after the last line; then past the 3 s end hold
+  assert.deepEqual((await told(instance, a.conversation)).filter((x) => x.includes('Kid')), ['[p9] Kid ended its turn: bg-late-mark reply', '[p9] Kid ended its turn: bg-late-mark done'], 'one note per end: the late end mark did not end the run again');
+  console.log('PASS O194 FIX1: fallback end at ' + took + ' ms; the end mark at 12 s ended nothing again');
+});
+
 test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });

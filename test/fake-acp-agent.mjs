@@ -464,6 +464,19 @@ const connection = acp.connectAgent(stream, {
       await say('bg-marked reply');
       return { stopReason: 'end_turn' };
     }
+    // O194 FIX1: "bg-lost-mark" is "bg-marked" whose end mark never comes; "bg-late-mark" sends it 12 s after its last line.
+    if (text === 'bg-lost-mark' || text === 'bg-late-mark') {
+      const task = (update) => asyncTasks && connection.sessionUpdate({ sessionId, update });
+      setTimeout(async () => {
+        await task({ sessionUpdate: 'async_task_spawned', asyncTaskId: 'autonomous-turn-1', name: 'Claude is working', taskType: 'turn', description: 'A background task finished.', showInTranscript: false, canStop: true });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'resume-1', title: 'Resumed tool', kind: 'execute', status: 'in_progress' } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'resume-1', status: 'completed' } });
+        await say(text + ' done');
+        if (text === 'bg-late-mark') setTimeout(() => task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'autonomous-turn-1', state: 'completed' }), 12000);
+      }, 4000);
+      await say(text + ' reply');
+      return { stopReason: 'end_turn' };
+    }
     // O192 FIX1: "bg-compact" is resumed with no prompt 4 s after its end (a reply), and 200 ms later compacts; the
     // compaction ends (a higher cost) well before that reply's quiet time is up. Then nothing more.
     if (text === 'bg-compact') {
