@@ -411,7 +411,10 @@ touches them (the daemon's service also keeps `KillMode=process`). Stop Session 
 terminal's panes; a job that pane detached lives until Stop All stops the server unit,
 its slice and its pane scopes (known gap). Stored ACP provider session IDs resume
 through `session/resume` after restart. An in-flight turn becomes interrupted, its
-pending approval expires, and P9 never retries the prompt automatically.
+pending approval expires, and P9 never retries the prompt automatically. A message that was waiting for that
+turn's end (yours or an agent's; not a note, which waits on its own, nor another chat's question) is kept in the ledger
+and sent once after the restart, under its own sender and in the mode it waited with, as at a turn's end (O109). A
+line from a phone in it is sent even if that phone was revoked meanwhile: a restart forgets that check, as after Resume.
 
 The Phase 8 Dev Focus terminal is the VSCodium REH's node-pty, not a P9 tmux session.
 It remains deliberately coupled to the editor host and dies when that host is stopped;
