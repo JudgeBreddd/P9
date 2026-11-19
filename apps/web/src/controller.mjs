@@ -169,7 +169,13 @@ function takeLists(lists) {
 }
 // A chat's own report (a 'config' event): kept as the agent's list only when it is newer than the one held.
 const newLists = (a, at, model, pickers) => { if (!(at >= (listsAt[a] || 0))) return; listsAt[a] = at; if (model) lastModels[a] = model; if (pickers) lastPickers[a] = pickers; };
-const isDefault = (a, id, v) => v !== undefined && (id === null ? listDef[a]?.model : listDef[a]?.pickers?.[id]) === v;
+// O131: "(Default)" marks what a new chat made here starts on: the user's Settings default (startDefaults) while the agent still
+// offers it, else the agent's own start value.
+const isDefault = (a, id, v) => {
+  if (v === undefined) return false;
+  const p = id !== null && lastPickers[a]?.find(x => x.id === id), mine = id === null ? defaultModel(a) : p && pickerKind(p) === 'effort' ? defaultEffort(a) : '';
+  return (mine && (id === null ? lastModels[a]?.options : p.options)?.some(o => o.value === mine) ? mine : id === null ? listDef[a]?.model : listDef[a]?.pickers?.[id]) === v;
+};
 // The agent's other settings (threat model row 22), told apart by category: Effort (thought_level), Fast mode (model_config, in
 // the Model menu) and Codex's plan switch (collaboration_mode, the Mode menu's Plan). A list without categories (an older
 // daemon on a remote) goes by name. The chat bar's pills that read them are in chat-view.mjs.

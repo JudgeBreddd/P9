@@ -239,8 +239,8 @@ test('Settings > New chats start in: Default model and Default effort per agent,
     return pane;
   };
   let pane = await fresh();
-  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 5000 });
-  assert.equal(await pillValue(pane, 'Effort'), 'High');
+  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku (Default)"]').waitFor({ timeout: 5000 });
+  assert.equal(await pillValue(pane, 'Effort'), 'High (Default)'); // O131 label: the Settings default is the one marked
   await pane.locator('.composer textarea').fill('config'); await pane.locator('.composer textarea').press('Enter');
   await pane.locator('.hist', { hasText: 'config:model=haiku,effort=high,fast=off,sandbox=on' }).waitFor({ timeout: 20000 });
   // A pick inside the chat changes only that chat.
@@ -254,7 +254,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   await page.locator('#nav .row[data-chat="' + other + '"]').click();
   const otherPane = page.locator('.pane[data-id="' + other + '"]');
   await otherPane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
-  assert.equal(await pillValue(otherPane, 'Effort'), 'Medium (Default)');
+  assert.equal(await pillValue(otherPane, 'Effort'), 'Medium', 'O131 label: the agent\'s own is not called the default while a Settings default is set');
   await otherPane.locator('.composer textarea').fill('config'); await otherPane.locator('.composer textarea').press('Enter');
   await otherPane.locator('.hist', { hasText: 'config:model=default,effort=medium,fast=off,sandbox=on' }).waitFor({ timeout: 20000 });
   // After a restart: Settings still lists and shows them, and a new chat starts with them.
@@ -264,8 +264,8 @@ test('Settings > New chats start in: Default model and Default effort per agent,
     ['haiku', 'high', ["Agent's default", 'Default (recommended)', 'Opus', 'Haiku']]);
   await closeSettings();
   pane = await fresh();
-  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 5000 });
-  assert.equal(await pillValue(pane, 'Effort'), 'High');
+  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku (Default)"]').waitFor({ timeout: 5000 });
+  assert.equal(await pillValue(pane, 'Effort'), 'High (Default)'); // O131 label: the Settings default is the one marked
   console.log('PASS defaults: Default model and effort offered from the lists seen, applied to new chats here only, kept across a restart');
 });
 
@@ -300,10 +300,28 @@ test('O131: after a daemon restart and a window reload whose first read of the d
   const reply = pane.locator('.hist', { hasText: 'config:model=' }).first();
   await reply.waitFor({ timeout: 20000 });
   assert.match(await reply.innerText(), /config:model=haiku,effort=high,/, 'the first turn runs on the saved defaults');
-  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 10000 });
-  assert.equal(await pillValue(pane, 'Effort'), 'High');
+  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku (Default)"]').waitFor({ timeout: 10000 });
+  assert.equal(await pillValue(pane, 'Effort'), 'High (Default)');
   assert.deepEqual(errors, []);
   console.log('PASS O131: saved defaults applied to a New chat after a restart and a failed first read');
+});
+
+// O131 label: "(Default)" in a chat's Model and Effort menus and pills marks the user's Settings default once one is set (what a
+// new chat here starts on), not the agent's own start value; with none set, the agent's own again. A chat on another value is
+// not called the default.
+test('O131 label: (Default) marks the Settings default effort and model when one is set, the agent\'s own when none is', { timeout: 180000 }, async (t) => {
+  const { instance, pane, page, errors } = await setup(t, 'o131-label');
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High'], 'none set: the agent\'s own');
+  await pickDefaults(page, instance, 'claude', { model: 'haiku', effort: 'high' });
+  assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium ✓', 'High (Default)'], 'the Settings default is marked');
+  assert.deepEqual((await pillItems(page, pane, 'Model')).slice(0, 3), ['Default (recommended) ✓', 'Opus', 'Haiku (Default)']);
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium"]').waitFor({ timeout: 5000 });
+  await pickDefaults(page, instance, 'claude', { model: '', effort: '' });
+  assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High'], 'cleared: the agent\'s own again');
+  assert.deepEqual((await pillItems(page, pane, 'Model')).slice(0, 3), ['Default (recommended) ✓', 'Opus', 'Haiku']);
+  assert.deepEqual(errors, []);
+  console.log('PASS O131 label: (Default) follows the Settings default, else the agent\'s own');
 });
 
 // #222 review (FIX1): a Default save names only its own field and the daemon merges it. Forced: the daemon is paused (SIGSTOP) so the
@@ -457,7 +475,7 @@ test('Agent pill: an empty chat switches agent and takes that agent\'s defaults;
   await page.keyboard.press('ArrowUp'); await page.keyboard.press('Enter');
   const switched = await madeNext(page, had);
   assert.deepEqual([await pillValue(switched.pane, 'Agent'), await pillValue(switched.pane, 'Mode'), await pillValue(switched.pane, 'Model'), await pillValue(switched.pane, 'Effort')],
-    ['Claude', 'Plan', 'Haiku', 'High'], 'Claude, on Claude\'s defaults');
+    ['Claude', 'Plan', 'Haiku (Default)', 'High (Default)'], 'Claude, on Claude\'s defaults');
   await page.locator('#navList .row[data-chat="' + empty.id + '"]').waitFor({ state: 'detached', timeout: 10000 });
   assert.ok((await rows(page)).includes(id), 'the chat with messages is still there');
   await switched.pane.locator('.composer textarea').fill('config'); await switched.pane.locator('.composer textarea').press('Enter');
@@ -558,7 +576,7 @@ test('New menu, palette: New Claude session starts on the saved Default model', 
   await page.keyboard.press('Control+k'); await page.fill('#palIn', 'New Claude session');
   await page.locator('#palList li[data-i]', { hasText: 'New Claude session' }).first().waitFor({ timeout: 5000 }); await page.keyboard.press('Enter');
   const made = await madeNext(page, had);
-  await until(async () => await pillValue(made.pane, 'Model') === 'Opus', 'the palette\'s chat shows the saved default', 5000);
+  await until(async () => await pillValue(made.pane, 'Model') === 'Opus (Default)', 'the palette\'s chat shows the saved default', 5000);
   await sendModel(made.pane); await ranOn(made.pane, 'opus');
   assert.deepEqual(errors, []);
   console.log('PASS new menu palette: New Claude session starts on the saved Default model');
