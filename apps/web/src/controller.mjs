@@ -14,7 +14,6 @@ import { tileHtml, tileLevel, linkHtml, tileAnswer, quickNotePath, quickNoteHtml
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
-import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
 import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
