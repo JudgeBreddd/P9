@@ -413,7 +413,11 @@ its slice and its pane scopes (known gap). Stored ACP provider session IDs resum
 through `session/resume` after restart. An in-flight turn becomes interrupted, its
 pending approval expires, and P9 never retries the prompt automatically. A message that was waiting for that
 turn's end (yours or an agent's; not a note, which waits on its own, nor another chat's question) is kept in the ledger
-and sent once after the restart, under its own sender and in the mode it waited with, as at a turn's end (O109). A
+and sent after the restart, under its own sender and in the mode it waited with, as at a turn's end (O109). It is
+written to the ledger before the chat shows it as waiting, and leaves the ledger only once the agent took it. If P9
+stopped after the agent may have taken it but before P9 recorded that (a steer just accepted, or a prompt between its
+`user` event and the adapter's answer), P9 cannot tell, so it sends it again with a first line saying it may have
+reached the agent already: at least once and labelled, never lost and never a silent second copy. A
 line from a phone in it is sent even if that phone was revoked meanwhile: a restart forgets that check, as after Resume.
 
 The Phase 8 Dev Focus terminal is the VSCodium REH's node-pty, not a P9 tmux session.

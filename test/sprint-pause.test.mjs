@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
 import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -181,7 +182,12 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   instance = await restart(t, instance, 'state-4');
   await until(instance, (e) => e.conversation === id.w2 && e.data?.content?.text?.includes('crash-three'), mark);
   await pause(1000);
-  assert.deepEqual((await turns(id.w2, 'crash-', mark)).map((e) => e.data.text.match(/crash-\w+/)[0]), ['crash-one', 'crash-two', 'crash-three'], 'a message was lost or sent twice');
+  // O109 remainder: crash-one's user event was written but its agent never started, so P9 cannot know whether it got it:
+  // it goes again, once, saying it may be a repeat (never lost, never a silent second copy).
+  const went = await turns(id.w2, 'crash-', mark);
+  // crash-two and crash-three may wait together behind it and go as one prompt: every name in each prompt counts.
+  assert.deepEqual(went.flatMap((e) => e.data.text.match(/crash-\w+/g)), ['crash-one', 'crash-one', 'crash-two', 'crash-three'], 'a message was lost or sent twice');
+  assert.ok(!went[0].data.repeat && went[1].data.repeat === true && went[1].data.text === went[0].data.text, 'the resent crash-one does not say it may be a repeat, or its text changed: ' + JSON.stringify(went.map((e) => [e.data.text, e.data.repeat])));
   const modes = (await events(instance, id.w2)).filter((e) => e.cursor > mark && e.type === 'mode').map((e) => e.data.name);
   assert.equal(modes.at(-1), 'Manual', 'a kept message ran wider than its sender is now: ' + JSON.stringify(modes));
   assert.equal(await isPaused(), false);
@@ -203,6 +209,65 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   await until(instance, (e) => e.conversation === id.w2 && e.data?.content?.text?.includes('queued-two'), mark);
   await pause(1000);
   assert.deepEqual((await turns(id.w2, 'queued-', mark)).flatMap((e) => e.data.text.match(/queued-\w+/g)), ['queued-one', 'queued-two'], 'a message queued behind a running turn was lost or sent twice across a restart');
+
+  // O109 FIX2 (Reviewer P2): a resend that may be a repeat, into a sprint paused again, keeps its label through the pause,
+  // a crash just after the pause write and a restart while paused; Resume sends it once more, labelled, text unchanged.
+  mark = await cursor(instance);
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  again = await attach(t, instance, sprint, mark);
+  assert.deepEqual(await again.tool('pause_sprint'), { paused: true });
+  assert.ok((await again.tool('send_chat', { chat: id.w2, text: 'replay-one' })).held, 'replay-one was not kept');
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  fs.writeFileSync(hang, '');
+  instance = await restart(t, instance, 'state-6');
+  mark = await cursor(instance);
+  call(instance, `/sprints/${sprint}/resume`, 'POST', {}).catch(() => null);
+  await until(instance, (e) => e.conversation === id.w2 && e.type === 'user' && e.data.text?.includes('replay-one'), mark);
+  instance.child.kill('SIGKILL'); await once(instance.child, 'exit');
+  fs.rmSync(hang);
+  // Paused again while P9 is down, so the resend on the next start goes into the pause; and P9 dies just after that write.
+  const ledgerFile = [path.join(instance.directory, 'p9-foundation/p9.db'), path.join(instance.directory, '.local/state/p9-foundation/p9.db')].find((f) => fs.existsSync(f));
+  const ledger = new DatabaseSync(ledgerFile);
+  ledger.prepare("INSERT INTO prefs (key, value) VALUES (?, '[]') ON CONFLICT(key) DO UPDATE SET value = '[]'").run('paused:' + sprint); ledger.close();
+  const crashFile = path.join(instance.directory, 'crash-pause-write');
+  fs.writeFileSync(crashFile, '');
+  // The resend runs as P9 starts, so the crash can come before the start is done (daemon-exit): that is the crash.
+  const crashed = await restart(t, instance, 'state-7').catch((e) => (/daemon-exit/.test(e.message) ? null : Promise.reject(e)));
+  if (crashed) await Promise.race([once(crashed.child, 'exit'), pause(60000)]);
+  assert.ok(!fs.existsSync(crashFile), 'the resend never reached the pause write');
+  instance = await restart(t, instance, 'state-8');
+  await pause(3000);
+  const replays = async () => (await turns(id.w2, 'replay-one', mark)).map((e) => [e.data.text, e.data.repeat ?? false]);
+  assert.equal((await replays()).length, 1, 'a paused sprint\'s worker was sent the resend: ' + JSON.stringify(await replays()));
+  assert.equal(await isPaused(), true);
+  call(instance, `/sprints/${sprint}/resume`, 'POST', {}).catch(() => null);
+  for (let i = 0; i < 300 && (await replays()).length < 2; i += 1) await pause(100);
+  await pause(3000);
+  const [sent1, sent2, ...more] = await replays();
+  assert.ok(sent2 && !more.length, 'replay-one was lost or sent more than twice: ' + JSON.stringify(await replays()));
+  assert.ok(!sent1[1] && sent2[1] === true && sent2[0] === sent1[0], 'the resend through the pause lost its label, or its text changed: ' + JSON.stringify(await replays()));
+
+  // O109 FIX2, rule 3b: what a turn's end drains into a sprint paused meanwhile leaves the turn's kept list in the same write
+  // that pauses it, so a crash just after it sends it once on Resume, not twice.
+  mark = await cursor(instance);
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  again = await attach(t, instance, sprint, mark);
+  await call(instance, `/chat/${id.w2}/prompt`, 'POST', { text: 'gate' }); // the owner's own message: a turn that waits for 'go'
+  await until(instance, (e) => e.conversation === id.w2 && e.data?.content?.text === 'gating', mark);
+  assert.ok((await again.tool('send_chat', { chat: id.w2, text: 'drain-one', when: 'queue' })).held, 'drain-one was not held');
+  assert.deepEqual(await again.tool('pause_sprint'), { paused: true });
+  fs.writeFileSync(crashFile, '');
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  await Promise.race([once(instance.child, 'exit'), pause(60000)]);
+  assert.ok(!fs.existsSync(crashFile), 'the drain never reached the pause write');
+  instance = await restart(t, instance, 'state-9');
+  await pause(3000);
+  const drained = async () => (await turns(id.w2, 'drain-one', mark)).length;
+  assert.equal(await drained(), 0, 'a paused sprint\'s worker was sent the drained message');
+  call(instance, `/sprints/${sprint}/resume`, 'POST', {}).catch(() => null);
+  for (let i = 0; i < 300 && (await drained()) < 1; i += 1) await pause(100);
+  await pause(3000);
+  assert.equal(await drained(), 1, 'the drained message was lost or sent twice');
 
   // The cap: the lead's own pause (no note to itself), 100 kept, the 101st refused by name.
   mark = await cursor(instance);
