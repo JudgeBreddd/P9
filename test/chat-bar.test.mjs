@@ -269,6 +269,43 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   console.log('PASS defaults: Default model and effort offered from the lists seen, applied to new chats here only, kept across a restart');
 });
 
+// O131: Settings > New chats start in, saved before a daemon restart and an app restart (an update does both). The window reads
+// the saved values once, with the chat list; a read that fails then (the daemon still starting answers 503) left them unknown
+// for the window's whole life, so every New chat started on the agent's own. Forced: main answers the window's first read of
+// them with 503, then the window reloads; New is pressed at once.
+test('O131: after a daemon restart and a window reload whose first read of the defaults failed, a New chat starts on the saved Default model and effort', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-o131-')), 'profile');
+  const before = await launch(t, instance, profile);
+  await pickDefaults(before.page, instance, 'claude', { model: 'haiku', effort: 'high' });
+  await before.app.close();
+  instance.child.kill('SIGTERM');
+  await new Promise((resolve) => instance.child.exitCode !== null ? resolve() : instance.child.once('exit', resolve));
+  const second = await restart(t, instance, 'state-2');
+  assert.deepEqual((await call(second, '/start-defaults')).claude, { model: 'haiku', effort: 'high' }, 'the daemon kept them');
+  const { app, page, errors } = await launch(t, second, profile);
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.reads = 0;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && !Object.keys(args[1] ?? {}).length && !globalThis.reads++
+      ? { status: 503, body: { error: 'daemon-unavailable' } } : h(e, ...args));
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await page.click('#newBtn');
+  await page.locator('#navList .row[data-chat]').first().waitFor({ timeout: 15000 });
+  assert.ok(await app.evaluate(() => globalThis.reads) >= 1, 'the first read was made (and failed)');
+  const id = await page.locator('#navList .row[data-chat]').first().getAttribute('data-chat');
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
+  const pane = page.locator('#chats .pane[data-id="' + id + '"]');
+  await pane.locator('.composer textarea').fill('config'); await pane.locator('.composer textarea').press('Enter');
+  const reply = pane.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply.waitFor({ timeout: 20000 });
+  assert.match(await reply.innerText(), /config:model=haiku,effort=high,/, 'the first turn runs on the saved defaults');
+  await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 10000 });
+  assert.equal(await pillValue(pane, 'Effort'), 'High');
+  assert.deepEqual(errors, []);
+  console.log('PASS O131: saved defaults applied to a New chat after a restart and a failed first read');
+});
+
 // #222 review (FIX1): a Default save names only its own field and the daemon merges it. Forced: the daemon is paused (SIGSTOP) so the
 // model save is still unanswered when the effort is picked; and a second window, opened before the first one's pick, changes
 // another field. Before the fix each save sent the whole object from the window's last answer and put back the older value.
