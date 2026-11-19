@@ -108,8 +108,15 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.click('[data-act="code:claude"]');
   assert.equal(await until(() => readFile(path.join(instance.workspace, 'fake-login-code'), 'utf8').catch(() => ''), 'the code'), '"abc 123"\n');
   await page.waitForFunction(() => document.querySelector('#welCode')?.value === '', null, { timeout: 5000 }); // sent: the box empties
-  await page.click('[data-act="open:claude"]');
+  // O71: the owner is in the code box when "Browser didn't open?" redraws the step with its note. Before, the note went
+  // above the box and the position-matched redraw replaced the box, so what was typed next was lost and Send sent ''
+  // (CI: the sign-in never ended, the daemon still running). The click is made from the page so focus stays in the box.
+  await page.focus('#welCode');
+  await page.evaluate(() => document.querySelector('[data-act="open:claude"]').click());
   assert.equal((await until(() => readFile(opened, 'utf8').catch(() => ''), 'the open')).trim(), 'https://claude.com/cai/oauth/authorize?fake=1');
+  await page.locator('#welBody', { hasText: 'Opened the sign-in page in your browser' }).waitFor({ timeout: 10000 });
+  await page.keyboard.insertText('done');
+  assert.deepEqual(await page.evaluate(() => [document.activeElement?.id, document.querySelector('#welCode').value]), ['welCode', 'done'], 'the code box kept focus and what was typed through the redraw');
   assert.ok(!(await page.content()).includes('oauth'), 'the page never holds the URL');
   // "done" ends the fake CLI without a credentials file: the cause, and Retry in place of Sign in.
   // O187: the window polls the sign-in record every 10 s (BL5) with one immediate refresh after a code send, so a
@@ -119,7 +126,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   // daemon's own login record first (the CLI really ended), then a UI watchdog for the window to catch up — not a
   // longer timeout from the click.
   await writeFile(path.join(instance.workspace, 'login-exit-slow'), '');
-  await page.fill('#welCode', 'done'); await page.click('[data-act="code:claude"]');
+  await page.click('[data-act="code:claude"]');
   for (let i = 0; i < 60; i++) { const s = await call(instance, '/setup/login'); if (s.claude && !s.claude.running && s.claude.exit !== null) break; await new Promise((r) => setTimeout(r, 500)); }
   const ended = await call(instance, '/setup/login');
   assert.ok(ended.claude && !ended.claude.running && ended.claude.exit !== null, 'the daemon recorded the sign-in end: ' + JSON.stringify(ended));
