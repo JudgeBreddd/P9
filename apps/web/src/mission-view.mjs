@@ -200,9 +200,11 @@ const widgetOn = w => outer.sampleView || outer.M.space.some(s => s.widget === w
 // + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
 const icmSpace = () => outer.sampleView || outer.M.space.some(namesPanel) || outer.M.icmFiles && !outer.M.space.some(namesPanel);
 const allNotes = () => outer.S.alerts;
+// O190: what the token totals count, in the daemon's words (/usage tokens, ledger.mjs TOKENS); an older daemon sends none.
+const tokensSay = () => usage.tokens ? `<p class="sm" data-tokens>Tokens counted: ${esc(usage.tokens)}</p>` : '';
 const usageBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
-  : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`)
+  : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div>${tokensSay()}<p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`)
   // O191: a provider profile's chats, outside the Claude totals; its cost is the adapter's estimate, never a Claude bill. Drawn
   // whatever the Claude state: state counts Claude records only, so a profile's spend alone reads 'unavailable'.
   + (usage.profiles ?? []).map(p => `<p class="sm" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');
@@ -930,5 +932,5 @@ function missionModal(m, body, row) {
   } else return false;
   return true;
 }
-  return { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal };
+  return { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal };
 }

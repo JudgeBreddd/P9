@@ -16,7 +16,7 @@ import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
 type Window = { usedPercent: number; resetsAt: number | null; windowMins?: number };
 type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Window & { name: string })[]; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
@@ -2056,7 +2056,7 @@ async function loadUsage() {
     // The redraw (startup twice, Refresh, every 20 s) keeps an opened Details open.
     const more = one('#usage').querySelector('details.more')?.open ? ' open' : '';
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p><p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>`
+    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>`
       + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"${more}><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
   } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
 }

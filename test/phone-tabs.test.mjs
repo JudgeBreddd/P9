@@ -213,6 +213,8 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.waitForSelector('#usage .sum', { timeout: 10000 });
   // Spec §6, P5: "27,600 in · 3,820 out · $0.28 at API prices"; the fixture's cost is $0.2768.
   await soft('Cost in cents', async () => assert.match(await page.locator('#usage .sum').innerText(), /^27,600 in · 3,820 out · \$0\.28 at API prices/));
+  // O190 (web half): the totals say what they count, in the daemon's words (/usage tokens).
+  await soft('Token totals say what they count', async () => assert.equal(await page.locator('#usage [data-tokens]').innerText(), 'Tokens counted: prompted turns and Claude Code\'s own runs'));
   await soft('Details has a chevron', async () => {
     const chevron = () => page.evaluate(() => { const after = getComputedStyle(document.querySelector('#usage details.more summary'), '::after'); return after.content !== 'none' && after.width === '8px' ? after.transform : 'none'; });
     const closed = await chevron();
