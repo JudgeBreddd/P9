@@ -235,13 +235,15 @@ function sprintGroup() {
 const NOTICE_ROWS = [['ready', 'Ready report', 'A worker marked its task ready.'], ['approval', 'Approval', 'A worker waits on an approval.'],
   ['question', 'Question', 'A worker waits on an answer to a question.'], ['compacting', 'Compacting', 'A worker is compacting and will go on.'],
   ['ended', 'Turn ended', 'A worker ended its turn.'], ['sprint', 'Sprint paused or resumed', 'You paused or resumed a sprint; its lead is told.']];
-let notices = null, noticesNote = '';
+// Saves go one after another (each answer is P9's whole map, so a late one could show values already replaced), and a pick
+// still saving is shown over that map until its own answer, so another answer never undoes it.
+let notices = null, noticesNote = '', noticesWant = {}, noticesSaves = Promise.resolve();
 function noticesGroup() {
   if (!window.p9?.chat || !outer.liveChat?.on) return '';
-  const off = notices ? '' : ' disabled';
-  return `<fieldset class="set-group" id="setNotices"><legend>Notices ${info('How P9 tells a chat about its workers: a note, or a message that starts the chat\'s turn.', 'settings')}</legend>`
+  const off = notices ? '' : ' disabled', shown = { ...notices, ...noticesWant };
+  return `<fieldset class="set-group" id="setNotices"${Object.keys(noticesWant).length ? ' data-notice-saving' : ''}><legend>Notices ${info('How P9 tells a chat about its workers: a note, or a message that starts the chat\'s turn.', 'settings')}</legend>`
     + '<p class="muted sm">Note: a line in the chat that starts no turn. Message: it starts the chat\'s turn, or joins the one running. A chat that is stopped gets a note.</p>'
-    + NOTICE_ROWS.map(([k, label, what]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${what}</span></span><span class="spacer"></span><select data-slot="input" data-notice="${k}" aria-label="${label}" style="width:9em"${off}>${[['note', 'Note'], ['message', 'Message']].map(([v, n]) => `<option value="${v}"${notices?.[k] === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`).join('')
+    + NOTICE_ROWS.map(([k, label, what]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${what}</span></span><span class="spacer"></span><select data-slot="input" data-notice="${k}" aria-label="${label}" style="width:9em"${off}>${[['note', 'Note'], ['message', 'Message']].map(([v, n]) => `<option value="${v}"${shown[k] === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`).join('')
     + (notices ? '' : '<p class="muted sm" data-notice-wait>Reading from P9…</p>') + (noticesNote ? `<p class="muted sm" data-notice-note>${esc(noticesNote)}</p>` : '') + '</fieldset>';
 }
 function drawNotices() { const el = outer.$('#setNotices'); if (el) { el.outerHTML = noticesGroup(); bindNotices(); } }
@@ -249,10 +251,14 @@ function bindNotices() {
   const el = outer.$('#setNotices'); if (!el) return;
   if (!notices && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('notices', {}).then(r => { if (r?.status === 200) { notices = r.body; drawNotices(); } }).catch(() => {}); }
   // One kind per save; the daemon answers with every kind, so the rows show what it keeps.
-  el.querySelectorAll('[data-notice]').forEach(x => { x.onchange = async () => {
-    const r = await window.p9.chat('notices', { set: { [x.dataset.notice]: x.value } }).catch(() => null);
-    if (r?.status === 200) { notices = r.body; noticesNote = ''; } else noticesNote = 'Not saved: P9 did not take it. Try again in a moment.';
-    drawNotices();
+  el.querySelectorAll('[data-notice]').forEach(x => { x.onchange = () => {
+    const k = x.dataset.notice, v = x.value; noticesWant[k] = v; noticesNote = ''; el.dataset.noticeSaving = '';
+    noticesSaves = noticesSaves.then(async () => {
+      const r = await window.p9.chat('notices', { set: { [k]: v } }).catch(() => null);
+      if (noticesWant[k] === v) delete noticesWant[k];
+      if (r?.status === 200) notices = r.body; else noticesNote = 'Not saved: P9 did not take it. Try again in a moment.';
+      drawNotices();
+    });
   }; });
 }
 // Drawn again on its own (never the whole page, which would drop what is being typed in another box).
