@@ -29,26 +29,27 @@ function repo(t) {
   return { folder, commit: (m) => { g('commit', '--allow-empty', '-qm', m); return g('rev-parse', 'HEAD'); }, merge: () => { g('checkout', '-q', 'main'); g('merge', '-q', '--ff-only', 'work'); g('checkout', '-q', 'work'); } };
 }
 
-function world(t, { paused = false, withReviewer = true } = {}) {
+function world(t, { paused = false, withReviewer = true, started = true } = {}) {
   const { folder, commit, merge } = repo(t);
   const store = new Map([[worker, { task: { item: 'B1', doneMeans: 'done', checks: ['test'] } }]]);
   const states = new Map([[lead, 'running'], [worker, 'running'], [reviewer, 'running']]);
   const family = [{ id: lead, project: 'p', title: 'Lead' }, { id: worker, parent: lead, key: 'w1', project: 'p', title: 'Kid' },
     ...(withReviewer ? [{ id: reviewer, parent: lead, key: 'review', project: 'p', title: 'Rev' }] : [])];
-  const prompts = [], notes = [];
+  const prompts = [], notes = [], refused = [], archived = new Set(), taskTurn = new Set();
+  let refuse = 0; // the next `refuse` prompts are refused (a lifecycle 503), and logged in `refused`
   const make = () => {
     const settled = [];
     let ready;
     const restarted = new Promise((resolve) => { ready = resolve; });
     const chat = {
-      lock: () => ({ on: false }), list: () => [], family: () => family,
+      lock: () => ({ on: false }), list: () => family.map((c) => ({ ...c, archived: archived.has(c.id) })), family: () => family,
       info: (id) => { const c = family.find((x) => x.id === id); return c && { provider: 'claude', mode: 'Auto', ...c, state: states.get(id) }; },
-      activeTaskTurn: (id) => (states.get(id) === 'turn' ? 'turn-1' : null),
+      activeTaskTurn: (id) => (states.get(id) === 'turn' || taskTurn.has(id) ? 'turn-1' : null),
       sprint: (id) => store.get(id) ?? {}, setSprint: (id, patch) => store.set(id, { ...(store.get(id) ?? {}), ...patch }),
       startFolder: async () => folder, gauge: () => ({}), pin: () => {}, turnEnded: () => {}, acts: () => 0, reply: () => 'done for now',
-      note: async (id, text) => { notes.push([id, text]); }, prompt: async (id, body) => { prompts.push([id, body.text]); return { status: 202 }; },
+      note: async (id, text) => { notes.push([id, text]); }, prompt: async (id, body) => { if (refuse > 0) { refuse -= 1; refused.push([id, body.text]); return { status: 503, error: 'restarting' }; } prompts.push([id, body.text]); return { status: 202 }; },
       settled: (hook) => { settled.push(hook); }, restarted: () => restarted,
-      projects: { started: (id) => (id === lead ? { plan: 'hash', at: 1 } : null), closed: () => null }, paused: () => paused,
+      projects: { started: (id) => (started && id === lead ? { plan: 'hash', at: 1 } : null), closed: () => null }, paused: () => paused,
     };
     const tools = createDelegate({ chat });
     return { tools, end: async (id, how) => { for (const hook of settled) hook(id, true, how); await settle(); }, boot: async () => { ready({ chats: [], storm: false }); await settle(); } };
@@ -56,7 +57,7 @@ function world(t, { paused = false, withReviewer = true } = {}) {
   const ready = async (p9, c, row) => { states.set(worker, 'turn'); const out = await p9.tools.ready({ commit: c, results: [{ check: 'test', result: 'passed' }], weakest: 'none', ...(row && { row }) }, worker); states.set(worker, 'running'); assert.ok(out.ready, JSON.stringify(out)); await settle(); };
   const verdict = async (p9, c, result) => { states.set(reviewer, 'turn'); const out = p9.tools.verdict({ chat: worker, commit: c, result, note: 'see the test' }, reviewer); states.set(reviewer, 'running'); assert.ok(out.verdict, JSON.stringify(out)); await settle(); };
   const who = { [lead]: 'lead', [worker]: 'worker', [reviewer]: 'reviewer' };
-  return { make, store, states, commit, merge, prompts, notes, ready, verdict, order: () => prompts.map(([id]) => who[id]) };
+  return { make, store, states, commit, merge, prompts, notes, ready, verdict, family, archived, taskTurn, refused, refuse: (n) => { refuse = n; }, order: () => prompts.map(([id]) => who[id]) };
 }
 
 test('O193: an item\'s whole life (ready, fix, ready, pass) wakes reviewer, worker, reviewer, then worker (next item) and lead, and nothing else', { timeout: 30000 }, async (t) => {
@@ -169,6 +170,41 @@ test('O193: ready names the plan row, so two rows from one worker are two review
   w.states.set(worker, 'turn');
   const bad = await p9.tools.ready({ commit: c2, results: [{ check: 'test', result: 'passed' }], weakest: 'none', row: 'O 3; rm' }, worker);
   assert.equal(bad.error, 'request-refused');
+});
+
+test('O193 FIX1: a refused wake is not spent: the next event for the sprint sends it', { timeout: 30000 }, async (t) => {
+  const w = world(t), p9 = w.make();
+  await p9.boot();
+  w.refuse(1); // P9 is restarting when the ready comes: the reviewer's wake is refused
+  await w.ready(p9, w.commit('one'));
+  assert.equal(w.refused.length, 1, JSON.stringify(w.refused));
+  assert.deepEqual(w.order(), []);
+  await p9.end(lead); // the next event: the wake goes now
+  assert.deepEqual(w.order(), ['reviewer'], JSON.stringify(w.prompts));
+  await p9.end(lead); // and once only
+  assert.deepEqual(w.order(), ['reviewer']);
+});
+
+test('O193 FIX1: with no sprint Start, a reviewer added after P9 started still gets the first ready', { timeout: 30000 }, async (t) => {
+  const w = world(t, { withReviewer: false, started: false }), p9 = w.make();
+  await p9.boot(); // no Start record and no reviewer: not a sprint yet
+  w.family.push({ id: reviewer, parent: lead, key: 'review', project: 'p', title: 'Rev' });
+  await w.ready(p9, w.commit('one'));
+  assert.deepEqual(w.order(), ['reviewer'], JSON.stringify(w.prompts));
+});
+
+test('O193 FIX1: an unprompted run\'s end wakes nobody while O188 would not: the lead archived or waiting on it, a task turn running', { timeout: 30000 }, async (t) => {
+  const w = world(t), p9 = w.make();
+  await p9.boot();
+  w.taskTurn.add(worker); // a prompted turn of the worker is still its task turn
+  await p9.end(worker, 'unprompted'); await settle(3600);
+  assert.deepEqual(w.order(), [], JSON.stringify(w.prompts));
+  w.taskTurn.delete(worker); w.archived.add(lead);
+  await p9.end(worker, 'unprompted'); await settle(3600);
+  assert.deepEqual(w.order(), [], JSON.stringify(w.prompts));
+  w.archived.delete(lead);
+  await p9.end(worker, 'unprompted'); await settle(3600); // with both gone, it wakes as before
+  assert.deepEqual(w.order(), ['lead']);
 });
 
 test('O193 decide: a record whose commit is on main, or queued before the sprint started, wakes nobody', () => {

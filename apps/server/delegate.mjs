@@ -772,7 +772,7 @@ export function createDelegate({ chat, allowed, usage }) {
     trail(info.parent);
     // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
     const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
-    if (inSprint(info.parent)) { carry(info.parent, { type: 'ready', chat: caller }).catch(() => {}); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
+    if (inSprint(info.parent)) { carry(info.parent, { type: 'ready', chat: caller, at: value.at }).catch(() => {}); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
     if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
@@ -802,7 +802,7 @@ export function createDelegate({ chat, allowed, usage }) {
       trail(worker.parent);
       if (args.result === 'pass') chat.prompt?.(args.chat, { text: `[p9] ${item} passed review at ${args.commit}. Start your next item.`, when: 'queue' }, undefined, 'p9').catch(() => {});
       if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
-      carry(worker.parent, { type: 'verdict', chat: caller }).catch(() => {});
+      carry(worker.parent, { type: 'verdict', chat: caller, at: value.at }).catch(() => {});
     } else if (item && worker?.parent) {
       trail(worker.parent);
       const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
@@ -842,7 +842,9 @@ export function createDelegate({ chat, allowed, usage }) {
   };
   // One carry at a time per lead, so two events close together never both read the record before either writes it.
   const carrying = new Map();
+  // FIX1 (Reviewer): the event's time is taken when it happens (ready and verdict pass their record's own), before any wait.
   const carry = (lead, event) => {
+    event = { at: Date.now(), ...event };
     const next = (carrying.get(lead) ?? Promise.resolve()).then(() => carryNow(lead, event)).catch(() => {});
     carrying.set(lead, next);
     next.then(() => { if (carrying.get(lead) === next) carrying.delete(lead); });
@@ -861,16 +863,16 @@ export function createDelegate({ chat, allowed, usage }) {
     }));
     if (!inSprint(lead)) return;
     const record = chat.sprint(lead), woken = { ...(record.carry ?? {}) };
-    // Records older than the sprint are not carried: its Start, else the first carry for this lead.
-    const since = chat.projects?.started?.(lead)?.at ?? record.carrySince ?? Date.now(), first = !record.carrySince;
+    // Records older than the sprint are not carried: its Start, else the first carry for this lead. FIX1 (Reviewer): that
+    // first carry's epoch is its event's time, not now: a first ready (a reviewer added after P9 started) is carried.
+    const since = chat.projects?.started?.(lead)?.at ?? record.carrySince ?? event.at, first = !record.carrySince;
     if (first) chat.setSprint(lead, { carrySince: since });
     const wakes = decide({ lead: { id: lead, busy: busy(lead) }, started: since, first, woken, workers,
-      reviewer: rev ? { id: rev.id, title: rev.title, busy: busy(rev.id) } : null }, { at: Date.now(), ...event });
-    for (const w of wakes) {
-      chat.prompt(w.chat, { text: w.text, when: 'queue' }, undefined, 'p9').catch(() => {});
-      woken[w.key] = Date.now();
-    }
-    if (wakes.length) chat.setSprint(lead, { carry: woken });
+      reviewer: rev ? { id: rev.id, title: rev.title, busy: busy(rev.id) } : null }, event);
+    // FIX1 (Reviewer): a key is spent only by a wake P9 accepted (a refusal, a 503 while P9 restarts say, keeps it for the next event).
+    const sent = await Promise.all(wakes.map((w) => chat.prompt(w.chat, { text: w.text, when: 'queue' }, undefined, 'p9').then((r) => r?.status < 300, () => false)));
+    wakes.forEach((w, i) => { if (sent[i]) woken[w.key] = Date.now(); });
+    if (sent.some(Boolean)) chat.setSprint(lead, { carry: { ...(chat.sprint(lead).carry ?? {}), ...woken } });
   }
   chat.settled((id) => {
     const lead = inSprint(id) ? id : chat.info?.(id)?.parent;
@@ -1316,8 +1318,11 @@ export function createDelegate({ chat, allowed, usage }) {
     const ended = Date.now(), sentToLead = (toLead.get(id) ?? -1) > (turnEnds.get(id)?.[0] ?? 0); // O193: anything but a note to the lead since its prompt
     // O193 F1: a run P9 never prompted (O192) has already been quiet UNPROMPTED_QUIET_MS: the idle rule looks at its end,
     // after END_HOLD_MS, not 10 min later. A prompted turn's end keeps O188's 10 min (it often waits on its own background run).
+    // FIX1 (Reviewer): it keeps O188's guards (no task turn, not ready, the lead not archived nor in wait_chat on it), all
+    // but one: the lead may be stopped, since an O192 run often ends while its lead is (O188's check never prompts a stopped parent).
     if (how === 'unprompted' && at && inSprint(at)) setTimeout(() => {
-      if (endGen.get(id) === gen && chat.acts(id) === acts && chat.info(id)?.state !== 'turn' && !chat.info(id)?.compacting) carry(at, { type: 'idle', chat: id, ended, sentToLead }).catch(() => {});
+      if (endGen.get(id) === gen && chat.acts(id) === acts && chat.info(id)?.state !== 'turn' && !chat.info(id)?.compacting
+        && !chat.activeTaskTurn(id) && !chat.sprint(id).ready && !shelved(at) && !waiting.has(at + ':' + id)) carry(at, { type: 'idle', chat: id, ended, sentToLead }).catch(() => {});
     }, END_HOLD_MS).unref?.();
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
