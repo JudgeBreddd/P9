@@ -118,7 +118,7 @@ test('PH1: sign-in keeps the linked chat, and drops any fragment that is not #ch
 // chat has a queue: it stops when the queue empties and when the chat closes, and starts again when a message is queued.
 test('O125 tick: the phone strip\'s oldest wait advances; its timer stops on an empty queue and a closed chat, and restarts', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
-  await newChat(page, 'claude');
+  const other = await newChat(page, 'claude'), id = await newChat(page, 'claude');
   await setOnline(page, false);
   await page.clock.install();
   const tick = () => page.evaluate(() => document.querySelector('#queued').dataset.tick ?? '');
@@ -136,10 +136,22 @@ test('O125 tick: the phone strip\'s oldest wait advances; its timer stops on an 
   await page.click('#composer button');
   await page.waitForSelector('#queued:not([hidden])');
   assert.equal(await tick(), 'on', 'a message queued again restarts it');
+  // A hidden tab skips ticks; back on screen the age is current at once, not a tick late.
+  const hide = (hidden) => page.evaluate((hidden) => { Object.defineProperty(document, 'hidden', { get: () => hidden, configurable: true }); if (!hidden) document.dispatchEvent(new Event('visibilitychange')); }, hidden);
+  await hide(true); await page.clock.runFor(3 * 60000 + 1000);
+  assert.equal(await summary(), '1 queued, oldest waiting <1 min ▸', 'hidden: no redraw');
+  await hide(false);
+  assert.equal(await summary(), '1 queued, oldest waiting 3 min ▸', 'visible again: the age is current at once');
+  // Another chat with nothing queued: the timer stops; back on this chat it runs again (one timer).
+  await pick(page, other);
+  assert.equal(await tick(), '', 'a chat with no queue: no timer');
+  await pick(page, id);
+  assert.equal(await tick(), 'on', 'back on the queued chat');
+  assert.equal(await summary(), '1 queued, oldest waiting 3 min ▸');
   await toList(page);
   await page.clock.runFor(15001);
   assert.equal(await tick(), '', 'a closed chat stops the timer at its next tick');
-  console.log('PASS O125 tick: <1 min -> 2 min on the fake clock; timer off when empty, on again, off after the chat closed');
+  console.log('PASS O125 tick: <1 min -> 2 min on the fake clock; timer off when empty, on again; current on return from hidden; follows a chat switch; off after the chat closed');
 });
 
 for (const agent of ['claude', 'codex']) {
