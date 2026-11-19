@@ -465,7 +465,7 @@ export function createDelegate({ chat, allowed, usage }) {
   const pause = (ms, signal) => new Promise((resolve) => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true }); });
   // by: 'owner' (the desktop's press) or the chat whose agent calls start_sprint (asked first, in every mode).
   // S13 (SECURITY.md § Pause sprint). A sprint's lead is a chat with a sprint folder; the owner's press (setup-routes.mjs)
-  // and the lead's own tool pause or resume its workers. Only the press sends the lead a note: the lead knows what it did.
+  // and the lead's own tool pause or resume its workers. Only the press sends the lead a notice (a note by default, O197): the lead knows what it did.
   const PAUSED = { error: 'sprint-paused', detail: 'Your sprint is paused: resume_sprint first, or wait for the user to resume it.' };
   const isLead = (id) => ID.test(id ?? '') && !!chat.info(id) && chat.sprintFiles.exists(id);
   function pauseSprint(lead, owner) {
@@ -1304,7 +1304,8 @@ export function createDelegate({ chat, allowed, usage }) {
   // meanwhile drops it: that turn's own end comes. A parent in wait_chat on it at the end gets no end line (wait_chat's
   // answer is the news), but does get the compacting note. ponytail: a compaction later than END_HOLD_MS still sends the end line first.
   const END_HOLD_MS = 3000;
-  // O188 (the owner's usage plan point 1): a worker's end reaches its parent as a note, which starts no turn (CI, dev-space
+  // O188 (the owner's usage plan point 1): a worker's end reaches its parent as a note by default (O197: Settings > Notices
+  // can make it a message), which starts no turn (CI, dev-space
   // and other waits end turns all night). Only a worker still stopped WAKE_AFTER_MS later (no newer end, no turn or tool
   // call started, not compacting, not ready) prompts its parent, once; a failed turn prompts at once.
   // P9_WAKE_AFTER_MS is honoured only under the test home (test/helpers.mjs sets P9_TEST_HOME), so a shipped unit never takes it.
@@ -1315,7 +1316,8 @@ export function createDelegate({ chat, allowed, usage }) {
   // settled hook), so a cancelled second turn drops the held line. A turn answering ask_chat takes none: the held line
   // keeps its own text (read at the end, not 3 s later) and goes, and only a prompted turn still running at 3 s drops it.
   const endGen = new Map(); // chat -> number of its latest end
-  // O84: a worker that starts waiting on an approval or a question tells its parent at once, as a note (no turn), with
+  // O84: a worker that starts waiting on an approval or a question tells its parent at once (O197: by default a message that
+  // starts its turn; a note when Settings > Notices says so), with
   // what answer_chat needs, unless the parent is already in wait_chat on it (that returns the same waiting).
   chat.asked?.((id, ask) => {
     const child = chat.info(id), at = child?.parent;
@@ -1355,7 +1357,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const last = first;
     if (!live || !parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     if (!ok) return void wake(parent, id, '[p9] ' + child.title + ' failed; read_chat shows why.');
-    // O188: the end itself is a note (starts no turn); the parent is prompted only if the worker is still stopped WAKE_AFTER_MS later.
+    // O188: the end itself is a note by default (starts no turn; O197 can make it a message); the parent is prompted only if the worker is still stopped WAKE_AFTER_MS later.
     notify(parent.id, 'ended', '[p9] ' + child.title + ' ended its turn: ' + last, id); // its key is the late wake's: a newer one replaces it while it waits
     setTimeout(() => {
       const child = chat.info(id), parent = child?.parent && chat.info(child.parent);

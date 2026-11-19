@@ -810,8 +810,9 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   only; Delegate saves nothing that grants access. What it adds to the ledger is which chat
   started which, and the name the parent gave it.
 - **What P9 sends on its own.** When a worker's turn ends and its parent is not waiting on it,
-  P9 sends the parent one note, `[p9] <title> ended its turn: <last line of the reply>`, marked in the
-  transcript as P9's and not yours. Like any note it starts no turn (O188): a parent that is working
+  P9 sends the parent one notice, `[p9] <title> ended its turn: <last line of the reply>`, marked in the
+  transcript as P9's and not yours. By default it is a note, and like any note it starts no turn (O188); Settings > Notices
+  can make it a message (O197), which starts or joins the parent's turn as below. As a note, a parent that is working
   reads it at its next step (one whose agent cannot steer, at its next message), and an idle parent
   keeps it until its next message. If the worker is still stopped 10 minutes later (no newer end, no
   turn or tool call started, not compacting, not marked ready), P9 sends the parent one message,
@@ -819,9 +820,12 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   running one to end and then goes with the notes that waited. That line is text the worker wrote, so the parent reads
   it as a report, not as an instruction from you. A worker whose agent dies mid-turn is reported
   at once as `[p9] <title> failed`, a message that starts the parent's turn. A worker that starts waiting on an approval or a
-  question gives its parent one note at once (O84), `[p9] <title> is waiting on an approval: <what it asks>. answer_chat request
-  "<id>" with ...`, naming the option ids or the form's fields; it starts no turn and is not sent while the parent is in
-  `wait_chat` on that worker. The approval's text is the worker's, read as a report like the end line. Each is sent only to a parent that is running; none starts
+  question gives its parent one notice at once (O84), `[p9] <title> is waiting on an approval: <what it asks>. answer_chat request
+  "<id>" with ...`, naming the option ids or the form's fields; by default (O197) it is a message that starts the parent's
+  turn, or a note that starts none when Settings > Notices says so, and it is not sent while the parent is in
+  `wait_chat` on that worker. Every kind of notice (ready report, approval, question, compacting, turn end, and a sprint's
+  pause or resume to its lead) can be set to note or message there; a message goes only to a parent that is open and not
+  stopped, and otherwise the notice goes as a note. The approval's text is the worker's, read as a report like the end line. Each is sent only to a parent that is running; none starts
   a stopped chat. A run the agent makes with no prompt (Claude Code resumed by a finished background task) counts as a
   turn for these lines (O192): it ends once a minute passes with no update and no tool call open.
 - **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
