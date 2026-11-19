@@ -394,7 +394,7 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   };
   // Folded: the box first (what could not be found in O109), then the strip says how many wait.
   await onScreen('folded');
-  assert.equal(await pane.locator('.queue > summary').innerText(), waiting + ' queued');
+  assert.equal(await pane.locator('.queue > summary').innerText(), waiting + ' queued, oldest waiting <1 min'); // O125 (4): a stuck queue shows how long its oldest has waited
   assert.equal(await pane.locator('.queue').evaluate((el) => el.open), false);
   // Open: all of them listed, each with its Take back, and the box still on screen.
   await pane.locator('.queue > summary').click();
