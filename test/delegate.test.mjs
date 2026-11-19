@@ -309,6 +309,24 @@ test('O188 FIX1: a worker that starts a tool inside the end hold and finishes it
   console.log('PASS O188 FIX1: a tool started 1 s after the end (inside the 3 s hold) and completed at 2.5 s cancelled the ' + WAKE + ' ms wake; one note, no parent turn');
 });
 
+// O192: a worker resumed with no prompt after its end (a background task finished) runs outside a P9 turn. When that
+// run goes quiet the parent gets the same end note, and the same wake if the worker then stays stopped.
+test('O192: an unprompted run that ends gives its parent an end note and one wake', { timeout: 120000 }, async (t) => {
+  const WAKE = 5000, instance = await start(t, { P9_WAKE_AFTER_MS: String(WAKE), P9_UNPROMPTED_QUIET_MS: '2000' });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'bg-run', title: 'Kid' });
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('bg-run reply'));
+  await until(instance, (e) => e.conversation === made.chat && e.type === 'update' && e.data?.toolCallId === 'resume-1' && e.data.status === 'completed');
+  const second = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('bg-run done'));
+  assert.equal(second.hit.data.text, '[p9] Kid ended its turn: bg-run done');
+  const woke = await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data.from === 'p9', second.cursor);
+  assert.equal(woke.hit.data.text, '[p9] Kid has been stopped 10 min: bg-run done');
+  await pause(WAKE + 1000);
+  assert.deepEqual((await told(instance, a.conversation)).filter((x) => x.includes('Kid')), ['[p9] Kid ended its turn: bg-run reply', '[p9] Kid ended its turn: bg-run done', '[p9] Kid has been stopped 10 min: bg-run done'], 'one note per end, one wake');
+  console.log('PASS O192: the unprompted run ended after 2 s quiet; second end note; one wake after ' + WAKE + ' ms');
+});
+
 test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
