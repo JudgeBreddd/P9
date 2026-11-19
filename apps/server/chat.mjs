@@ -486,16 +486,18 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         heldAuthority.delete(item.id);
         const recorded = item.sending !== undefined && db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'user' AND cursor > ? AND json_valid(data) AND data ->> '$.text' = ? LIMIT 1").get(item.chat, item.sending, item.body.text);
         if (recorded) { done(); continue; }
-        const picked = !allowed() ? { error: 'session-ended' } : narrow ? narrow(item) : { mode: item.body.mode };
+        // O109: one a restart cut out of a turn's queue (was) goes in the mode it waited with, as at that turn's end; its
+        // sender may not be running yet, so its mode now is not known.
+        const picked = !allowed() ? { error: 'session-ended' } : narrow && !item.was ? narrow(item) : { mode: item.body.mode };
         if (picked.error) { emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: picked.error }); done(); continue; }
         setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
         const body = { ...item.body, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
         if (item.mixed) mixed.set(body, item.mixed);
-        const result = await api.prompt(item.chat, body, undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
+        // was: the ID it waited under before a restart, so its 'user' event clears it from the window.
+        const result = await api.prompt(item.chat, body, item.was ? [item.was] : undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
         if (result.status !== 202 && result.status !== 200) emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: result.error ?? 'refused' });
-        // Into a running turn's queue: kept until settleResumed sees it delivered or refused.
-        if (result.held && result.when === 'queue') setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, queued: result.held } : i)));
-        else done();
+        // Into a running turn's queue: hold() keeps it there under its new ID (O109), so this entry goes.
+        done();
       }
     } finally { delivering.delete(lead); }
   }
@@ -1275,6 +1277,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const mode = old ? (oldQueued || repicks ? 'queue' : 'steer') : when;
     (mode === 'queue' ? session.queued : session.held).push(item);
     emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: mode, ...(old && { replaces: old.id }) });
+    // O109: the queue is memory, so a held message is also kept in resuming:<chat> as queued: <its ID> until a 'user'
+    // event carries it or an 'unheld' names it (settleResumed); a P9 restart before then sends it once (resumeLeft).
+    // A note (parked:<chat> keeps it), another chat's question (its asker is gone) and a command are not kept.
+    if (!notes.has(body) && !solos.has(body) && !commands.has(body)) setResuming(id, [...resumingOf(id), { id: item.id, chat: id, from: senders.get(body) ?? null, mixed: mixed.get(body) ?? null, queued: item.id,
+      body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } }]);
     return { status: 202, held: item.id, when: mode, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
@@ -1307,6 +1314,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       park(id, item.body);
     }
     if (!items.length) return;
+    // O109: P9 shutting down is not the user's Stop: what hold() kept in resuming:<chat> stays waiting, and the next
+    // start sends it (resumeLeft). Only what was not kept is told as not sent.
+    if (closing && !cancelled) { const kept = new Set(resumingOf(id).map((i) => i.queued)); return unheld(id, items.filter((item) => !kept.has(item.id)), 'stopped'); }
     if (cancelled || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
     const gone = items.filter((item) => !item.allowed());
     unheld(id, gone, 'session-ended');
@@ -1763,7 +1773,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A message left in a turn's queue when P9 stopped: recorded (a 'user' event carries its id, or an 'unheld' names
         // it) leaves the list; otherwise the queue it was in is gone, and it is sent again in its place.
         const lead = key.slice(9), seen = db.prepare("SELECT 1 FROM events WHERE conversation = ? AND json_valid(data) AND ((type = 'user' AND EXISTS (SELECT 1 FROM json_each(data, '$.held') WHERE value = ?)) OR (type = 'unheld' AND data ->> '$.id' = ?)) LIMIT 1");
-        setResuming(lead, resumingOf(lead).flatMap((i) => (!i.queued ? [i] : seen.get(i.chat, i.queued, i.queued) ? [] : [{ ...i, queued: undefined }])));
+        setResuming(lead, resumingOf(lead).flatMap((i) => (!i.queued ? [i] : seen.get(i.chat, i.queued, i.queued) ? [] : [{ ...i, queued: undefined, was: i.queued }])));
         deliver(lead, narrow).catch(() => {});
       }
     },
