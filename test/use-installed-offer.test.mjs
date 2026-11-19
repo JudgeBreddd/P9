@@ -54,3 +54,22 @@ test('O135 offer: Keep my setup that cannot be written says why (main.mjs shows 
   assert.ok(branch.includes("updateLog('keep my setup not saved: ' + failed)") && branch.includes("type: 'warning'") && branch.includes('detail: failed'), branch);
   console.log('PASS O135 keep: a write under a plain file says ' + JSON.stringify(why) + '; the window warns with it and logs it; a good write reads back as kept');
 });
+
+test('O135 offer: a Keep my setup warning or offer dialog that throws or rejects is logged, not an unhandled rejection', async () => {
+  assert.equal(typeof offer.guarded, 'function', 'no guarded: a rejecting Keep my setup warning (main.mjs returns dialog.showMessageBox with no catch) is an unhandled rejection');
+  const lines = [], log = (line) => lines.push(line);
+  // A dialog that rejects, one that throws before it returns, and one that answers.
+  assert.equal(await offer.guarded(() => Promise.reject(new Error('window gone')), log, 'keep my setup warning failed'), null);
+  assert.equal(await offer.guarded(() => { throw new TypeError('no window'); }, log, 'keep my setup warning failed'), null);
+  assert.deepEqual(await offer.guarded(() => Promise.resolve({ response: 0 }), log, 'keep my setup warning failed'), { response: 0 });
+  assert.deepEqual(lines, ['keep my setup warning failed: window gone', 'keep my setup warning failed: no window']);
+  // main.mjs: the warning goes through guarded with that label and no second dialog; the whole offer chain ends in a logged catch.
+  const main = fs.readFileSync(new URL('../apps/desktop/main.mjs', import.meta.url), 'utf8');
+  const branch = main.slice(main.indexOf('if (response === 1)'), main.indexOf('if (response !== 2)'));
+  assert.ok(branch.includes('return guarded(() => dialog.showMessageBox(window, {') && branch.includes("updateLog, 'keep my setup warning failed')"), branch);
+  assert.equal(branch.split('showMessageBox').length - 1, 1, 'one dialog in the Keep my setup branch: ' + branch);
+  const start = main.indexOf('serviceResult?.then(async (result) => {'), chain = main.slice(start, main.indexOf('if (watched) {', start));
+  assert.match(chain, /\}\)\.catch\(\(error\) => updateLog\('use installed offer failed: ' \+ \(error\?\.message \|\| String\(error\)\)\)\);\s*$/, chain.slice(-200));
+  console.log('PASS O135 warning: a rejecting and a throwing dialog are each one log line; the offer chain ends in a logged catch');
+});
+

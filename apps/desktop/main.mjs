@@ -9,7 +9,7 @@ import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, useInstalledDaemon, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
-import { daemonOffer, keptCheckout, keepText, failureOf } from './use-installed.mjs';
+import { daemonOffer, keptCheckout, keepText, failureOf, guarded } from './use-installed.mjs';
 import { connectServer, forwardPath, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
@@ -453,8 +453,8 @@ export async function createDesktop({ state, open } = {}) {
       if (!failed) return;
       updateLog('keep my setup not saved: ' + failed);
       if (window.isDestroyed()) return;
-      return dialog.showMessageBox(window, { type: 'warning', title: 'Keep my setup', message: 'P9 could not save your choice to keep this setup.',
-        detail: failed + '\n\nThe service is unchanged. P9 will ask again at the next start. File: ' + keepFile, noLink: true });
+      return guarded(() => dialog.showMessageBox(window, { type: 'warning', title: 'Keep my setup', message: 'P9 could not save your choice to keep this setup.',
+        detail: failed + '\n\nThe service is unchanged. P9 will ask again at the next start. File: ' + keepFile, noLink: true }), updateLog, 'keep my setup warning failed');
     }
     if (response !== 2) return;
     const moved = await useInstalledDaemon({ checkout: result.checkout, seen: result.seen, state: localState });
@@ -463,7 +463,7 @@ export async function createDesktop({ state, open } = {}) {
       message: moved.done ? 'The background service now runs P9 ' + moved.version + '.' : 'The background service was not moved (' + moved.error + ').',
       detail: (moved.done ? 'The old service file is kept as ' + moved.backup + '.' : moved.restored === false ? 'Putting the old service back failed; the old service file is ' + moved.backup + '.'
         : moved.restored ? 'The old service is back as it was.' : 'Nothing was changed.') + ' Details: ' + path.join(p9, 'service-install.log'), noLink: true });
-  });
+  }).catch((error) => updateLog('use installed offer failed: ' + (error?.message || String(error))));
   if (watched) {
     window.on('session-end', quitting);
     const ready = new Promise(resolve => window.once('ready-to-show', resolve));
