@@ -1130,6 +1130,7 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Sprint View');
   assert.equal(await page.locator('[data-sv-done]').textContent(), `${st.done.merged} of ${st.done.total} items merged`);
   assert.deepEqual([await fact('ticked'), await fact('chats'), await fact('scripts')], [`${st.done.ticked} of ${st.done.total}`, String(st.workers.length), '1']);
+  assert.equal(await fact('rate'), String(st.prs_per_hour), 'PRs an hour, from the status answer'); // O162
   await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base'), script('later'), script('unseen')] }));
   assert.match(await fact('time'), /^(under a minute|\d+ min)$/);
   assert.equal(await page.locator('.sv-ring.big b').textContent(), '0/3');

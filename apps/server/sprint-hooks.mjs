@@ -10,6 +10,9 @@ import { hashOf, phasesOf, planItems } from './sprint-files.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // The four a script may refuse, then the notices.
+// O162 PRs an hour: items merged (each item is one PR) per hour since Start, to one decimal. Within the first hour it is
+// the count merged so far, which is that hour's count: no huge rate from a few minutes' run.
+const perHour = (merged, ms) => Math.round((merged * 10) / Math.max(1, ms / 3_600_000)) / 10;
 export const BLOCKING = ['before-start', 'before-new-worker', 'before-merge', 'before-close'];
 export const POINTS = [...BLOCKING, 'sprint-start', 'worker-folder-made', 'before-ready', 'ci-red', 'gate-passed', 'pause', 'resume', 'after-close'];
 // The points P9 has an action for today; the rest are accepted, approved and never run (SECURITY.md says so).
@@ -263,17 +266,20 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     // O164 part (3): a v line (Role: owner) never merges — it closes on the owner's click — so it is counted nowhere a
     // merge is counted: not in done.total, not in a phase's steps. It belongs to the owner's own queue and ring (owner).
     const mine = s.items.filter((i) => i.role !== 'owner'), owned = s.items.filter((i) => i.role === 'owner'),
-      clicked = new Set(Object.keys(chat.sprint?.(sprint)?.ownerDone ?? {}));
+      clicked = new Set(Object.keys(chat.sprint?.(sprint)?.ownerDone ?? {})),
+      merged = mine.filter((i) => i.review?.merged === true).length, ms = start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null;
     return { ...s, closed: null,
       // merged: by P9's own record of the merge (mergedNow); ticked: the box in the plan, a model's say-so, counted but never done.
       // unproven: reviewed items P9 cannot prove merged because it holds no clone or copy of the repo — the 0 is a fact, not silence.
-      done: { merged: mine.filter((i) => i.review?.merged === true).length, ticked: s.items.filter((i) => i.ticked).length,
+      done: { merged, ticked: s.items.filter((i) => i.ticked).length,
         unproven: repo === null ? mine.filter((i) => i.review?.commit && i.review?.merged !== true).length : 0, total: mine.length },
       // The owner's own (Role: owner lines): closed by P9's record of the owner's click (ownerDone on the lead's state),
       // never by the plan's tick, never by a merge. An empty queue answers { done: 0, total: 0, items: [] }.
       owner: { done: owned.filter((i) => clicked.has(i.id)).length, total: owned.length,
         items: owned.map((i) => ({ id: i.id, text: i.text, ticked: i.ticked, done: clicked.has(i.id) })) },
-      running_ms: start && Number.isFinite(start.at) ? Math.max(0, Date.now() - start.at) : null,
+      running_ms: ms,
+      // O162: PRs an hour, the items merged per hour since Start (perHour); null before Start.
+      prs_per_hour: ms === null ? null : perHour(merged, ms),
       // phases (I1): each "## Phase" heading of the plan with its items merged and its total; current: the first
       // with an item not merged (null once all have merged). [] for a plan with no such heading: the page shows no phase line.
       ...phasesView(chat.sprintFiles.read(sprint, 'sprint.md'), s.items),
