@@ -29,7 +29,8 @@ const usage = { state: 'unavailable', samples: 0, discarded: 0, totals: { inputT
 async function loadUsage() {
   if (!window.p9?.usage) return;
   const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
-  Object.assign(usage, result.status === 200 ? result.body : { state: 'unavailable' });
+  // O190 FIX1: tokens is optional (an older daemon sends none), so each answer sets it or clears it.
+  Object.assign(usage, { tokens: undefined }, result.status === 200 ? result.body : { state: 'unavailable' });
   outer.renderMission();
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
