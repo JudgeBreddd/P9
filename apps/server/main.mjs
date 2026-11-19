@@ -200,14 +200,17 @@ try {
   else {
     const acl = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', windowsHost, '-Mode', 'PipeLock', '-Pipe', socketPath], { encoding: 'utf8', env: childEnv() });
-    if (acl.status !== 0) throw new Error('pipe-acl-not-current-user-only');
+    if (acl.status !== 0) throw Object.assign(new Error('pipe-acl-not-current-user-only'), { code: 'PIPE_ACL' });
   }
   // A second process must bind successfully before it may create credentials.
   const credentialFile = await open(path.join(values.state, 'desktop.json'), 'wx', 0o600);
   try { await credentialFile.writeFile(JSON.stringify(credentials)); await credentialFile.sync(); }
   finally { await credentialFile.close(); }
-} catch {
+} catch (error) {
   console.error('P9_START_FAILED');
+  // N6-1 (a): the error's code or name only (EADDRINUSE, EEXIST, PIPE_ACL), never its message, which can hold a path.
+  // A line of its own, so teh.mjs still matches 'P9_START_FAILED' exactly.
+  console.error('P9_START_FAILED_CODE ' + ([error?.code, error?.name].find((v) => /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(v ?? '')) ?? 'unknown'));
   process.exit(1);
 }
 // daemon.log beside the state folder is checked every 10 min, not only when its starter runs: the Windows task's
