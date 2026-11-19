@@ -605,7 +605,8 @@ export function createDelegate({ chat, allowed, usage }) {
         const work = (chat.sprintFiles.read(sprint, `roles/${r.key}.work.md`) ?? '').trim() || 'Your sprint started. Read your instructions and your notes file, then begin your work.';
         // Made by an earlier press whose first message never reached its agent (its start or a setting failed): sent now.
         if (existing && !chat.delivered(existing.id)) {
-          const mode = modeFor(sprint, { provider: r.provider, mode: null }, r.mode);
+          // O137 FIX1: the same start mode as openChat's (Unrestricted: the Settings default or Auto), not the lead's.
+          const mode = modeFor(sprint, { provider: r.provider, mode: null }, startMode(sprint, r.provider, r.mode ?? undefined));
           if (mode.error) return { ...mode, role: r.key, chats };
           const sent = await chat.prompt(existing.id, { text: work, mode: mode.mode, ...(!r.profile && { model: r.model }), ...(r.effortId && { config: { [r.effortId]: r.effort } }) }, undefined, sprint);
           if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', role: r.key, chats, detail: `Role ${r.key} was made, but its message was not sent; press Start again.` };
