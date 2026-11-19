@@ -23,7 +23,8 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 // One line of text safe for the page, the log and a tool result: no control characters, no table bar, single spaces, at most LINE.
 export const clean = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029|\s]+/g, ' ').trim().slice(0, LINE);
 
-// hooks.json as text -> { scripts } (each { name, command, point, blocking }), or { error } naming the row and field.
+// hooks.json as text -> { scripts } (each { name, command, point, blocking, notify? }), or { error } naming the row and field.
+// notify (O189 2b): one chat outside the sprint (a chat id, e.g. the coordinator) this script's POST /script may also reach.
 // No file, or an empty one, is no scripts. The library (S18) is the same list under another name and a larger limit.
 export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
   if (text === null || text === undefined || !String(text).trim()) return { scripts: [] };
@@ -34,7 +35,7 @@ export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
   const scripts = [];
   for (const [i, r] of rows.entries()) {
     const at = `${what}, script ${i + 1}`;
-    if (!r || typeof r !== 'object' || Array.isArray(r) || Object.keys(r).some((k) => !['name', 'command', 'point', 'blocking'].includes(k))) return { error: `${at}: only name, command, point and blocking.` };
+    if (!r || typeof r !== 'object' || Array.isArray(r) || Object.keys(r).some((k) => !['name', 'command', 'point', 'blocking', 'notify'].includes(k))) return { error: `${at}: only name, command, point, blocking and notify.` };
     const ok = (v, max) => typeof v === 'string' && v.trim() === v && v.length > 0 && v.length <= max && !CONTROL.test(v) && v.isWellFormed();
     if (!ok(r.name, MAX_NAME) || r.name.includes('|')) return { error: `${at}, name: 1 to ${MAX_NAME} characters, one line, no |.` };
     if (scripts.some((s) => s.name === r.name)) return { error: `${at}, name: "${r.name}" is used twice.` };
@@ -42,13 +43,14 @@ export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
     if (!POINTS.includes(r.point)) return { error: `${at} (${r.name}), point: one of ${POINTS.join(', ')}.` };
     if (r.blocking !== undefined && typeof r.blocking !== 'boolean') return { error: `${at} (${r.name}), blocking: true or false.` };
     if (r.blocking && !BLOCKING.includes(r.point)) return { error: `${at} (${r.name}), blocking: only at ${BLOCKING.join(', ')}.` };
-    scripts.push({ name: r.name, command: r.command, point: r.point, blocking: r.blocking === true });
+    if (r.notify !== undefined && !(typeof r.notify === 'string' && ID.test(r.notify))) return { error: `${at} (${r.name}), notify: a chat id.` };
+    scripts.push({ name: r.name, command: r.command, point: r.point, blocking: r.blocking === true, ...(r.notify && { notify: r.notify }) });
   }
   return { scripts };
 }
 // What the owner is shown before approving: one line per script, the whole command.
 const DRAIN = 250; // ms after the script ends for its last output to arrive
-export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : ''}): ${s.command}`;
+export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : ''}${s.notify ? ', may also message chat ' + s.notify : ''}): ${s.command}`;
 
 // One run: no shell, the allow-list environment, input on stdin, the last KEEP bytes of output kept. Never throws.
 // -> { exit (the code, or null), reason (null | 'timeout' | 'not-started' | 'killed'), ms, line (the last output line) }.
@@ -98,14 +100,15 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   // O189: a running script's way to its sprint's chats (POST /script, server.mjs; SECURITY.md § Sprint scripts). One
   // token per run, made just before the spawn and dropped when the run ends, so it works only while that run runs.
   const callers = new Map(); // token -> { sprint, name, calls }
-  const speaking = async (sprint, name, go) => {
+  const speaking = async (sprint, name, go, notify) => {
     if (!chat.socketPath) return go(undefined); // no daemon socket (tests without one): nothing to call
     const token = randomBytes(32).toString('hex');
-    callers.set(token, { sprint, name, calls: 0 });
+    callers.set(token, { sprint, name, notify, calls: 0 });
     try { return await go({ socket: chat.socketPath, token, ended: () => callers.delete(token) }); } finally { callers.delete(token); }
   };
   // note: starts no turn. prompt: always a queued message, never a steer. Only to the sprint's lead, a chat under it or
-  // the lead's parent; both are P9's, with a first line naming the script, never the user's. At most SAY_CALLS per run.
+  // the lead's parent, or the one chat its approved row names (notify, O189 2b); both are P9's, with a first line naming
+  // the script, never the user's. At most SAY_CALLS per run.
   async function say(token, body) {
     let at = null;
     if (typeof token === 'string' && /^[0-9a-f]{64}$/.test(token)) for (const [t, c] of callers) if (timingSafeEqual(Buffer.from(t), Buffer.from(token))) at = c;
@@ -119,8 +122,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     if ((at.calls += 1) > SAY_CALLS) return { status: 429, error: 'too-many-calls', detail: `A script run sends at most ${SAY_CALLS} notes and prompts.` };
     if (chat.projects.closed(at.sprint)) return { status: 409, error: 'sprint-closed' };
     const family = chat.family(), parent = family.find((c) => c.id === at.sprint)?.parent;
-    if (to !== at.sprint && to !== parent && !family.some((c) => c.id === to && c.parent === at.sprint))
-      return { status: 422, error: 'not-this-sprints', detail: 'A script reaches its own sprint\'s lead, the chats under it and the lead\'s parent.' };
+    if (to !== at.sprint && to !== parent && to !== at.notify && !family.some((c) => c.id === to && c.parent === at.sprint))
+      return { status: 422, error: 'not-this-sprints', detail: 'A script reaches its own sprint\'s lead, the chats under it, the lead\'s parent and the chat its row names (notify).' };
     const line = `[P9: from sprint script ${at.name}, not from the user.]\n\n` + text;
     const r = action === 'note' ? await chat.note(to, line, 'p9') : await chat.prompt(to, { text: line, when: 'queue' }, undefined, 'p9');
     if (r?.error || r?.status >= 400) return { status: r.status >= 400 ? r.status : 409, error: r.error ?? 'not-sent' };
@@ -194,7 +197,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     let base; try { base = await state(sprint, point, subject); } catch { base = { contract: 1, point, error: 'state-unavailable' }; }
     for (const s of due) {
       const blocking = s.blocking && BLOCKING.includes(point);
-      const going = speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, say }))
+      const going = speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, say }), s.notify)
         .then((r) => { record(sprint, s, r); return r; });
       if (!blocking) { going.catch(() => {}); continue; }
       const r = await going;
@@ -350,7 +353,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
   async function runNow(sprint, script, by, still) {
     let base; try { base = await state(sprint, script.point, { manual: true, by }); } catch { base = { contract: 1, point: script.point, error: 'state-unavailable' }; }
     const no = still?.(); if (no) return no;
-    const r = await speaking(sprint, script.name, (say) => run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking, say }));
+    const r = await speaking(sprint, script.name, (say) => run(script.command, JSON.stringify({ ...base, blocking: false, script: { name: script.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.blocking, say }), script.notify);
     record(sprint, { ...script, point: script.point + ' (run now)' }, r);
     return { sprint, script: script.name, point: script.point, exit: r.exit, reason: r.reason, ms: r.ms, line: r.line };
   }

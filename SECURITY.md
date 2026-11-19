@@ -1293,8 +1293,12 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
 - **A script can reach its own sprint's chats (O189).** For each run P9 makes a new random token (32 bytes) and puts
   it in the script's environment as `P9_SCRIPT_TOKEN`, with the desktop socket's path as `P9_SCRIPT_SOCKET`. A
   `POST /script` on that socket (or the Windows pipe; never the phone's listener) with the token in `x-p9-script`
-  sends a note (starts no turn) or a queued prompt (never a steer) to the sprint's lead, a chat under it, or the lead's
-  parent; any other chat is refused, and so is a closed sprint. Both arrive as P9's, with a first line
+  sends a note (starts no turn) or a queued prompt (never a steer) to the sprint's lead, a chat under it, the lead's
+  parent, or the one chat its hooks.json row names in `notify` (a chat id, say the coordinator's, for a lead you started
+  yourself, which has no parent); any other chat is refused, and so is a closed sprint. The named chat is part of the
+  row you approve: the approval shows "may also message chat <id>", and a row whose `notify` changes waits for your
+  approval again, unless you allow additional scripts (then an agent's row runs as written, named chat included, as
+  any additional script does). Both arrive as P9's, with a first line
   `[P9: from sprint script <name>, not from the user.]`. A run makes at most 20 well-formed calls (a malformed one is
   refused without counting). The token stops working the moment the script itself exits, is killed or times out, not
   when its output is done, so a program the script started and left running cannot use it after. P9 keeps the live
@@ -1305,7 +1309,7 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   live token. The socket is yours alone (0600), but agents run as your user too, so the socket does not keep them
   out: the token is the only barrier, and a process of your user can read a running script's environment (on Linux,
   `/proc/<pid>/environ`). What that buys such a process is limited: only while an approved script runs, only that
-  sprint's lead, its chats and the lead's parent, at most 20 messages, each marked as not from you.
+  sprint's lead, its chats, the lead's parent and the row's named chat, at most 20 messages, each marked as not from you.
 - **The library.** Scripts you want in more than one sprint are kept in a library: rows of the same four fields, at
   most 100, held in P9's database (the `prefs` table, key `sprint-scripts`), not in a file, so no agent's file tools
   reach it and one library serves every project. It is the same list the Macro card will read. The Sprint scripts
