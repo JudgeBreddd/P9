@@ -9,7 +9,7 @@ import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, useInstalledDaemon, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
-import { daemonOffer, keptCheckout, keepText } from './use-installed.mjs';
+import { daemonOffer, keptCheckout, keepText, failureOf, guarded } from './use-installed.mjs';
 import { connectServer, forwardPath, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
@@ -447,7 +447,15 @@ export async function createDesktop({ state, open } = {}) {
       message: 'P9\'s background service runs another copy, not P9 ' + ownVersion + '.',
       detail: 'It runs: ' + result.checkout + '\n\nUse the installed P9 moves the service onto the copy this update installed, with the same workspace. The old service file is kept as a backup and put back if the new one does not start. Running chats, scripts and terminals stop.\n\nKeep my setup leaves it as it is and does not ask again.',
       buttons: ['Not now', 'Keep my setup', 'Use the installed P9'], defaultId: 0, cancelId: 0, noLink: true });
-    if (response === 1) return mkdir(p9, { recursive: true, mode: 0o700 }).then(() => writeFile(keepFile, keepText(result.checkout), { mode: 0o600 })).catch(() => {});
+    if (response === 1) {
+      // A failed write is said, not swallowed: the user would be asked again next start with no word why.
+      const failed = await failureOf(mkdir(p9, { recursive: true, mode: 0o700 }).then(() => writeFile(keepFile, keepText(result.checkout), { mode: 0o600 })));
+      if (!failed) return;
+      updateLog('keep my setup not saved: ' + failed);
+      if (window.isDestroyed()) return;
+      return guarded(() => dialog.showMessageBox(window, { type: 'warning', title: 'Keep my setup', message: 'P9 could not save your choice to keep this setup.',
+        detail: failed + '\n\nThe service is unchanged. P9 will ask again at the next start. File: ' + keepFile, noLink: true }), updateLog, 'keep my setup warning failed');
+    }
     if (response !== 2) return;
     const moved = await useInstalledDaemon({ checkout: result.checkout, seen: result.seen, state: localState });
     if (window.isDestroyed()) return;
@@ -455,7 +463,7 @@ export async function createDesktop({ state, open } = {}) {
       message: moved.done ? 'The background service now runs P9 ' + moved.version + '.' : 'The background service was not moved (' + moved.error + ').',
       detail: (moved.done ? 'The old service file is kept as ' + moved.backup + '.' : moved.restored === false ? 'Putting the old service back failed; the old service file is ' + moved.backup + '.'
         : moved.restored ? 'The old service is back as it was.' : 'Nothing was changed.') + ' Details: ' + path.join(p9, 'service-install.log'), noLink: true });
-  });
+  }).catch((error) => updateLog('use installed offer failed: ' + (error?.message || String(error))));
   if (watched) {
     window.on('session-end', quitting);
     const ready = new Promise(resolve => window.once('ready-to-show', resolve));

@@ -21,3 +21,9 @@ export function keptCheckout(text) {
   try { const { checkout } = JSON.parse(text); return typeof checkout === 'string' ? checkout : null; } catch { return null; }
 }
 export const keepText = (checkout) => JSON.stringify({ checkout }) + '\n';
+// failureOf: the Keep my setup write's answer, null when written or why it was not (the error's own message), so the window
+// says so instead of asking again next start with no word why. main.mjs does the write; this stays pure.
+export const failureOf = (write) => Promise.resolve(write).then(() => null, (error) => error?.message || String(error));
+// guarded: runs a dialog step and answers its result, or logs why it failed (thrown or rejected) and answers null, so a failed
+// dialog is one log line: not an unhandled rejection, not another dialog.
+export const guarded = (step, log, label) => Promise.resolve().then(step).catch((error) => { log(label + ': ' + (error?.message || String(error))); return null; });
