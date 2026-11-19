@@ -475,6 +475,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     ? db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('resuming:' + lead, JSON.stringify(list))
     : db.prepare('DELETE FROM prefs WHERE key = ?').run('resuming:' + lead);
   const delivering = new Set(); // leads whose resuming list is being sent now
+  const origins = new WeakMap(); // a body deliver() is sending -> { lead, id } of its resuming entry
+  // Test home only: a file that SIGKILLs P9 once, just after hold() kept a message deliver() was sending (O109 FIX1 test).
+  const crashHook = (body) => { const f = process.env.P9_TEST_HOME && origins.has(body) && path.join(process.env.P9_TEST_HOME, 'crash-after-replay-hold');
+    if (f) try { statSync(f); rmSync(f); process.kill(process.pid, 'SIGKILL'); } catch {} };
   // narrow (delegate.mjs): the mode each kept message may run in now, from its senders' modes now, or { error }.
   async function deliver(lead, narrow) {
     if (delivering.has(lead)) return; // the running pass takes what was added
@@ -493,6 +497,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
         const body = { ...item.body, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
         if (item.mixed) mixed.set(body, item.mixed);
+        origins.set(body, { lead, id: item.id }); // a busy chat holds it: hold() takes this entry over (O109 FIX1)
         // was: the ID it waited under before a restart, so its 'user' event clears it from the window.
         const result = await api.prompt(item.chat, body, item.was ? [item.was] : undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
         if (result.status !== 202 && result.status !== 200) emit(item.chat, 'unheld', { id: item.id, text: item.body.text, why: result.error ?? 'refused' });
@@ -1282,6 +1287,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // A note (parked:<chat> keeps it), another chat's question (its asker is gone) and a command are not kept.
     if (!notes.has(body) && !solos.has(body) && !commands.has(body)) setResuming(id, [...resumingOf(id), { id: item.id, chat: id, from: senders.get(body) ?? null, mixed: mixed.get(body) ?? null, queued: item.id,
       body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } }]);
+    crashHook(body);
     return { status: 202, held: item.id, when: mode, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.

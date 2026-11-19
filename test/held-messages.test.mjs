@@ -95,3 +95,53 @@ test('O125 point 5: 40 notes from 4 workers and 2 coordinator messages, the seco
   assert.equal(count('coordinator first wording'), 0, 'the replaced coordinator message went too: ' + text);
   console.log(`PASS O125 point 5: ${held} held for the lead, one prompt at the turn's end with each worker's newest note and the coordinator's replacement only`);
 });
+
+// O109 FIX1 (Reviewer on 44c3a71): after a restart the first kept message ('gate') starts a turn that waits, so the second
+// finds the chat busy and is held again under a new ID. Its 'user' event must name the ID the window showed it under
+// before the restart too, and a crash just after that re-hold must not leave it to be sent twice.
+async function busyReplay(t) {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance), chat = a.conversation;
+  assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202);
+  await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating');
+  const first = await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate', when: 'queue' });
+  const second = await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'second kept', when: 'queue' });
+  assert.ok(first.body.held && second.body.held, 'not held: ' + JSON.stringify([first.body, second.body]));
+  return { instance, chat, original: second.body.held };
+}
+const stopped = (child) => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : once(child, 'exit');
+
+test('O109 FIX1: a replay that finds the chat busy is held again, and its user event names the ID it waited under before the restart', { timeout: 240000 }, async (t) => {
+  let { instance, chat, original } = await busyReplay(t);
+  instance.child.kill('SIGTERM'); await stopped(instance.child);
+  instance = await restart(t, instance, 'state-2');
+  const of = async (type) => (await events(instance, chat)).filter((e) => e.type === type && String(e.data?.text).includes('second kept'));
+  for (let i = 0; i < 300 && (await of('held')).length < 2; i += 1) await pause(100);
+  assert.equal((await of('held')).length, 2, 'the replay did not find the chat busy (held again): ' + JSON.stringify(await of('held')));
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  for (let i = 0; i < 300 && (await of('user')).length < 1; i += 1) await pause(100);
+  await pause(3000);
+  const users = await of('user');
+  assert.equal(users.length, 1, 'not sent once: ' + JSON.stringify(users.map((e) => e.data)));
+  assert.ok(users[0].data.held?.includes(original), `its user event does not name ${original}, the ID the window shows: ` + JSON.stringify(users[0].data));
+  console.log('PASS O109 FIX1 busy replay: held again, sent once, and its user event names its first ID');
+});
+
+test('O109 FIX1: P9 killed just after a busy replay is held again sends it once after the next start', { timeout: 240000 }, async (t) => {
+  let { instance, chat } = await busyReplay(t);
+  const hook = path.join(instance.directory, 'crash-after-replay-hold');
+  fs.writeFileSync(hook, '');
+  instance.child.kill('SIGTERM'); await stopped(instance.child);
+  instance = await restart(t, instance, 'state-2');
+  await stopped(instance.child); // the hook kills P9 once, just after hold() kept the replayed message
+  assert.ok(!fs.existsSync(hook), 'the crash hook did not fire');
+  instance = await restart(t, instance, 'state-3');
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  const sent = async () => (await events(instance, chat)).filter((e) => e.type === 'user' && String(e.data?.text).includes('second kept'));
+  for (let i = 0; i < 300 && (await sent()).length < 1; i += 1) await pause(100);
+  await pause(5000);
+  const trail = JSON.stringify((await events(instance, chat)).filter((e) => ['held', 'unheld', 'user', 'interrupted', 'turn-end'].includes(e.type)).map((e) => [e.type, e.data?.why ?? e.data?.reason ?? String(e.data?.text ?? '').slice(-30)]));
+  assert.equal((await sent()).length, 1, 'the replayed message after a crash between its re-hold and its receipt: ' + trail);
+  console.log('PASS O109 FIX1 crash: killed just after the re-hold, the message went once after the next start');
+});
