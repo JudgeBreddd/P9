@@ -990,7 +990,7 @@ export function createDelegate({ chat, allowed, usage }) {
         if (ask || state !== 'working' || left <= 0 || signal?.aborted) {
           return { guidance: CROSS_CHAT, chat: args.chat, state, ended: state !== 'working', waiting: ask, timedOut: state === 'working' && !ask, ...(info.compacting && { compacting: true }), last: chat.reply(args.chat).slice(-400) };
         }
-        await Promise.race([chat.changed(Math.min(left, 8000)), aborted]);
+        await Promise.race([chat.changed(Math.min(left, 8000), args.chat), aborted]);
       }
     } finally {
       const n = waiting.get(slot) - 1;
