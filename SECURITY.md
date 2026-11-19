@@ -810,7 +810,8 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   question gives its parent one note at once (O84), `[p9] <title> is waiting on an approval: <what it asks>. answer_chat request
   "<id>" with ...`, naming the option ids or the form's fields; it starts no turn and is not sent while the parent is in
   `wait_chat` on that worker. The approval's text is the worker's, read as a report like the end line. Each is sent only to a parent that is running; none starts
-  a stopped chat.
+  a stopped chat. A run the agent makes with no prompt (Claude Code resumed by a finished background task) counts as a
+  turn for these lines (O192): it ends once a minute passes with no update and no tool call open.
 - **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
   receiving agent with one line in front, added by P9: it says the message is from another chat's
   agent and not from you, and names that chat. Your own messages carry no such line. It is a

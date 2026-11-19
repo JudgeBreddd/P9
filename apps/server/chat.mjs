@@ -566,8 +566,25 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // sends no more); or the chat's next prompt, whose own end comes. At the first two the turn's end hooks run again.
   // ponytail: a silent tool call longer than 60 s in that run counts as its end.
   const COMPACT_QUIET_MS = 60000;
+  // O192: Claude Code resumes a chat with no prompt when a background task it started finishes, and that run has no end
+  // of its own. A tool call or reply with no prompted turn starts such a run; once UNPROMPTED_QUIET_MS pass with no update
+  // and no tool call open, it has ended and the turn's end hooks run (delegate.mjs: the parent's end note and late wake).
+  // ponytail: a tool call that never completes keeps the run open; a run that pauses longer than the quiet time ends twice.
+  const UNPROMPTED_QUIET_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_QUIET_MS) > 0 ? Number(process.env.P9_UNPROMPTED_QUIET_MS) : 60000;
+  const unprompted = (session, id, update) => {
+    if (session.turn || session.solo || session.stopping || session.compacting) return;
+    if (!session.quiet && !['tool_call', 'tool_call_update', 'agent_message_chunk'].includes(update?.sessionUpdate)) return;
+    clearTimeout(session.quiet);
+    session.quiet = setTimeout(function end() {
+      if (session.tools.size) { session.quiet = setTimeout(end, UNPROMPTED_QUIET_MS); session.quiet.unref?.(); return; }
+      session.quiet = null;
+      if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true); } catch {} }
+    }, UNPROMPTED_QUIET_MS);
+    session.quiet.unref?.();
+  };
   const compacting = (session, id) => {
     if (session.compacting) return;
+    clearTimeout(session.quiet); session.quiet = null; // O192 FIX1: the compaction's end is the unprompted run's one end
     const timer = setTimeout(() => compacted.end(session, id, true), COMPACT_QUIET_MS);
     timer.unref?.();
     session.compacting = { cost: null, timer };
@@ -1001,6 +1018,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         emit(conversation.id, 'update', trim(agentImages(update)));
         if (session.ghost) session.ghost.refresh();
         if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);
+        unprompted(session, conversation.id, update);
       },
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       requestPermission: async (request) => (await ownRead(conversation.id, request).catch(() => null)) ?? session.approve(request),
@@ -1518,6 +1536,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if ((sprintOf(id).task || sprintOf(id).ready) && !solo) setSprint(id, { idleSince: null, ready: null, verdict: null });
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
+      clearTimeout(session.quiet); session.quiet = null; // O192: likewise for a resumed run
       compacted.end(session, id, false);
       let ended;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
