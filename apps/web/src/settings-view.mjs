@@ -294,6 +294,7 @@ function bindDefaults() {
     const a = el.dataset.defaultMode, m = el.value;
     if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(a, m)) { el.value = outer.defaultMode(a); return; }
     m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
+    outer.saveStarts(a, 'mode', m); // O137: the daemon's copy, which a worker started under Unrestricted starts in (not what the Unrestricted switch sets)
   }; });
   // O133: saved in the daemon; one it did not take shows what is kept again.
   outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = async () => {

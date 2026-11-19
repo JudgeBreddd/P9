@@ -717,6 +717,14 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
   mode takes no message from it until that turn ends. The agent lock
   and File protection are global, so they cover every worker as they cover its parent.
+- **A worker's mode under Unrestricted (O137, the owner's call, 2026-11-19).** Under Unrestricted
+  (agent lock and File protection both off), a worker started with no mode named, by `open_chat` or
+  its roles.json row, starts in the Default mode you saved in Settings > New chats start in for its
+  agent, else in the agent's Auto (Claude Auto, Codex Auto review), never wider than its parent.
+  So a parent in Bypass permissions no longer hands Bypass on by default: its workers keep the
+  agent's own checks unless you set a wider default or the call names one. The mode the Unrestricted
+  switch itself gives new chats in the window is not that saved default. Restricted, nothing
+  changes: the worker takes the parent's mode.
 - **Notes (`send_chat` with `when: note`).** A note passes information on and asks for nothing: a
   result, a branch that is ready, something found. It is the one message that is not held to the
   sender's mode, and the one that reaches a worker's parent when the two share no project. What
