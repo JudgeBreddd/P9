@@ -631,6 +631,9 @@ function pane(s, i, bare) {
 let unseenKept = false;
 outer.keepUnseen = () => { if (unseenKept) try { localStorage.setItem('p9-unseen', JSON.stringify(Object.fromEntries(outer.S.sessions.filter(s => s.failed || s.done).map(s => [s.id, s.failed ? 'failed' : 'done'])))); } catch {} };
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
+// N6-1 (d): each drawn <details> -> [its event, open as drawn]. A click opens it at once but toggle comes a task later, so a
+// redraw in between would draw it shut from the event; the redraw first keeps any open state the user changed.
+const DRAWN = new WeakMap();
 function renderChats(only) {
   const ids = outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1);
   const ss = ids.map(id => outer.S.sessions.find(s => s.id === id)).filter(Boolean);
@@ -661,6 +664,7 @@ function paint(root, ss, only) {
   const panes = part ? old.filter(p => only.has(p.dataset.id) || touched.has(p.dataset.id)) : old;
   if (part && !panes.length) return;
   panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); outer.view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
+  panes.forEach(p => p.querySelectorAll('details[data-ev]').forEach(d => { const w = DRAWN.get(d); if (w?.[0] && d.open !== w[1]) w[0].open = d.open; }));
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); outer.addHalos(t.content); outer.attrs(p, t.content.firstElementChild); outer.sync(p, t.content.firstElementChild); });
   else outer.morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the two chats (arrow keys)"></div>'));
@@ -670,7 +674,7 @@ function paint(root, ss, only) {
     const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = outer.view[root.id + ':' + s.id];
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
     place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
-    p.querySelectorAll('details[data-ev]').forEach(d => d.ontoggle = () => { s.events[d.dataset.ev].open = d.open; });
+    p.querySelectorAll('details[data-ev]').forEach(d => { const e = s.events[d.dataset.ev]; DRAWN.set(d, [e, d.open]); d.ontoggle = () => { if (e) e.open = d.open; DRAWN.set(d, [e, d.open]); }; });
     p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
     // A7: a card answers the chat it came from (data-ask): this one, or a worker of it.
     const asker = el => outer.S.sessions.find(x => x.id === el.closest('[data-ask]')?.dataset.ask) || s;

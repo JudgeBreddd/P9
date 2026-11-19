@@ -51,7 +51,10 @@ test('Agent warnings, desktop: a grey line above the reply, not in it; its i say
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   await page.locator('#nav .row[data-chat="' + id + '"]').click();
   await page.locator('.msg.agent', { hasText: REPLY }).waitFor({ timeout: 15000 });
-  await opened(page);
+  // N6-1 (d): a click opens a <details> at once, but its toggle event comes a task later. A redraw in between (here the
+  // window's focus redraw, in the same task as each click) must not close the line again; then a later redraw keeps it open.
+  await page.evaluate(() => document.querySelectorAll('details.agent-warn summary').forEach((s) => { s.click(); dispatchEvent(new Event('focus')); }));
+  await page.waitForTimeout(300); await page.evaluate(() => dispatchEvent(new Event('focus')));
   assert.deepEqual(await read(page, '.msg.agent'), WANT);
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
