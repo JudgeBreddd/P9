@@ -40,7 +40,7 @@ async function window(t, provider, remote) {
   const page = await app.firstWindow();
   await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await page.locator('#nav .row[data-chat="' + id + '"]').click();
-  return { id, page, instance, pane: page.locator('.pane[data-id="' + id + '"]') };
+  return { id, page, instance, app, pane: page.locator('.pane[data-id="' + id + '"]') };
 }
 
 for (const provider of ['claude', 'codex']) {
@@ -69,4 +69,25 @@ test('PH1: with remote logins off the dialog says how to turn them on and offers
   assert.equal(await page.locator('#phoneDlg [data-phone-link], #phoneDlg .qr').count(), 0);
   await page.waitForTimeout(600); // the dialog fades in
   await shot(page, 'desktop-phone-remote-off');
+});
+
+// O116 FIX1: phone-link.mjs loads when the dialog opens. A failed load (the chunk's first request cancelled) shows a
+// visible failure with Try again, and Try again loads it afresh: the QR and the link appear.
+test('PH1: a failed load of the phone link says so, and Try again shows the QR', { timeout: 90000 }, async (t) => {
+  const { id, page, pane, instance, app } = await window(t, 'claude', true);
+  await app.evaluate(({ session }) => {
+    globalThis.phoneLinkRequests = 0;
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      if (/\/_astro\/phone-link[^/]*\.js/.test(details.url)) callback({ cancel: ++globalThis.phoneLinkRequests === 1 }); else callback({});
+    });
+  });
+  await pane.locator('[data-phone]').click();
+  await page.locator('#phoneDlg[open]').waitFor({ timeout: 10000 });
+  await page.locator('#phoneBody [role=status]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#phoneBody').innerText(), /Cannot show the phone link right now\./);
+  assert.equal(await page.locator('#phoneDlg .qr').count(), 0);
+  await page.click('#phoneBody [data-phone-retry]');
+  await page.locator('#phoneDlg .qr svg').waitFor({ timeout: 10000 });
+  assert.equal(await page.inputValue('#phoneDlg [data-phone-link]'), `${instance.origin}/phone#chat=${id}`);
+  assert.equal(await app.evaluate(() => globalThis.phoneLinkRequests), 2, 'the chunk was requested again on Try again');
 });

@@ -4,7 +4,7 @@ import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, war
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, lineDiff } from './composer.mjs';
-import { phoneDialogBody } from './phone-link.mjs'; import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
+import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
 const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
@@ -832,8 +832,15 @@ const toolDiff = content => { const rows = (content || []).filter(c => c.type ==
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
   const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
-  outer.$('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
-  outer.$('#phoneDlg').showModal();
+  // O116: phone-link.mjs (with qrcode-generator, about 44 KB) loads here, on the first open, not at shell startup.
+  // A failed load says so in the dialog; Try again calls import() afresh (nothing keeps the rejected promise).
+  const mod = await import('./phone-link.mjs').catch(() => null), body = outer.$('#phoneBody'), dlg = outer.$('#phoneDlg');
+  if (mod) body.innerHTML = mod.phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
+  else {
+    body.innerHTML = '<p role="status">Cannot show the phone link right now.</p><p><button data-slot="button" type="button" data-phone-retry>Try again</button></p>';
+    body.querySelector('[data-phone-retry]').onclick = () => continueOnPhone(s);
+  }
+  if (!dlg.open) dlg.showModal();
 }
 // A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser,
 // after a question showing the whole address; "don't ask again"

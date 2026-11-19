@@ -77,6 +77,9 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 3
         const scriptsRaw = scripts.reduce((n, f) => n + f.raw, 0);
         console.log('P9_SCRIPTS ' + JSON.stringify({ raw: scriptsRaw, files: scripts.length, scripts }));
         assert.ok(scripts.length > 0, 'the shell page parsed JS from /_astro/');
+        // O116: the QR library (qrcode-generator, about 44 KB) loads with the Continue on phone dialog, not at startup.
+        const qr = scripts.filter((f) => readFileSync(path.join(dist, '_astro', f.file), 'utf8').includes('createSvgTag')).map((f) => f.file);
+        assert.deepEqual(qr, [], `the shell page parsed the QR library at startup in ${qr.join(', ')}`);
         assert.ok(scriptsRaw <= BUDGET, `the shell page parsed ${scriptsRaw} bytes of JS at startup, over the budget of ${BUDGET}`);
         const png = await page.screenshot({ animations: 'disabled' });
         if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT shell ' + png.toString('base64'));
