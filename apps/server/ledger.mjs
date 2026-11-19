@@ -354,7 +354,10 @@ export function counted(result) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   const whole = (n) => Number.isSafeInteger(n) && n >= 0;
   if (!rows.every((row) => row?.token_count && typeof row.token_count === 'object' && ROW.every(([, key]) => whole(row.token_count[key] ?? 0)))) return null;
+  // Each row's counters are safe, but their sum may not be (two near MAX_SAFE_INTEGER): then null, so the reply's usage counts.
+  const sums = ROW.map(([, key]) => rows.reduce((sum, row) => sum + (row.token_count[key] ?? 0), 0));
+  if (!sums.every(whole)) return null;
   const own = result.usage ?? {};
-  return Object.fromEntries(ROW.map(([to, key]) => [to, Math.max(rows.reduce((sum, row) => sum + (row.token_count[key] ?? 0), 0), whole(own[to]) ? own[to] : 0)]));
+  return Object.fromEntries(ROW.map(([to], i) => [to, Math.max(sums[i], whole(own[to]) ? own[to] : 0)]));
 }
 

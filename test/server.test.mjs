@@ -225,13 +225,20 @@ test('O190 compaction: a turn counts its model_usage (a /compact turn is not 0);
   for (const bad of [undefined, [], [row('h', -1, 0, 0, 0)], [row('h', 1.5, 0, 0, 0)], [{ model: 'h' }], [row('h', '3', 0, 0, 0)], [null], 'rows'])
     assert.equal(counted(bad === undefined ? reply(zero) : { usage: zero, _meta: { quota: { model_usage: bad } } }), null, JSON.stringify(bad));
   assert.equal(counted({ stopReason: 'cancelled' }), null);
+  // Each row safe, the sum not (FIX1): null, so a valid reply usage is not overridden by an unsafe total.
+  const big = Number.MAX_SAFE_INTEGER;
+  assert.equal(counted(reply(zero, [row('h', big, 0, 0, 0), row('s', big, 0, 0, 0)])), null, 'an unsafe sum counts the reply usage');
+  assert.equal(counted(reply(zero, [row('h', 0, 0, 0, big), row('s', 0, 0, 0, 1)])), null, 'one past MAX_SAFE_INTEGER');
+  assert.deepEqual(counted(reply(zero, [row('h', big - 1, 0, 0, 0), row('s', 1, 0, 0, 0)])).inputTokens, big, 'exactly MAX_SAFE_INTEGER is kept');
   // The ledger counts a turn-end's counted when it has one, its usage when not; a turn-end with neither counts nothing.
   const ledger = openLedger(':memory:');
   ledger.append('c', 'turn-end', { usage: zero, counted: counted(reply(zero, [row('h', 2242, 33491, 81, 692)])) });
   ledger.append('c', 'turn-end', { usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 900 } });
   ledger.append('c', 'turn-end', { stopReason: 'cancelled' });
+  // An unsafe sum: the turn falls back to its usage (3 in, 1 out), it is not lost.
+  ledger.append('c', 'turn-end', { usage: { inputTokens: 3, outputTokens: 1, cachedReadTokens: 0 }, counted: counted(reply({ inputTokens: 3, outputTokens: 1, cachedReadTokens: 0, cachedWriteTokens: 0 }, [row('h', big, 0, 0, 0), row('s', big, 0, 0, 0)])) });
   const totals = ledger.usage().totals;
-  assert.deepEqual([totals.inputTokens, totals.outputTokens, totals.cachedTokens, ledger.usage().samples], [2252, 697, 34391, 2]);
+  assert.deepEqual([totals.inputTokens, totals.outputTokens, totals.cachedTokens, ledger.usage().samples], [2255, 698, 34391, 3]);
   console.log('PASS O190 compaction: a /compact reply with usage 0 counts its model_usage (' + JSON.stringify(totals) + '); a reply without model_usage or with a bad row counts its usage');
 });
 

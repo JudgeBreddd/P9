@@ -1079,7 +1079,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // pending prompt (user_message_uuids) is in that turn's usage (stored at turn-end), and the raw message does not say
       // whether it did, so P9 skips them all.
       // ponytail: so an own run's result that lands while a prompted turn runs and does not answer it is not counted (the
-      // adapter leaves it out of that turn); no compaction result was seen with one of these origins, so compactions stay uncounted.
+      // adapter leaves it out of that turn); no compaction result was seen with one of these origins, so the adapter's own idle /compact (its result goes to the
+      // adapter, not P9) stays uncounted; a compaction P9 prompts is counted at turn-end (ledger.mjs counted, O190).
       sdkMessage: ({ message } = {}) => {
         const u = message?.usage, n = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
         if (message?.type !== 'result' || !OWN_RUNS.includes(message.origin?.kind) || !u || typeof u !== 'object' || session.turn || session.solo || live.get(conversation.id) !== session) return;
