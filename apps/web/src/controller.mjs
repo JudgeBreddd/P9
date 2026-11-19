@@ -82,7 +82,7 @@ export function mountShell({ askAdmin } = {}) {
     get welcome() { return welcome; }, get winTop() { return winTop; }, get wins() { return wins; }, get wireEditor() { return wireEditor; },
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
-  const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
+  const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
   const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
@@ -552,7 +552,7 @@ const wins = {
   musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's plan windows as rows with the pace tick
     inline: () => { const rows = usageRows();
-      return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
+      return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>${tokensSay()}`); } },
 };
 // M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
 let guide = null;

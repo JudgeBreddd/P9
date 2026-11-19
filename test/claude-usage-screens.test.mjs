@@ -110,7 +110,7 @@ test('O191: the Usage window shows a provider profile as its own row, apart from
   await page.locator('#navList').waitFor({ state: 'attached', timeout: 15000 });
   // /usage as the daemon answers it with one profile chat (test/server.test.mjs, O191); the page reads it again after a reload.
   await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:usage');
-    ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'ok', samples: 1, discarded: 0, updatedAt: Date.now(),
+    ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'ok', samples: 1, discarded: 0, updatedAt: Date.now(), tokens: 'prompted turns and Claude Code\'s own runs',
       totals: { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 }, contexts: [],
       profiles: [{ id: 'p1', name: 'Far Cloud', inputTokens: 1000, outputTokens: 500, cachedTokens: 200, costUsd: 47.42, turns: 1 }] } })); });
   await page.reload();
@@ -120,6 +120,18 @@ test('O191: the Usage window shows a provider profile as its own row, apart from
   await win.locator('[data-profile]').waitFor({ timeout: 15000 });
   assert.equal(await win.locator('[data-profile]').innerText(), 'Far Cloud (profile): 1,000 input · 500 output tokens · 1 turn · $47.42 estimated at Claude prices, not billed by Claude');
   assert.match(await win.locator('.stats').innerText(), /Input tokens\s*10\b[\s\S]*Output tokens\s*5\b[\s\S]*\$0\.5000/, 'the Claude totals leave the profile out');
+  // O190 (web half): the totals say what they count, in the daemon's words (/usage tokens, ledger.mjs TOKENS), here and on
+  // the Mission page's Usage panel.
+  assert.equal(await win.locator('[data-tokens]').innerText(), 'Tokens counted: prompted turns and Claude Code\'s own runs');
+  assert.match(await page.locator('#fMission [data-panel="musage"] [data-tokens]').innerText(), /^Tokens counted: prompted turns and Claude Code's own runs$/);
+  // FIX1: an answer without tokens (an older daemon after a reconnect) takes the line away again on both, without a reload.
+  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:usage');
+    ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'ok', samples: 1, discarded: 0, updatedAt: Date.now(),
+      totals: { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 }, contexts: [], profiles: [] } })); });
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await win.locator('[data-profile]').waitFor({ state: 'detached', timeout: 15000 });
+  assert.equal(await win.locator('[data-tokens]').count(), 0, 'no stale label in the Usage window');
+  assert.equal(await page.locator('#fMission [data-panel="musage"] [data-tokens]').count(), 0, 'no stale label on the Mission panel');
   await shot(win, 'o191-usage-profile');
   // FIX1: /usage's state counts Claude records only, so a profile's spend alone (its chats deleted, or token-only events)
   // reads 'unavailable'; the profile row still shows, under "No chat token records yet."
