@@ -51,9 +51,9 @@ function world(t, { paused = false, withReviewer = true } = {}) {
       projects: { started: (id) => (id === lead ? { plan: 'hash', at: 1 } : null), closed: () => null }, paused: () => paused,
     };
     const tools = createDelegate({ chat });
-    return { tools, end: async (id) => { for (const hook of settled) hook(id, true); await settle(); }, boot: async () => { ready({ chats: [], storm: false }); await settle(); } };
+    return { tools, end: async (id, how) => { for (const hook of settled) hook(id, true, how); await settle(); }, boot: async () => { ready({ chats: [], storm: false }); await settle(); } };
   };
-  const ready = async (p9, c) => { states.set(worker, 'turn'); const out = await p9.tools.ready({ commit: c, results: [{ check: 'test', result: 'passed' }], weakest: 'none' }, worker); states.set(worker, 'running'); assert.ok(out.ready, JSON.stringify(out)); await settle(); };
+  const ready = async (p9, c, row) => { states.set(worker, 'turn'); const out = await p9.tools.ready({ commit: c, results: [{ check: 'test', result: 'passed' }], weakest: 'none', ...(row && { row }) }, worker); states.set(worker, 'running'); assert.ok(out.ready, JSON.stringify(out)); await settle(); };
   const verdict = async (p9, c, result) => { states.set(reviewer, 'turn'); const out = p9.tools.verdict({ chat: worker, commit: c, result, note: 'see the test' }, reviewer); states.set(reviewer, 'running'); assert.ok(out.verdict, JSON.stringify(out)); await settle(); };
   const who = { [lead]: 'lead', [worker]: 'worker', [reviewer]: 'reviewer' };
   return { make, store, states, commit, merge, prompts, notes, ready, verdict, order: () => prompts.map(([id]) => who[id]) };
@@ -102,8 +102,10 @@ test('O193: a dropped event is caught on the next event for that sprint; a revie
   assert.deepEqual(w.order(), []);
   await p9.end(lead); // the next event for the sprint, from another chat
   assert.deepEqual(w.order(), ['reviewer']);
-  await p9.end(reviewer); // woken, ended, no verdict
-  await p9.end(reviewer);
+  await p9.end(reviewer); // woken, ended: a single end is often mid-work, so nothing yet
+  assert.deepEqual(w.order(), ['reviewer']);
+  await settle(3600); // still stopped after END_HOLD_MS and the shortened 10-minute check, no verdict: the lead is told
+  await p9.end(reviewer); await settle(3600);
   assert.deepEqual(w.order(), ['reviewer', 'lead']);
 });
 
@@ -140,11 +142,46 @@ test('O193: ready with no reviewer tells the lead; a paused sprint gets only wha
   assert.equal(held.store.get(lead)?.carry, undefined, 'nothing is recorded in a paused sprint');
 });
 
+test('O193: a run P9 never prompted that ends with no ready and nothing sent to the lead wakes the lead at its end, once', { timeout: 30000 }, async (t) => {
+  const w = world(t), p9 = w.make();
+  await p9.boot();
+  w.states.set(lead, 'stopped'); // O188's 10-minute path never prompts a stopped parent; the run's end does
+  await p9.end(worker); await settle(3600);
+  assert.deepEqual(w.order(), [], 'a prompted turn\'s end waits for the 10-minute check');
+  await p9.end(worker, 'unprompted'); await settle(3600);
+  assert.deepEqual(w.order(), ['lead']);
+  assert.equal(w.prompts[0][1], '[p9] Kid ended its turn with no ready and nothing queued for you.');
+  w.states.set(lead, 'running'); // both paths look at the same end: still one wake
+  await p9.end(worker, 'unprompted'); await settle(3600);
+  assert.equal(w.order().length, 2, JSON.stringify(w.prompts));
+});
+
+test('O193: ready names the plan row, so two rows from one worker are two review records and two reviews', { timeout: 30000 }, async (t) => {
+  const w = world(t), p9 = w.make();
+  await p9.boot();
+  const c1 = w.commit('one');
+  await w.ready(p9, c1, 'O1'); await w.verdict(p9, c1, 'pass');
+  const c2 = w.commit('two');
+  await w.ready(p9, c2, 'O2');
+  assert.deepEqual(Object.keys(w.store.get(worker).reviews).sort(), ['O1', 'O2']);
+  assert.deepEqual(w.order(), ['reviewer', 'lead', 'reviewer'], JSON.stringify(w.prompts));
+  assert.match(w.prompts[2][1], /^\[p9\] Ready for review: O2, by Kid/);
+  w.states.set(worker, 'turn');
+  const bad = await p9.tools.ready({ commit: c2, results: [{ check: 'test', result: 'passed' }], weakest: 'none', row: 'O 3; rm' }, worker);
+  assert.equal(bad.error, 'request-refused');
+});
+
 test('O193 decide: a record whose commit is on main, or queued before the sprint started, wakes nobody', () => {
   const base = { lead: { id: 'L', busy: false }, started: 100, reviewer: { id: 'R', title: 'Rev', busy: false }, woken: {} };
   const one = (r) => decide({ ...base, workers: [{ id: 'W', title: 'Kid', reviews: { B1: r } }] }, { type: 'end' });
   assert.equal(one({ state: 'queued', commit: 'c', at: 50 }).length, 0);
   assert.equal(one({ state: 'passed', commit: 'c', at: 150, onMain: true }).length, 0);
   assert.deepEqual(one({ state: 'queued', commit: 'c', at: 150 }).map((w) => [w.chat, w.key]), [['R', 'W:B1:queued:c']]);
+  assert.equal(one({ state: 'queued', commit: 'c', at: 150, open: false }).length, 0, 'no longer an open PR head');
+  const old = { id: 'W', title: 'Kid', reviews: { B1: { state: 'passed', commit: 'abcdef0123', at: 50 }, B2: { state: 'fix', commit: 'c', at: 150, onMain: true } } };
+  const listed = decide({ ...base, first: true, workers: [old] }, { type: 'end' });
+  assert.deepEqual(listed.map((x) => [x.chat, x.key]), [['L', 'stale']], 'the first carry lists the stale records to the lead, once');
+  assert.match(listed[0].text, /Kid B1 \(passed at abcdef0\); Kid B2 \(fix at c\)/);
+  assert.equal(decide({ ...base, workers: [old] }, { type: 'end' }).length, 0, 'later carries do not list them');
   assert.equal(decide({ ...base, woken: { 'W:B1:queued:c': 1 }, workers: [{ id: 'W', title: 'Kid', reviews: { B1: { state: 'queued', commit: 'c', at: 150 } } }] }, { type: 'end', chat: 'W' }).length, 0, 'another chat\'s end tells nobody');
 });
