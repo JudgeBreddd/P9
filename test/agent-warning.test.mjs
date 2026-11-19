@@ -56,6 +56,12 @@ test('Agent warnings, desktop: a grey line above the reply, not in it; its i say
   await page.evaluate(() => document.querySelectorAll('details.agent-warn summary').forEach((s) => { s.click(); dispatchEvent(new Event('focus')); }));
   await page.waitForTimeout(300); await page.evaluate(() => dispatchEvent(new Event('focus')));
   assert.deepEqual(await read(page, '.msg.agent'), WANT);
+  // The same gap the other way: a user's close must stay closed through the redraw, then the lines open again the same way.
+  const gap = () => page.evaluate(() => document.querySelectorAll('details.agent-warn summary').forEach((s) => { s.click(); dispatchEvent(new Event('focus')); }));
+  await gap(); await page.waitForTimeout(300); await page.evaluate(() => dispatchEvent(new Event('focus')));
+  assert.deepEqual(await read(page, '.msg.agent'), { ...WANT, warns: WANT.warns.map((w) => ({ ...w, open: false, say: null, raw: null })) });
+  await gap(); await page.waitForTimeout(300);
+  assert.deepEqual(await read(page, '.msg.agent'), WANT);
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
     await page.mouse.move(0, 0);
