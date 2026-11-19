@@ -81,8 +81,9 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   // sent to a Codex worker) is refused at once with those options, before the user is asked about it.
   const options = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
   assert.deepEqual(waits.options, options);
-  // O84: a parent not waiting on it learns at once, as a note from P9 (no turn), with what answer_chat needs.
-  const heard = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('is waiting on an approval'));
+  // O84: a parent not waiting on it learns at once, with what answer_chat needs. O197: by default (Settings > Notices) an
+  // approval is a message from P9 that starts the parent's turn, not a note.
+  const heard = await until(instance, (e) => e.conversation === a.conversation && e.type === 'user' && e.data.from === 'p9' && e.data.text.includes('is waiting on an approval'));
   assert.equal(heard.hit.data.text, `[p9] Kid is waiting on an approval: Write marker. answer_chat request "${waits.request}" with { "optionId": one of "allow", "reject" }.`);
   for (const wrong of [{ action: 'accept' }, { action: 'accept', content: { optionId: 'allow' } }, { optionId: 'allow_once' }]) {
     const refused = await Promise.race([a.tool('answer_chat', { chat: made.chat, request: waits.request, answer: wrong }), pause(3000).then(() => ({ error: 'the user was asked' }))]);
@@ -101,12 +102,19 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   await answer(asked.hit.data.request, 'allow');
   assert.deepEqual(await pending, { chat: made.chat, action: 'answered' });
   assert.equal((await a.done(made.chat)).last, 'permission:allow');
-  // O84: a question gets the same note, naming the form's fields.
+  // O84: a question gets the same line, naming the form's fields. O197: switched to note in Settings > Notices, it starts no turn.
+  assert.deepEqual((await call(instance, '/notices')).body, { ready: 'note', approval: 'message', question: 'message', compacting: 'note', ended: 'note', sprint: 'note' }, 'the defaults');
+  for (const bad of [{}, { set: {} }, { set: { question: 'loud' } }, { set: { nope: 'note' } }, { set: { question: 'note' }, extra: 1 }, { set: [] }]) {
+    const r = await call(instance, '/notices', 'POST', bad);
+    assert.deepEqual([r.status, r.body], [400, { error: 'bad-request' }], JSON.stringify(bad));
+  }
+  assert.deepEqual((await call(instance, '/notices', 'POST', { set: { question: 'note' } })).body, { ready: 'note', approval: 'message', question: 'note', compacting: 'note', ended: 'note', sprint: 'note' }, 'only the kind named changed');
   const before = (await call(instance, '/chat/events?after=0')).body.cursor;
   await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'ask' });
   const quiz = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('is waiting on a question'), before);
   const quizWait = (await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).waiting;
   assert.equal(quiz.hit.data.text, `[p9] Kid is waiting on a question: Pick a colour. answer_chat request "${quizWait.request}" with { "action": "accept", "content": { "colour": ... } } or { "action": "decline" }.`);
+  assert.ok(!(await events(instance, a.conversation)).some((e) => e.cursor > before && e.type === 'user'), 'a notice set to note started a turn');
   assert.deepEqual(await a.tool('answer_chat', { chat: made.chat, request: quizWait.request, answer: { action: 'accept', content: { colour: 'red' } } }), { chat: made.chat, action: 'answered' });
   await a.done(made.chat);
   // The HTTP route cannot name a parent: lineage comes only from the tool.

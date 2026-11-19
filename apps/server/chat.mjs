@@ -29,6 +29,8 @@ const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
 const ID = /^[0-9a-f-]{36}$/;
 const MAX_TEXT = 100_000, MAX_EVENT = 64 * 1024;
+// O197: each P9 notice kind and how it reaches a parent by default (Settings > Notices changes it).
+export const NOTICES = Object.freeze({ ready: 'note', approval: 'message', question: 'message', compacting: 'note', ended: 'note', sprint: 'note' });
 // A7: what a worker is told when its parent has set no rules of its own (set_rules replaces it).
 export const DEFAULT_RULES = ['Before you start, say in one line which folder you are in and, if it is a git repository, its branch, newest commit and remote.',
   'Do not end your turn while something you started (a build, a test run, a check) is still running: wait for it.',
@@ -1864,6 +1866,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     setNewChatDefaults(patch, onlyEmpty = false) { const v = this.newChatDefaults();
       for (const [a, f] of Object.entries(patch)) for (const [k, x] of Object.entries(f)) if (!onlyEmpty || !v[a][k]) { if (k === 'mode' && !x) delete v[a].mode; else v[a][k] = x; }
       db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(v)); return this.newChatDefaults(); },
+    // O197: how each kind of P9 notice reaches a parent chat: 'note' (starts no turn) or 'message' (starts or joins its turn,
+    // only in a parent that is open and not stopped; delegate.mjs notify). Kept in prefs under 'notices'; a save names only the kinds it changes.
+    notices: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'notices'").get()?.value ?? '{}'); } catch { v = {}; }
+      return Object.fromEntries(Object.entries(NOTICES).map(([k, d]) => [k, ['note', 'message'].includes(v?.[k]) ? v[k] : d])); },
+    setNotices(patch) { const v = { ...this.notices(), ...patch };
+      db.prepare("INSERT INTO prefs (key, value) VALUES ('notices', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(v)); return this.notices(); },
     // Which Settings row a worker started on (0 is the first); kept so a row frees only when its worker stops.
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
     setSlot: (id, n) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('slot:' + id, String(n)); },

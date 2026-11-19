@@ -175,6 +175,7 @@ test('c18 row 66: the phone turns the agent lock and File protection on and off 
   for (const route of ['/setup/starter', '/setup/login', '/setup/agent-terminal']) assert.equal((await post(route, {})).status, 404, route);
   assert.equal((await post('/files', { path: 'phone-made.txt', content: 'x' })).status, 404);
   assert.deepEqual([(await server.remote('/delegation', { session })).status, (await post('/delegation', { start: 'agent', max: 20, workers: [] })).status], [404, 404], 'Settings > Delegation is the desktop\'s');
+  assert.deepEqual([(await server.remote('/notices', { session })).status, (await post('/notices', { set: { ended: 'message' } })).status], [404, 404], 'Settings > Notices is the desktop\'s (O197)');
   assert.equal((await post('/sprints/' + (await server.desk('/chat', 'POST', { provider: 'claude' })).body.conversation + '/clean', {})).status, 404, 'worker-folder clean-up is the desktop\'s');
   // A project the phone itself made: its sprint source and setup command are still the desktop's to set.
   const mine = (await post('/projects', { name: 'Phone made', work: { kind: 'p9' } })).body.project;

@@ -708,6 +708,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   still reaches it and starts nothing, and you can still open and message it yourself from
   the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
   mode. No tool deletes a chat.
+- **Notices to a parent (O197).** P9's notices (a worker's ready report, approval, question, compacting or turn end, and a sprint's pause or resume) go as a note, which starts no turn, unless Settings > Notices sets that kind to message (by default approvals and questions); a notice set to message may start a turn only in an open parent, never a stopped or archived one. Only the desktop sets it.
 - **A worker is only what Settings > Delegation allows.** You set each worker's agent, model and
   effort in Settings > Delegation, one row per worker (a row left on "the parent's" allows the
   parent's own). `open_chat` left without them starts the next free row as you set it. A provider,
@@ -809,8 +810,9 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   only; Delegate saves nothing that grants access. What it adds to the ledger is which chat
   started which, and the name the parent gave it.
 - **What P9 sends on its own.** When a worker's turn ends and its parent is not waiting on it,
-  P9 sends the parent one note, `[p9] <title> ended its turn: <last line of the reply>`, marked in the
-  transcript as P9's and not yours. Like any note it starts no turn (O188): a parent that is working
+  P9 sends the parent one notice, `[p9] <title> ended its turn: <last line of the reply>`, marked in the
+  transcript as P9's and not yours. By default it is a note, and like any note it starts no turn (O188); Settings > Notices
+  can make it a message (O197), which starts or joins the parent's turn as below. As a note, a parent that is working
   reads it at its next step (one whose agent cannot steer, at its next message), and an idle parent
   keeps it until its next message. If the worker is still stopped 10 minutes later (no newer end, no
   turn or tool call started, not compacting, not marked ready), P9 sends the parent one message,
@@ -818,9 +820,12 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   running one to end and then goes with the notes that waited. That line is text the worker wrote, so the parent reads
   it as a report, not as an instruction from you. A worker whose agent dies mid-turn is reported
   at once as `[p9] <title> failed`, a message that starts the parent's turn. A worker that starts waiting on an approval or a
-  question gives its parent one note at once (O84), `[p9] <title> is waiting on an approval: <what it asks>. answer_chat request
-  "<id>" with ...`, naming the option ids or the form's fields; it starts no turn and is not sent while the parent is in
-  `wait_chat` on that worker. The approval's text is the worker's, read as a report like the end line. Each is sent only to a parent that is running; none starts
+  question gives its parent one notice at once (O84), `[p9] <title> is waiting on an approval: <what it asks>. answer_chat request
+  "<id>" with ...`, naming the option ids or the form's fields; by default (O197) it is a message that starts the parent's
+  turn, or a note that starts none when Settings > Notices says so, and it is not sent while the parent is in
+  `wait_chat` on that worker. Every kind of notice (ready report, approval, question, compacting, turn end, and a sprint's
+  pause or resume to its lead) can be set to note or message there; a message goes only to a parent that is open and not
+  stopped, and otherwise the notice goes as a note. The approval's text is the worker's, read as a report like the end line. Each is sent only to a parent that is running; none starts
   a stopped chat. A run the agent makes with no prompt (Claude Code resumed by a finished background task) counts as a
   turn for these lines (O192): it ends once a minute passes with no update and no tool call open.
 - **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
@@ -1133,7 +1138,8 @@ Written before the code (sprint spec D1, D3, D4).
   A compaction that comes while no turn is running (Claude Code compacts just after a turn ends, then works on with no
   prompt) marks the chat compacting until that run ends: a cost update above the compaction's own, 60 s with no update,
   or the chat's next prompt. The worker's end line to its lead waits 3 s; a worker compacting by then sends the lead the
-  note "<title> is compacting and will continue" (it starts no turn) and its end line when the run ends. `list_chats`
+  notice "<title> is compacting and will continue" (a note that starts no turn by default, a message when the owner
+  sets compacting to message in Settings > Notices, O197) and its end line when the run ends. `list_chats`
   and `wait_chat` show such a chat as working, with `compacting: true`. This only delays and labels a line P9 already
   sends; nothing new is read or run.
 - **Reading a worker's notes in its chat.** `GET /chat/<id>/notes` returns the text of that chat's own notes file, for
@@ -1377,7 +1383,8 @@ migration spec S13).
   refused (one waiting in a running turn's queue included) it stays in the ledger, so a P9 restart during Resume sends the rest after the restart, and one already recorded is not
   sent twice (its turn, cut by the restart, is like any turn a restart cuts). A held message that carries a line you sent from a
   phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
-  Pause and Resume each send the lead one note.
+  Pause and Resume each send the lead one notice: a note by default, a message when Settings > Notices sets that kind
+  to message (O197).
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Agent modes
