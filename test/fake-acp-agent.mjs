@@ -128,12 +128,16 @@ const commands = (sessionId) => connection.sessionUpdate({ sessionId, update: { 
   availableCommands: [{ name: 'compact', description: 'Clear history but keep a summary' }, { name: 'context', description: 'Show context use' }, { name: 'review', description: 'Review the changes' }] } });
 
 let steering = true;
+// O194: like claude-agent-acp 0.106.0, it marks a run it starts with no prompt only for a client that advertises asyncTasks.
+let asyncTasks = false;
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 const connection = acp.connectAgent(stream, {
   async initialize(params) {
     // As Claude asked for ACP 2 it offers no steering, like claude-agent-acp 0.106.0 (test/real-adapter-steering.test.mjs).
     // ponytail: it still answers protocol 1 and speaks v1; only the steering offer follows the version P9 asked for.
     steering = !existsSync('no-steering') && !(process.argv[2] === 'claude' && params?.protocolVersion >= 2);
+    const air = params?.clientCapabilities?._meta?.jetbrains?.air;
+    asyncTasks = air?.version >= 1 && Array.isArray(air.capabilities) && air.capabilities.includes('asyncTasks');
     if (existsSync('hang-init')) await new Promise(() => {});
     if (existsSync('slow-init')) await new Promise((resolve) => setTimeout(resolve, 10000));
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: !existsSync('no-images') }, sessionCapabilities: { resume: {}, close: {} } },
@@ -440,6 +444,24 @@ const connection = acp.connectAgent(stream, {
         await say('bg-run done');
       }, 4000);
       await say('bg-run reply');
+      return { stopReason: 'end_turn' };
+    }
+    // O194: "bg-marked" is "bg-run" with the adapter's marks (only for a client that advertises asyncTasks): its unprompted
+    // run opens with an async_task_spawned of taskType 'turn' and ends with that task's async_task_state_update. A background
+    // command's own task starts and ends inside the run and is not the run's end.
+    if (text === 'bg-marked') {
+      const task = (update) => asyncTasks && connection.sessionUpdate({ sessionId, update });
+      setTimeout(async () => {
+        await task({ sessionUpdate: 'async_task_spawned', asyncTaskId: 'autonomous-turn-1', name: 'Claude is working', taskType: 'turn', description: 'A background task finished.', showInTranscript: false, canStop: true });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'resume-1', title: 'Resumed tool', kind: 'execute', status: 'in_progress' } });
+        await task({ sessionUpdate: 'async_task_spawned', asyncTaskId: 'bash-1', name: 'sleep 1', taskType: 'local_bash', description: 'sleep 1', showInTranscript: true, canStop: true, toolCallId: 'resume-1' });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'bash-1', state: 'completed' });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'resume-1', status: 'completed' } });
+        await say('bg-marked done');
+        await task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'autonomous-turn-1', state: 'completed' });
+      }, 4000);
+      await say('bg-marked reply');
       return { stopReason: 'end_turn' };
     }
     // O192 FIX1: "bg-compact" is resumed with no prompt 4 s after its end (a reply), and 200 ms later compacts; the

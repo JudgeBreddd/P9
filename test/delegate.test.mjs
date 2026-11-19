@@ -323,6 +323,26 @@ test('O192 FIX1: a compaction inside an unprompted run ends it once: one end not
   console.log('PASS O192 FIX1: compaction inside the unprompted run; 2 end notes, 1 wake');
 });
 
+// O194: Claude's adapter marks the start and end of a run it starts with no prompt (the asyncTasks capability, which P9
+// advertises). A marked run ends at its end mark, not after the quiet time; a background command's own task ending inside
+// it is not its end, and the quiet time does not end it a second time.
+test('O194: an unprompted run with the adapter marks ends at its end mark, not after the quiet time', { timeout: 120000 }, async (t) => {
+  const QUIET = 12000, instance = await start(t, { P9_UNPROMPTED_QUIET_MS: String(QUIET) });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'bg-marked', title: 'Kid' });
+  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('bg-marked reply'));
+  const done = await until(instance, (e) => e.conversation === made.chat && e.type === 'update' && e.data?.sessionUpdate === 'agent_message_chunk' && e.data.content?.text === 'bg-marked done');
+  const at = Date.now();
+  const second = await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('bg-marked done'), done.cursor);
+  const took = Date.now() - at;
+  assert.equal(second.hit.data.text, '[p9] Kid ended its turn: bg-marked done');
+  assert.ok(took < QUIET / 2, 'the run ended ' + took + ' ms after its last line, as late as the ' + QUIET + ' ms quiet time, not at its end mark');
+  await pause(QUIET + 2000);
+  assert.deepEqual((await told(instance, a.conversation)).filter((x) => x.includes('Kid')), ['[p9] Kid ended its turn: bg-marked reply', '[p9] Kid ended its turn: bg-marked done'], 'one note per end: the quiet time did not end the marked run again');
+  console.log('PASS O194: the marked run ended ' + took + ' ms after its last line (quiet time ' + QUIET + ' ms); no second end');
+});
+
 test('Delegate F2: archive_chat archives and brings back a chat the caller started; never a chat beside it, a working chat, or under the agent lock; nothing is deleted', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
