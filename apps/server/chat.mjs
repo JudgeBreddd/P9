@@ -393,7 +393,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
     if (type === 'user' && Array.isArray(data.held)) settleResumed(data.held);
     else if (type === 'unheld') settleResumed([data.id]);
-    wakeAll(type);
+    wakeAll(type, conversation);
   };
   // A resumed message that went into a running turn's queue (202 held) stays in resuming:<lead> as queued: <held id>
   // until a 'user' event carries that id (it reached the agent) or an 'unheld' names it (refused, replaced, cancelled):
@@ -409,10 +409,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
   // Streamed updates wake long polls once per tick, not once per event: a burst is one read for each poller (finding 16).
   // Every other event wakes them now, so 'created' reaches a window before the create's reply (controller.mjs relies on it).
-  let waking = false;
-  const wakeAll = (type) => {
-    if (type !== 'update') { for (const wake of listeners) wake(); return; }
-    if (waking) return; waking = true; setImmediate(() => { waking = false; for (const wake of listeners) wake(); });
+  // Each wake is passed the chat the event is of (none: every chat); changed(ms, id) below waits for one chat's.
+  let waking = null;
+  const wakeAll = (type, conversation) => {
+    if (type !== 'update') { for (const wake of listeners) wake(conversation); return; }
+    if (waking) { waking.add(conversation); return; }
+    waking = new Set([conversation]);
+    setImmediate(() => { const ids = waking; waking = null; for (const wake of listeners) for (const id of ids) wake(id); });
   };
   const sprintOf = (id) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('sprint:' + id)?.value ?? '{}'); } catch { return {}; } };
   const setSprint = (id, patch) => {
@@ -1863,9 +1866,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!last || last.type === 'user') return '';
       try { return String(replyEnd.get(id, runFrom.get(id, last.cursor)?.cursor ?? 0, last.cursor).text ?? ''); } catch { return ''; }
     },
-    // Resolves at the next event of any chat, or after ms.
-    changed: (ms) => new Promise((resolve) => {
-      const done = () => { listeners.delete(done); clearTimeout(timer); resolve(); };
+    // Resolves at the next event of chat id (left out: of any chat), at a wake for every chat (shutdown, a sprint's
+    // pause or resume), or after ms.
+    changed: (ms, id) => new Promise((resolve) => {
+      const done = (of) => { if (id && of && of !== id) return; listeners.delete(done); clearTimeout(timer); resolve(); };
       const timer = setTimeout(done, ms);
       listeners.add(done);
     }),
