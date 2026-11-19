@@ -1383,7 +1383,8 @@ migration spec S13).
   refused (one waiting in a running turn's queue included) it stays in the ledger, so a P9 restart during Resume sends the rest after the restart, and one already recorded is not
   sent twice (its turn, cut by the restart, is like any turn a restart cuts). A held message that carries a line you sent from a
   phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
-  Pause and Resume each send the lead one note.
+  Pause and Resume each send the lead one notice: a note by default, a message when Settings > Notices sets that kind
+  to message (O197).
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Agent modes

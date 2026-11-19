@@ -1298,17 +1298,17 @@ export function createDelegate({ chat, allowed, usage }) {
   // message still waiting is the newest one from that worker: a newer one replaces it by its ID (wake).
   // ponytail: "nothing for you" is matched in the end line itself; a worker that words it otherwise still sends its end line.
   const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|the parent|your side)\b/i;
-  const waitingNote = new Map(); // worker chat -> held ID of its note still waiting for its parent's turn to end
+  const waitingNote = new Map(); // worker chat -> held ID of P9's wake message from it (end line set to message, late or failed wake) still waiting for its parent's turn to end
   // O139: the line waits END_HOLD_MS first, since Claude Code's compaction comes just after the turn's end (186 of 199 in
   // P9's history within 1 s, 189 within 5 s). Compacting by then: the parent gets a notice that it will continue (a note,
   // which starts no turn, unless Settings > Notices makes compacting a message, O197); chat.mjs runs this again when that run ends, and the end line goes then. A prompted turn started
   // meanwhile drops it: that turn's own end comes. A parent in wait_chat on it at the end gets no end line (wait_chat's
   // answer is the news), but does get the compacting note. ponytail: a compaction later than END_HOLD_MS still sends the end line first.
   const END_HOLD_MS = 3000;
-  // O188 (the owner's usage plan point 1): a worker's end reaches its parent as a note by default (O197: Settings > Notices
-  // can make it a message), which starts no turn (CI, dev-space
-  // and other waits end turns all night). Only a worker still stopped WAKE_AFTER_MS later (no newer end, no turn or tool
-  // call started, not compacting, not ready) prompts its parent, once; a failed turn prompts at once.
+  // O188 (the owner's usage plan point 1): a worker's end reaches its parent as a note by default, which starts no turn (CI,
+  // dev-space and other waits end turns all night). Under that default only a worker still stopped WAKE_AFTER_MS later (no
+  // newer end, no turn or tool call started, not compacting, not ready) prompts its parent, once; a failed turn prompts at
+  // once. O197: with Settings > Notices set to message for turn ends, the end line itself prompts the parent at once.
   // P9_WAKE_AFTER_MS is honoured only under the test home (test/helpers.mjs sets P9_TEST_HOME), so a shipped unit never takes it.
   const WAKE_AFTER_MS = process.env.P9_TEST_HOME && Number(process.env.P9_WAKE_AFTER_MS) > 0 ? Number(process.env.P9_WAKE_AFTER_MS) : 600_000;
   // FIX1 (Reviewer): each end takes the chat's next number and only the newest one's timer sends, so a turn or a
@@ -1358,7 +1358,8 @@ export function createDelegate({ chat, allowed, usage }) {
     const last = first;
     if (!live || !parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     if (!ok) return void wake(parent, id, '[p9] ' + child.title + ' failed; read_chat shows why.');
-    // O188: the end itself is a note by default (starts no turn; O197 can make it a message); the parent is prompted only if the worker is still stopped WAKE_AFTER_MS later.
+    // O188: by default the end is a note (starts no turn) and the parent is prompted only if the worker is still stopped
+    // WAKE_AFTER_MS later. O197: set to message, the end line prompts the parent now; the late wake then replaces it if still waiting.
     notify(parent.id, 'ended', '[p9] ' + child.title + ' ended its turn: ' + last, id); // its key is the late wake's: a newer one replaces it while it waits
     setTimeout(() => {
       const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
