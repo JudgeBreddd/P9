@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
+import * as windowsModule from '../apps/server/windows.mjs';
 import { internalEndpoint, missingWindowsBinaries, trimLog, windowsLockEndpoint } from '../apps/server/windows.mjs';
 import { resolveWindowsExecutable, windowsArgv, windowsJobCommand } from '../apps/server/process-tree.mjs';
 import { allowed, childEnv } from '../apps/server/child-env.mjs';
@@ -64,7 +65,9 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
   assert.match(host, /PROC_THREAD_ATTRIBUTE_JOB_LIST/);
   assert.doesNotMatch(host, /AssignProcessToJobObject/);
   assert.ok(main.indexOf('windowsLockEndpoint') < main.indexOf('await readdir(state)'), 'lock must precede state or ledger mutation');
-  assert.ok(main.indexOf("'-Mode', 'PipeLock'") < main.indexOf("'desktop.json'), 'wx'"), 'pipe ACL check must precede credentials');
+  assert.ok(main.includes('else lockPipe({ host: windowsHost, pipe: socketPath, env: childEnv() });'), 'Windows locks its pipe through lockPipe');
+  assert.ok(main.indexOf('lockPipe({') < main.indexOf("'desktop.json'), 'wx'"), 'pipe ACL check must precede credentials');
+  assert.ok(main.includes("console.error('P9_START_FAILED_CODE ' + ([error?.code, error?.name]"), 'a refused start names its code (PIPE_ACL) in the log');
   assert.match(pack, /extract-node-windows\.ps1/);
   assert.match(pack, /process\.env\.npm_execpath/);
   // O151: Windows' own tar.exe by full path, and a failed extract stops the build.
@@ -74,6 +77,31 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
 
 // O23: on a Windows machine with WSL, System32\bash.exe and WindowsApps\bash.exe are WSL launchers. A bare bash or sh (a
 // Mission button's cmd) must reach Git Bash, never WSL; every other name resolves exactly as before.
+// N6-1: the refusal side of the pipe lock runs on every platform: spawnSync is stubbed, so no Windows and no PowerShell.
+// (The lock itself, Win32 SetSecurityInfo and the ACE check in windows-host.ps1, runs only on the Windows CI job above.)
+test('N6-1 PIPE_ACL: lockPipe runs PipeLock on the pipe with a timeout; any exit but 0 (ACE check failed, no PowerShell, timed out) refuses with code PIPE_ACL', () => {
+  const { lockPipe, PIPE_LOCK_MS } = windowsModule;
+  assert.equal(typeof lockPipe, 'function', 'no lockPipe: the PIPE_ACL refusal is inline in main.mjs and untested');
+  const pipe = '\\\\.\\pipe\\p9-foundation-0123456789abcdef0123', host = 'C:\\P9\\scripts\\windows-host.ps1', env = { Path: 'C:\\Windows' };
+  const calls = [];
+  const stub = (result) => (command, args, options) => { calls.push({ command, args, options }); return result; };
+  assert.equal(lockPipe({ host, pipe, env, run: stub({ status: 0, stdout: 'D:P(A;;FA;;;S-1-5-21-1)\r\n' }) }), undefined);
+  assert.deepEqual(calls[0].command, 'powershell.exe');
+  assert.deepEqual(calls[0].args, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', host, '-Mode', 'PipeLock', '-Pipe', pipe]);
+  assert.equal(calls[0].options.env, env);
+  assert.equal(calls[0].options.shell, undefined, 'no shell: the pipe name is one argument');
+  assert.ok(Number.isInteger(calls[0].options.timeout) && calls[0].options.timeout === PIPE_LOCK_MS && PIPE_LOCK_MS >= 60_000,
+    'a hung PowerShell must not hold the start forever (CI cold starts took up to 20 s)');
+  const refused = (result, why) => assert.throws(() => lockPipe({ host, pipe, env, run: stub(result) }),
+    (error) => error.code === 'PIPE_ACL' && error.message === 'pipe-acl-not-current-user-only' && !error.message.includes(pipe), why);
+  refused({ status: 1, stderr: 'pipe-acl-not-current-user-only' }, 'the ACE check threw');
+  refused({ status: null, error: Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' }) }, 'no PowerShell');
+  refused({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'killed at the timeout');
+  refused({ status: 3221225786 }, 'killed by Windows (an NTSTATUS exit)');
+  refused(undefined, 'no result');
+  console.log('PASS N6-1 PIPE_ACL: exit 0 locks; exit 1, no PowerShell, timeout, NTSTATUS and no result refuse as PIPE_ACL (timeout ' + PIPE_LOCK_MS + ' ms)');
+});
+
 test('O23: bare bash and sh skip the WSL launchers and fall back to Git Bash; cmd, node and powershell are unchanged', () => {
   const env = { Path: 'C:\\Windows\\system32;C:\\Users\\one\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\Git\\cmd;C:\\Program Files\\nodejs;C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
     SystemRoot: 'C:\\Windows', LOCALAPPDATA: 'C:\\Users\\one\\AppData\\Local', ProgramFiles: 'C:\\Program Files' };

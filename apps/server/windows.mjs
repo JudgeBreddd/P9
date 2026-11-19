@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { copyFile, stat, truncate } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,4 +47,15 @@ export function missingWindowsBinaries(installed, arch = 'x64') {
   const alias = { [codex]: new RegExp(`^@openai\\+codex@[^@]*-win32-${arch}$`) };
   return [codex, `@anthropic-ai+claude-agent-sdk-win32-${arch}@`]
     .filter((prefix) => !installed.some((name) => name.startsWith(prefix) || alias[prefix]?.test(name)));
+}
+
+// N6-1: the daemon, right after listen, has windows-host.ps1 (PipeLock) set its pipe's owner-only DACL and verify it.
+// Any exit but 0 (the ACE check threw, PowerShell missing, killed at the timeout) refuses the start with code PIPE_ACL,
+// before credentials exist. The timeout: a hung PowerShell once held start with no error (the B8 host cold start took
+// 17-20 s on CI runners, so 120 s is far past a slow start). run is spawnSync; tests pass a stub (no Windows needed).
+export const PIPE_LOCK_MS = 120_000;
+export function lockPipe({ host, pipe, env, run = spawnSync, timeout = PIPE_LOCK_MS }) {
+  const result = run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', host, '-Mode', 'PipeLock', '-Pipe', pipe], { encoding: 'utf8', env, timeout });
+  if (result?.status !== 0) throw Object.assign(new Error('pipe-acl-not-current-user-only'), { code: 'PIPE_ACL' });
 }
