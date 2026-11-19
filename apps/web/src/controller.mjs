@@ -1215,6 +1215,7 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
 liveChat.create = async (agent, folder = '', project = null, model = '', profile = '') => {
+  if (!starts) await loadStarts(); // O131: the read with the chat list failed (a daemon still starting): read them now, or the chat starts on the agent's own
   const op = crypto.randomUUID(), f = { agent, model, op }; fresh.push(f);
   const r = await liveChat.call('create', { op, provider: agent, ...(folder && { folder }), ...(project && { project }), ...(profile && { profile, model }) });
   if (r.status !== 201) { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); }
