@@ -1006,9 +1006,18 @@ function renderQueue() {
   const oldest = Math.min(...[...held.map(([, item]) => item.at), ...items.map((item) => item.at)].map((at) => Number(at) || Infinity));
   const html = `<details${queueOpen ? ' open' : ''}><summary>${count} queued${oldest < Infinity ? ', oldest waiting ' + ageOf(oldest) : ''} ▸</summary><div class="list">${rows}</div></details>`;
   if (html !== queueSig) { queueSig = html; box.innerHTML = html; } // unchanged, the open list keeps its scroll
+  tickQueue(!!count && !!openId);
 }
-// The age ticks while nothing else redraws (a stuck queue is exactly that case); unchanged text redraws nothing.
-setInterval(() => { if (!document.hidden && openId) renderQueue(); }, 15000);
+// The age ticks while nothing else redraws (a stuck queue is exactly that case): one timer while an open chat has a queue,
+// stopped when the queue empties or the chat closes (the next tick sees no open chat); hidden, a tick skips. Unchanged text
+// redraws nothing. data-tick says it runs (phone-continue 'O125 tick').
+let queueTick = 0;
+function tickQueue(on: boolean) {
+  if (on === !!queueTick) return;
+  if (on) queueTick = window.setInterval(() => { if (!openId) tickQueue(false); else if (!document.hidden) renderQueue(); }, 15000);
+  else { clearInterval(queueTick); queueTick = 0; }
+  one<HTMLElement>('#queued').dataset.tick = on ? 'on' : '';
+}
 one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
 let draining = false;
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
