@@ -10,12 +10,18 @@ export const { ndJsonStream, RequestError, PROTOCOL_VERSION } = acp;
 const AGENT = { initialize: 'initialize', newSession: 'session/new', resumeSession: 'session/resume', closeSession: 'session/close',
   setSessionConfigOption: 'session/set_config_option', prompt: 'session/prompt' };
 
-// handlers: { sessionUpdate(params), requestPermission(params), createElicitation(params) }, each given the request's params only.
-// The stream goes through acp-v2.mjs: an agent that answers initialize with protocol 2 is translated to v1 there.
+// handlers: { sessionUpdate(params), requestPermission(params), createElicitation(params), asyncTask(params)? }, each given
+// the request's params only. The stream goes through acp-v2.mjs: an agent that answers initialize with protocol 2 is
+// translated to v1 there. O194: the adapter's asyncTasks updates (async_task_*) are not in the SDK's schema, which refuses
+// them as invalid params; renamed to a method of P9's own, they reach handlers.asyncTask in order with the other updates.
 export function connectClient(raw, handlers) {
-  const stream = v1Stream(raw);
+  const v1 = v1Stream(raw);
+  const tasks = new TransformStream({ transform: (message, controller) => controller.enqueue(message?.method === 'session/update'
+    && String(message.params?.update?.sessionUpdate).startsWith('async_task_') ? { ...message, method: '_p9/async_task' } : message) });
+  const stream = { readable: v1.readable.pipeThrough(tasks), writable: v1.writable, version: v1.version };
   const connection = acp.client({ name: 'p9' })
     .onNotification('session/update', ({ params }) => handlers.sessionUpdate(params))
+    .onNotification('_p9/async_task', { parse: (params) => params }, ({ params }) => handlers.asyncTask?.(params))
     .onRequest('session/request_permission', ({ params }) => handlers.requestPermission(params))
     .onRequest('elicitation/create', ({ params }) => handlers.createElicitation(params))
     .connect(stream);
