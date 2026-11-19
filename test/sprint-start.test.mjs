@@ -557,3 +557,36 @@ test('Sprint O174 no project: a Start press on a chat with no project but its ow
   assert.deepEqual([unknown.status, unknown.body.error], [404, 'unknown-sprint']);
   console.log('PASS Sprint O174 no project: Start press on a no-project chat starts it (200), a second press too, unknown id 404');
 });
+
+test('O137 FIX1: under Unrestricted a role whose first message failed is sent on the next Start in the Settings default mode (startMode), not in its Bypass lead\'s mode', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await config(instance, first);
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Retry' })).body;
+  const write = (name, body) => fs.writeFileSync(path.join(s.folder, name), body);
+  const lead = { key: 'lead', provider: 'claude', model: 'haiku', effort: 'low', mode: 'Bypass permissions' }, review = { key: 'review', provider: 'claude', model: 'haiku', effort: 'low' };
+  write('roles.json', JSON.stringify({ roles: [lead] })); write('roles/lead.work.md', 'config'); write('roles/review.work.md', 'config');
+  assert.equal((await call(instance, `/sprints/${s.sprint}/start`, 'POST', {})).status, 200);
+  const modeOf = async (id) => (await events(instance, id)).filter((e) => e.type === 'mode').at(-1)?.data.name;
+  await config(instance, s.sprint);
+  assert.equal(await modeOf(s.sprint), 'Bypass permissions', 'the lead runs in Bypass');
+  // The role is made, but its agent cannot start: its first message is not delivered.
+  write('roles.json', JSON.stringify({ roles: [lead, review] }));
+  fs.writeFileSync(path.join(instance.workspace, 'signed-out'), '');
+  const stuck = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  fs.rmSync(path.join(instance.workspace, 'signed-out'));
+  assert.equal(stuck.body.role, 'review', JSON.stringify(stuck.body));
+  const kid = (await rows(instance)).find((r) => r.parent === s.sprint && r.title === 'review');
+  assert.ok(kid, 'the role\'s chat was made before its agent failed to start');
+  // A Default mode saved in Settings before the next press: the resend takes it (startMode), not the lead's Bypass.
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { claude: { mode: 'Accept edits' } } })).status, 200);
+  const retry = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(retry.status, 200, JSON.stringify(retry.body));
+  assert.deepEqual(retry.body.chats.map((c) => [c.key, c.sent ?? false]), [['lead', false], ['review', true]]);
+  await config(instance, kid.id);
+  assert.equal(await modeOf(kid.id), 'Accept edits', 'the retried role did not take the Settings default');
+  console.log('PASS O137 FIX1: a role whose first message failed is sent on the next Start in the Settings default mode under Unrestricted, not its Bypass lead\'s mode');
+});

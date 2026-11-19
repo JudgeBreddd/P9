@@ -203,6 +203,16 @@ export function createDelegate({ chat, allowed, usage }) {
     return { mode: want, ceiling };
   };
 
+  // O137 (the owner, 2026-11-19): under Unrestricted a new worker with no mode asked (by open_chat or its roles.json row)
+  // starts in the Settings > New chats start in mode the user saved for its agent, else the agent's Auto, never wider than
+  // its parent (a narrower parent's own mode). Restricted, it takes the parent's mode, as before (modeFor).
+  const AUTO = { claude: 'Auto', codex: 'Auto review' };
+  const startMode = (caller, provider, asked) => {
+    if (asked !== undefined || !chat.loose?.(caller) || !AUTO[provider]) return asked;
+    const mine = chat.info(caller), ceiling = tierOf(mine.provider, mine.mode), want = chat.newChatDefaults?.()[provider]?.mode || AUTO[provider];
+    return ceiling === undefined ? undefined : tierOf(provider, want) <= ceiling ? want : under(provider, ceiling);
+  };
+
   const OFF = { error: 'delegate-off', detail: 'The user turned workers off in Settings > Delegation. Do the work in this chat, or ask the user to turn them on.' };
   const tooMany = (set) => ({ error: 'too-many-chats', detail: 'At most ' + set.max + ' running workers per chat (the user sets this in Settings > Delegation), ' + MAX_DEPTH + ' levels deep. An idle worker still holds its place. To free one you no longer need, call stop_chat with close: true (a plain stop_chat only interrupts its turn).' });
   const running = (caller, family) => family.filter((c) => c.parent === caller && !['stopped', 'moved'].includes(c.state)).length;
@@ -338,7 +348,7 @@ export function createDelegate({ chat, allowed, usage }) {
   const seen = (w) => ({ provider: w.provider, model: w.profile ? w.profile.model : w.model, effort: w.effortId ? w.effort : undefined });
   async function startWorker(caller, args, signal, { me, family, set, depth, at, sprintCall = false, approved = false, profile: named }) {
     const { provider, rowProfile, mine, profile, model, effortId, effort } = pick(set.workers[at], me, args, named);
-    const picked = modeFor(caller, { provider, mode: null }, args.mode);
+    const asked = startMode(caller, provider, args.mode), picked = modeFor(caller, { provider, mode: null }, asked);
     if (picked.error) return picked;
     if (args.effort !== undefined && !effortId) return { error: 'effort-unknown', detail: 'That agent\'s effort list is not known yet; leave effort out.' };
     const folder = args.folder ?? (me.folder.startsWith(':') ? undefined : me.folder); // ':…' is a project's own files: the project places the chat
@@ -359,7 +369,7 @@ export function createDelegate({ chat, allowed, usage }) {
       if (chat.lock(caller).on) return { error: 'agent-lock-on' };
       if (shut()) return shut();
       if (chat.paused(caller)) return PAUSED; // a Pause pressed while the user was asked or the folder was made
-      const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, args.mode);
+      const now = chat.delegation(), again = modeFor(caller, { provider, mode: null }, startMode(caller, provider, args.mode));
       if (now.start === 'off' && !sprintCall) return OFF;
       if (running(caller, chat.family()) + holding.get(caller).length - 1 >= (sprintCall ? MAX_CHILDREN : Math.min(now.max, MAX_CHILDREN))) return sprintCall ? tooManySprint : tooMany(now);
       if (again.error) return again;
@@ -596,7 +606,8 @@ export function createDelegate({ chat, allowed, usage }) {
         const work = (chat.sprintFiles.read(sprint, `roles/${r.key}.work.md`) ?? '').trim() || 'Your sprint started. Read your instructions and your notes file, then begin your work.';
         // Made by an earlier press whose first message never reached its agent (its start or a setting failed): sent now.
         if (existing && !chat.delivered(existing.id)) {
-          const mode = modeFor(sprint, { provider: r.provider, mode: null }, r.mode);
+          // O137 FIX1: the same start mode as openChat's (Unrestricted: the Settings default or Auto), not the lead's.
+          const mode = modeFor(sprint, { provider: r.provider, mode: null }, startMode(sprint, r.provider, r.mode ?? undefined));
           if (mode.error) return { ...mode, role: r.key, chats };
           const sent = await chat.prompt(existing.id, { text: work, mode: mode.mode, ...(!r.profile && { model: r.model }), ...(r.effortId && { config: { [r.effortId]: r.effort } }) }, undefined, sprint);
           if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', role: r.key, chats, detail: `Role ${r.key} was made, but its message was not sent; press Start again.` };

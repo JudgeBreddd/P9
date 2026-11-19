@@ -156,6 +156,24 @@ test('Delegate: open_chat asks the user first; the worker is an ordinary chat wi
   console.log('PASS Delegate open_chat: reject made nothing, allow made one Plan chat with its parent, the key returned it again, wider modes refused unasked');
 });
 
+test('O137: under Unrestricted a worker with no mode asked starts in Auto, or in the Settings default mode; restricted, it keeps its parent\'s', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude' });
+  await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp', mode: 'Bypass permissions' });
+  const a = await connect(t, instance, conversation);
+  // Restricted (File protection on, as installed): asked first, and the worker takes the parent's mode, as before.
+  const pending = a.tool('open_chat', { text: 'hello', title: 'Kid' });
+  const asked = await until(instance, (event) => event.conversation === a.conversation && event.type === 'approval', a.cursor);
+  await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'allow' } });
+  assert.equal((await pending).mode, 'Bypass permissions', 'restricted: the parent\'s mode');
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted
+  assert.equal((await a.tool('open_chat', { text: 'hello', title: 'Kid 2' })).mode, 'Auto', 'Unrestricted, no Settings default: Auto');
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { claude: { mode: 'Accept edits' } } })).status, 200);
+  assert.equal((await a.tool('open_chat', { text: 'hello', title: 'Kid 3' })).mode, 'Accept edits', 'the Settings default wins over Auto');
+  assert.equal((await a.tool('open_chat', { text: 'hello', title: 'Kid 4', mode: 'Plan' })).mode, 'Plan', 'a mode open_chat names wins over both');
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { claude: { mode: 'Nope' } } })).status, 400, 'only the agent\'s own mode names');
+});
+
 test('Delegate: send, wait, read, list and stop reach a chat\'s own workers; another chat sees none of them; an approval stays the user\'s; the lock refuses', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: open_chat does not ask

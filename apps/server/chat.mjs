@@ -1770,14 +1770,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // O133 (the Settings defaults kept going back to the agent default): Settings > New chats start in,
     // each agent's Default model and Default effort ('' the agent's own), kept here so a chat an agent opens starts on them
     // too, not only one the window makes. Kept in prefs under 'start-defaults'.
+    modeNames: (agent) => Object.keys(MODES[agent] ?? {}),
     newChatDefaults: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'start-defaults'").get()?.value ?? '{}'); } catch { v = {}; }
       const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : '');
-      return Object.fromEntries(Object.keys(MODES).map((a) => [a, { model: str(v?.[a]?.model), effort: str(v?.[a]?.effort) }])); },
+      // O137: and the Default mode, kept here too so a worker started under Unrestricted starts in it (delegate.mjs startMode); listed only when set.
+      return Object.fromEntries(Object.keys(MODES).map((a) => [a, { model: str(v?.[a]?.model), effort: str(v?.[a]?.effort), ...(Object.hasOwn(MODES[a], v?.[a]?.mode ?? ' ') && { mode: v[a].mode }) }])); },
     // #222 review: a save names only the fields it changes ({ codex: { effort: 'high' } }) and is merged into what is kept, so two
     // picks in flight, or two windows, never put back each other's older value. onlyEmpty (the one-time move of a value the window
     // kept itself) fills a field only while it is still ''.
     setNewChatDefaults(patch, onlyEmpty = false) { const v = this.newChatDefaults();
-      for (const [a, f] of Object.entries(patch)) for (const [k, x] of Object.entries(f)) if (!onlyEmpty || !v[a][k]) v[a][k] = x;
+      for (const [a, f] of Object.entries(patch)) for (const [k, x] of Object.entries(f)) if (!onlyEmpty || !v[a][k]) { if (k === 'mode' && !x) delete v[a].mode; else v[a][k] = x; }
       db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(v)); return this.newChatDefaults(); },
     // Which Settings row a worker started on (0 is the first); kept so a row frees only when its worker stops.
     slot: (id) => { const n = Number(db.prepare('SELECT value FROM prefs WHERE key = ?').get('slot:' + id)?.value ?? NaN); return Number.isInteger(n) ? n : -1; },
