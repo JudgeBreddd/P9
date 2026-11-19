@@ -10,10 +10,11 @@ export const { ndJsonStream, RequestError, PROTOCOL_VERSION } = acp;
 const AGENT = { initialize: 'initialize', newSession: 'session/new', resumeSession: 'session/resume', closeSession: 'session/close',
   setSessionConfigOption: 'session/set_config_option', prompt: 'session/prompt' };
 
-// handlers: { sessionUpdate(params), requestPermission(params), createElicitation(params), asyncTask(params)? }, each given
+// handlers: { sessionUpdate(params), requestPermission(params), createElicitation(params), asyncTask(params)?, sdkMessage(params)? }, each given
 // the request's params only. The stream goes through acp-v2.mjs: an agent that answers initialize with protocol 2 is
 // translated to v1 there. O194: the adapter's asyncTasks updates (async_task_*) are not in the SDK's schema, which refuses
 // them as invalid params; renamed to a method of P9's own, they reach handlers.asyncTask in order with the other updates.
+// O190: claude-agent-acp's ext notification '_claude/sdkMessage' (a raw SDK message P9 opted in to) reaches handlers.sdkMessage.
 export function connectClient(raw, handlers) {
   const v1 = v1Stream(raw);
   const tasks = new TransformStream({ transform: (message, controller) => controller.enqueue(message?.method === 'session/update'
@@ -22,6 +23,7 @@ export function connectClient(raw, handlers) {
   const connection = acp.client({ name: 'p9' })
     .onNotification('session/update', ({ params }) => handlers.sessionUpdate(params))
     .onNotification('_p9/async_task', { parse: (params) => params }, ({ params }) => handlers.asyncTask?.(params))
+    .onNotification('_claude/sdkMessage', { parse: (params) => params }, ({ params }) => handlers.sdkMessage?.(params))
     .onRequest('session/request_permission', ({ params }) => handlers.requestPermission(params))
     .onRequest('elicitation/create', ({ params }) => handlers.createElicitation(params))
     .connect(stream);
@@ -37,7 +39,7 @@ export function connectAgent(stream, handlers) {
   if (handlers.cancel) app.onNotification('session/cancel', ({ params }) => handlers.cancel(params));
   if (handlers.extMethod) app.onRequest('*', ({ method, params }) => handlers.extMethod(method, params));
   const connection = app.connect(stream);
-  return { sessionUpdate: (params) => connection.client.notify('session/update', params),
+  return { sessionUpdate: (params) => connection.client.notify('session/update', params), extNotification: (method, params) => connection.client.notify(method, params),
     requestPermission: (params) => connection.client.request('session/request_permission', params),
     createElicitation: (params) => connection.client.request('elicitation/create', params), closed: connection.closed };
 }

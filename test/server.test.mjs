@@ -189,10 +189,10 @@ test('usage reads each usage row once and never parses agent chunks', (t) => {
   assert.equal(parsed, 0, 'a call with no new rows parses nothing');
 });
 
-// O190: a run with no prompt (a scheduled wake, a background task's notification, a compaction) reports its cost through
-// usage_update but no token counts (the adapter's result carries only used, size and cost), so token totals are prompted
-// turns only. They say so; the cost counts the run.
-test('token totals say they are prompted turns only; a run with no prompt counts in the cost', () => {
+// O190: a run with no prompt reports its cost through usage_update; its tokens count only when a 'usage' event carries them
+// (chat.mjs stores one for a run Claude Code started itself). Here none does: the cost counts the run, the tokens do not.
+// Token totals say what they count.
+test('token totals name what they count; a run with no usage event counts in the cost only', () => {
   const ledger = openLedger(':memory:');
   const used = (n, amount, more) => ({ sessionUpdate: 'usage_update', used: n, size: 200000, cost: { amount, currency: 'USD' }, ...more });
   ledger.append('c', 'user', { text: 'go' }); ledger.append('c', 'update', used(1000, 0.5));
@@ -200,9 +200,9 @@ test('token totals say they are prompted turns only; a run with no prompt counts
   // A wake with no prompt: no user event and no turn-end, only the run's usage_update with the session's new cost.
   ledger.append('c', 'update', used(1500, 0.9, { _meta: { '_claude/origin': { kind: 'task-notification' } } }));
   const spent = ledger.spent('c').usage, usage = ledger.usage();
-  assert.deepEqual(spent, { inputTokens: 10, outputTokens: 5, cachedTokens: 900, costUsd: 0.9, turns: 1, tokens: 'prompted turns only' });
-  assert.deepEqual([usage.tokens, usage.totals.cachedTokens, usage.totals.costUsd], ['prompted turns only', 900, 0.9]);
-  console.log('PASS O190: spent and /usage name their tokens prompted turns only; the unprompted run is in the cost (0.9), not the tokens');
+  assert.deepEqual(spent, { inputTokens: 10, outputTokens: 5, cachedTokens: 900, costUsd: 0.9, turns: 1, tokens: "prompted turns and Claude Code's own runs" });
+  assert.deepEqual([usage.tokens, usage.totals.cachedTokens, usage.totals.costUsd], ["prompted turns and Claude Code's own runs", 900, 0.9]);
+  console.log('PASS O190: spent and /usage name what their tokens count; the run with no usage event is in the cost (0.9), not the tokens');
 });
 
 // O191: a chat on a provider profile is stored as provider claude, but spends neither the Claude plan nor the Claude

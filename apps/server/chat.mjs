@@ -73,6 +73,12 @@ export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} },
   _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } } };
 // The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.
+// O190: claude-agent-acp 0.106.0 leaves a result Claude Code started itself out of the turn's usage and sends only its cost
+// (usage_update), so those runs' tokens were never counted. Asked at session/new and session/resume
+// (_meta.claudeCode.emitRawSDKMessages), it also sends each SDK result from these origins, usage included, as the ext
+// notification '_claude/sdkMessage': the origins its AUTONOMOUS_RESULT_ORIGINS lists (result-end.js).
+const OWN_RUNS = ['task-notification', 'peer', 'coordinator', 'observer'];
+export const rawResults = OWN_RUNS.map((origin) => ({ type: 'result', origin }));
 const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
 // The approval a P9 MCP tool asks for (run_script, answer_needs_you): the chat's own prompt, two buttons.
 const MCP_OPTIONS = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
@@ -1055,6 +1061,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       },
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       asyncTask: ({ update }) => marked(session, conversation.id, update),
+      // O190: a result from a run Claude Code started itself (OWN_RUNS) is stored as a 'usage' event, which the ledger adds
+      // to the chat's tokens. Only with no prompted turn open: the adapter folds a result that answers a prompt into that
+      // turn's usage (stored at turn-end), so counting it here would count it twice.
+      // ponytail: an own run's result that lands while a prompted turn runs is not counted (the adapter leaves it out of
+      // that turn too); no compaction result was seen with one of these origins, so compactions stay uncounted.
+      sdkMessage: ({ message } = {}) => {
+        const u = message?.usage, n = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+        if (message?.type !== 'result' || !OWN_RUNS.includes(message.origin?.kind) || !u || typeof u !== 'object' || session.turn || session.solo || live.get(conversation.id) !== session) return;
+        emit(conversation.id, 'usage', { usage: { inputTokens: n(u.input_tokens), outputTokens: n(u.output_tokens), cachedReadTokens: n(u.cache_read_input_tokens), cachedWriteTokens: n(u.cache_creation_input_tokens) }, origin: message.origin.kind });
+      },
       requestPermission: async (request) => (await ownRead(conversation.id, request).catch(() => null)) ?? session.approve(request),
       createElicitation: ask('question'),
     });
@@ -1080,7 +1096,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // O48: the base URL and key go to this one agent in the session request itself (its stdin), on new and on resume:
       // the adapter keeps neither between runs. Never the adapter's environment or a command line; the adapter itself puts
       // both in the environment of the agent it starts, so that agent's commands can read the key (SECURITY.md).
-      const _meta = profile ? { claudeCode: { options: { env: { ANTHROPIC_BASE_URL: profiles.get(profile.id).baseUrl, ANTHROPIC_AUTH_TOKEN: await bounded(profiles.secret(profile.id)) } } } } : undefined;
+      const own = conversation.provider === 'claude' ? { emitRawSDKMessages: rawResults } : {}; // O190, rawResults above
+      const _meta = profile ? { claudeCode: { ...own, options: { env: { ANTHROPIC_BASE_URL: profiles.get(profile.id).baseUrl, ANTHROPIC_AUTH_TOKEN: await bounded(profiles.secret(profile.id)) } } } }
+        : own.emitRawSDKMessages ? { claudeCode: own } : undefined;
       if (conversation.session) {
         const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers, ...(_meta && { _meta }) }));
         session.mode = resumed?.configOptions?.find((o) => o.id === 'mode')?.currentValue;
