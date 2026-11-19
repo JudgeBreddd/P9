@@ -26,7 +26,7 @@ function repo(t) {
   const g = (...a) => execFileSync('git', ['-C', folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...a], { encoding: 'utf8' }).trim();
   execFileSync('git', ['init', '-q', '-b', 'main', folder]);
   g('commit', '--allow-empty', '-qm', 'base'); g('checkout', '-qb', 'work');
-  return { folder, commit: (m) => { g('commit', '--allow-empty', '-qm', m); return g('rev-parse', 'HEAD'); }, merge: () => { g('checkout', '-q', 'main'); g('merge', '-q', '--ff-only', 'work'); g('checkout', '-q', 'work'); } };
+  return { folder, commit: (m) => { g('commit', '--allow-empty', '-qm', m); return g('rev-parse', 'HEAD'); }, merge: () => { g('checkout', '-q', 'main'); g('merge', '-q', '--ff-only', 'work'); g('update-ref', 'refs/remotes/origin/main', 'main'); g('checkout', '-q', 'work'); } };
 }
 
 function world(t, { paused = false, withReviewer = true, started = true } = {}) {
@@ -79,29 +79,24 @@ test('O193: an item\'s whole life (ready, fix, ready, pass) wakes reviewer, work
   assert.equal(w.prompts.length, 5);
 });
 
-test('O193: a P9 restart between ready and verdict still wakes the reviewer, once', { timeout: 30000 }, async (t) => {
+test('O193: a busy reviewer is woken at ready (a queued prompt waits for its turn); a P9 restart sends it again never, and tells the lead once', { timeout: 30000 }, async (t) => {
   const w = world(t), first = w.make();
   await first.boot();
-  w.states.set(reviewer, 'turn'); // busy at ready: no wake yet
+  w.states.set(reviewer, 'turn'); // busy at ready: the queued prompt goes now, as on main
   await w.ready(first, w.commit('one'));
-  assert.deepEqual(w.order(), []);
-  w.states.set(reviewer, 'stopped'); // P9 restarts: the reviewer's turn and its end are lost
-  await w.make().boot();
   assert.deepEqual(w.order(), ['reviewer']);
+  w.states.set(reviewer, 'stopped'); // P9 restarts: the reviewer's turn and its end are lost
   await w.make().boot(); // the wake is kept, so not sent again; the lead is told once instead
   await w.make().boot();
   assert.deepEqual(w.order(), ['reviewer', 'lead']);
   assert.match(w.prompts[1][1], /Rev ended its turn on B1 at .* without acting on it/);
 });
 
-test('O193: a dropped event is caught on the next event for that sprint; a reviewer ending with no verdict tells the lead once', { timeout: 30000 }, async (t) => {
+test('O193: a reviewer ending with no verdict tells the lead once', { timeout: 30000 }, async (t) => {
   const w = world(t), p9 = w.make();
   await p9.boot();
-  w.states.set(reviewer, 'turn');
   await w.ready(p9, w.commit('one'));
-  w.states.set(reviewer, 'running'); // its turn ended, but that event never came
-  assert.deepEqual(w.order(), []);
-  await p9.end(lead); // the next event for the sprint, from another chat
+  await p9.end(lead); // another event for the sprint: nothing again
   assert.deepEqual(w.order(), ['reviewer']);
   await p9.end(reviewer); // woken, ended: a single end is often mid-work, so nothing yet
   assert.deepEqual(w.order(), ['reviewer']);

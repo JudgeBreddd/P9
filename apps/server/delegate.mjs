@@ -772,7 +772,7 @@ export function createDelegate({ chat, allowed, usage }) {
     trail(info.parent);
     // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
     const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
-    if (inSprint(info.parent)) { carry(info.parent, { type: 'ready', chat: caller, at: value.at }).catch(() => {}); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
+    if (inSprint(info.parent)) { await carry(info.parent, { type: 'ready', chat: caller, at: value.at }); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
     if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
@@ -835,10 +835,9 @@ export function createDelegate({ chat, allowed, usage }) {
   };
   const merged = async (folder, commit) => {
     if (onMain.has(commit)) return true;
-    for (const ref of ['origin/main', 'main']) {
-      try { await git('git', ['merge-base', '--is-ancestor', commit, ref], { cwd: folder, timeout: 10000, env: childEnv() }); onMain.add(commit); return true; } catch {}
-    }
-    return false; // ponytail: not on main, or no git there: the record stays live
+    // CI fix: origin/main only. A commit made on a local main is not merged (work-queue commits there, unpushed).
+    try { await git('git', ['merge-base', '--is-ancestor', commit, 'origin/main'], { cwd: folder, timeout: 10000, env: childEnv() }); onMain.add(commit); return true; } catch {}
+    return false; // ponytail: not on origin/main, no remote, or no git there: the record stays live
   };
   // One carry at a time per lead, so two events close together never both read the record before either writes it.
   const carrying = new Map();

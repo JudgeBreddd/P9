@@ -10,7 +10,7 @@
 //   background task of its own (unknown to P9 until O194: false); start: P9 started.
 //
 // Each review record names one next actor: queued -> the reviewer (the lead if there is none), fix -> the worker,
-// passed -> the lead. A busy actor is skipped and the next event looks again. A record is live only if it is from this
+// passed -> the lead. A busy actor is woken too: the wake is a queued prompt, which waits for its turn's end (CI FIX). A record is live only if it is from this
 // sprint run (not older than its start, else its first carry), its commit is not on main, and it is still the head of a
 // branch on origin (open: false; undefined when unknown). The first carry lists the stale ones to the lead, once. An actor woken that is
 // still stopped 10 min after an end since the wake (or lost its turn to a restart), with the record unchanged, tells the
@@ -25,14 +25,13 @@ export function decide(state, event) {
       if (r.onMain || r.open === false || (state.started && r.at < state.started)) { stale.push(`${w.title} ${item} (${r.state} at ${String(r.commit).slice(0, 7)})`); continue; }
       const key = [w.id, item, r.state, r.commit].join(':');
       const actor = r.state === 'fix' ? w : r.state === 'queued' && state.reviewer ? state.reviewer : { ...state.lead, title: 'the lead' };
-      if (actor.busy) continue;
       if (!seen[key]) {
         const note = w.note?.commit === r.commit ? ': ' + w.note.text : '';
         add(actor.id, r.state === 'passed' ? `[p9] ${item} by ${w.title} passed at ${r.commit}: merge it.`
           : r.state === 'fix' ? `[p9] ${item}: the reviewer asked for a fix (fix ${r.fixes}) at ${r.commit}${note}`
             : actor.id !== lead ? `[p9] Ready for review: ${item}, by ${w.title} (chat ${w.id}), commit ${r.commit}. Read its report, then call verdict with that chat and commit.`
               : `[p9] ${item} by ${w.title} is ready at ${r.commit}, and no reviewer can take it: start or bring back one with key review.`, key);
-      } else if (actor.id !== lead && (event.type === 'start' || (event.type === 'idle' && event.chat === actor.id && !event.background && event.ended > seen[key]))) {
+      } else if (actor.id !== lead && !actor.busy && (event.type === 'start' || (event.type === 'idle' && event.chat === actor.id && !event.background && event.ended > seen[key]))) {
         add(lead, `[p9] ${actor.title} ended its turn on ${item} at ${r.commit} without acting on it.`, key + ':told');
       }
     }
