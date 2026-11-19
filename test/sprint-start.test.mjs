@@ -558,7 +558,7 @@ test('Sprint O174 no project: a Start press on a chat with no project but its ow
   console.log('PASS Sprint O174 no project: Start press on a no-project chat starts it (200), a second press too, unknown id 404');
 });
 
-test('O137 FIX1: under Unrestricted a role whose first message failed is sent on the next Start in Auto, or in the Settings default mode, not in its Bypass lead\'s mode', { timeout: 180000 }, async (t) => {
+test('O137 FIX1: under Unrestricted a role whose first message failed is sent on the next Start in the Settings default mode (startMode), not in its Bypass lead\'s mode', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
   await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted
@@ -581,10 +581,12 @@ test('O137 FIX1: under Unrestricted a role whose first message failed is sent on
   assert.equal(stuck.body.role, 'review', JSON.stringify(stuck.body));
   const kid = (await rows(instance)).find((r) => r.parent === s.sprint && r.title === 'review');
   assert.ok(kid, 'the role\'s chat was made before its agent failed to start');
+  // A Default mode saved in Settings before the next press: the resend takes it (startMode), not the lead's Bypass.
+  assert.equal((await call(instance, '/start-defaults', 'POST', { set: { claude: { mode: 'Accept edits' } } })).status, 200);
   const retry = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
   assert.equal(retry.status, 200, JSON.stringify(retry.body));
   assert.deepEqual(retry.body.chats.map((c) => [c.key, c.sent ?? false]), [['lead', false], ['review', true]]);
   await config(instance, kid.id);
-  assert.equal(await modeOf(kid.id), 'Auto', 'the retried role took its Bypass lead\'s mode, not Auto');
-  console.log('PASS O137 FIX1: a role whose first message failed is sent on the next Start in Auto under Unrestricted, not its Bypass lead\'s mode');
+  assert.equal(await modeOf(kid.id), 'Accept edits', 'the retried role did not take the Settings default');
+  console.log('PASS O137 FIX1: a role whose first message failed is sent on the next Start in the Settings default mode under Unrestricted, not its Bypass lead\'s mode');
 });
