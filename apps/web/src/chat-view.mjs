@@ -833,9 +833,14 @@ const toolDiff = content => { const rows = (content || []).filter(c => c.type ==
 async function continueOnPhone(s) {
   const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
   // O116: phone-link.mjs (with qrcode-generator, about 44 KB) loads here, on the first open, not at shell startup.
-  const { phoneDialogBody } = await import('./phone-link.mjs');
-  outer.$('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
-  outer.$('#phoneDlg').showModal();
+  // A failed load says so in the dialog; Try again calls import() afresh (nothing keeps the rejected promise).
+  const mod = await import('./phone-link.mjs').catch(() => null), body = outer.$('#phoneBody'), dlg = outer.$('#phoneDlg');
+  if (mod) body.innerHTML = mod.phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
+  else {
+    body.innerHTML = '<p role="status">Cannot show the phone link right now.</p><p><button data-slot="button" type="button" data-phone-retry>Try again</button></p>';
+    body.querySelector('[data-phone-retry]').onclick = () => continueOnPhone(s);
+  }
+  if (!dlg.open) dlg.showModal();
 }
 // A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser,
 // after a question showing the whole address; "don't ask again"
