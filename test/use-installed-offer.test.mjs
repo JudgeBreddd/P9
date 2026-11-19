@@ -3,7 +3,11 @@
 // stays kept across starts (keep-my-setup.json), and a different checkout is asked about again.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { daemonOffer, keptCheckout, keepText } from '../apps/desktop/use-installed.mjs';
+import * as offer from '../apps/desktop/use-installed.mjs';
 
 const installed = '/users/u/.local/share/p9/daemon';
 const result = { checkout: '/usr/bin/node /srv/src/p9/apps/server/main.mjs', seen: '{ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/src/p9/apps/server/main.mjs ; pid=0 }\n' };
@@ -29,4 +33,24 @@ test('O135 offer: ask, leave or nothing from the service answer, /health from, t
 test('O135 offer: keep my setup as written reads back as kept on the next start; a missing or broken file is no keep', () => {
   assert.equal(daemonOffer({ ...base, keep: keptCheckout(keepText(result.checkout)) }), 'leave', 'asked again after keep');
   for (const text of ['', '{', 'null', '{"checkout":5}']) assert.equal(keptCheckout(text), null, JSON.stringify(text));
+});
+
+test('O135 offer: Keep my setup that cannot be written says why (main.mjs shows and logs it), not silence', async (t) => {
+  assert.equal(typeof offer.failureOf, 'function', 'no failureOf: a failed Keep my setup write is swallowed (main.mjs .catch(() => {})) and P9 just asks again');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'o135-keep-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // The write main.mjs makes, into a folder that can be made, and into one under a plain file (it fails).
+  const write = (p9) => fs.promises.mkdir(p9, { recursive: true, mode: 0o700 }).then(() => fs.promises.writeFile(path.join(p9, 'keep-my-setup.json'), keepText(result.checkout), { mode: 0o600 }));
+  const good = path.join(dir, 'p9');
+  assert.equal(await offer.failureOf(write(good)), null);
+  assert.equal(daemonOffer({ ...base, keep: keptCheckout(fs.readFileSync(path.join(good, 'keep-my-setup.json'), 'utf8')) }), 'leave');
+  const blocked = path.join(dir, 'blocked'); fs.writeFileSync(blocked, 'not a folder');
+  const why = await offer.failureOf(write(path.join(blocked, 'p9')));
+  assert.equal(typeof why, 'string', 'a failed write answered ' + JSON.stringify(why));
+  assert.match(why, /ENOTDIR|EEXIST|not a directory/, why);
+  // The window uses that answer: the same write, no swallowed catch, a warning with the reason, a log line.
+  const main = fs.readFileSync(new URL('../apps/desktop/main.mjs', import.meta.url), 'utf8');
+  const branch = main.slice(main.indexOf('if (response === 1)'), main.indexOf('if (response !== 2)'));
+  assert.ok(branch.includes('await failureOf(mkdir(p9, { recursive: true, mode: 0o700 }).then(() => writeFile(keepFile, keepText(result.checkout), { mode: 0o600 })))') && !branch.includes('.catch(() => {})'), branch);
+  assert.ok(branch.includes("updateLog('keep my setup not saved: ' + failed)") && branch.includes("type: 'warning'") && branch.includes('detail: failed'), branch);
+  console.log('PASS O135 keep: a write under a plain file says ' + JSON.stringify(why) + '; the window warns with it and logs it; a good write reads back as kept');
 });

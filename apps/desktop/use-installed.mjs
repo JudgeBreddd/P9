@@ -21,3 +21,6 @@ export function keptCheckout(text) {
   try { const { checkout } = JSON.parse(text); return typeof checkout === 'string' ? checkout : null; } catch { return null; }
 }
 export const keepText = (checkout) => JSON.stringify({ checkout }) + '\n';
+// failureOf: the Keep my setup write's answer, null when written or why it was not (the error's own message), so the window
+// says so instead of asking again next start with no word why. main.mjs does the write; this stays pure.
+export const failureOf = (write) => Promise.resolve(write).then(() => null, (error) => error?.message || String(error));
