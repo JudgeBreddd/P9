@@ -171,6 +171,11 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   // O190: token counts come only from a prompted turn's reply (turn-end). A run with no prompt (a scheduled wake, a
   // background task's notification, a compaction) reports its cost through usage_update, which costs below count, but no
   // token counts: the adapter sends only used, size and cost for it. So every token total is labelled.
+  // Checked in claude-agent-acp 0.106.0 (dist/v1/acp-agent.js): a result Claude Code started itself is left out of the
+  // turn's usage on purpose (:4107-4119), and its usage_update carries used, size and cost only (:4158-4175). The way to
+  // count them: session/new _meta.claudeCode.emitRawSDKMessages (:422), filtered to type 'result' (:8290), sends each raw
+  // SDK result with its usage as the ext notification '_claude/sdkMessage' (:3063); P9 would take that, keep only the
+  // results Claude Code started itself (a prompted turn's are already counted at turn-end) and add them here. Not built.
   const TOKENS = 'prompted turns only';
   const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
   // What the adapters send (ACP, checked against claude-agent-acp 0.88.0 and 0.104.1): token counts per turn in the prompt
