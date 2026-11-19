@@ -19,10 +19,14 @@ export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="$
 // O109: everything waiting (held, then the local queue) is one strip, "N queued", so 30 waiting messages cannot push the box
 // off the screen. Open while it is short (up to 3), shut past that; the user's own open or shut (s.queueOpen) wins.
 // ponytail: an open strip's list scrolls inside 30vh (shell.css).
-// O125 (4): with how long the oldest held one has waited (since: chat-view's ticking age), so a stuck queue shows. ponytail: the
-// local queue (an agent without steering) keeps no time, so it adds to the count only.
-export const strip = (s, since, local) => { const n = (s.held?.length ?? 0) + s.queue.length, at = Math.min(...(s.held ?? []).map(h => h.at || Infinity));
+// O125 (4): with how long the oldest one has waited (since: chat-view's ticking age), so a stuck queue shows: held ones and
+// the local queue (an agent without steering, { t, at }) alike. One kept by an older build has no time and adds to the count only.
+export const strip = (s, since, local) => { const n = (s.held?.length ?? 0) + s.queue.length, at = Math.min(...[...(s.held ?? []), ...s.queue].map(h => h.at || Infinity));
   return `<details class="queue" data-queue${s.queueOpen ?? n <= 3 ? ' open' : ''}><summary>${n} queued${at < Infinity ? ', oldest waiting ' + since(at) : ''}</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
+
+// O125: a local queue read back from storage: { t, at } items; a bare string from an older build is { t } (no time);
+// anything else is dropped.
+export const keptItems = q => Array.isArray(q) ? q.map(x => typeof x === 'string' ? { t: x } : x).filter(x => typeof x?.t === 'string' && (x.at === undefined || Number.isFinite(x.at))) : [];
 
 // What a key in the box does while a turn runs: 'steer', 'queue', 'cancel', or null (the box keeps the key).
 export const turnKey = e => e.shiftKey || e.altKey || e.ctrlKey || e.metaKey ? null : { Enter: 'steer', Tab: 'queue', Escape: 'cancel' }[e.key] ?? null;

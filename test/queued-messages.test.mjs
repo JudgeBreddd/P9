@@ -160,6 +160,8 @@ test('An agent that cannot take a message mid-turn: it waits queued, is kept acr
   await page.waitForTimeout(2000);
   assert.deepEqual(await chat.queued(), ['Queued: first', 'Queued: second'], 'queued messages kept across the restart');
   assert.equal(await chat.pane.locator('.queue [data-qdel]').count(), 2);
+  // O125 (4): the local queue keeps when each was queued, also across the restart, so the strip names the oldest wait.
+  assert.equal(await chat.pane.locator('.queue > summary').innerText(), '2 queued, oldest waiting <1 min');
   await call(instance, '/chat/' + id + '/cancel', 'POST');
   await until(async () => await ends() === 4, 'first and second sent after the turn ended, one turn each');
   assert.deepEqual(await users(), ['hello', 'slow', 'first', 'second']);

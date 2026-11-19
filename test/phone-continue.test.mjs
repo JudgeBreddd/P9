@@ -114,6 +114,34 @@ test('PH1: sign-in keeps the linked chat, and drops any fragment that is not #ch
   }
 });
 
+// O125 (4), Reviewer FIX1 on #367: the phone strip's age ticks on a fake clock, and its one timer runs only while an open
+// chat has a queue: it stops when the queue empties and when the chat closes, and starts again when a message is queued.
+test('O125 tick: the phone strip\'s oldest wait advances; its timer stops on an empty queue and a closed chat, and restarts', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.clock.install();
+  const tick = () => page.evaluate(() => document.querySelector('#queued').dataset.tick ?? '');
+  const summary = () => page.textContent('#queued summary');
+  assert.equal(await tick(), '', 'no queue, no timer');
+  await page.fill('#prompt', 'kept here'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden])');
+  assert.equal(await summary(), '1 queued, oldest waiting <1 min ▸');
+  assert.equal(await tick(), 'on', 'a queue starts the timer');
+  await page.clock.runFor(2 * 60000 + 1000);
+  assert.equal(await summary(), '1 queued, oldest waiting 2 min ▸', 'the age advances with nothing else redrawing');
+  await page.locator('[data-unqueue]').dispatchEvent('click');
+  await page.waitForSelector('#queued[hidden]', { state: 'attached' });
+  assert.equal(await tick(), '', 'an empty queue stops the timer');
+  await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden])');
+  assert.equal(await tick(), 'on', 'a message queued again restarts it');
+  await toList(page);
+  await page.clock.runFor(15001);
+  assert.equal(await tick(), '', 'a closed chat stops the timer at its next tick');
+  console.log('PASS O125 tick: <1 min -> 2 min on the fake clock; timer off when empty, on again, off after the chat closed');
+});
+
 for (const agent of ['claude', 'codex']) {
   test(`PH2 (${agent}): messages typed offline or while an approval is pending are kept, then sent once`, { timeout: 120000 }, async (t) => {
     const { page, server } = await phoneOn(t);
@@ -135,6 +163,9 @@ for (const agent of ['claude', 'codex']) {
     await page.waitForSelector('#queued:not([hidden]) :text("typed offline")', { state: 'attached' });
     assert.equal(await page.inputValue('#prompt'), '');
     assert.deepEqual((await stored()).map((item) => item.text), ['typed offline']);
+    // O125 (4): a message kept on this phone has its time, and the strip names the wait.
+    assert.ok(Math.abs(Date.now() - (await stored())[0].at) < 60000, 'the kept message has the time it was queued');
+    assert.match(await page.textContent('#queued summary'), /^1 queued, oldest waiting <1 min ▸$/);
     assert.equal(prompts.length, 0, 'nothing is sent while offline');
     // The queue survives a reload.
     await page.reload();

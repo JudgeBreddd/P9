@@ -1,9 +1,9 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
+import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
-import { strip, chip, turnKey, lineDiff } from './composer.mjs';
+import { strip, chip, turnKey, lineDiff, keptItems } from './composer.mjs';
 import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
@@ -329,7 +329,6 @@ function workerStatus(k) {
 const clearable = k => k.state === 'stopped';
 // window-3: a worker report ('ready-' + worker id) whose worker is archived is not pinned, wherever it was archived.
 const shelved = id => outer.S.sessions.some(k => k.archived && 'ready-' + k.id === id);
-const ageOf = (at, now = Date.now()) => { const m = Math.max(0, Math.floor((now - at) / 60000)); return m < 1 ? '<1 min' : m < 60 ? m + ' min' : m < 1440 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + m % 60 + ' min' : '') : Math.floor(m / 1440) + ' d'; };
 const since = at => at ? `<time data-since="${at}">${ageOf(at)}</time>` : '';
 const ring = (status, done, total) => { const R = 10, C = +(2 * Math.PI * R).toFixed(2), f = total ? done / total : 0;
   return `<span class="sp-ring" data-status="${status}" role="img" aria-label="${done} of ${total} items merged"><svg viewBox="0 0 28 28" aria-hidden="true"><circle class="t" cx="14" cy="14" r="${R}"/><circle class="a" cx="14" cy="14" r="${R}" stroke-dasharray="${+(C * f).toFixed(2)} ${C}"/></svg><b>${done}/${total}</b></span>`; };
@@ -623,7 +622,7 @@ function pane(s, i, bare) {
       ${bare ? '' : tools()}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get(), shelved)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.readonly ? '' : meters(s)}
-      ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
+      ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
@@ -743,7 +742,7 @@ function paint(root, ss, only) {
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
-    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
+    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [q] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, q.t); });
     // The Mode, Model and Effort pills each open their menu (#pillMenu, outside the panes; the pill menu code above pane).
     p.querySelectorAll('[data-pill]').forEach(b => b.onclick = () => PM.btn === b ? closePill() : openPill(b, s, b.dataset.pill));
     p.querySelector('[data-attach]').onclick = () => pickImages(s);
@@ -791,14 +790,14 @@ async function addImages(s, files) {
 const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved');
 function sendText(s, t, now, when) {
   const mid = !now && busy(s);
-  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); return; }
+  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push({ t, at: Date.now() }); keepQueue(s); renderChats(); return; }
   (now ? interrupt : outer.startTurn)(s, t, mid ? when || 'steer' : undefined);
 }
 // An interrupt-and-send message was lost: the daemon refuses a prompt while the cancelled turn is
 // still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
 function interrupt(s, t) {
   if (!busy(s)) return outer.startTurn(s, t);
-  if (s.live) { s.queue.unshift(t); keepQueue(s); cancelTurn(s); renderChats(); return; }
+  if (s.live) { s.queue.unshift({ t, at: Date.now() }); keepQueue(s); cancelTurn(s); renderChats(); return; }
   cancelTurn(s); outer.startTurn(s, t);
 }
 function cancelTurn(s, quiet) {
@@ -822,7 +821,7 @@ function finished(s) {
 function turnEnd(s) {
   autoArtifact(s);
   if (s.modeNext) { setMode(s, s.modeNext); s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + modeNow(s) + '.'}); }
-  if (s.queue.length) { const t = s.queue.shift(); keepQueue(s); outer.startTurn(s, t); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
+  if (s.queue.length) { const { t } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -871,9 +870,11 @@ const toolText = content => (content || []).filter(c => c.type === 'content' && 
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
 const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
+// O125: each is { t: text, at: when queued }, so the strip's oldest wait counts it; one kept by an older build (a bare
+// string) has no time and still goes.
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
-const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return Array.isArray(q) ? q.filter(t => typeof t === 'string') : []; } catch { return []; } };
+const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return keptItems(q); } catch { return []; } };
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
 // E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
