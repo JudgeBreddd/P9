@@ -367,6 +367,14 @@ const connection = acp.connectAgent(stream, {
       else { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: id, title: 'Compact conversation', kind: 'think', status: 'in_progress' } });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed' } }); }
     }
+    // O190 "compact-usage": a /compact turn as claude-agent-acp 0.106.0 answers it (seen live): the reply's usage is all 0,
+    // its _meta.quota.model_usage holds what the compaction spent, here on two models.
+    if (text === 'compact-usage') {
+      await say('compacted');
+      const row = (model, inputTokens, cachedInputTokens, cachedWriteTokens, outputTokens) => ({ model, token_count: { totalTokens: inputTokens + cachedInputTokens + cachedWriteTokens + outputTokens, inputTokens, cachedInputTokens, cachedWriteTokens, outputTokens, reasoningOutputTokens: 0 } });
+      const zero = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 };
+      return { stopReason: 'end_turn', usage: zero, _meta: { quota: { token_count: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cachedWriteTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 }, model_usage: [row('claude-haiku-5-5', 2242, 33491, 81, 692), row('claude-sonnet-5-5', 8, 100, 0, 8)] } } };
+    }
     // "spend <n>": a turn that cost n dollars and n thousand input tokens, as the real adapters report it (O35's usage test).
     const spend = /^spend (\d+)/.exec(text);
     if (spend) {

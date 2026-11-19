@@ -376,6 +376,23 @@ for (const origin of ['task-notification', 'observer-activity']) {
   });
 }
 
+// O190 remainder: a /compact turn as the adapter answers it (usage 0, the compaction's spend in _meta.quota.model_usage)
+// adds the compaction's tokens to the totals, through the real daemon: the turn-end keeps the reply's usage and adds counted.
+test('O190 compaction: a compact turn whose reply usage is 0 adds its model_usage tokens to the totals', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const before = (await call(instance, '/usage')).body;
+  const made = await a.tool('open_chat', { text: 'compact-usage', title: 'Compactor' });
+  await a.done(made.chat);
+  const after = (await call(instance, '/usage')).body;
+  const delta = Object.fromEntries(['inputTokens', 'outputTokens', 'cachedTokens'].map((k) => [k, after.totals[k] - before.totals[k]]));
+  assert.deepEqual(delta, { inputTokens: 2250, outputTokens: 700, cachedTokens: 33591 }, 'the compaction\'s tokens (two model rows) are in the totals');
+  const end = (await events(instance, made.chat)).filter((e) => e.type === 'turn-end').map((e) => e.data);
+  assert.deepEqual(end, [{ stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 }, counted: { inputTokens: 2250, outputTokens: 700, cachedReadTokens: 33591, cachedWriteTokens: 81 } }]);
+  console.log('PASS O190 compaction (daemon): the compact turn added ' + JSON.stringify(delta) + '; its turn-end keeps usage 0 and adds counted');
+});
+
 // O194 FIX1: a marked run whose end mark never comes ends at the bound (no update for P9_UNPROMPTED_MARK_MS), not never;
 // an end mark that comes after that fallback ends nothing a second time.
 const lostMark = async (t, text) => {

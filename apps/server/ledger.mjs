@@ -168,11 +168,12 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     return into.profiles.get(p.id);
   };
   let fold = fresh();
-  // O190: token counts come from a prompted turn's reply (turn-end) and from a Claude chat's 'usage' events: the result of
-  // a run Claude Code started itself (a background task's notification, another agent's message), which claude-agent-acp
-  // 0.106.0 leaves out of the turn's usage and sends as a raw SDK result only when asked (chat.mjs OWN_RUNS). Not counted:
-  // a Codex turn P9 never prompted (no usage reaches P9), a compaction, and an own run's result that lands during a
-  // prompted turn. The cost (usage_update) counts every run.
+  // O190: token counts come from a prompted turn's reply (turn-end, its counted() figure when it has one) and from a Claude
+  // chat's 'usage' events: the result of a run Claude Code started itself (a background task's notification, another
+  // agent's message), which claude-agent-acp 0.106.0 leaves out of the turn's usage and sends as a raw SDK result only when
+  // asked (chat.mjs OWN_RUNS). A compaction in a prompted turn (P9's /compact, or Claude Code's own mid-turn) counts through
+  // counted(). Not counted: a Codex turn P9 never prompted (no usage reaches P9), the adapter's own idle /compact (its reply
+  // goes to the adapter), and an own run's result that lands during a prompted turn. The cost (usage_update) counts every run.
   const TOKENS = 'prompted turns and Claude Code\'s own runs';
   const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
   // What the adapters send (ACP, checked against claude-agent-acp 0.88.0 and 0.104.1): token counts per turn in the prompt
@@ -195,7 +196,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       return;
     }
     if (row.type === 'turn-end' || row.type === 'usage') {
-      const usage = data?.usage;
+      const usage = data?.counted ?? data?.usage;
       if (usage === undefined) return;
       if (!usage || !['inputTokens', 'outputTokens', 'cachedReadTokens'].every((key) => count(usage[key]))) { into.discarded += 1; return; }
       to.totals.inputTokens += usage.inputTokens ?? 0; to.totals.outputTokens += usage.outputTokens ?? 0;
@@ -342,3 +343,21 @@ export function operations(ledger, login) {
     ledger.finish(id, c.res.status, await c.res.clone().text());
   };
 }
+
+// O190: what a prompted turn counts. The reply's usage is the main loop only: a /compact turn answers all 0 (claude-agent-acp
+// 0.106.0, seen live). Its _meta.quota.model_usage rows (the SDK's modelUsage for this turn, per model) also count internal
+// calls such as compaction, subagents and side calls. counted is their sum, never below the reply's usage in any field;
+// null when the reply has no model_usage or any row is not plain counts (the reply's usage is counted then, as before).
+const ROW = [['inputTokens', 'inputTokens'], ['outputTokens', 'outputTokens'], ['cachedReadTokens', 'cachedInputTokens'], ['cachedWriteTokens', 'cachedWriteTokens']];
+export function counted(result) {
+  const rows = result?._meta?.quota?.model_usage;
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const whole = (n) => Number.isSafeInteger(n) && n >= 0;
+  if (!rows.every((row) => row?.token_count && typeof row.token_count === 'object' && ROW.every(([, key]) => whole(row.token_count[key] ?? 0)))) return null;
+  // Each row's counters are safe, but their sum may not be (two near MAX_SAFE_INTEGER): then null, so the reply's usage counts.
+  const sums = ROW.map(([, key]) => rows.reduce((sum, row) => sum + (row.token_count[key] ?? 0), 0));
+  if (!sums.every(whole)) return null;
+  const own = result.usage ?? {};
+  return Object.fromEntries(ROW.map(([to], i) => [to, Math.max(sums[i], whole(own[to]) ? own[to] : 0)]));
+}
+
