@@ -1144,3 +1144,36 @@ test('Speed (E2): a listed chat the bridge will not narrow to still goes live, b
   console.log('PASS E2 fallback: a chat ID the bridge refuses for only= falls back to the full replay; the desktop went live');
 });
 
+
+test('Settings > Notices (O197): one Note or Message row per kind of worker notice, read from P9 and each save kept by it', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-notices-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const rows = () => page.locator('#setNotices select:not([disabled])').evaluateAll((l) => l.map((s) => [s.dataset.notice, s.closest('.set-row').querySelector('strong').textContent, s.value]));
+  const open = async () => {
+    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+    await page.click('[data-set-page="Chat Focus"]');
+    await page.locator('#setBody > [data-page="Chat Focus"] #setNotices select:not([disabled])').first().waitFor({ timeout: 10000 });
+  };
+  await open();
+  // The daemon's defaults: approvals and questions start the chat's turn, the rest are notes.
+  assert.deepEqual(await rows(), [['ready', 'Ready report', 'note'], ['approval', 'Approval', 'message'], ['question', 'Question', 'message'],
+    ['compacting', 'Compacting', 'note'], ['ended', 'Turn ended', 'note'], ['sprint', 'Sprint paused or resumed', 'note']]);
+  await page.locator('#setNotices [data-notice="ended"]').selectOption('message');
+  await page.waitForFunction(() => document.querySelector('#setNotices [data-notice="ended"]')?.value === 'message' && !document.querySelector('#setNotices [data-notice="ended"]').disabled);
+  await page.locator('#setNotices [data-notice="approval"]').selectOption('note');
+  await page.waitForFunction(() => document.querySelector('#setNotices [data-notice="approval"]')?.value === 'note');
+  // Each save named one kind, and P9 kept both.
+  assert.deepEqual(await call(instance, '/notices'), { ready: 'note', approval: 'note', question: 'message', compacting: 'note', ended: 'message', sprint: 'note' });
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await open();
+  assert.deepEqual((await rows()).map(([k, , v]) => k + ':' + v), ['ready:note', 'approval:note', 'question:message', 'compacting:note', 'ended:message', 'sprint:note'], 'read again after a reload');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT notices ' + (await page.locator('#setNotices').screenshot({ type: 'png' })).toString('base64'));
+  console.log('PASS Settings > Notices');
+});
