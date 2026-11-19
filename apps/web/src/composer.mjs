@@ -19,8 +19,10 @@ export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="$
 // O109: everything waiting (held, then the local queue) is one strip, "N queued", so 30 waiting messages cannot push the box
 // off the screen. Open while it is short (up to 3), shut past that; the user's own open or shut (s.queueOpen) wins.
 // ponytail: an open strip's list scrolls inside 30vh (shell.css).
-export const strip = (s, local) => { const n = (s.held?.length ?? 0) + s.queue.length;
-  return `<details class="queue" data-queue${s.queueOpen ?? n <= 3 ? ' open' : ''}><summary>${n} queued</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
+// O125 (4): with how long the oldest held one has waited (since: chat-view's ticking age), so a stuck queue shows. ponytail: the
+// local queue (an agent without steering) keeps no time, so it adds to the count only.
+export const strip = (s, since, local) => { const n = (s.held?.length ?? 0) + s.queue.length, at = Math.min(...(s.held ?? []).map(h => h.at || Infinity));
+  return `<details class="queue" data-queue${s.queueOpen ?? n <= 3 ? ' open' : ''}><summary>${n} queued${at < Infinity ? ', oldest waiting ' + since(at) : ''}</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
 
 // What a key in the box does while a turn runs: 'steer', 'queue', 'cancel', or null (the box keeps the key).
 export const turnKey = e => e.shiftKey || e.altKey || e.ctrlKey || e.metaKey ? null : { Enter: 'steer', Tab: 'queue', Escape: 'cancel' }[e.key] ?? null;
