@@ -227,6 +227,15 @@ export function setupRoutes(outer) {
         || !Object.entries(set).every(([a, f]) => agents.includes(a) && f && typeof f === 'object' && Object.keys(f).length && Object.entries(f).every(([k, x]) => (k === 'model' || k === 'effort' ? str(x) : k === 'mode' && (x === '' || outer.chat.modeNames?.(a)?.includes(x)))))) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setNewChatDefaults(set, body.onlyEmpty === true));
   });
+  // Desktop only, Settings > Notices (O197): how each kind of P9 notice reaches a parent chat, 'note' or 'message'.
+  outer.app.get('/notices', (c) => c.json(outer.chat.notices()));
+  // Body { set: { <kind>: 'note' | 'message' } }: only the kinds named change.
+  outer.app.post('/notices', async (c) => {
+    const body = await outer.json(c), kinds = Object.keys(outer.chat.notices()), set = body?.set;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((k) => k !== 'set') || !set || typeof set !== 'object' || Array.isArray(set)
+        || !Object.keys(set).length || !Object.entries(set).every(([k, x]) => kinds.includes(k) && (x === 'note' || x === 'message'))) return c.json({ error: 'bad-request' }, 400);
+    return c.json(outer.chat.setNotices(set));
+  });
   // Desktop only (SECURITY.md § Worker folders, "Who cleans up"): one sprint's worker folders, by the store's own rules
   // (worker-folders.mjs clean). Refused while a worker the lead started is not stopped, and while the lead is in a turn or
   // has a message waiting: it may be making a worker folder, which has nothing of its own yet and would read as merged.

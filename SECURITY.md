@@ -708,6 +708,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   still reaches it and starts nothing, and you can still open and message it yourself from
   the Archived page. Like `stop_chat` and `send_chat`, it runs without asking you, in every
   mode. No tool deletes a chat.
+- **Notices to a parent (O197).** P9's notices (a worker's ready report, approval, question, compacting or turn end, and a sprint's pause or resume) go as a note, which starts no turn, unless Settings > Notices sets that kind to message (by default approvals and questions); a notice set to message may start a turn only in an open parent, never a stopped or archived one. Only the desktop sets it.
 - **A worker is only what Settings > Delegation allows.** You set each worker's agent, model and
   effort in Settings > Delegation, one row per worker (a row left on "the parent's" allows the
   parent's own). `open_chat` left without them starts the next free row as you set it. A provider,

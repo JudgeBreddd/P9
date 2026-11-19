@@ -472,7 +472,7 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
     if (!chat.pause(lead)) return { paused: true, already: true };
-    if (owner) chat.note(lead, '[p9] The user paused this sprint. Your workers start no new turn; what you, the reviewer or P9 send them is kept and sent when the user resumes it. Turns already running finish.', 'p9').catch(() => {});
+    if (owner) notify(lead, 'sprint', '[p9] The user paused this sprint. Your workers start no new turn; what you, the reviewer or P9 send them is kept and sent when the user resumes it. Turns already running finish.', 'sprint');
     return { paused: true };
   }
   // A kept message runs in no mode wider than any of its senders' modes at Resume (modeFor's ceiling, read now and not
@@ -495,7 +495,7 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
     const sent = await chat.resume(lead, narrow);
     if (sent === null) return { paused: false, already: true };
-    if (owner) chat.note(lead, `[p9] The user resumed this sprint. ${sent} kept message${sent === 1 ? '' : 's'} sent in order.`, 'p9').catch(() => {});
+    if (owner) notify(lead, 'sprint', `[p9] The user resumed this sprint. ${sent} kept message${sent === 1 ? '' : 's'} sent in order.`, 'sprint');
     return { paused: false, sent };
   }
   // hooksHash: the owner's press names the hooks.json its page showed (SECURITY.md § Sprint scripts).
@@ -1288,7 +1288,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(state.task, state.ready, tokens) });
     if (data.error) return;
     chat.pin(info.parent, data);
-    chat.note(info.parent, '[p9] Ready report pinned for ' + state.task.item + '.', 'p9').catch(() => {});
+    notify(info.parent, 'ready', '[p9] Ready report pinned for ' + state.task.item + '.', id + ':ready');
   }
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
@@ -1323,7 +1323,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const q = (s) => JSON.stringify(String(s));
     const how = ask.kind === 'approval' ? `{ "optionId": one of ${(ask.options ?? []).map((o) => q(o.optionId)).join(', ')} }`
       : `{ "action": "accept", "content": { ${(ask.form?.fields ?? []).map((f) => q(f.key) + ': ...').join(', ')} } } or { "action": "decline" }`;
-    chat.note(at, `[p9] ${child.title} is waiting on ${ask.kind === 'approval' ? 'an approval' : 'a question'}: ${ask.text.slice(0, 400)}. answer_chat request ${q(ask.request)} with ${how}.`, 'p9').catch(() => {});
+    notify(at, ask.kind === 'approval' ? 'approval' : 'question', `[p9] ${child.title} is waiting on ${ask.kind === 'approval' ? 'an approval' : 'a question'}: ${ask.text.slice(0, 400)}. answer_chat request ${q(ask.request)} with ${how}.`, id + ':ask:' + ask.request);
   });
   chat.turnEnded?.((id, turn, solo) => { if (!solo) { endGen.set(id, (endGen.get(id) ?? 0) + 1); turnEnds.set(id, [turnEnds.get(id)?.[1] ?? 0, Date.now()]); } });
   // FIX3 (CI, sprint-pause): whether the parent was running at the end is read at the end, like waited. A parent that was
@@ -1349,14 +1349,14 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!child) return void endGen.delete(id);
     if (chat.sprint(id).ready || chat.activeTaskTurn(id)) return;
     if (child.compacting) {
-      if (parent && !shelved(parent.id) && ['running', 'turn'].includes(parent.state)) chat.note(parent.id, '[p9] ' + child.title + ' is compacting and will continue.', 'p9').catch(() => {});
+      if (parent && !shelved(parent.id) && ['running', 'turn'].includes(parent.state)) notify(parent.id, 'compacting', '[p9] ' + child.title + ' is compacting and will continue.', id + ':compacting');
       return;
     }
     const last = first;
     if (!live || !parent || shelved(parent.id) || waited || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     if (!ok) return void wake(parent, id, '[p9] ' + child.title + ' failed; read_chat shows why.');
     // O188: the end itself is a note (starts no turn); the parent is prompted only if the worker is still stopped WAKE_AFTER_MS later.
-    chat.note(parent.id, '[p9] ' + child.title + ' ended its turn: ' + last, 'p9').catch(() => {});
+    notify(parent.id, 'ended', '[p9] ' + child.title + ' ended its turn: ' + last, id); // its key is the late wake's: a newer one replaces it while it waits
     setTimeout(() => {
       const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
       if (endGen.get(id) !== gen || !child || child.state === 'turn' || child.compacting || chat.acts(id) !== acts || chat.sprint(id).ready || chat.activeTaskTurn(id)) return;
@@ -1365,6 +1365,14 @@ export function createDelegate({ chat, allowed, usage }) {
       wake(parent, id, '[p9] ' + child.title + ' has been stopped 10 min: ' + last);
     }, WAKE_AFTER_MS).unref?.();
   }, END_HOLD_MS); });
+  // O197: a notice goes as a message (wake: it starts or joins the parent's turn) when Settings > Notices says so for its kind and
+  // the parent is open and not stopped, as for wake; otherwise, and by default for all but approvals and questions, as a note.
+  // key: a newer message with the same key replaces one still waiting (a worker's newest of that kind, as for wake).
+  function notify(at, kind, text, key) {
+    const parent = chat.info(at);
+    if (chat.notices?.()[kind] === 'message' && parent && !shelved(at) && ['running', 'turn'].includes(parent.state)) return void wake(parent, key, text);
+    chat.note(at, text, 'p9').catch(() => {});
+  }
   // A line that starts the parent's turn: steered into a running one, else queued after it.
   // FIX1 (O125 point 2): the first send carries replaces too, and the held ID is kept from either path (steer held while a tool runs, or the 409 queue).
   function wake(parent, id, line) {
