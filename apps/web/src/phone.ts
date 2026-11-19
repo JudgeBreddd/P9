@@ -1010,7 +1010,8 @@ function renderQueue() {
 }
 // The age ticks while nothing else redraws (a stuck queue is exactly that case): one timer while an open chat has a queue,
 // stopped when the queue empties or the chat closes (the next tick sees no open chat); hidden, a tick skips. Unchanged text
-// redraws nothing. data-tick says it runs (phone-continue 'O125 tick').
+// redraws nothing. A chat switch redraws (render), so the timer follows the open chat; there is never a second one. data-tick
+// says it runs (phone-continue 'O125 tick').
 let queueTick = 0;
 function tickQueue(on: boolean) {
   if (on === !!queueTick) return;
@@ -1018,6 +1019,8 @@ function tickQueue(on: boolean) {
   else { clearInterval(queueTick); queueTick = 0; }
   one<HTMLElement>('#queued').dataset.tick = on ? 'on' : '';
 }
+// Back from a hidden tab the age is current at once, not up to a tick late.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && queueTick) renderQueue(); });
 one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
 let draining = false;
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
