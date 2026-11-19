@@ -1548,8 +1548,19 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (solo || bare) return refused(409, 'sprint-paused');
         if (pausing.length >= 100) return refused(409, 'sprint-paused-full'); // SECURITY.md § Pause sprint
         const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, mixed: mixed.get(body) ?? null,
-          body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } };
-        setPaused(conversation.parent, [...pausing, item]);
+          body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }), ...(repeats.has(body) && { repeat: true }) } };
+        // O109 FIX2 (Reviewer): a message that may be a repeat keeps saying so through the pause (repeat: true, as hold() does).
+        // Kept in the same write that takes it off Resume's list (deliver's entry, or what a turn's end drained): a crash after
+        // it finds the message in one list, never both (sent twice) or neither.
+        const origin = origins.get(body);
+        db.exec('BEGIN');
+        try {
+          if (origin) setResuming(origin.lead, resumingOf(origin.lead).filter((i) => i.id !== origin.id));
+          if (held?.length) settleResumed(held);
+          setPaused(conversation.parent, [...pausing, item]);
+          db.exec('COMMIT');
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+        crashAt('pause-write');
         heldAuthority.set(item.id, captureAuthority()); // a phone's line in it, from a phone revoked by Resume, sends nothing
         // Messages that waited for a turn's end are on the window already, under their own IDs.
         if (!held?.length) emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: 'pause' });
