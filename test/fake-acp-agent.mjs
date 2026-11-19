@@ -121,7 +121,8 @@ const provider = (what, params) => {
 const called = (what) => { if (existsSync('calls.log')) appendFileSync('calls.log', process.argv[2] + ' ' + what + '\n'); };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
-  { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
+  // PD-1: no-model in the workspace: a model list with no current model (P9's model: null for the chat).
+  { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: existsSync('no-model') ? null : model,
     options: [...(listedModels() ?? [{ value: 'default', name: 'Default (recommended)' }, { group: 'more', name: 'More', options: [{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }] }]), ...(custom ? [{ value: custom, name: 'Custom model' }] : [])] },
   // Like the real adapters: effort and fast mode; sandbox is a mode-category switch P9 must never offer (threat model row 22).
   { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: picked.effort, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value[0].toUpperCase() + value.slice(1) })) },

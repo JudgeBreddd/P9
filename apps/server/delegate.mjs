@@ -342,7 +342,8 @@ export function createDelegate({ chat, allowed, usage }) {
     const model = profile ? undefined : args.model ?? (dflt.model || (provider === me.provider && listed(known?.model?.options, me.model)) || (known && listed(known.model?.options, user.model)) || undefined);
     const effortId = (provider === me.provider && me.effort?.id) || chat.lists()[provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
     // PD-1 (f): the parent's effort was picked for the parent's model, so only a worker on that same model takes it.
-    const sameModel = provider === me.provider && (profile ? profile.model === me.profile?.model : !me.profile && model === me.model);
+    // No model is one model: a parent that reports none (null, or '' from an agent's empty current) and a worker that names none.
+    const sameModel = provider === me.provider && (profile ? profile.model === me.profile?.model : !me.profile && (model || null) === (me.model || null));
     const effort = args.effort ?? ((effortId && dflt.effort) || (sameModel ? me.effort?.value : undefined) ||(effortId && efforts && listed(efforts, user.effort)) || undefined);
     return { provider, known, rowProfile, mine, profile, model, effortId, effort };
   }

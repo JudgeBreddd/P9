@@ -1009,6 +1009,19 @@ test('Delegate: a worker whose Settings row names another model does not take it
   assert.match((await a.done(other.chat)).last, /config:model=opus,effort=medium,/, 'a worker on another model took its parent\'s effort');
 });
 
+// PD-1 (f), Reviewer FIX1: a parent whose agent reports no model (model: null) and a worker that names none are on the
+// same model, so the worker takes the parent's effort.
+test('Delegate: a parent with no reported model passes its effort to a worker on no named model', async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: open_chat does not ask
+  fs.writeFileSync(path.join(instance.workspace, 'no-model'), '');
+  const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude' });
+  await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp', config: { effort: 'high' } });
+  const a = await connect(t, instance, conversation);
+  const kid = await a.tool('open_chat', { text: 'config', title: 'No model' });
+  assert.match((await a.done(kid.chat)).last, /config:model=default,effort=high,/, 'a worker on no named model lost its no-model parent\'s effort');
+});
+
 // O132 / row 721: stop_chat close: true also archives what it stopped; a plain stop does not; under the agent lock a close
 // still stops but archives nothing. A closed worker is reached again only after archive_chat archived: false.
 test('Delegate O132: a close archives, a plain stop does not, a close under the agent lock stops without archiving; send, ask and compact refuse a closed worker until it is brought back', { timeout: 180000 }, async (t) => {
