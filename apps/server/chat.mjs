@@ -77,7 +77,7 @@ export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: fa
 // (usage_update), so those runs' tokens were never counted. Asked at session/new and session/resume
 // (_meta.claudeCode.emitRawSDKMessages), it also sends each SDK result from these origins, usage included, as the ext
 // notification '_claude/sdkMessage': the origins its AUTONOMOUS_RESULT_ORIGINS lists (result-end.js).
-const OWN_RUNS = ['task-notification', 'peer', 'coordinator', 'observer'];
+const OWN_RUNS = ['task-notification', 'peer', 'coordinator', 'observer', 'observer-activity'];
 export const rawResults = OWN_RUNS.map((origin) => ({ type: 'result', origin }));
 const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
 // The approval a P9 MCP tool asks for (run_script, answer_needs_you): the chat's own prompt, two buttons.
@@ -1062,10 +1062,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       asyncTask: ({ update }) => marked(session, conversation.id, update),
       // O190: a result from a run Claude Code started itself (OWN_RUNS) is stored as a 'usage' event, which the ledger adds
-      // to the chat's tokens. Only with no prompted turn open: the adapter folds a result that answers a prompt into that
-      // turn's usage (stored at turn-end), so counting it here would count it twice.
-      // ponytail: an own run's result that lands while a prompted turn runs is not counted (the adapter leaves it out of
-      // that turn too); no compaction result was seen with one of these origins, so compactions stay uncounted.
+      // to the chat's tokens. Only with no prompted turn open: during one, a result from these origins that names the
+      // pending prompt (user_message_uuids) is in that turn's usage (stored at turn-end), and the raw message does not say
+      // whether it did, so P9 skips them all.
+      // ponytail: so an own run's result that lands while a prompted turn runs and does not answer it is not counted (the
+      // adapter leaves it out of that turn); no compaction result was seen with one of these origins, so compactions stay uncounted.
       sdkMessage: ({ message } = {}) => {
         const u = message?.usage, n = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
         if (message?.type !== 'result' || !OWN_RUNS.includes(message.origin?.kind) || !u || typeof u !== 'object' || session.turn || session.solo || live.get(conversation.id) !== session) return;

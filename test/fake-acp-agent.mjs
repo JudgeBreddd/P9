@@ -454,9 +454,11 @@ const connection = acp.connectAgent(stream, {
     // O194: "bg-marked" is "bg-run" with the adapter's marks (only for a client that advertises asyncTasks): its unprompted
     // run opens with an async_task_spawned of taskType 'turn' and ends with that task's async_task_state_update. A background
     // command's own task starts and ends inside the run and is not the run's end.
-    // O190: "bg-usage" is "bg-marked" whose unprompted run ends with a result of its own (origin task-notification, 7 in,
+    // O190: "bg-usage [origin]" is "bg-marked" whose unprompted run ends with a result of its own (origin task-notification
+    // unless one is named, 7 in,
     // 3 out, 500 cache read, 20 cache write), sent raw only if asked; its prompted turn's reply carries 10 in, 5 out, 900 cache read.
-    if (text === 'bg-marked' || text === 'bg-usage') {
+    const usage = /^bg-usage( [a-z-]+)?$/.test(text), origin = text.split(' ')[1] ?? 'task-notification';
+    if (text === 'bg-marked' || usage) {
       const task = (update) => asyncTasks && connection.sessionUpdate({ sessionId, update });
       const result = (message) => rawWanted(message) && connection.extNotification('_claude/sdkMessage', { sessionId, message });
       setTimeout(async () => {
@@ -467,14 +469,14 @@ const connection = acp.connectAgent(stream, {
         await task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'bash-1', state: 'completed' });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'resume-1', status: 'completed' } });
         await say(text + ' done');
-        if (text === 'bg-usage') {
-          await result({ type: 'result', subtype: 'success', origin: { kind: 'task-notification' }, usage: { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 500, cache_creation_input_tokens: 20 } });
+        if (usage) {
+          await result({ type: 'result', subtype: 'success', origin: { kind: origin }, usage: { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 500, cache_creation_input_tokens: 20 } });
           await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 20, size: 1000, cost: { amount: 0.9, currency: 'USD' } } });
         }
         await task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'autonomous-turn-1', state: 'completed' });
       }, 4000);
       await say(text + ' reply');
-      if (text === 'bg-usage') {
+      if (usage) {
         // The prompted turn's own result: no origin, so a client filtering on origins never gets it raw.
         await result({ type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.5, currency: 'USD' } } });

@@ -343,26 +343,30 @@ test('O194: an unprompted run with the adapter marks ends at its end mark, not a
   console.log('PASS O194: the marked run ended ' + took + ' ms after its last line (quiet time ' + QUIET + ' ms); no second end');
 });
 
-// O190: a run Claude Code starts with no prompt (here a background task's notification) adds its own tokens to the totals:
-// the adapter sends that run's result raw only when asked, and P9 asks. The prompted turn's tokens are counted once.
-test('O190: an unprompted run adds its tokens to the totals; the prompted turn counts once', { timeout: 120000 }, async (t) => {
-  const instance = await start(t, { P9_UNPROMPTED_QUIET_MS: '12000' });
-  await call(instance, '/file-protection', 'POST', { on: false });
-  const a = await agent(t, instance);
-  const made = await a.tool('open_chat', { text: 'bg-usage', title: 'Kid' });
-  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('bg-usage reply'));
-  const before = (await call(instance, '/usage')).body;
-  const done = await until(instance, (e) => e.conversation === made.chat && e.type === 'update' && e.data?.sessionUpdate === 'agent_message_chunk' && e.data.content?.text === 'bg-usage done');
-  await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes('bg-usage done'), done.cursor);
-  const after = (await call(instance, '/usage')).body;
-  const delta = Object.fromEntries(['inputTokens', 'outputTokens', 'cachedTokens'].map((k) => [k, after.totals[k] - before.totals[k]]));
-  assert.deepEqual(delta, { inputTokens: 7, outputTokens: 3, cachedTokens: 500 }, 'the unprompted run\'s tokens (7 in, 3 out, 500 cache read) are in the totals');
-  assert.equal(after.samples - before.samples, 1, 'the run counts as one more sample');
-  const kid = (await events(instance, made.chat)).filter((e) => e.type === 'usage');
-  assert.deepEqual(kid.map((e) => e.data), [{ usage: { inputTokens: 7, outputTokens: 3, cachedReadTokens: 500, cachedWriteTokens: 20 }, origin: 'task-notification' }], 'one usage event, for the unprompted run only');
-  assert.equal(after.tokens, "prompted turns and Claude Code's own runs");
-  console.log('PASS O190: the unprompted run added ' + JSON.stringify(delta) + '; one usage event; the prompted turn not counted twice');
-});
+// O190: a run Claude Code starts with no prompt (a background task's notification; FIX1: an observer's activity, the fifth
+// origin the adapter's AUTONOMOUS_RESULT_ORIGINS lists) adds its own tokens to the totals: the adapter sends that run's
+// result raw only when asked, and P9 asks. The prompted turn's tokens are counted once.
+for (const origin of ['task-notification', 'observer-activity']) {
+  test('O190: an unprompted run adds its tokens to the totals; the prompted turn counts once; origin ' + origin, { timeout: 120000 }, async (t) => {
+    const instance = await start(t, { P9_UNPROMPTED_QUIET_MS: '12000' });
+    await call(instance, '/file-protection', 'POST', { on: false });
+    const a = await agent(t, instance);
+    const text = 'bg-usage ' + origin;
+    const made = await a.tool('open_chat', { text, title: 'Kid' });
+    await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes(text + ' reply'));
+    const before = (await call(instance, '/usage')).body;
+    const done = await until(instance, (e) => e.conversation === made.chat && e.type === 'update' && e.data?.sessionUpdate === 'agent_message_chunk' && e.data.content?.text === text + ' done');
+    await until(instance, (e) => e.conversation === a.conversation && e.type === 'note' && e.data.from === 'p9' && e.data.text.includes(text + ' done'), done.cursor);
+    const after = (await call(instance, '/usage')).body;
+    const delta = Object.fromEntries(['inputTokens', 'outputTokens', 'cachedTokens'].map((k) => [k, after.totals[k] - before.totals[k]]));
+    assert.deepEqual(delta, { inputTokens: 7, outputTokens: 3, cachedTokens: 500 }, 'the unprompted run\'s tokens (7 in, 3 out, 500 cache read) are in the totals');
+    assert.equal(after.samples - before.samples, 1, 'the run counts as one more sample');
+    const kid = (await events(instance, made.chat)).filter((e) => e.type === 'usage');
+    assert.deepEqual(kid.map((e) => e.data), [{ usage: { inputTokens: 7, outputTokens: 3, cachedReadTokens: 500, cachedWriteTokens: 20 }, origin }], 'one usage event, for the unprompted run only');
+    assert.equal(after.tokens, "prompted turns and Claude Code's own runs");
+    console.log('PASS O190 ' + origin + ': the unprompted run added ' + JSON.stringify(delta) + '; one usage event; the prompted turn not counted twice');
+  });
+}
 
 // O194 FIX1: a marked run whose end mark never comes ends at the bound (no update for P9_UNPROMPTED_MARK_MS), not never;
 // an end mark that comes after that fallback ends nothing a second time.
