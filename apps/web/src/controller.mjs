@@ -201,7 +201,7 @@ async function loadStarts() {
 // Sends only the field picked; the daemon merges it. Only the newest save's answer is kept, so an older one answering late never
 // shows a value the daemon has already replaced.
 let startsSeq = 0;
-async function saveStarts(a, kind, v) { const n = ++startsSeq; const r = await window.p9?.chat?.('newChatDefaults', { set: { [a]: { [kind]: v } } }).catch(() => null); if (r?.status === 200 && n === startsSeq) starts = r.body; return r?.status === 200; }
+async function saveStarts(a, kind, v) { const n = ++startsSeq; const r = await window.p9?.chat?.('newChatDefaults', { set: { [a]: { [kind]: v } } }).catch(() => null); if (r?.status === 200 && n === startsSeq) { starts = r.body; renderChats(); } return r?.status === 200; } // O131: the open chats' "(Default)" pills follow at once
 const fresh = [];
 // O48 provider profiles (threat model "Provider profiles"): what the daemon lists, never a key: { id, name, baseUrl, models,
 // secret: 'key' | 'command' | 'none' }. Read at the first chat list and after each Settings change.
