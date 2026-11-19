@@ -370,6 +370,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const turnEndedHooks = new Set();
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
+  const askedHooks = new Set(); // O84: called when a chat starts waiting on an approval or question (delegate.mjs: the parent's note)
   // A7 list_chats: a chat's model and context use, from its newest config and usage_update events. Read from the ledger
   // once per chat (gauge, below), then kept current here.
   const gauges = new Map();
@@ -965,6 +966,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         ? { request: id, toolCall: trim(request.toolCall), options: request.options }
         : { request: id, message: request.message, schema: request.requestedSchema, form });
       if (signal?.aborted) withdraw(); else signal?.addEventListener('abort', withdraw, { once: true });
+      if (!session.solo && session.pending.has(id)) for (const hook of askedHooks) { try { hook(conversation.id, { kind, request: id, text: String(kind === 'approval' ? request.toolCall?.title ?? '' : request.message ?? ''), options: request.options, form }); } catch {} }
     });
     session.approve = ask('approval');
     const stream = acp.ndJsonStream(Writable.toWeb(proc.child.stdin), Readable.toWeb(proc.child.stdout));
@@ -1793,6 +1795,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       listeners.add(done);
     }),
     settled: (hook) => { settledHooks.add(hook); },
+    asked: (hook) => { askedHooks.add(hook); },
     compacting: (id) => Boolean(live.get(id)?.compacting),
     stopAll,
     projects,

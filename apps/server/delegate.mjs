@@ -88,7 +88,8 @@ export const DELEGATE_TOOLS = (input) => {
       key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again. '
-      + 'Not waiting, a worker\'s turn end reaches you as a note from P9, which starts no turn; one still stopped 10 minutes later starts your turn once, and a failed turn at once.',
+      + 'Not waiting, a worker\'s turn end reaches you as a note from P9, which starts no turn; one still stopped 10 minutes later starts your turn once, and a failed turn at once. '
+      + 'So does a worker that starts waiting on an approval or a question: the note names the request and the answer answer_chat takes.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
       + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
@@ -713,11 +714,13 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!turn || (prompted ? info.state !== 'turn' : !['running', 'turn'].includes(info.state))) return { error: 'no-active-turn' };
     const stillCurrent = () => (prompted ? chat.info(caller)?.state === 'turn' && chat.activeTaskTurn(caller) === turn : ['running', 'turn'].includes(chat.info(caller)?.state) && chat.ownRun(caller) === turn);
     // The field at fault, by name only: never what was sent (dogfood 3.5: three bare refusals told the worker nothing).
+    // O84: the count and name refusals list the task's own checks (what ready expects, not what was sent).
+    const expected = task.checks ? '. Your task\'s checks: ' + task.checks.map((c) => JSON.stringify(c)).join('; ') : '';
     const fault = !text(args.commit, 200) ? 'commit: 1 to 200 characters'
       : !task.checks ? (!Array.isArray(args.results) || !args.results.length || args.results.length > 20 || args.results.some((r) => !(typeof r?.check === 'string' && text(r.check.trim(), 200))) ? 'results: 1 to 20 { check, result }, each check 1 to 200 characters, the checks your item names' : null)
         ?? (args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank' : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null)
-      : !Array.isArray(args.results) || args.results.length !== task.checks.length ? 'results: one { check, result } for each check of your task, no more'
-        : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once (they are in the message that gave you the task)'
+      : !Array.isArray(args.results) || args.results.length !== task.checks.length ? 'results: one { check, result } for each check of your task, no more' + expected
+        : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once' + expected
           : args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank'
             : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null;
     if (fault) return { error: 'request-refused', detail: 'Refused at ' + fault + '.' };
@@ -1215,6 +1218,16 @@ export function createDelegate({ chat, allowed, usage }) {
   // settled hook), so a cancelled second turn drops the held line. A turn answering ask_chat takes none: the held line
   // keeps its own text (read at the end, not 3 s later) and goes, and only a prompted turn still running at 3 s drops it.
   const endGen = new Map(); // chat -> number of its latest end
+  // O84: a worker that starts waiting on an approval or a question tells its parent at once, as a note (no turn), with
+  // what answer_chat needs, unless the parent is already in wait_chat on it (that returns the same waiting).
+  chat.asked?.((id, ask) => {
+    const child = chat.info(id), at = child?.parent;
+    if (!at || waiting.has(at + ':' + id) || shelved(at) || !['running', 'turn'].includes(chat.info(at)?.state)) return; // like the end note: never starts a stopped chat
+    const q = (s) => JSON.stringify(String(s));
+    const how = ask.kind === 'approval' ? `{ "optionId": one of ${(ask.options ?? []).map((o) => q(o.optionId)).join(', ')} }`
+      : `{ "action": "accept", "content": { ${(ask.form?.fields ?? []).map((f) => q(f.key) + ': ...').join(', ')} } } or { "action": "decline" }`;
+    chat.note(at, `[p9] ${child.title} is waiting on ${ask.kind === 'approval' ? 'an approval' : 'a question'}: ${ask.text.slice(0, 400)}. answer_chat request ${q(ask.request)} with ${how}.`, 'p9').catch(() => {});
+  });
   chat.turnEnded?.((id, turn, solo) => { if (!solo) endGen.set(id, (endGen.get(id) ?? 0) + 1); });
   // FIX3 (CI, sprint-pause): whether the parent was running at the end is read at the end, like waited. A parent that was
   // stopped then (after a restart, say) and started within END_HOLD_MS gets no end line steered into its new turn.
