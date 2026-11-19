@@ -767,6 +767,7 @@ export function createDelegate({ chat, allowed, usage }) {
     trail(info.parent);
     // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
     const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
+    if (inSprint(info.parent)) { carry(info.parent); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
     if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${task.item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
@@ -790,7 +791,13 @@ export function createDelegate({ chat, allowed, usage }) {
     if (review?.fixes >= 3) review.larger = true;
     chat.setSprint(args.chat, { verdict: value, ...(item && { reviews: { ...target.reviews, [item]: review } }) });
     const worker = (chat.family?.() ?? []).find((c) => c.id === args.chat);
-    if (item && worker?.parent) {
+    if (item && worker?.parent && inSprint(worker.parent)) {
+      // O193: in a sprint the next actor is woken by carry: the worker on a fix, the lead on a pass (the worker gets a note).
+      trail(worker.parent);
+      if (args.result === 'pass') chat.note?.(args.chat, `[p9] ${item} passed review at ${args.commit}. Start your next item.`, 'p9').catch?.(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      carry(worker.parent);
+    } else if (item && worker?.parent) {
       trail(worker.parent);
       const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
       chat.prompt?.(args.chat, { text: said, when: 'queue' }, undefined, 'p9').catch(() => {});
@@ -798,6 +805,45 @@ export function createDelegate({ chat, allowed, usage }) {
     }
     return { verdict: value, ...(review && { review }) };
   }
+  // O193: P9 carries a sprint item from ready to the merge itself. On each event it already sees for a sprint (ready,
+  // verdict, a turn end of any kind, its own start) it reads every worker's persisted review records, names each item's
+  // one next actor (the reviewer once queued, the lead if no reviewer can take it, the worker on a fix, the lead on a
+  // pass) and, if that chat is not working, wakes it once with a queued prompt. Once per worker, item, state and commit,
+  // kept in the lead's sprint record, so a restart neither drops nor repeats a wake; a missed event is caught at the next
+  // one. A reviewer or worker that ends its turn (or lost it to a restart) still on a key it was woken for tells the lead
+  // once. No timer: nothing runs outside a started, open, unpaused sprint.
+  const RESTART = Symbol('restart');
+  const inSprint = (lead) => Boolean(lead && chat.projects?.started?.(lead)?.plan && !chat.projects.closed(lead) && !chat.paused?.(lead));
+  function carry(lead, ended) {
+    if (!inSprint(lead)) return;
+    const family = chat.family?.() ?? [], seen = { ...(chat.sprint(lead).carry ?? {}) };
+    const reviewer = family.find((c) => c.parent === lead && c.key === 'review' && !shelved(c.id));
+    const wake = (id, text) => chat.prompt(id, { text, when: 'queue' }, undefined, 'p9').catch(() => {});
+    let changed = false;
+    for (const w of family.filter((c) => c.parent === lead && c.key !== 'review' && !shelved(c.id))) {
+      const mine = chat.sprint(w.id);
+      for (const [item, r] of Object.entries(mine.reviews ?? {})) {
+        const key = [w.id, item, r.state, r.commit].join(':');
+        if (seen[key]?.told || !['queued', 'fix', 'passed'].includes(r.state)) continue;
+        const actor = r.state === 'fix' ? w.id : r.state === 'queued' && reviewer ? reviewer.id : lead, info = chat.info(actor);
+        if (!info || stateOf(info) === 'working') continue;
+        if (!seen[key]) {
+          const note = mine.verdict?.commit === r.commit ? mine.verdict.note : '';
+          wake(actor, r.state === 'passed' ? `[p9] ${item} by ${w.title} passed at ${r.commit}: merge it.`
+            : r.state === 'fix' ? `[p9] ${item}: the reviewer asked for a fix (fix ${r.fixes}) at ${r.commit}: ${note}`
+              : actor !== lead ? `[p9] Ready for review: ${item}, by ${w.title} (chat ${w.id}), commit ${r.commit}. Read its report, then call verdict with that chat and commit.`
+                : `[p9] ${item} by ${w.title} is ready at ${r.commit}, and no reviewer can take it: start or bring back one with key review.`);
+          seen[key] = { at: Date.now() }; changed = true;
+        } else if (actor !== lead && (ended === actor || ended === RESTART)) {
+          wake(lead, `[p9] ${info.title ?? actor} ended its turn on ${item} at ${r.commit} without acting on it.`);
+          seen[key].told = true; changed = true;
+        }
+      }
+    }
+    if (changed) chat.setSprint(lead, { carry: seen });
+  }
+  chat.settled((id) => { const lead = inSprint(id) ? id : chat.info?.(id)?.parent; if (inSprint(lead)) carry(lead, id); });
+
   // The review trail (one file, one writer): P9 rewrites review-trail.md in the lead's sprint folder from its workers'
   // review records; nobody else writes it (sprint-files.mjs).
   const cell = (value) => String(value ?? '').replace(/[|\r\n]+/g, ' ').slice(0, 160);
@@ -1277,6 +1323,7 @@ export function createDelegate({ chat, allowed, usage }) {
       if (!c || (root === c && ![...all.values()].some((other) => other.parent === c.id))) continue; // not in a sprint
       tops.set(root.id, [...(tops.get(root.id) ?? []), root === c ? 'this chat' : c.title]);
     }
+    if (!storm) for (const c of chat.family()) if (inSprint(c.id)) carry(c.id, RESTART); // O193
     if (!storm) for (const [id, titles] of tops) {
       if (shelved(id)) continue; // an archived chat is started by nothing, P9's own lines included
       chat.prompt(id, { text: `[p9] P9 restarted. Interrupted mid-turn: ${titles.slice(0, 20).join(', ').slice(0, 1000)}. Not resent.` }, undefined, 'p9').catch(() => {});
