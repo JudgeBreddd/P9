@@ -104,7 +104,12 @@ const listedModels = () => { try { return JSON.parse(readFileSync('models.json',
 // _meta.claudeCode.options.env (new and resume). profile.log, when it exists, gets one line per session opened: the
 // names it saw, a hash of the key, and whether the key was anywhere in its environment or command line.
 const custom = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION;
+// O190: like claude-agent-acp 0.106.0, it sends a raw SDK result as '_claude/sdkMessage' only when the session asked for it
+// (_meta.claudeCode.emitRawSDKMessages, new and resume), filtered by type and origin as the adapter's shouldEmitRawMessage.
+let rawAsked = false;
+const rawWanted = (message) => rawAsked === true || (Array.isArray(rawAsked) && rawAsked.some((f) => f.type === message.type && (f.subtype === undefined || f.subtype === message.subtype) && (f.origin === undefined || f.origin === message.origin?.kind)));
 const provider = (what, params) => {
+  rawAsked = params._meta?.claudeCode?.emitRawSDKMessages ?? false;
   const env = params._meta?.claudeCode?.options?.env, key = env?.ANTHROPIC_AUTH_TOKEN;
   if (existsSync('profile.log')) appendFileSync('profile.log', JSON.stringify({ agent: process.argv[2], what, model: process.env.ANTHROPIC_MODEL ?? null, custom: custom ?? null,
     names: Object.keys(process.env).filter((name) => name.startsWith('ANTHROPIC_')).sort(), baseUrl: env?.ANTHROPIC_BASE_URL ?? null,
@@ -449,8 +454,13 @@ const connection = acp.connectAgent(stream, {
     // O194: "bg-marked" is "bg-run" with the adapter's marks (only for a client that advertises asyncTasks): its unprompted
     // run opens with an async_task_spawned of taskType 'turn' and ends with that task's async_task_state_update. A background
     // command's own task starts and ends inside the run and is not the run's end.
-    if (text === 'bg-marked') {
+    // O190: "bg-usage [origin]" is "bg-marked" whose unprompted run ends with a result of its own (origin task-notification
+    // unless one is named, 7 in,
+    // 3 out, 500 cache read, 20 cache write), sent raw only if asked; its prompted turn's reply carries 10 in, 5 out, 900 cache read.
+    const usage = /^bg-usage( [a-z-]+)?$/.test(text), origin = text.split(' ')[1] ?? 'task-notification';
+    if (text === 'bg-marked' || usage) {
       const task = (update) => asyncTasks && connection.sessionUpdate({ sessionId, update });
+      const result = (message) => rawWanted(message) && connection.extNotification('_claude/sdkMessage', { sessionId, message });
       setTimeout(async () => {
         await task({ sessionUpdate: 'async_task_spawned', asyncTaskId: 'autonomous-turn-1', name: 'Claude is working', taskType: 'turn', description: 'A background task finished.', showInTranscript: false, canStop: true });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'resume-1', title: 'Resumed tool', kind: 'execute', status: 'in_progress' } });
@@ -458,10 +468,20 @@ const connection = acp.connectAgent(stream, {
         await new Promise((resolve) => setTimeout(resolve, 500));
         await task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'bash-1', state: 'completed' });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'resume-1', status: 'completed' } });
-        await say('bg-marked done');
+        await say(text + ' done');
+        if (usage) {
+          await result({ type: 'result', subtype: 'success', origin: { kind: origin }, usage: { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 500, cache_creation_input_tokens: 20 } });
+          await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 20, size: 1000, cost: { amount: 0.9, currency: 'USD' } } });
+        }
         await task({ sessionUpdate: 'async_task_state_update', asyncTaskId: 'autonomous-turn-1', state: 'completed' });
       }, 4000);
-      await say('bg-marked reply');
+      await say(text + ' reply');
+      if (usage) {
+        // The prompted turn's own result: no origin, so a client filtering on origins never gets it raw.
+        await result({ type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.5, currency: 'USD' } } });
+        return { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 900, cachedWriteTokens: 0, totalTokens: 915 } };
+      }
       return { stopReason: 'end_turn' };
     }
     // O194 FIX1: "bg-lost-mark" is "bg-marked" whose end mark never comes; "bg-late-mark" sends it 12 s after its last line.

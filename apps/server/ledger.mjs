@@ -136,9 +136,9 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     // O35: a deleted chat's 'deleted' event carries what it had spent, so the totals keep it once its own rows are gone.
     usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, p.value AS profile, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
       + " LEFT JOIN prefs p ON p.key = 'profile:' || e.conversation"
-      + " WHERE e.cursor > ? AND (e.type IN ('turn-end', 'deleted') OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
+      + " WHERE e.cursor > ? AND (e.type IN ('turn-end', 'usage', 'deleted') OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
     spent: db.prepare("SELECT cursor, conversation, type, NULL AS provider, data, at FROM events WHERE conversation = ? AND cursor > ?"
-      + " AND (type = 'turn-end' OR type = 'update' AND (instr(data, 'usage_update') > 0 OR NOT json_valid(data))) ORDER BY cursor"),
+      + " AND (type IN ('turn-end', 'usage') OR type = 'update' AND (instr(data, 'usage_update') > 0 OR NOT json_valid(data))) ORDER BY cursor"),
     // O35: the photo hashes a chat's messages name (sent, steered or held), and which of those any other event still names.
     photos: db.prepare("SELECT DISTINCT i.value ->> '$.hash' AS hash FROM events e, json_each(CASE WHEN json_valid(e.data) THEN e.data ELSE '{}' END, '$.images') i"
       + " WHERE e.conversation = ? AND e.type IN ('user', 'held')"),
@@ -168,15 +168,12 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     return into.profiles.get(p.id);
   };
   let fold = fresh();
-  // O190: token counts come only from a prompted turn's reply (turn-end). A run with no prompt (a scheduled wake, a
-  // background task's notification, a compaction) reports its cost through usage_update, which costs below count, but no
-  // token counts: the adapter sends only used, size and cost for it. So every token total is labelled.
-  // Checked in claude-agent-acp 0.106.0 (dist/v1/acp-agent.js): a result Claude Code started itself is left out of the
-  // turn's usage on purpose (:4107-4119), and its usage_update carries used, size and cost only (:4158-4175). The way to
-  // count them: session/new _meta.claudeCode.emitRawSDKMessages (:422), filtered to type 'result' (:8290), sends each raw
-  // SDK result with its usage as the ext notification '_claude/sdkMessage' (:3063); P9 would take that, keep only the
-  // results Claude Code started itself (a prompted turn's are already counted at turn-end) and add them here. Not built.
-  const TOKENS = 'prompted turns only';
+  // O190: token counts come from a prompted turn's reply (turn-end) and from a Claude chat's 'usage' events: the result of
+  // a run Claude Code started itself (a background task's notification, another agent's message), which claude-agent-acp
+  // 0.106.0 leaves out of the turn's usage and sends as a raw SDK result only when asked (chat.mjs OWN_RUNS). Not counted:
+  // a Codex turn P9 never prompted (no usage reaches P9), a compaction, and an own run's result that lands during a
+  // prompted turn. The cost (usage_update) counts every run.
+  const TOKENS = 'prompted turns and Claude Code\'s own runs';
   const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
   // What the adapters send (ACP, checked against claude-agent-acp 0.88.0 and 0.104.1): token counts per turn in the prompt
   // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the
@@ -197,7 +194,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       into.latest = Math.max(into.latest, spent.latest);
       return;
     }
-    if (row.type === 'turn-end') {
+    if (row.type === 'turn-end' || row.type === 'usage') {
       const usage = data?.usage;
       if (usage === undefined) return;
       if (!usage || !['inputTokens', 'outputTokens', 'cachedReadTokens'].every((key) => count(usage[key]))) { into.discarded += 1; return; }
