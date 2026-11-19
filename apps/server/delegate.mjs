@@ -82,7 +82,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
       + 'or queue (after the running turn). An agent without steering cannot take a message into its running turn: while it works, auto and steer are refused (turn-running) and only queue reaches it. It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
       + 'when: note passes information on and asks for nothing (a result, a branch that is ready, something you found): it never starts a turn, the chat reads it in its running turn '
-      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. Your worker\'s turn end reaches you as such a note from P9 (see wait_chat). '
+      + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. Your worker\'s turn end reaches you from P9 as such a note by default, or as a message that starts your turn when Settings > Notices says so (see wait_chat). '
       + 'key (not with a note) gives a worker you started, reused for another role, that role\'s key first, so this message carries roles/<key>.rules.md; a worker in its own worktree keeps its key.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] },
       replaces: { type: 'string', description: 'The held ID of your own earlier message still waiting for the turn to end (returned as held): this one replaces it, and it is marked replaced, not sent.' },
@@ -90,7 +90,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again. '
       + 'Not waiting, a worker\'s turn end reaches you from P9 as a note, which starts no turn (unless Settings > Notices makes it a message); one still stopped 10 minutes later starts your turn once, and a failed turn at once. '
-      + 'So does a worker that starts waiting on an approval or a question: the note names the request and the answer answer_chat takes.',
+      + 'A worker that starts waiting on an approval or a question tells you at once, by default as a message that starts your turn (a note when Settings > Notices says so); it names the request and the answer answer_chat takes.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
       + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
@@ -1294,8 +1294,9 @@ export function createDelegate({ chat, allowed, usage }) {
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
   // § Delegate). Only a parent whose agent is running: an idle-since-start, stopped or archived chat is never started by this.
   // O125 point 2: a worker whose end line says nothing for its parent updates its own status (sprint state endNote) and
-  // sends nothing. Otherwise a note that waits is the newest one from that worker: a newer one replaces it by its ID.
-  // ponytail: "nothing for you" is matched in the end line itself; a worker that words it otherwise still sends its note.
+  // sends nothing. Otherwise the end line goes, a note by default or a message when Settings > Notices says so (O197); a
+  // message still waiting is the newest one from that worker: a newer one replaces it by its ID (wake).
+  // ponytail: "nothing for you" is matched in the end line itself; a worker that words it otherwise still sends its end line.
   const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|the parent|your side)\b/i;
   const waitingNote = new Map(); // worker chat -> held ID of its note still waiting for its parent's turn to end
   // O139: the line waits END_HOLD_MS first, since Claude Code's compaction comes just after the turn's end (186 of 199 in
@@ -1321,7 +1322,7 @@ export function createDelegate({ chat, allowed, usage }) {
   // what answer_chat needs, unless the parent is already in wait_chat on it (that returns the same waiting).
   chat.asked?.((id, ask) => {
     const child = chat.info(id), at = child?.parent;
-    if (!at || waiting.has(at + ':' + id) || shelved(at) || !['running', 'turn'].includes(chat.info(at)?.state)) return; // like the end note: never starts a stopped chat
+    if (!at || waiting.has(at + ':' + id) || shelved(at) || !['running', 'turn'].includes(chat.info(at)?.state)) return; // like the end line: never starts a stopped chat
     const q = (s) => JSON.stringify(String(s));
     const how = ask.kind === 'approval' ? `{ "optionId": one of ${(ask.options ?? []).map((o) => q(o.optionId)).join(', ')} }`
       : `{ "action": "accept", "content": { ${(ask.form?.fields ?? []).map((f) => q(f.key) + ': ...').join(', ')} } } or { "action": "decline" }`;
