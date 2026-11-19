@@ -797,9 +797,10 @@ export function createDelegate({ chat, allowed, usage }) {
     chat.setSprint(args.chat, { verdict: value, ...(item && { reviews: { ...target.reviews, [item]: review } }) });
     const worker = (chat.family?.() ?? []).find((c) => c.id === args.chat);
     if (item && worker?.parent && inSprint(worker.parent)) {
-      // O193: in a sprint the next actor is woken by carry: the worker on a fix, the lead on a pass (the worker gets a note).
+      // O193: in a sprint carry wakes the next actor: the worker on a fix, the lead on a pass. The pass still starts the
+      // worker's next item, as outside a sprint (the work queue: that message ends the old ready).
       trail(worker.parent);
-      if (args.result === 'pass') chat.note?.(args.chat, `[p9] ${item} passed review at ${args.commit}. Start your next item.`, 'p9').catch?.(() => {});
+      if (args.result === 'pass') chat.prompt?.(args.chat, { text: `[p9] ${item} passed review at ${args.commit}. Start your next item.`, when: 'queue' }, undefined, 'p9').catch(() => {});
       if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
       carry(worker.parent, { type: 'verdict', chat: caller }).catch(() => {});
     } else if (item && worker?.parent) {

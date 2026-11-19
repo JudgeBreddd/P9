@@ -59,7 +59,7 @@ function world(t, { paused = false, withReviewer = true } = {}) {
   return { make, store, states, commit, merge, prompts, notes, ready, verdict, order: () => prompts.map(([id]) => who[id]) };
 }
 
-test('O193: an item\'s whole life (ready, fix, ready, pass) wakes reviewer, worker, reviewer, lead, in that order, and nothing else', { timeout: 30000 }, async (t) => {
+test('O193: an item\'s whole life (ready, fix, ready, pass) wakes reviewer, worker, reviewer, then worker (next item) and lead, and nothing else', { timeout: 30000 }, async (t) => {
   const w = world(t), p9 = w.make();
   await p9.boot();
   const c1 = w.commit('one');
@@ -69,13 +69,13 @@ test('O193: an item\'s whole life (ready, fix, ready, pass) wakes reviewer, work
   await w.ready(p9, c2); await p9.end(worker);
   await w.verdict(p9, c2, 'pass'); await p9.end(reviewer);
   await p9.end(lead); await p9.end(reviewer); // later ends wake nobody again
-  assert.deepEqual(w.order(), ['reviewer', 'worker', 'reviewer', 'lead'], JSON.stringify(w.prompts));
-  assert.equal(w.prompts[3][1], `[p9] B1 by Kid passed at ${c2}: merge it.`);
+  assert.deepEqual(w.order(), ['reviewer', 'worker', 'reviewer', 'worker', 'lead'], JSON.stringify(w.prompts));
+  assert.equal(w.prompts[3][1], `[p9] B1 passed review at ${c2}. Start your next item.`);
+  assert.equal(w.prompts[4][1], `[p9] B1 by Kid passed at ${c2}: merge it.`);
   assert.equal(w.prompts[1][1], `[p9] B1: the reviewer asked for a fix (fix 1) at ${c1}: see the test`);
-  assert.ok(w.notes.some(([id, text]) => id === worker && text.includes('passed review')), 'the worker hears of the pass as a note');
   w.merge(); // merged: the passed record is stale, and a restart wakes nobody
   await w.make().boot();
-  assert.equal(w.prompts.length, 4);
+  assert.equal(w.prompts.length, 5);
 });
 
 test('O193: a P9 restart between ready and verdict still wakes the reviewer, once', { timeout: 30000 }, async (t) => {
@@ -164,8 +164,8 @@ test('O193: ready names the plan row, so two rows from one worker are two review
   const c2 = w.commit('two');
   await w.ready(p9, c2, 'O2');
   assert.deepEqual(Object.keys(w.store.get(worker).reviews).sort(), ['O1', 'O2']);
-  assert.deepEqual(w.order(), ['reviewer', 'lead', 'reviewer'], JSON.stringify(w.prompts));
-  assert.match(w.prompts[2][1], /^\[p9\] Ready for review: O2, by Kid/);
+  assert.deepEqual(w.order(), ['reviewer', 'worker', 'lead', 'reviewer'], JSON.stringify(w.prompts));
+  assert.match(w.prompts[3][1], /^\[p9\] Ready for review: O2, by Kid/);
   w.states.set(worker, 'turn');
   const bad = await p9.tools.ready({ commit: c2, results: [{ check: 'test', result: 'passed' }], weakest: 'none', row: 'O 3; rm' }, worker);
   assert.equal(bad.error, 'request-refused');
