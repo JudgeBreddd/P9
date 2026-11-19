@@ -216,3 +216,19 @@ test('O109 crash points: killed after the agent took a held steer, before P9 rec
   once_(got, trail, 'held steer');
   console.log('PASS O109 crash steer-taken: ' + got.length);
 });
+
+test('O109 crash points: killed just after a replacement\'s held event, the replacement reaches the agent once and the replaced one never', { timeout: 240000 }, async (t) => {
+  const { got, trail, instance } = await crashCase(t, 'held-event', 'second wording', async (instance, chat) => {
+    await gated(instance, chat);
+    // The first is kept with no crash file in place; the replacement then crashes P9 just after its held event.
+    fs.renameSync(path.join(instance.directory, 'crash-held-event'), path.join(instance.directory, 'crash-later'));
+    const first = await queue(instance, chat, { text: 'first wording' });
+    assert.ok(first.body?.held, JSON.stringify(first.body));
+    fs.renameSync(path.join(instance.directory, 'crash-later'), path.join(instance.directory, 'crash-held-event'));
+    await queue(instance, chat, { text: 'second wording', replaces: first.body.held });
+  });
+  once_(got, trail, 'the replacement');
+  const old = fs.readFileSync(path.join(instance.workspace, 'prompts.log'), 'utf8').split('\n').filter((line) => line.includes('first wording'));
+  assert.equal(old.length, 0, 'the replaced message went: ' + JSON.stringify(old));
+  console.log('PASS O109 crash replace: replacement ' + got.length + ', replaced 0');
+});
