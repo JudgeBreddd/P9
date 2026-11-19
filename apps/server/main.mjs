@@ -17,7 +17,7 @@ import { parseSettings } from './mission.mjs';
 import { drainSaves, guardFolders, desktopFolders } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
 import { AGENTS, placeAgents } from './deps.mjs';
-import { internalEndpoint, trimLog, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+import { internalEndpoint, lockPipe, trimLog, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
 import { keepOldPhotos } from './chat.mjs';
 import { createClaudeUsage, openQuery } from './claude-usage.mjs';
 import { createCodexUsage, readOnce } from './codex-usage.mjs';
@@ -197,11 +197,7 @@ try {
     });
   }
   if (!windows) await chmod(socketPath, 0o600);
-  else {
-    const acl = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', windowsHost, '-Mode', 'PipeLock', '-Pipe', socketPath], { encoding: 'utf8', env: childEnv() });
-    if (acl.status !== 0) throw Object.assign(new Error('pipe-acl-not-current-user-only'), { code: 'PIPE_ACL' });
-  }
+  else lockPipe({ host: windowsHost, pipe: socketPath, env: childEnv() });
   // A second process must bind successfully before it may create credentials.
   const credentialFile = await open(path.join(values.state, 'desktop.json'), 'wx', 0o600);
   try { await credentialFile.writeFile(JSON.stringify(credentials)); await credentialFile.sync(); }
