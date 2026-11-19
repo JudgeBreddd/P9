@@ -232,3 +232,41 @@ test('O109 crash points: killed just after a replacement\'s held event, the repl
   assert.equal(old.length, 0, 'the replaced message went: ' + JSON.stringify(old));
   console.log('PASS O109 crash replace: replacement ' + got.length + ', replaced 0');
 });
+
+test('O109 FIX1: a full-limit message that may be a repeat is sent whole with the label beside it, across two crashes', { timeout: 300000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance), chat = a.conversation;
+  fs.writeFileSync(path.join(instance.workspace, 'log-prompts'), '');
+  const mark = 'full limit kept ', text = mark + 'x'.repeat(100_000 - mark.length); // MAX_TEXT exactly
+  fs.writeFileSync(path.join(instance.directory, 'crash-user-event'), '');
+  await gated(instance, chat);
+  assert.ok((await queue(instance, chat, { text })).body?.held, 'not held');
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  await stopped(instance.child);
+  // The resend after the first crash crashes P9 at the same point again: still unsure, it goes again after the next start.
+  fs.writeFileSync(path.join(instance.directory, 'crash-user-event'), '');
+  // The resend runs as P9 starts, so the second crash can come before the start is done (daemon-exit): that is the crash.
+  const second = await restart(t, instance, 'state-2').catch((e) => (/daemon-exit/.test(e.message) ? null : Promise.reject(e)));
+  let lost = '[]';
+  if (second) {
+    // Bounded: if the resend is refused before its user event, P9 never reaches the crash point and keeps running.
+    await Promise.race([stopped(second.child), pause(60000)]);
+    lost = JSON.stringify((await events(second, chat).catch(() => [])).filter((e) => e.type === 'unheld').map((e) => e.data?.why));
+    instance = second;
+  }
+  assert.ok(!fs.existsSync(path.join(instance.directory, 'crash-user-event')), 'the resend never reached its user event (unheld: ' + lost + ')');
+  instance = await restart(t, instance, 'state-3');
+  const got = () => { try { return fs.readFileSync(path.join(instance.workspace, 'prompts.log'), 'utf8').split('\n').filter((l) => l.includes(mark)).map((l) => JSON.parse(l)); } catch { return []; } };
+  for (let i = 0; i < 300 && got().length < 1; i += 1) await pause(100);
+  await pause(3000);
+  const trail = JSON.stringify((await events(instance, chat)).filter((e) => ['held', 'unheld', 'user', 'interrupted'].includes(e.type)).map((e) => [e.type, e.data?.why ?? e.data?.reason ?? String(e.data?.text ?? '').length, e.data?.repeat ?? '']));
+  assert.equal(got().length, 1, 'the agent got it ' + got().length + ' times: ' + trail);
+  const [blocks] = got();
+  assert.ok(blocks.some((b) => b.startsWith(REPEAT)), 'no repeat label: ' + JSON.stringify(blocks.map((b) => b.slice(0, 60))));
+  assert.ok(blocks.includes(text), 'the user\'s text was not sent whole: ' + JSON.stringify(blocks.map((b) => b.length)));
+  const users = (await events(instance, chat)).filter((e) => e.type === 'user' && String(e.data?.text).startsWith(mark));
+  assert.equal(users.at(-1).data.text, text, 'the shown text is not the user\'s'); assert.equal(users.at(-1).data.repeat, true, 'the last user event does not say repeat: ' + trail);
+  assert.equal((await events(instance, chat)).filter((e) => e.type === 'unheld').length, 0, 'it was dropped: ' + trail);
+  console.log('PASS O109 FIX1 full limit: once, labelled, ' + text.length + ' chars');
+});

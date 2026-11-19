@@ -488,7 +488,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // Test home only: crash-<point> SIGKILLs P9 once at that point of a kept message's way (O109 remainder tests).
   const crashAt = (point) => { if (process.env.P9_TEST_HOME) try { const f = path.join(process.env.P9_TEST_HOME, 'crash-' + point); statSync(f); rmSync(f); process.kill(process.pid, 'SIGKILL'); } catch {} };
   // narrow (delegate.mjs): the mode each kept message may run in now, from its senders' modes now, or { error }.
-  const maybeRepeat = (text) => (text.startsWith(REPEAT) ? text : REPEAT + '\n\n' + text);
+  // O109 FIX1: a message that may be a repeat says so in a block of its own before the user's text, never inside it, so the
+  // text keeps its own MAX_TEXT budget and is never cut. repeats marks such a body in memory; the ledger keeps repeat: true.
+  const repeats = new WeakSet();
+  const again = (body) => (repeats.has(body) ? [{ type: 'text', text: REPEAT + '\n\n' }] : []);
   // A kept entry by its queued ID: patch it in place (steerHeld's trying mark).
   const markKept = (chat, queued, patch) => setResuming(chat, resumingOf(chat).map((i) => (i.queued === queued ? { ...i, ...patch } : i)));
   async function deliver(lead, narrow) {
@@ -501,13 +504,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         heldAuthority.delete(item.id);
         const recorded = item.sending !== undefined && db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'user' AND cursor > ? AND json_valid(data) AND data ->> '$.text' = ? LIMIT 1").get(item.chat, item.sending, item.body.text);
         // O109: recorded, then P9 stopped before its prompt was taken: the agent may or may not have it, so it goes again saying so.
-        if (recorded) item = { ...item, body: { ...item.body, text: maybeRepeat(item.body.text) } };
+        if (recorded) item = { ...item, body: { ...item.body, repeat: true } };
         // O109: one a restart cut out of a turn's queue (was) goes in the mode it waited with, as at that turn's end; its
         // sender may not be running yet, so its mode now is not known.
         const picked = !allowed() ? { error: 'session-ended' } : narrow && !item.was ? narrow(item) : { mode: item.body.mode };
         if (picked.error) { for (const id of [item.id, ...(item.was ?? [])]) emit(item.chat, 'unheld', { id, text: item.body.text, why: picked.error }); done(); continue; }
         setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, body: item.body, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
-        const body = { ...item.body, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
+        const { repeat, ...kept } = item.body, body = { ...kept, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
+        if (repeat) repeats.add(body);
         if (item.mixed) mixed.set(body, item.mixed);
         origins.set(body, { lead, id: item.id }); // a busy chat holds it: hold() takes this entry over (O109 FIX1)
         // was: the ID it waited under before a restart, so its 'user' event clears it from the window.
@@ -1241,8 +1245,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
     const rules = rulesFor(row(id), body);
     if (rules?.started) sending.add(id);
-    const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held?.length && { held }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }) });
-    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(body.text, images)],
+    const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held?.length && { held }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }), ...(repeats.has(body) && { repeat: true }) });
+    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(body.text, images)],
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
     try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
@@ -1305,7 +1309,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try {
         if (origin) setResuming(origin.lead, resumingOf(origin.lead).filter((i) => i.id !== origin.id));
         setResuming(id, [...resumingOf(id).filter((i) => !old || i.queued !== old.id), { id: item.id, chat: id, from: senders.get(body) ?? null, mixed: mixed.get(body) ?? null, queued: item.id, ...(prior.length && { prior }),
-          body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }) } }]);
+          body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }), ...(repeats.has(body) && { repeat: true }) } }]);
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
@@ -1372,7 +1376,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const other = (mode !== undefined && item.body.mode !== undefined && item.body.mode !== mode) || (send.length > 0 && (solos.has(item.body) || solos.has(send[0].body)))
         // #257 FIX1: nor messages that pick different models or efforts: each prompt sets one model and effort, so a pick
         // the joined prompt could not carry would be lost. Picks that agree (or are left out) join, and all of them are sent.
-        || (send.length > 0 && !agrees(model, config, item.body));
+        || (send.length > 0 && !agrees(model, config, item.body))
+        // O109 FIX1: a message that may be a repeat goes alone, so its label speaks for it only.
+        || (send.length > 0 && (repeats.has(item.body) || repeats.has(send[0].body)));
       // rest: once one message waits for the next turn, so does every later one, or they would run out of order.
       if (rest || (send.length && (other || joined.length > MAX_TEXT || images.length + item.images.length > MAX_IMAGES))) { rest = true; session.queued.push(item); continue; }
       send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode; model ??= item.body.model; config = { ...config, ...item.body.config };
@@ -1382,6 +1388,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Joined from several senders: no one sender for the whole prompt, its lines are in the text.
     const from = [...new Set(send.map((item) => senders.get(item.body)))], body = { ...send.at(-1).body, ...(mode !== undefined && { mode }), ...(model !== undefined && { model }), ...(Object.keys(config).length && { config }), text, images };
     if (from.length > 1) mixed.set(body, from);
+    if (repeats.has(send[0].body)) repeats.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body))).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
     else settleResumed(send.map((item) => item.id)); // O109: taken, so a restart from here on does not send it again
@@ -1584,7 +1591,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }) }); // hash and type only: events stay small
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }) }); // hash and type only: events stay small
       if (held?.length) crashAt('user-event');
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
@@ -1648,7 +1655,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (told.length) keepWaiting(id);
       // With notes in front, the message itself says who sent it too (O109): the user's is not left to read as the last note's.
       const shared = told.length > 0 && !mixed.has(body);
-      const prompt = bare ? blocks(body.text, []) : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
+      const prompt = bare ? [...again(body), ...blocks(body.text, [])] : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
       if (rules?.started) sending.add(id);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
       // the reply's model_usage, compactions included) when the reply has it.
@@ -1817,7 +1824,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           const event = seen.get(i.chat, i.queued, i.queued);
           if (event && (event.type === 'unheld' || event.steered)) return [];
           const unsure = event || i.trying;
-          return [{ ...i, queued: undefined, prior: undefined, trying: undefined, was: [i.queued, ...(i.prior ?? [])], ...(unsure && { body: { ...i.body, text: maybeRepeat(i.body.text) } }) }];
+          return [{ ...i, queued: undefined, prior: undefined, trying: undefined, was: [i.queued, ...(i.prior ?? [])], ...(unsure && { body: { ...i.body, repeat: true } }) }];
         }));
         deliver(lead, narrow).catch(() => {});
       }

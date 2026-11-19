@@ -186,7 +186,7 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   const went = await turns(id.w2, 'crash-', mark);
   // crash-two and crash-three may wait together behind it and go as one prompt: every name in each prompt counts.
   assert.deepEqual(went.flatMap((e) => e.data.text.match(/crash-\w+/g)), ['crash-one', 'crash-one', 'crash-two', 'crash-three'], 'a message was lost or sent twice');
-  assert.ok(!went[0].data.text.includes('may have reached you already') && went[1].data.text.includes('may have reached you already'), 'the resent crash-one does not say it may be a repeat: ' + JSON.stringify(went.map((e) => e.data.text)));
+  assert.ok(!went[0].data.repeat && went[1].data.repeat === true && went[1].data.text === went[0].data.text, 'the resent crash-one does not say it may be a repeat, or its text changed: ' + JSON.stringify(went.map((e) => [e.data.text, e.data.repeat])));
   const modes = (await events(instance, id.w2)).filter((e) => e.cursor > mark && e.type === 'mode').map((e) => e.data.name);
   assert.equal(modes.at(-1), 'Manual', 'a kept message ran wider than its sender is now: ' + JSON.stringify(modes));
   assert.equal(await isPaused(), false);
