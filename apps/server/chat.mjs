@@ -578,7 +578,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.quiet = setTimeout(function end() {
       if (session.tools.size) { session.quiet = setTimeout(end, UNPROMPTED_QUIET_MS); session.quiet.unref?.(); return; }
       session.quiet = null;
-      if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true); } catch {} }
+      if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true, 'unprompted'); } catch {} }
     }, UNPROMPTED_QUIET_MS);
     session.quiet.unref?.();
   };

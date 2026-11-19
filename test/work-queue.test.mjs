@@ -73,7 +73,10 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
     assert.equal(tools.verdict({ chat: worker, commit: at, result: 'fix', note: 'again' }, reviewer).error, 'already-reviewed');
     assert.equal(sprintOf(worker).reviews['daemon-1'].fixes, n);
     assert.equal(sent.length, before);
-    assert.deepEqual(sent.find((s) => s[0] === worker && s[1].includes('finding ' + n)).slice(1, 3), [`[p9] daemon-1: the reviewer asked for a fix (fix ${n}) at ${at}: finding ${n}`, 'queue']);
+    // O193: in a sprint the fix reaches the worker through carry, a moment after the verdict returns.
+    const told = (s) => s[0] === worker && s[1].includes('finding ' + n);
+    for (let i = 0; i < 250 && !sent.some(told); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(sent.find(told).slice(1, 3), [`[p9] daemon-1: the reviewer asked for a fix (fix ${n}) at ${at}: finding ${n}`, 'queue']);
   }
   assert.deepEqual(sent.filter((s) => s[0] === lead).map((s) => s[1]), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Opus or Fable).']);
   const c2 = commit('passed');

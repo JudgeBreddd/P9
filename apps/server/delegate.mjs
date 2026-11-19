@@ -9,6 +9,7 @@ import { childEnv } from './child-env.mjs';
 import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
+import { decide } from './carry.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
 import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
@@ -63,7 +64,7 @@ export const DELEGATE_TOOLS = (input) => {
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
       folder: { type: 'string', description: 'Where it starts, relative to the workspace. With worktree, every worker of your sprint comes from one repository: a folder of another is refused.' },
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
-    ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string', description: 'The commit id of the work to review, as git in your start folder\'s repository knows it; it is recorded as sent (unknown-commit if that repository does not have it).' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' } }, ['commit', 'results', 'weakest'])],
+    ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string', description: 'The commit id of the work to review, as git in your start folder\'s repository knows it; it is recorded as sent (unknown-commit if that repository does not have it).' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' }, row: { type: 'string', description: 'The plan row this commit is for (its O-number, say O84). Each row gets its own review record; without it the record is your task\'s item, so two rows would share one.' } }, ['commit', 'results', 'weakest'])],
     ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. P9 sends the worker your note, counts its fixes, and asks the lead for a larger model at the third fix. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
     ['schedule_prompt', 'Have P9 send a prompt later, once (at) or every so many minutes (every), to this chat (your own wake-up) or to a chat send_chat reaches. '
       + 'P9 sends it like send_chat with when: queue, so a chat that is working gets it when its turn ends. It is kept across a P9 restart; a run missed while P9 was down goes once when it is back. '
@@ -698,7 +699,7 @@ export function createDelegate({ chat, allowed, usage }) {
       : `; cached input read ${tokens.cachedRead ?? 'not reported'}, written ${tokens.cachedWrite ?? 'not reported'}`; // a missing or invalid count is never shown as 0
     const usage = tokens ? `Input ${tokens.input}${cached}; output ${tokens.output}` : 'Not reported';
     const files = ready.claimed ? 'Unavailable until Git facts can be read' : ready.files.length ? ready.files.map((file) => `- ${file}`).join('\n') : 'None';
-    return `### ${task.item}\n\nCommit: ${ready.commit}${ready.claimed ? ' (claim)' : ''}\n\nChanged files:\n${files}\n\nChecks:\n${ready.results.map(({ check, result }) => `- ${check}: ${result}`).join('\n')}\n\nTokens used: ${usage}\n\nWeakest part: ${ready.weakest}`;
+    return `### ${ready.item ?? task.item}\n\nCommit: ${ready.commit}${ready.claimed ? ' (claim)' : ''}\n\nChanged files:\n${files}\n\nChecks:\n${ready.results.map(({ check, result }) => `- ${check}: ${result}`).join('\n')}\n\nTokens used: ${usage}\n\nWeakest part: ${ready.weakest}`;
   }
   async function ready(caller, args, signal) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -723,7 +724,11 @@ export function createDelegate({ chat, allowed, usage }) {
         : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once' + expected
           : args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank'
             : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null;
-    if (fault) return { error: 'request-refused', detail: 'Refused at ' + fault + '.' };
+    // O193 FIX (F3): the item is the review record's key, so the plan row the worker names wins over its task's item
+    // (tonight's task items were stale or missing, so every row of a worker collided on one record).
+    const row = args.row === undefined || args.row === null ? null : typeof args.row === 'string' && /^[A-Za-z0-9][\w.-]{0,39}$/.test(args.row.trim()) ? args.row.trim() : false;
+    if (fault || row === false) return { error: 'request-refused', detail: 'Refused at ' + (fault ?? 'row: the plan row id, 1 to 40 letters, digits, dot, dash or underscore') + '.' };
+    const item = row ?? task.item;
     const folder = await chat.startFolder(caller);
     if (!stillCurrent()) return { error: 'no-active-turn' };
     if (!folder) return { error: 'folder-unavailable' };
@@ -755,19 +760,20 @@ export function createDelegate({ chat, allowed, usage }) {
     if (signal?.aborted) return { error: 'cancelled' };
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!stillCurrent()) return { error: 'no-active-turn' };
-    const value = { item: task.item, commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
+    const value = { item, commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
     if (card({ id: 'ready-' + caller, kind: 'markdown', text: report(task, value, { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER }) }).error) return { error: 'report-too-large', detail: 'The completion card exceeds 8192 bytes; reduce the reported text or changed files.' };
     await notice(info.parent, 'before-ready', { chat: caller, key: info.key ?? null, item: value.item, commit: value.commit, files: value.files });
     if (!stillCurrent()) return { error: 'no-active-turn' };
-    const was = mine.reviews?.[task.item];
-    chat.setSprint(caller, { ready: value, verdict: null, idleSince: null, reviews: { ...mine.reviews, [task.item]: { state: 'queued', commit: value.commit, fixes: was?.fixes ?? 0, at: value.at } } });
+    const was = mine.reviews?.[item];
+    chat.setSprint(caller, { ready: value, verdict: null, idleSince: null, reviews: { ...mine.reviews, [item]: { state: 'queued', commit: value.commit, fixes: was?.fixes ?? 0, at: value.at } } });
     // A prompted turn's report waits for its end, which carries the turn's tokens. A run P9 never prompted has no end
     // P9 can wait on and reports no usage: its report is pinned now.
     if (prompted) readyTurns.set(caller, turn); else pinReport(caller, null);
     trail(info.parent);
     // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
     const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
-    if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${task.item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
+    if (inSprint(info.parent)) { await carry(info.parent, { type: 'ready', chat: caller, at: value.at }); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
+    if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
   function verdict(caller, args) {
@@ -790,7 +796,14 @@ export function createDelegate({ chat, allowed, usage }) {
     if (review?.fixes >= 3) review.larger = true;
     chat.setSprint(args.chat, { verdict: value, ...(item && { reviews: { ...target.reviews, [item]: review } }) });
     const worker = (chat.family?.() ?? []).find((c) => c.id === args.chat);
-    if (item && worker?.parent) {
+    if (item && worker?.parent && inSprint(worker.parent)) {
+      // O193: in a sprint carry wakes the next actor: the worker on a fix, the lead on a pass. The pass still starts the
+      // worker's next item, as outside a sprint (the work queue: that message ends the old ready).
+      trail(worker.parent);
+      if (args.result === 'pass') chat.prompt?.(args.chat, { text: `[p9] ${item} passed review at ${args.commit}. Start your next item.`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      carry(worker.parent, { type: 'verdict', chat: caller, at: value.at }).catch(() => {});
+    } else if (item && worker?.parent) {
       trail(worker.parent);
       const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
       chat.prompt?.(args.chat, { text: said, when: 'queue' }, undefined, 'p9').catch(() => {});
@@ -798,6 +811,73 @@ export function createDelegate({ chat, allowed, usage }) {
     }
     return { verdict: value, ...(review && { review }) };
   }
+  // O193: P9 carries a sprint item from ready to the merge itself. On each event it already sees for a sprint (ready,
+  // verdict, a turn or run end, O188's 10-minute check, its own start) it builds the sprint's state and asks decide
+  // (carry.mjs) whom to wake. Each wake goes as a queued prompt and its key is kept in the lead's sprint record, so a
+  // restart neither drops nor repeats one. No timer of its own: nothing runs outside a sprint that is not paused.
+  // A sprint is a started, open sprint, or (FIX: tonight's sprint had no Start record) a lead with a review worker.
+  // When each worker last sent its lead a message (not a note), and its two latest prompted-turn ends: the idle rule asks
+  // whether it sent one since the end before its latest prompted turn, so in that turn or any run after it.
+  const toLead = new Map(), turnEnds = new Map(); // turnEnds: set with endGen below
+  const onMain = new Set(); // commits seen on main: once there, always there
+  const inSprint = (lead) => Boolean(lead && !chat.paused?.(lead) && !chat.projects?.closed?.(lead)
+    && (chat.projects?.started?.(lead)?.plan || (chat.family?.() ?? []).some((c) => c.parent === lead && c.key === 'review' && !shelved(c.id))));
+  // F2: a record is live only while its commit is the head of a branch on origin (an open PR's head). One ls-remote per
+  // folder a minute; ponytail: no remote or no network leaves every record live (the merged check still applies).
+  const heads = new Map();
+  const openHeads = async (folder) => {
+    const was = heads.get(folder);
+    if (was && Date.now() - was.at < 60000) return was.set;
+    let set = null;
+    try { set = new Set((await git('git', ['ls-remote', '--heads', 'origin'], { cwd: folder, timeout: 10000, env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0' } })).stdout.split('\n').map((l) => l.split('\t')[0]).filter(Boolean)); } catch {}
+    heads.set(folder, { at: Date.now(), set });
+    return set;
+  };
+  const merged = async (folder, commit) => {
+    if (onMain.has(commit)) return true;
+    // CI fix: origin/main only. A commit made on a local main is not merged (work-queue commits there, unpushed).
+    try { await git('git', ['merge-base', '--is-ancestor', commit, 'origin/main'], { cwd: folder, timeout: 10000, env: childEnv() }); onMain.add(commit); return true; } catch {}
+    return false; // ponytail: not on origin/main, no remote, or no git there: the record stays live
+  };
+  // One carry at a time per lead, so two events close together never both read the record before either writes it.
+  const carrying = new Map();
+  // FIX1 (Reviewer): the event's time is taken when it happens (ready and verdict pass their record's own), before any wait.
+  const carry = (lead, event) => {
+    event = { at: Date.now(), ...event };
+    const next = (carrying.get(lead) ?? Promise.resolve()).then(() => carryNow(lead, event)).catch(() => {});
+    carrying.set(lead, next);
+    next.then(() => { if (carrying.get(lead) === next) carrying.delete(lead); });
+    return next;
+  };
+  async function carryNow(lead, event) {
+    if (!inSprint(lead)) return;
+    const family = (chat.family?.() ?? []).filter((c) => c.parent === lead && !shelved(c.id));
+    const busy = (id) => { const i = chat.info(id); return !i || i.state === 'turn' || Boolean(i.compacting || chat.activeTaskTurn?.(id)); };
+    const rev = family.find((c) => c.key === 'review'), folder = await Promise.resolve(chat.startFolder?.(lead)).catch(() => null);
+    const open = folder && await openHeads(folder);
+    const workers = await Promise.all(family.filter((c) => c.key !== 'review').map(async (c) => {
+      const s = chat.sprint(c.id), reviews = {};
+      for (const [item, r] of Object.entries(s.reviews ?? {})) reviews[item] = { ...r, onMain: Boolean(folder && r.commit && await merged(folder, r.commit)), ...(open && { open: open.has(r.commit) }) };
+      return { id: c.id, title: c.title, busy: busy(c.id), ready: Boolean(s.ready && !s.verdict), reviews, note: s.verdict && { commit: s.verdict.commit, text: s.verdict.note } };
+    }));
+    if (!inSprint(lead)) return;
+    const record = chat.sprint(lead), woken = { ...(record.carry ?? {}) };
+    // Records older than the sprint are not carried: its Start, else the first carry for this lead. FIX1 (Reviewer): that
+    // first carry's epoch is its event's time, not now: a first ready (a reviewer added after P9 started) is carried.
+    const since = chat.projects?.started?.(lead)?.at ?? record.carrySince ?? event.at, first = !record.carrySince;
+    if (first) chat.setSprint(lead, { carrySince: since });
+    const wakes = decide({ lead: { id: lead, busy: busy(lead) }, started: since, first, woken, workers,
+      reviewer: rev ? { id: rev.id, title: rev.title, busy: busy(rev.id) } : null }, event);
+    // FIX1 (Reviewer): a key is spent only by a wake P9 accepted (a refusal, a 503 while P9 restarts say, keeps it for the next event).
+    const sent = await Promise.all(wakes.map((w) => chat.prompt(w.chat, { text: w.text, when: 'queue' }, undefined, 'p9').then((r) => r?.status < 300, () => false)));
+    wakes.forEach((w, i) => { if (sent[i]) woken[w.key] = Date.now(); });
+    if (sent.some(Boolean)) chat.setSprint(lead, { carry: { ...(chat.sprint(lead).carry ?? {}), ...woken } });
+  }
+  chat.settled((id) => {
+    const lead = inSprint(id) ? id : chat.info?.(id)?.parent;
+    if (inSprint(lead)) carry(lead, { type: 'end', chat: id }).catch(() => {});
+  });
+
   // The review trail (one file, one writer): P9 rewrites review-trail.md in the lead's sprint folder from its workers'
   // review records; nobody else writes it (sprint-files.mjs).
   const cell = (value) => String(value ?? '').replace(/[|\r\n]+/g, ' ').slice(0, 160);
@@ -1228,12 +1308,21 @@ export function createDelegate({ chat, allowed, usage }) {
       : `{ "action": "accept", "content": { ${(ask.form?.fields ?? []).map((f) => q(f.key) + ': ...').join(', ')} } } or { "action": "decline" }`;
     chat.note(at, `[p9] ${child.title} is waiting on ${ask.kind === 'approval' ? 'an approval' : 'a question'}: ${ask.text.slice(0, 400)}. answer_chat request ${q(ask.request)} with ${how}.`, 'p9').catch(() => {});
   });
-  chat.turnEnded?.((id, turn, solo) => { if (!solo) endGen.set(id, (endGen.get(id) ?? 0) + 1); });
+  chat.turnEnded?.((id, turn, solo) => { if (!solo) { endGen.set(id, (endGen.get(id) ?? 0) + 1); turnEnds.set(id, [turnEnds.get(id)?.[1] ?? 0, Date.now()]); } });
   // FIX3 (CI, sprint-pause): whether the parent was running at the end is read at the end, like waited. A parent that was
   // stopped then (after a restart, say) and started within END_HOLD_MS gets no end line steered into its new turn.
-  chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), live = Boolean(at && ['running', 'turn'].includes(chat.info(at)?.state)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
+  chat.settled((id, ok, how) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), live = Boolean(at && ['running', 'turn'].includes(chat.info(at)?.state)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
     // O188 FIX1 (Reviewer): the activity count is read at the end, not after the hold, so a tool the worker starts inside the hold still cancels the wake.
     const acts = chat.acts(id);
+    const ended = Date.now(), sentToLead = (toLead.get(id) ?? -1) > (turnEnds.get(id)?.[0] ?? 0); // O193: anything but a note to the lead since its prompt
+    // O193 F1: a run P9 never prompted (O192) has already been quiet UNPROMPTED_QUIET_MS: the idle rule looks at its end,
+    // after END_HOLD_MS, not 10 min later. A prompted turn's end keeps O188's 10 min (it often waits on its own background run).
+    // FIX1 (Reviewer): it keeps O188's guards (no task turn, not ready, the lead not archived nor in wait_chat on it), all
+    // but one: the lead may be stopped, since an O192 run often ends while its lead is (O188's check never prompts a stopped parent).
+    if (how === 'unprompted' && at && inSprint(at)) setTimeout(() => {
+      if (endGen.get(id) === gen && chat.acts(id) === acts && chat.info(id)?.state !== 'turn' && !chat.info(id)?.compacting
+        && !chat.activeTaskTurn(id) && !chat.sprint(id).ready && !shelved(at) && !waiting.has(at + ':' + id)) carry(at, { type: 'idle', chat: id, ended, sentToLead }).catch(() => {});
+    }, END_HOLD_MS).unref?.();
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
     if (first !== null && NOTHING_FOR.test(first) && !chat.sprint(id).ready) return void chat.setSprint(id, { endNote: { at: Date.now(), text: first } });
@@ -1255,6 +1344,7 @@ export function createDelegate({ chat, allowed, usage }) {
       const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
       if (endGen.get(id) !== gen || !child || child.state === 'turn' || child.compacting || chat.acts(id) !== acts || chat.sprint(id).ready || chat.activeTaskTurn(id)) return;
       if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
+      if (inSprint(parent.id)) return void carry(parent.id, { type: 'idle', chat: id, ended, sentToLead }).catch(() => {}); // O193
       wake(parent, id, '[p9] ' + child.title + ' has been stopped 10 min: ' + last);
     }, WAKE_AFTER_MS).unref?.();
   }, END_HOLD_MS); });
@@ -1277,6 +1367,7 @@ export function createDelegate({ chat, allowed, usage }) {
       if (!c || (root === c && ![...all.values()].some((other) => other.parent === c.id))) continue; // not in a sprint
       tops.set(root.id, [...(tops.get(root.id) ?? []), root === c ? 'this chat' : c.title]);
     }
+    if (!storm) for (const c of chat.family()) if (inSprint(c.id)) carry(c.id, { type: 'start' }).catch(() => {}); // O193
     if (!storm) for (const [id, titles] of tops) {
       if (shelved(id)) continue; // an archived chat is started by nothing, P9's own lines included
       chat.prompt(id, { text: `[p9] P9 restarted. Interrupted mid-turn: ${titles.slice(0, 20).join(', ').slice(0, 1000)}. Not resent.` }, undefined, 'p9').catch(() => {});
@@ -1287,7 +1378,11 @@ export function createDelegate({ chat, allowed, usage }) {
     ready: (args, caller, signal) => ready(caller, args, signal),
     verdict: (args, caller) => verdict(caller, args),
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
-    send_chat: (args, caller) => sendChat(caller, args),
+    send_chat: async (args, caller) => {
+      const out = await sendChat(caller, args);
+      if (!out?.error && args?.when !== 'note' && args?.chat && args.chat === chat.info(caller)?.parent) toLead.set(caller, Date.now()); // O193
+      return out;
+    },
     schedule_prompt: (args, caller) => schedulePrompt(caller, args),
     list_schedules: (args, caller) => (schedules ? { schedules: schedules.list(caller) } : NO_SCHEDULES),
     remove_schedule: (args, caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : schedules ? schedules.remove(caller, args.id) : NO_SCHEDULES),
