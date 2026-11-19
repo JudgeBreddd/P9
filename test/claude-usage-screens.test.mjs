@@ -98,7 +98,7 @@ test('live Claude usage: the phone\'s Usage tab shows the polled figures', { tim
 
 // O191 (web half): a provider profile's spend is not in the Claude totals (#326, /usage profiles); the Usage window gives it
 // its own row, with the adapter's estimate named as such, so a $47 estimate never reads as a Claude bill.
-test('O191: the Usage window shows a provider profile as its own row, apart from the Claude totals', { timeout: 120000 }, async (t) => {
+test('O191: the Usage window shows a provider profile as its own row, apart from the Claude totals, also with no Claude records', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, usageSpace);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-usage-profile-')), 'profile');
   await mkdir(profile); await versionSeen(profile);
@@ -121,4 +121,17 @@ test('O191: the Usage window shows a provider profile as its own row, apart from
   assert.equal(await win.locator('[data-profile]').innerText(), 'Far Cloud (profile): 1,000 input · 500 output tokens · 1 turn · $47.42 estimated at Claude prices, not billed by Claude');
   assert.match(await win.locator('.stats').innerText(), /Input tokens\s*10\b[\s\S]*Output tokens\s*5\b[\s\S]*\$0\.5000/, 'the Claude totals leave the profile out');
   await shot(win, 'o191-usage-profile');
+  // FIX1: /usage's state counts Claude records only, so a profile's spend alone (its chats deleted, or token-only events)
+  // reads 'unavailable'; the profile row still shows, under "No chat token records yet."
+  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:usage');
+    ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'unavailable', samples: 0, discarded: 0, updatedAt: null,
+      totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 }, contexts: [],
+      profiles: [{ id: 'p1', name: 'Far Cloud', inputTokens: 1000, outputTokens: 500, cachedTokens: 200, costUsd: 47.42, turns: 1 }] } })); });
+  await page.reload();
+  await page.locator('#rMission').click();
+  await page.click('#fMission [data-win="musage"]');
+  await win.locator('.empty', { hasText: 'No chat token records yet.' }).waitFor({ timeout: 15000 });
+  assert.equal(await win.locator('[data-profile]').count(), 1, 'the profile row shows with no Claude records');
+  assert.match(await win.locator('[data-profile]').innerText(), /^Far Cloud \(profile\): 1,000 input/);
+  await shot(win, 'o191-usage-profile-only');
 });
