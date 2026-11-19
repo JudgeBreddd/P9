@@ -630,7 +630,7 @@ test('O133: a Settings default effort applies to a worker an agent opens, after 
   await row.waitFor({ timeout: 20000 }); await row.click();
   const effort = page.locator(`.pane[data-id="${made.chat}"] [data-pill="Effort"]`);
   await effort.waitFor({ timeout: 20000 });
-  assert.equal(await effort.getAttribute('aria-label'), 'Effort: High', 'the worker\'s pill');
+  assert.equal(await effort.getAttribute('aria-label'), 'Effort: High (Default)', 'the worker\'s pill (O131 label: the Settings default is the one marked)');
   await shot(page, 'o133-worker');
   await settings();
   await until(async () => await page.locator(pick).inputValue() === 'high', 'Settings still shows High after the restart', 10000);
