@@ -50,7 +50,9 @@ test('script-say: a sprint script\'s token sends its lead a note and a queued pr
   fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'haiku', effort: 'low' }] }));
   fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
   fs.copyFileSync(path.join(root, 'test/fixtures/script-say-hook.mjs'), path.join(s.folder, 'say-hook.mjs'));
-  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'say', command: process.execPath + ' say-hook.mjs', point: 'sprint-start' }] }));
+  // O189 2b: a chat outside the sprint (here a root chat standing in for the coordinator) that the approved row names.
+  const coord = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'say', command: process.execPath + ' say-hook.mjs', point: 'sprint-start', notify: coord }] }));
   // Started by an agent's start_sprint (the user's yes), so the lead has a parent: the starter.
   const starter = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
   await call(instance, `/chat/${starter}/prompt`, 'POST', { text: 'mcp', mode: 'Auto' });
@@ -105,7 +107,11 @@ test('script-say: a sprint script\'s token sends its lead a note and a queued pr
   const toParent = await say(env.socket, env.token, { action: 'prompt', chat: starter, text: 'for the starter' });
   assert.equal(toParent.status, 200, JSON.stringify(toParent.body));
   await wait(async () => (await events(starter)).some((e) => e.type === 'user' && e.data.from === 'p9' && JSON.stringify(e.data).includes('for the starter')), 'the parent\'s prompt');
-  // Only this sprint's chats; only note or prompt (never steer).
+  // O189 2b: the one chat the approved row names (notify) is reached too, a note that starts no turn.
+  const toCoord = await say(env.socket, env.token, { action: 'note', chat: coord, text: 'tier 3 for the coordinator' });
+  assert.equal(toCoord.status, 200, JSON.stringify(toCoord.body));
+  await wait(async () => (await events(coord)).some((e) => e.type === 'note' && JSON.stringify(e.data).includes('tier 3 for the coordinator')), 'the named chat\'s note');
+  // Only this sprint's chats and the named one: any other chat is refused; only note or prompt (never steer).
   const other = await say(env.socket, env.token, { action: 'note', chat: warm, text: 'not yours' });
   assert.deepEqual([other.status, other.body.error], [422, 'not-this-sprints']);
   assert.equal((await say(env.socket, env.token, { action: 'steer', chat: sprint, text: 'now' })).status, 400);
@@ -113,9 +119,10 @@ test('script-say: a sprint script\'s token sends its lead a note and a queued pr
   // A text holding the live token is refused, never put in a chat (Reviewer FIX1 on 0609479, P2 (2)).
   const leak = await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'my token: ' + env.token });
   assert.deepEqual([leak.status, leak.body.error], [400, 'request-refused']);
-  // At most 20 calls per run, counted once a request is well formed (P2 (3)): the 5 above that were (2 notes, a prompt,
-  // a note to the worker, the 422) count, the 2 refused with 400 do not. 15 more go through, the next is 429.
-  for (let i = 0; i < 15; i += 1) assert.equal((await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'n' + i })).status, 200, 'call ' + (i + 6));
+  // At most 20 calls per run, counted once a request is well formed (P2 (3)): the 6 above that were (a note and a prompt
+  // to the lead, a note to the worker, a prompt to the starter, a note to the named chat, the 422) count, the 2 refused
+  // with 400 do not. 14 more go through, the next is 429.
+  for (let i = 0; i < 14; i += 1) assert.equal((await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'n' + i })).status, 200, 'call ' + (i + 7));
   const capped = await say(env.socket, env.token, { action: 'note', chat: sprint, text: 'one too many' });
   assert.deepEqual([capped.status, capped.body.error], [429, 'too-many-calls']);
 
@@ -133,5 +140,5 @@ test('script-say: a sprint script\'s token sends its lead a note and a queued pr
   assert.equal(JSON.stringify(status.body ?? '').includes(env.token), false, 'the token is in the sprint status');
   assert.equal(JSON.stringify(await events(sprint)).includes(env.token), false, 'the token is in the lead\'s history');
   for (const file of filesUnder(instance.state ?? path.dirname(env.socket))) assert.equal(fs.readFileSync(file).includes(env.token), false, 'the token is in ' + path.basename(file));
-  console.log('PASS script-say: token in the run\'s env only; note (no turn), prompt (once, marked), a worker and the lead\'s parent reached, 422 for another chat, 400 for the token as text (not counted), 429 at call 21, 401 after the run and for a program it left behind; never in hooks.log, status or state files');
+  console.log('PASS script-say: token in the run\'s env only; note (no turn), prompt (once, marked), a worker, the lead\'s parent and the row\'s named chat reached, 422 for another chat, 400 for the token as text (not counted), 429 at call 21, 401 after the run and for a program it left behind; never in hooks.log, status or state files');
 });
