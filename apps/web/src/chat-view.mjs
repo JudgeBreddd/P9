@@ -408,14 +408,18 @@ const liveModels = s => { if (s.profile) return profileModels(s); const kept = o
 const goneModel = s => { const m = s.live && liveModels(s), v = s.modelPick || m?.current; return m && v && !m.options.some(o => o.value === v) ? s.model || v : ''; };
 const dflt = (s, id, o) => o.name + (s.live && !s.profile && !/default/i.test(o.name) && outer.isDefault(s.agent, id, o.value) ? ' (Default)' : ''); // MC-16; an option the agent itself names its default is left as it is
 const modelList = s => s.live ? liveModels(s) : { current: s.model, options: [s.model, s.agent === 'codex' ? 'gpt-5.1-codex-mini' : 'Sonnet 5.5'].map(v => ({ value: v, name: v })) };
-const modelName = s => { const m = modelList(s), v = s.modelPick || m?.current, o = m?.options.find(o => o.value === v); return o ? dflt(s, null, o) : s.model; };
+// O133: once the chat has reported its own config, the pills name what it runs; a pick it has not taken yet is pending.
+const optName = (s, list, id, v) => { const o = list?.find(o => o.value === v); return o ? dflt(s, id, o) : ''; };
+const modelName = s => optName(s, modelList(s)?.options, null, s.live && s.models ? s.models.current : s.modelPick || modelList(s)?.current) || s.model;
+const modelNext = s => s.live && s.models && s.modelPick && s.modelPick !== s.models.current ? optName(s, modelList(s)?.options, null, s.modelPick) || s.modelPick : '';
 // The sample data, and a live chat before its config, keep Effort as a local choice.
 const pickers = s => s.live && (s.pickers || outer.lastPickers[s.agent]) || [];
 const pickerOf = (s, kind) => pickers(s).find(p => outer.pickerKind(p) === kind);
 const pickVal = (s, p) => s.pick?.[p.id] ?? p.current;
 const setPick = (s, p, v) => { s.pick ||= {}; if (v === p.current) delete s.pick[p.id]; else s.pick[p.id] = v; };
 const effortList = s => pickerOf(s, 'effort')?.options || [...new Set([s.effort, 'High', 'Low'])].map(v => ({ value: v, name: v }));
-const effortName = s => { const p = pickerOf(s, 'effort'); if (!p) return s.effort; const v = pickVal(s, p), o = p.options.find(o => o.value === v); return o ? dflt(s, p.id, o) : v; };
+const effortName = s => { const p = pickerOf(s, 'effort'); if (!p) return s.effort; const v = s.pickers ? p.current : pickVal(s, p); return optName(s, p.options, p.id, v) || v; };
+const effortNext = s => { const p = s.pickers && pickerOf(s, 'effort'), v = p && s.pick?.[p.id]; return v ? optName(s, p.options, p.id, v) || v : ''; };
 const planOpt = p => p.options.find(o => /plan/i.test(o.value)) || p.options.find(o => /plan/i.test(o.name));
 const planOn = s => { const p = pickerOf(s, 'collab'); return !!p && pickVal(s, p) === planOpt(p)?.value; };
 // The Mode menu's order per agent. Codex's Plan is its plan collaboration mode on top of the sandbox mode picked before
@@ -431,9 +435,10 @@ function setMode(s, m) {
   s.mode = m;
 }
 const PM = { sid: null, kind: null, btn: null, html: '', ac: null }; // the open menu: chat id, Mode | Model | Effort, its pill, its markup, its window listeners
-const pill = (s, kind, label, extra = '', pre = '') => `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(label)}" title="${kind}: ${esc(label)}">${pre}<span class="truncate">${esc(label)}</span>${extra}</button>`;
+const pill = (s, kind, label, extra = '', pre = '', next = '') => { const said = label + (next ? `, ${next} pending` : '');
+  return `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(said)}" title="${kind}: ${esc(said)}">${pre}<span class="truncate">${esc(label)}</span>${extra}${next ? `<span class="mode-q pick-q" title="Picked: goes with the next message, shown here once ${esc(outer.names[s.agent])} takes it">→ ${esc(next)}</span>` : ''}</button>`; };
 const agentDot = a => `<span class="dot" data-agent="${esc(a)}"></span>`;
-const pills = s => pill(s, 'Agent', s.profile?.name || outer.names[s.agent], '', s.profile ? agentDot('profile') : agentDot(s.agent)) + pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
+const pills = s => pill(s, 'Agent', s.profile?.name || outer.names[s.agent], '', s.profile ? agentDot('profile') : agentDot(s.agent)) + pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s), '', '', modelNext(s)) + pill(s, 'Effort', effortName(s), '', '', effortNext(s));
 document.body.insertAdjacentHTML('beforeend', '<div class="pop" id="pillMenu" role="menu" hidden></div>');
 const pmRoot = () => document.getElementById('pillMenu'); // not outer.$: installChat runs before controller.mjs defines $
 const mi = (label, checked, data, disabled) => `<button type="button" class="item" role="menuitemradio" aria-checked="${checked}" ${data}${disabled ? ` aria-disabled="true" title="${esc(disabled)}"` : ''}><span class="truncate">${esc(label)}</span></button>`;
