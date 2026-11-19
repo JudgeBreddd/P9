@@ -45,7 +45,9 @@ export function statusHtml(s, esc, opts = {}) {
     ['time', end ? 'Ran' : 'Running', s.running_ms === null ? 'Not started' : span(s.running_ms)],
     ['ticked', 'Ticked in the plan', `${d.ticked} of ${d.total}`],
     ['chats', 'Chats', String(s.workers.length)],
-    ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running)]]; // running already counts the additional ones
+    ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running)], // running already counts the additional ones
+    // O162: a record closed before PRs an hour was counted has no such number, so no row.
+    ...('prs_per_hour' in s ? [['rate', 'PRs an hour', s.prs_per_hour === null ? 'Not started' : String(s.prs_per_hour)]] : [])];
   return `<section class="sec sv" data-sv="${end ? 'closed' : 'open'}" aria-label="${end ? 'Closed sprint' : 'Sprint View'}: ${esc(s.sprint.title ?? '')}">
     <div class="sv-top">${ring(dn, d.total, `${dn} of ${d.total} items ${doneWord}`, 'big')}
       <div class="sv-say"><b data-sv-done>${d.total ? `${dn} of ${n(d.total, 'item', 'items')} ${doneWord}` : 'The plan has no items yet'}</b>

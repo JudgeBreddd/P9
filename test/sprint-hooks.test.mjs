@@ -358,6 +358,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { fs.ap
   got = await run; assert.equal(got.error, 'not-allowed', JSON.stringify(got)); assert.equal(out().length, 1, 'a declined run ran');
   run = B.tool('run_sprint_script', { name: 'notify', sprint: B.sprint }); await answer(B.chat, 1, 'allow'); got = await run;
   assert.deepEqual([got.error, got.sprint, got.script, got.point, got.exit, got.reason, got.line], [undefined, B.sprint, 'notify', 'sprint-start', 0, null, 'ran fine'], JSON.stringify(got));
+  const byTool = got; // O162: compared below with the same script run from the page
   assert.equal(out().length, 2); const first1 = out()[1], manual = () => out().filter((r) => r.subject?.manual);
   assert.deepEqual([first1.sprint.id, first1.cwd, first1.point, first1.blocking, first1.subject], [B.sprint, fs.realpathSync(B.folder), 'sprint-start', false, { manual: true, by: B.chat }]);
   noEvil('the library\'s later command ran in a sprint that approved the earlier one');
@@ -378,6 +379,13 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { fs.ap
   got = await call(instance, `/sprints/${B.sprint}/run-script`, 'POST', { name: 'notify' });
   assert.deepEqual([got.status, got.body.exit, got.body.line], [200, 0, 'ran fine'], JSON.stringify(got.body));
   assert.deepEqual(manual()[1].subject, { manual: true, by: 'owner' }); assert.equal(await asks(B.chat), 3);
+  // O162: a script run from the page does what the same script run by the agent does: the same answer and the same input
+  // on stdin, but for who ran it, the clock (the run's ms and the times in the sprint's state) and the log, which the
+  // page run sees one line longer: the agent's own run, just before it.
+  const steady = (v) => JSON.parse(JSON.stringify(v, (k, x) => (['at', 'ms', 'running_ms', 'active', 'log'].includes(k) ? 0 : k === 'by' && (x === 'owner' || x === B.chat) ? 'runner' : x)));
+  assert.deepEqual(steady(got.body), steady(byTool), 'the page run answered differently: ' + JSON.stringify([got.body, byTool]));
+  assert.deepEqual(steady(manual()[1]), steady(manual()[0]), 'the page run got different input: ' + JSON.stringify([manual()[1], manual()[0]]).slice(0, 3000));
+  assert.deepEqual(manual()[1].log.slice(0, -1), manual()[0].log); assert.match(manual()[1].log.at(-1), / \| sprint-start \(run now\) \| notify \| exit 0 \| \d+ ms \| ran fine$/);
   got = await call(instance, `/sprints/${A.sprint}/run-script`, 'POST', { name: 'notify' });
   assert.deepEqual([got.status, got.body.error], [409, 'script-not-approved'], JSON.stringify(got.body));
   assert.equal((await call(instance, `/sprints/${B.sprint}/run-script`, 'POST', { name: 'notify', command: bad })).status, 400);
@@ -640,6 +648,7 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   // Not started: the plan's items are there, nothing runs yet.
   let got = await route();
   assert.deepEqual([got.status, got.body.sprint.started, got.body.running_ms, got.body.done, got.body.workers], [200, null, null, { merged: 0, ticked: 1, unproven: 0, total: 3 }, []], JSON.stringify(got.body));
+  assert.equal(got.body.prs_per_hour, null, 'PRs an hour before Start'); // O162
   assert.deepEqual([(await route('11111111-1111-4111-8111-111111111111')).status, (await route('nope')).body.error], [404, 'unknown-sprint']);
   assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', {})).status, 200);
   assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
@@ -656,6 +665,10 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   assert.deepEqual([tool.done, tool.sprint.id, tool.sprint.title, tool.project.id, tool.scripts], [{ merged: 0, ticked: 1, unproven: 0, total: 3 }, sprint, 'Watched', project, { running: 0, additional: 0, waiting: 0 }]);
   assert.deepEqual(tool.workers.map((w) => [w.key, w.chat, w.model, w.work]), [['lead', sprint, 'opus', tool.workers[0].work], ['w1', w1.chat, 'haiku', { done: 0, total: 2 }]], JSON.stringify(tool.workers));
   assert.ok(tool.sprint.started.at && Number.isInteger(tool.running_ms) && tool.running_ms >= 0 && page.running_ms >= tool.running_ms, JSON.stringify([tool.sprint.started, tool.running_ms, page.running_ms]));
+  // O162: PRs an hour is the same answer's merged count over its running time, for the tool and the page's route.
+  // The rule, written out here: merged per hour since Start, one decimal; within the first hour, the count merged so far.
+  const perHour = (merged, ms) => Math.round((merged * 10) / Math.max(1, ms / 3_600_000)) / 10;
+  assert.deepEqual([tool.prs_per_hour, page.prs_per_hour], [perHour(tool.done.merged, tool.running_ms), perHour(page.done.merged, page.running_ms)]);
   // A sprint named from a chat of the same project, and from the worker with no name: the same sprint.
   assert.equal((await L.tool('sprint_status', { sprint })).sprint.id, sprint);
   assert.equal((await L.tool('sprint_status', { sprint: '11111111-1111-4111-8111-111111111111' })).error, 'unknown-sprint');
