@@ -18,6 +18,8 @@
   "cli.test.mjs": 1,
   "composer.test.mjs": 80,
   "connecting-hole.test.mjs": 3,
+  "delegate-schedule.test.mjs": 298,
+  "delegate.test.mjs": 286,
   "deps.test.mjs": 1,
   "desktop-c23.test.mjs": 25,
   "desktop-native.test.mjs": 1,
