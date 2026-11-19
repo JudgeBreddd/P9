@@ -9,6 +9,7 @@ import { childEnv } from './child-env.mjs';
 import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
+import { decide } from './carry.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
 import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
@@ -767,7 +768,7 @@ export function createDelegate({ chat, allowed, usage }) {
     trail(info.parent);
     // No middle man (sprint method rule 1): the reviewer beside it gets the PR in its queue, and an idle one wakes.
     const reviewer = (chat.family?.() ?? []).find((c) => c.parent === info.parent && c.key === 'review' && c.id !== caller && !shelved(c.id));
-    if (inSprint(info.parent)) { carry(info.parent); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
+    if (inSprint(info.parent)) { carry(info.parent, { type: 'ready', chat: caller }).catch(() => {}); return { ready: value, ...(reviewer && { queued: reviewer.id }) }; } // O193
     if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${task.item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
@@ -796,7 +797,7 @@ export function createDelegate({ chat, allowed, usage }) {
       trail(worker.parent);
       if (args.result === 'pass') chat.note?.(args.chat, `[p9] ${item} passed review at ${args.commit}. Start your next item.`, 'p9').catch?.(() => {});
       if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
-      carry(worker.parent);
+      carry(worker.parent, { type: 'verdict', chat: caller }).catch(() => {});
     } else if (item && worker?.parent) {
       trail(worker.parent);
       const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
@@ -806,43 +807,53 @@ export function createDelegate({ chat, allowed, usage }) {
     return { verdict: value, ...(review && { review }) };
   }
   // O193: P9 carries a sprint item from ready to the merge itself. On each event it already sees for a sprint (ready,
-  // verdict, a turn end of any kind, its own start) it reads every worker's persisted review records, names each item's
-  // one next actor (the reviewer once queued, the lead if no reviewer can take it, the worker on a fix, the lead on a
-  // pass) and, if that chat is not working, wakes it once with a queued prompt. Once per worker, item, state and commit,
-  // kept in the lead's sprint record, so a restart neither drops nor repeats a wake; a missed event is caught at the next
-  // one. A reviewer or worker that ends its turn (or lost it to a restart) still on a key it was woken for tells the lead
-  // once. No timer: nothing runs outside a started, open, unpaused sprint.
-  const RESTART = Symbol('restart');
-  const inSprint = (lead) => Boolean(lead && chat.projects?.started?.(lead)?.plan && !chat.projects.closed(lead) && !chat.paused?.(lead));
-  function carry(lead, ended) {
-    if (!inSprint(lead)) return;
-    const family = chat.family?.() ?? [], seen = { ...(chat.sprint(lead).carry ?? {}) };
-    const reviewer = family.find((c) => c.parent === lead && c.key === 'review' && !shelved(c.id));
-    const wake = (id, text) => chat.prompt(id, { text, when: 'queue' }, undefined, 'p9').catch(() => {});
-    let changed = false;
-    for (const w of family.filter((c) => c.parent === lead && c.key !== 'review' && !shelved(c.id))) {
-      const mine = chat.sprint(w.id);
-      for (const [item, r] of Object.entries(mine.reviews ?? {})) {
-        const key = [w.id, item, r.state, r.commit].join(':');
-        if (seen[key]?.told || !['queued', 'fix', 'passed'].includes(r.state)) continue;
-        const actor = r.state === 'fix' ? w.id : r.state === 'queued' && reviewer ? reviewer.id : lead, info = chat.info(actor);
-        if (!info || stateOf(info) === 'working') continue;
-        if (!seen[key]) {
-          const note = mine.verdict?.commit === r.commit ? mine.verdict.note : '';
-          wake(actor, r.state === 'passed' ? `[p9] ${item} by ${w.title} passed at ${r.commit}: merge it.`
-            : r.state === 'fix' ? `[p9] ${item}: the reviewer asked for a fix (fix ${r.fixes}) at ${r.commit}: ${note}`
-              : actor !== lead ? `[p9] Ready for review: ${item}, by ${w.title} (chat ${w.id}), commit ${r.commit}. Read its report, then call verdict with that chat and commit.`
-                : `[p9] ${item} by ${w.title} is ready at ${r.commit}, and no reviewer can take it: start or bring back one with key review.`);
-          seen[key] = { at: Date.now() }; changed = true;
-        } else if (actor !== lead && (ended === actor || ended === RESTART)) {
-          wake(lead, `[p9] ${info.title ?? actor} ended its turn on ${item} at ${r.commit} without acting on it.`);
-          seen[key].told = true; changed = true;
-        }
-      }
+  // verdict, a turn or run end, O188's 10-minute check, its own start) it builds the sprint's state and asks decide
+  // (carry.mjs) whom to wake. Each wake goes as a queued prompt and its key is kept in the lead's sprint record, so a
+  // restart neither drops nor repeats one. No timer of its own: nothing runs outside a sprint that is not paused.
+  // A sprint is a started, open sprint, or (FIX: tonight's sprint had no Start record) a lead with a review worker.
+  const toLead = new Set(); // workers that sent their lead a message (not a note) since their last end
+  const onMain = new Set(); // commits seen on main: once there, always there
+  const inSprint = (lead) => Boolean(lead && !chat.paused?.(lead) && !chat.projects?.closed?.(lead)
+    && (chat.projects?.started?.(lead)?.plan || (chat.family?.() ?? []).some((c) => c.parent === lead && c.key === 'review' && !shelved(c.id))));
+  const merged = async (folder, commit) => {
+    if (onMain.has(commit)) return true;
+    for (const ref of ['origin/main', 'main']) {
+      try { await git('git', ['merge-base', '--is-ancestor', commit, ref], { cwd: folder, timeout: 10000, env: childEnv() }); onMain.add(commit); return true; } catch {}
     }
-    if (changed) chat.setSprint(lead, { carry: seen });
+    return false; // ponytail: not on main, or no git there: the record stays live
+  };
+  // One carry at a time per lead, so two events close together never both read the record before either writes it.
+  const carrying = new Map();
+  const carry = (lead, event) => {
+    const next = (carrying.get(lead) ?? Promise.resolve()).then(() => carryNow(lead, event)).catch(() => {});
+    carrying.set(lead, next);
+    next.then(() => { if (carrying.get(lead) === next) carrying.delete(lead); });
+    return next;
+  };
+  async function carryNow(lead, event) {
+    if (!inSprint(lead)) return;
+    const family = (chat.family?.() ?? []).filter((c) => c.parent === lead && !shelved(c.id));
+    const busy = (id) => { const i = chat.info(id); return !i || i.state === 'turn' || Boolean(i.compacting || chat.activeTaskTurn?.(id)); };
+    const rev = family.find((c) => c.key === 'review'), folder = await Promise.resolve(chat.startFolder?.(lead)).catch(() => null);
+    const workers = await Promise.all(family.filter((c) => c.key !== 'review').map(async (c) => {
+      const s = chat.sprint(c.id), reviews = {};
+      for (const [item, r] of Object.entries(s.reviews ?? {})) reviews[item] = { ...r, onMain: Boolean(folder && r.commit && await merged(folder, r.commit)) };
+      return { id: c.id, title: c.title, busy: busy(c.id), ready: Boolean(s.ready && !s.verdict), reviews, note: s.verdict && { commit: s.verdict.commit, text: s.verdict.note } };
+    }));
+    if (!inSprint(lead)) return;
+    const record = chat.sprint(lead), woken = { ...(record.carry ?? {}) };
+    const wakes = decide({ lead: { id: lead, busy: busy(lead) }, started: chat.projects?.started?.(lead)?.at ?? 0, woken, workers,
+      reviewer: rev ? { id: rev.id, title: rev.title, busy: busy(rev.id) } : null }, { at: Date.now(), ...event });
+    for (const w of wakes) {
+      chat.prompt(w.chat, { text: w.text, when: 'queue' }, undefined, 'p9').catch(() => {});
+      woken[w.key] = Date.now();
+    }
+    if (wakes.length) chat.setSprint(lead, { carry: woken });
   }
-  chat.settled((id) => { const lead = inSprint(id) ? id : chat.info?.(id)?.parent; if (inSprint(lead)) carry(lead, id); });
+  chat.settled((id) => {
+    const lead = inSprint(id) ? id : chat.info?.(id)?.parent;
+    if (inSprint(lead)) carry(lead, { type: 'end', chat: id }).catch(() => {});
+  });
 
   // The review trail (one file, one writer): P9 rewrites review-trail.md in the lead's sprint folder from its workers'
   // review records; nobody else writes it (sprint-files.mjs).
@@ -1280,6 +1291,7 @@ export function createDelegate({ chat, allowed, usage }) {
   chat.settled((id, ok) => { const at = chat.info(id)?.parent, waited = Boolean(at && waiting.has(at + ':' + id)), live = Boolean(at && ['running', 'turn'].includes(chat.info(at)?.state)), gen = (endGen.get(id) ?? 0) + 1; endGen.set(id, gen);
     // O188 FIX1 (Reviewer): the activity count is read at the end, not after the hold, so a tool the worker starts inside the hold still cancels the wake.
     const acts = chat.acts(id);
+    const sentToLead = toLead.delete(id); // O193: anything but a note to the lead during the run that just ended
     // An end line that says nothing for the parent sends nothing: it is kept in the worker's status at once, not held.
     const first = ok && at ? lastLine(chat.reply(id)).slice(0, 400) : null;
     if (first !== null && NOTHING_FOR.test(first) && !chat.sprint(id).ready) return void chat.setSprint(id, { endNote: { at: Date.now(), text: first } });
@@ -1301,6 +1313,7 @@ export function createDelegate({ chat, allowed, usage }) {
       const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
       if (endGen.get(id) !== gen || !child || child.state === 'turn' || child.compacting || chat.acts(id) !== acts || chat.sprint(id).ready || chat.activeTaskTurn(id)) return;
       if (!parent || shelved(parent.id) || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
+      if (inSprint(parent.id)) return void carry(parent.id, { type: 'idle', chat: id, sentToLead }).catch(() => {}); // O193
       wake(parent, id, '[p9] ' + child.title + ' has been stopped 10 min: ' + last);
     }, WAKE_AFTER_MS).unref?.();
   }, END_HOLD_MS); });
@@ -1323,7 +1336,7 @@ export function createDelegate({ chat, allowed, usage }) {
       if (!c || (root === c && ![...all.values()].some((other) => other.parent === c.id))) continue; // not in a sprint
       tops.set(root.id, [...(tops.get(root.id) ?? []), root === c ? 'this chat' : c.title]);
     }
-    if (!storm) for (const c of chat.family()) if (inSprint(c.id)) carry(c.id, RESTART); // O193
+    if (!storm) for (const c of chat.family()) if (inSprint(c.id)) carry(c.id, { type: 'start' }).catch(() => {}); // O193
     if (!storm) for (const [id, titles] of tops) {
       if (shelved(id)) continue; // an archived chat is started by nothing, P9's own lines included
       chat.prompt(id, { text: `[p9] P9 restarted. Interrupted mid-turn: ${titles.slice(0, 20).join(', ').slice(0, 1000)}. Not resent.` }, undefined, 'p9').catch(() => {});
@@ -1334,7 +1347,11 @@ export function createDelegate({ chat, allowed, usage }) {
     ready: (args, caller, signal) => ready(caller, args, signal),
     verdict: (args, caller) => verdict(caller, args),
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
-    send_chat: (args, caller) => sendChat(caller, args),
+    send_chat: async (args, caller) => {
+      const out = await sendChat(caller, args);
+      if (!out?.error && args?.when !== 'note' && args?.chat && args.chat === chat.info(caller)?.parent) toLead.add(caller); // O193
+      return out;
+    },
     schedule_prompt: (args, caller) => schedulePrompt(caller, args),
     list_schedules: (args, caller) => (schedules ? { schedules: schedules.list(caller) } : NO_SCHEDULES),
     remove_schedule: (args, caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : schedules ? schedules.remove(caller, args.id) : NO_SCHEDULES),
