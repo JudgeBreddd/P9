@@ -89,7 +89,7 @@ export const DELEGATE_TOOLS = (input) => {
       key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again. '
-      + 'Not waiting, a worker\'s turn end reaches you as a note from P9, which starts no turn; one still stopped 10 minutes later starts your turn once, and a failed turn at once. '
+      + 'Not waiting, a worker\'s turn end reaches you from P9 as a note, which starts no turn (unless Settings > Notices makes it a message); one still stopped 10 minutes later starts your turn once, and a failed turn at once. '
       + 'So does a worker that starts waiting on an approval or a question: the note names the request and the answer answer_chat takes.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
@@ -1299,8 +1299,8 @@ export function createDelegate({ chat, allowed, usage }) {
   const NOTHING_FOR = /\bnothing for (you|the lead|the coordinator|the parent|your side)\b/i;
   const waitingNote = new Map(); // worker chat -> held ID of its note still waiting for its parent's turn to end
   // O139: the line waits END_HOLD_MS first, since Claude Code's compaction comes just after the turn's end (186 of 199 in
-  // P9's history within 1 s, 189 within 5 s). Compacting by then: the parent gets a note that it will continue, which
-  // starts no turn; chat.mjs runs this again when that run ends, and the end line goes then. A prompted turn started
+  // P9's history within 1 s, 189 within 5 s). Compacting by then: the parent gets a notice that it will continue (a note,
+  // which starts no turn, unless Settings > Notices makes compacting a message, O197); chat.mjs runs this again when that run ends, and the end line goes then. A prompted turn started
   // meanwhile drops it: that turn's own end comes. A parent in wait_chat on it at the end gets no end line (wait_chat's
   // answer is the news), but does get the compacting note. ponytail: a compaction later than END_HOLD_MS still sends the end line first.
   const END_HOLD_MS = 3000;
