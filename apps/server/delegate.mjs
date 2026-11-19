@@ -718,8 +718,14 @@ export function createDelegate({ chat, allowed, usage }) {
     // No task from open_chat: the first item of its work queue not yet passed (sprint method rule 4), so the next one
     // cannot be reported before this one passed review. Its checks are the worker's own (the plan line says them).
     const next = !mine.task && chat.queue?.(caller)?.items.find((i) => i.state !== 'passed');
-    const task = mine.task ?? (next && { item: next.id, checks: null });
-    if (!info?.parent || !task) return { error: 'no-task' };
+    // O193 FIX (F3): the item is the review record's key, so the plan row the worker names wins over its task's item
+    // (tonight's task items were stale or missing, so every row of a worker collided on one record).
+    const row = args.row === undefined || args.row === null ? null : typeof args.row === 'string' && /^[A-Za-z0-9][\w.-]{0,39}$/.test(args.row.trim()) ? args.row.trim() : false;
+    // O196: a worker with a role key whose key has no line in sprint.md (its rows live in the lead's own list) has no
+    // task from either source; the row it names is its task, with its own checks.
+    const task = mine.task ?? (next && { item: next.id, checks: null }) ?? (info?.key && row && { item: row, checks: null });
+    if (!info?.parent) return { error: 'no-task', missing: 'parent', detail: 'This chat has no lead: ready is for a worker another chat started.' };
+    if (!task) return { error: 'no-task', missing: 'task', detail: info.key ? 'No task: no open_chat task and no sprint.md line for your role key ' + JSON.stringify(info.key) + '. Name the plan row with row.' : 'No task: this chat was opened with no task and has no role key.' };
     // O176: from any turn of its own: a prompted one, or the run the agent works on with no prompt open (after a
     // compaction or a plugin's prompt). Never from a turn answering another chat (solo) or a stopping agent.
     const prompted = chat.activeTaskTurn(caller), turn = prompted ?? chat.ownRun?.(caller) ?? null;
@@ -735,9 +741,6 @@ export function createDelegate({ chat, allowed, usage }) {
         : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once' + expected
           : args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank'
             : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null;
-    // O193 FIX (F3): the item is the review record's key, so the plan row the worker names wins over its task's item
-    // (tonight's task items were stale or missing, so every row of a worker collided on one record).
-    const row = args.row === undefined || args.row === null ? null : typeof args.row === 'string' && /^[A-Za-z0-9][\w.-]{0,39}$/.test(args.row.trim()) ? args.row.trim() : false;
     if (fault || row === false) return { error: 'request-refused', detail: 'Refused at ' + (fault ?? 'row: the plan row id, 1 to 40 letters, digits, dot, dash or underscore') + '.' };
     const item = row ?? task.item;
     const folder = await chat.startFolder(caller);
