@@ -20,6 +20,9 @@ const until = async (check, what, ms) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 500))) if (await check()) return;
   assert.fail('timed out: ' + what);
 };
+// O191: one provider profile chat as /usage reports it (test/server.test.mjs), and the line every screen draws for it.
+const FAR = { id: 'p1', name: 'Far <b>Cloud</b>', inputTokens: 1000, outputTokens: 500, cachedTokens: 200, costUsd: 47.42, turns: 1 };
+const PROFILE_LINE = 'Far <b>Cloud</b> (profile): 1,000 input · 500 output tokens · 1 turn · $47.42 estimated at Claude prices, not billed by Claude';
 const fresh = (text) => text.includes('37%') && text.includes('63%');
 // Mission draws its Usage panel only where a space section names it (faed908), and a profile with no space shows only the
 // onboarding card (Mission M4a, 4d468c3): this space is one section holding the Usage widget.
@@ -109,16 +112,21 @@ test('O191: the Usage window shows a provider profile as its own row, apart from
   let page = await app.firstWindow();
   await page.locator('#navList').waitFor({ state: 'attached', timeout: 15000 });
   // /usage as the daemon answers it with one profile chat (test/server.test.mjs, O191); the page reads it again after a reload.
-  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:usage');
+  await app.evaluate(({ ipcMain }, FAR) => { ipcMain.removeHandler('p9:usage');
     ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'ok', samples: 1, discarded: 0, updatedAt: Date.now(), tokens: 'prompted turns and Claude Code\'s own runs',
       totals: { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 }, contexts: [],
-      profiles: [{ id: 'p1', name: 'Far Cloud', inputTokens: 1000, outputTokens: 500, cachedTokens: 200, costUsd: 47.42, turns: 1 }] } })); });
+      profiles: [FAR] } })); }, FAR);
   await page.reload();
   await page.locator('#rMission').click();
+  // O191 (panel): the Usage panel on the Mission page gives the profile its own line too, outside the Claude figures.
+  const panel = page.locator('#fMission [data-panel="musage"]');
+  await panel.locator('[data-profile]').waitFor({ timeout: 15000 });
+  assert.equal(await panel.locator('[data-profile]').innerText(), PROFILE_LINE);
+  assert.match(await panel.innerText(), /\b5 output tokens · \$0\.50 recorded/, 'the panel\'s Claude figures leave the profile out');
   await page.click('#fMission [data-win="musage"]');
   const win = page.locator('#mdl #musage');
   await win.locator('[data-profile]').waitFor({ timeout: 15000 });
-  assert.equal(await win.locator('[data-profile]').innerText(), 'Far Cloud (profile): 1,000 input · 500 output tokens · 1 turn · $47.42 estimated at Claude prices, not billed by Claude');
+  assert.equal(await win.locator('[data-profile]').innerText(), PROFILE_LINE);
   assert.match(await win.locator('.stats').innerText(), /Input tokens\s*10\b[\s\S]*Output tokens\s*5\b[\s\S]*\$0\.5000/, 'the Claude totals leave the profile out');
   // O190 (web half): the totals say what they count, in the daemon's words (/usage tokens, ledger.mjs TOKENS), here and on
   // the Mission page's Usage panel.
@@ -135,15 +143,42 @@ test('O191: the Usage window shows a provider profile as its own row, apart from
   await shot(win, 'o191-usage-profile');
   // FIX1: /usage's state counts Claude records only, so a profile's spend alone (its chats deleted, or token-only events)
   // reads 'unavailable'; the profile row still shows, under "No chat token records yet."
-  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:usage');
+  await app.evaluate(({ ipcMain }, FAR) => { ipcMain.removeHandler('p9:usage');
     ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'unavailable', samples: 0, discarded: 0, updatedAt: null,
       totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 }, contexts: [],
-      profiles: [{ id: 'p1', name: 'Far Cloud', inputTokens: 1000, outputTokens: 500, cachedTokens: 200, costUsd: 47.42, turns: 1 }] } })); });
+      profiles: [FAR] } })); }, FAR);
   await page.reload();
   await page.locator('#rMission').click();
+  await panel.locator('[data-profile]').waitFor({ timeout: 15000 });
+  assert.equal(await panel.locator('[data-profile]').count(), 1, 'the panel\'s profile line shows with no Claude records');
   await page.click('#fMission [data-win="musage"]');
   await win.locator('.empty', { hasText: 'No chat token records yet.' }).waitFor({ timeout: 15000 });
   assert.equal(await win.locator('[data-profile]').count(), 1, 'the profile row shows with no Claude records');
-  assert.match(await win.locator('[data-profile]').innerText(), /^Far Cloud \(profile\): 1,000 input/);
+  assert.match(await win.locator('[data-profile]').innerText(), /^Far <b>Cloud<\/b> \(profile\): 1,000 input/);
   await shot(win, 'o191-usage-profile-only');
+});
+
+// O191 (phone half): the phone's Usage tab gives each provider profile its own line, apart from the Claude totals, also when
+// /usage has no Claude records (state 'unavailable': it counts Claude records only); an old daemon with no profiles shows none.
+test('O191: the phone Usage tab shows a provider profile as its own line, apart from the Claude totals, also with no Claude records', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { args });
+  const { page } = await phone(t, server);
+  let body = { state: 'recorded', samples: 1, discarded: 0, updatedAt: Date.now(), totals: { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 }, contexts: [], profiles: [FAR] };
+  await page.route(/\/usage$/, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }));
+  await page.click('[data-nav="usage"]');
+  const line = page.locator('#usage [data-profile]');
+  await line.waitFor({ timeout: 15000 });
+  assert.equal(await line.innerText(), PROFILE_LINE);
+  assert.match(await page.locator('#usage .sum').innerText(), /^10 in · 5 out · \$0\.50 at API prices$/, 'the Claude totals leave the profile out');
+  await shot(page, 'o191-phone-profile');
+  body = { ...body, state: 'unavailable', samples: 0, updatedAt: null, totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 } };
+  await page.click('#refreshUsage');
+  await page.locator('#usage h2', { hasText: 'No chat token records yet' }).waitFor({ timeout: 15000 });
+  assert.equal(await line.count(), 1, 'the profile line shows with no Claude records');
+  assert.equal(await line.innerText(), PROFILE_LINE);
+  await shot(page, 'o191-phone-profile-only');
+  const { profiles, ...old } = body; body = { ...old, state: 'recorded', samples: 1 };
+  await page.click('#refreshUsage');
+  await page.locator('#usage .sum').waitFor({ timeout: 15000 });
+  assert.equal(await line.count(), 0, 'an old daemon with no profiles: no profile line');
 });

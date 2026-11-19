@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf } from './helpers.mjs';
+import { limitLine, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf } from './helpers.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -16,7 +16,7 @@ import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] }; profiles?: { id: string; name: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; turns: number }[] };
 type Window = { usedPercent: number; resetsAt: number | null; windowMins?: number };
 type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Window & { name: string })[]; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
@@ -2061,7 +2061,7 @@ async function loadUsage() {
     // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one card each: its age, then a row per window with the pace tick (helpers.mjs paceRow).
     const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`; };
     const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
-    if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>'; return; }
+    if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
     // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before
     // it stalls (P5). A stopped chat's last fill is history and is left out.
@@ -2070,7 +2070,7 @@ async function loadUsage() {
     // The redraw (startup twice, Refresh, every 20 s) keeps an opened Details open.
     const more = one('#usage').querySelector('details.more')?.open ? ' open' : '';
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>`
+    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
       + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"${more}><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
   } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
 }
