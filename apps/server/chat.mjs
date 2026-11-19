@@ -68,7 +68,10 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // advertises steering there: the ACP 2 case in test/real-adapter-steering.test.mjs goes red once it does.
 const ACP_ASK = { claude: 1, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
-export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
+// O194: _meta advertises claude-agent-acp's opt-in asyncTasks capability (its air-extension.js), so the adapter marks a
+// run it starts with no prompt. Codex and an ACP 2 start (acp-v2.mjs keeps only elicitation) never see it.
+export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} },
+  _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } } };
 // The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.
 const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
 // The approval a P9 MCP tool asks for (run_script, answer_needs_you): the chat's own prompt, two buttons.
@@ -571,20 +574,38 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // and no tool call open, it has ended and the turn's end hooks run (delegate.mjs: the parent's end note and late wake).
   // ponytail: a tool call that never completes keeps the run open; a run that pauses longer than the quiet time ends twice.
   const UNPROMPTED_QUIET_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_QUIET_MS) > 0 ? Number(process.env.P9_UNPROMPTED_QUIET_MS) : 60000;
+  const unpromptedEnd = (session, id) => {
+    if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true, 'unprompted'); } catch {} }
+  };
   const unprompted = (session, id, update) => {
-    if (session.turn || session.solo || session.stopping || session.compacting) return;
+    if (session.turn || session.solo || session.stopping || session.compacting || session.marked) return;
     if (!session.quiet && !['tool_call', 'tool_call_update', 'agent_message_chunk'].includes(update?.sessionUpdate)) return;
     clearTimeout(session.quiet);
     session.quiet = setTimeout(function end() {
       if (session.tools.size) { session.quiet = setTimeout(end, UNPROMPTED_QUIET_MS); session.quiet.unref?.(); return; }
       session.quiet = null;
-      if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true, 'unprompted'); } catch {} }
+      unpromptedEnd(session, id);
     }, UNPROMPTED_QUIET_MS);
     session.quiet.unref?.();
+  };
+  // O194: with asyncTasks advertised (clientCapabilities), claude-agent-acp marks that run: an async_task_spawned of taskType
+  // 'turn' opens it and the same task's async_task_state_update to a final state ends it. A marked run ends there, with no
+  // quiet time; Codex and older adapters send no marks and keep it. Other tasks (a background command) are not the run.
+  // ponytail: async_task_* updates are read for this only, not stored or shown.
+  const marked = (session, id, update) => {
+    if (update?.sessionUpdate === 'async_task_spawned' && update.taskType === 'turn') {
+      if (session.turn || session.solo || session.stopping || session.compacting) return;
+      session.marked = update.asyncTaskId;
+      clearTimeout(session.quiet); session.quiet = null;
+    } else if (update?.sessionUpdate === 'async_task_state_update' && update.asyncTaskId === session.marked && ['completed', 'failed', 'stopped'].includes(update.state)) {
+      session.marked = null;
+      unpromptedEnd(session, id);
+    }
   };
   const compacting = (session, id) => {
     if (session.compacting) return;
     clearTimeout(session.quiet); session.quiet = null; // O192 FIX1: the compaction's end is the unprompted run's one end
+    session.marked = null; // O194: likewise for a marked run
     const timer = setTimeout(() => compacted.end(session, id, true), COMPACT_QUIET_MS);
     timer.unref?.();
     session.compacting = { cost: null, timer };
@@ -1021,6 +1042,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         unprompted(session, conversation.id, update);
       },
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
+      asyncTask: ({ update }) => marked(session, conversation.id, update),
       requestPermission: async (request) => (await ownRead(conversation.id, request).catch(() => null)) ?? session.approve(request),
       createElicitation: ask('question'),
     });
@@ -1537,6 +1559,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.solo = solo ?? null;
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       clearTimeout(session.quiet); session.quiet = null; // O192: likewise for a resumed run
+      session.marked = null; // O194: the prompt ends a marked run too (the adapter ends its mark as it takes the prompt)
       compacted.end(session, id, false);
       let ended;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
