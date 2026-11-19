@@ -1144,3 +1144,67 @@ test('Speed (E2): a listed chat the bridge will not narrow to still goes live, b
   console.log('PASS E2 fallback: a chat ID the bridge refuses for only= falls back to the full replay; the desktop went live');
 });
 
+
+test('Settings > Notices (O197): one Note or Message row per kind of worker notice, read from P9 and each save kept by it', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-notices-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const rows = () => page.locator('#setNotices select:not([disabled])').evaluateAll((l) => l.map((s) => [s.dataset.notice, s.closest('.set-row').querySelector('strong').textContent, s.value]));
+  const open = async () => {
+    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+    await page.click('[data-set-page="Chat Focus"]');
+    await page.locator('#setBody > [data-page="Chat Focus"] #setNotices select:not([disabled])').first().waitFor({ timeout: 10000 });
+  };
+  await open();
+  // The daemon's defaults: approvals and questions start the chat's turn, the rest are notes.
+  assert.deepEqual(await rows(), [['ready', 'Ready report', 'note'], ['approval', 'Approval', 'message'], ['question', 'Question', 'message'],
+    ['compacting', 'Compacting', 'note'], ['ended', 'Turn ended', 'note'], ['sprint', 'Sprint paused or resumed', 'note']]);
+  await page.locator('#setNotices [data-notice="ended"]').selectOption('message');
+  await page.waitForFunction(() => document.querySelector('#setNotices [data-notice="ended"]')?.value === 'message' && !document.querySelector('#setNotices [data-notice="ended"]').disabled);
+  await page.locator('#setNotices [data-notice="approval"]').selectOption('note');
+  await page.waitForFunction(() => document.querySelector('#setNotices [data-notice="approval"]')?.value === 'note');
+  // Each save named one kind, and P9 kept both.
+  assert.deepEqual(await call(instance, '/notices'), { ready: 'note', approval: 'note', question: 'message', compacting: 'note', ended: 'message', sprint: 'note' });
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await open();
+  assert.deepEqual((await rows()).map(([k, , v]) => k + ':' + v), ['ready:note', 'approval:note', 'question:message', 'compacting:note', 'ended:message', 'sprint:note'], 'read again after a reload');
+  // FIX1: overlapping saves. Main holds back the answer to a save of Ready report until released, so a later save could answer
+  // first; Compacting's save is refused. Shown values must end as P9 keeps them, and a pick still saving is never undone.
+  await app.evaluate(({ ipcMain }) => { const real = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    globalThis.hold = () => new Promise((resolve) => { globalThis.release = resolve; }); globalThis.held = null;
+    ipcMain.handle('p9:chat', async (event, action, payload) => {
+      if (action === 'notices' && payload?.set?.compacting) return { status: 500, body: { error: 'test-refused' } };
+      const answer = await real(event, action, payload);
+      if (action === 'notices' && payload?.set?.ready) { globalThis.held = globalThis.hold(); await globalThis.held; }
+      return answer;
+    }); });
+  const shown = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#setNotices [data-notice]')].map((s) => [s.dataset.notice, s.value])));
+  const pick = (k, v) => page.locator(`#setNotices [data-notice="${k}"]`).selectOption(v);
+  const settled = () => page.waitForFunction(() => !document.querySelector('#setNotices [data-notice-saving]'), null, { timeout: 10000 });
+  await pick('ready', 'message'); await page.waitForTimeout(300);
+  await pick('question', 'note'); await page.waitForTimeout(500);
+  assert.deepEqual([(await shown()).ready, (await shown()).question], ['message', 'note'], 'both picks shown while the first save waits');
+  await app.evaluate(() => globalThis.release());
+  await settled(); await page.waitForTimeout(300);
+  const kept1 = await call(instance, '/notices');
+  assert.deepEqual([kept1.ready, kept1.question], ['message', 'note'], 'P9 kept both');
+  assert.deepEqual(await shown(), kept1, 'the rows show what P9 keeps after an answer came back late');
+  // A refused save overlapping one still waiting: the waiting pick stays shown, the refused one goes back and says so.
+  await pick('ready', 'note'); await page.waitForTimeout(300);
+  await pick('compacting', 'message'); await page.waitForTimeout(500);
+  assert.equal((await shown()).ready, 'note', 'a refused save did not undo a pick still saving');
+  await app.evaluate(() => globalThis.release());
+  await settled(); await page.waitForTimeout(300);
+  const kept2 = await call(instance, '/notices');
+  assert.deepEqual([kept2.ready, kept2.compacting], ['note', 'note']);
+  assert.deepEqual(await shown(), kept2, 'the rows show what P9 keeps after a refused save');
+  assert.match(await page.locator('#setNotices [data-notice-note]').innerText(), /^Not saved/);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT notices ' + (await page.locator('#setNotices').screenshot({ type: 'png' })).toString('base64'));
+  console.log('PASS Settings > Notices');
+});

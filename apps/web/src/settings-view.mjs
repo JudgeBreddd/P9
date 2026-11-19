@@ -150,7 +150,7 @@ async function setUnrestricted(on) {
 // Attempt 2 items 6 and 7 (the owner): five pages, picked on the left; every row moves, unchanged, to the page it mainly
 // affects. The wiring below finds rows by id in #setBody, so it does not care which page holds them.
 const SET_PAGES = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
-const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Provider profiles': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
+const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Provider profiles': 'Chat Focus', Notices: 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
 // Settings opened at one row (Add a machine, a send limit): show the page that holds it, then the row.
 const settingsAt = el => { if (!el) return; outer.$('[data-set-page="' + el.closest('.set-page').dataset.page + '"]').click(); el.scrollIntoView({ block: 'center' }); };
 function settingsPages() {
@@ -229,6 +229,37 @@ function sprintGroup() {
     + '<div class="set-row"><span><strong>Ready means checked</strong><span class="muted sm">A worker marks its task ready only with a result for every check and its weakest part, and only when everything in its folder is committed. A review counts only from a chat that did not do the work.</span></span></div>'
     + '<div class="set-row"><span><strong>Where you follow it</strong><span class="muted sm">The lead chat shows a sprint card with each worker, its task and its state. The workers are listed under the lead in the sidebar; click one to open its chat.</span></span></div>'
     + '<div class="set-row"><span><strong>Sprint settings</strong><span class="muted sm">A project\'s source to clone from and its own setup command: that project\'s page, under Sprints. Delegation above only decides whether a sprint can start at all: Off stops it.</span></span></div></fieldset>';
+}
+// O197: how P9 tells a chat about its workers, per kind: a note (a line that starts no turn) or a message (starts or joins its
+// turn). The daemon keeps it (GET and POST /notices, desktop only); read once, then drawn again on its own, as Delegation is.
+const NOTICE_ROWS = [['ready', 'Ready report', 'A worker marked its task ready.'], ['approval', 'Approval', 'A worker waits on an approval.'],
+  ['question', 'Question', 'A worker waits on an answer to a question.'], ['compacting', 'Compacting', 'A worker is compacting and will go on.'],
+  ['ended', 'Turn ended', 'A worker ended its turn.'], ['sprint', 'Sprint paused or resumed', 'You paused or resumed a sprint; its lead is told.']];
+// Saves go one after another (each answer is P9's whole map, so a late one could show values already replaced), and a pick
+// still saving is shown over that map until its own answer, so another answer never undoes it.
+let notices = null, noticesNote = '', noticesWant = {}, noticesSaves = Promise.resolve();
+function noticesGroup() {
+  if (!window.p9?.chat || !outer.liveChat?.on) return '';
+  const off = notices ? '' : ' disabled', shown = { ...notices, ...noticesWant };
+  return `<fieldset class="set-group" id="setNotices"${Object.keys(noticesWant).length ? ' data-notice-saving' : ''}><legend>Notices ${info('How P9 tells a chat about its workers: a note, or a message that starts the chat\'s turn.', 'settings')}</legend>`
+    + '<p class="muted sm">Note: a line in the chat that starts no turn. Message: it starts the chat\'s turn, or joins the one running. A chat that is stopped gets a note.</p>'
+    + NOTICE_ROWS.map(([k, label, what]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${what}</span></span><span class="spacer"></span><select data-slot="input" data-notice="${k}" aria-label="${label}" style="width:9em"${off}>${[['note', 'Note'], ['message', 'Message']].map(([v, n]) => `<option value="${v}"${shown[k] === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`).join('')
+    + (notices ? '' : '<p class="muted sm" data-notice-wait>Reading from P9…</p>') + (noticesNote ? `<p class="muted sm" data-notice-note>${esc(noticesNote)}</p>` : '') + '</fieldset>';
+}
+function drawNotices() { const el = outer.$('#setNotices'); if (el) { el.outerHTML = noticesGroup(); bindNotices(); } }
+function bindNotices() {
+  const el = outer.$('#setNotices'); if (!el) return;
+  if (!notices && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('notices', {}).then(r => { if (r?.status === 200) { notices = r.body; drawNotices(); } }).catch(() => {}); }
+  // One kind per save; the daemon answers with every kind, so the rows show what it keeps.
+  el.querySelectorAll('[data-notice]').forEach(x => { x.onchange = () => {
+    const k = x.dataset.notice, v = x.value; noticesWant[k] = v; noticesNote = ''; el.dataset.noticeSaving = '';
+    noticesSaves = noticesSaves.then(async () => {
+      const r = await window.p9.chat('notices', { set: { [k]: v } }).catch(() => null);
+      if (noticesWant[k] === v) delete noticesWant[k];
+      if (r?.status === 200) notices = r.body; else noticesNote = 'Not saved: P9 did not take it. Try again in a moment.';
+      drawNotices();
+    });
+  }; });
 }
 // Drawn again on its own (never the whole page, which would drop what is being typed in another box).
 function drawDelegation() { const el = outer.$('#setDelegation'); if (el) { el.outerHTML = delegationGroup(); bindDelegation(); } }
@@ -320,7 +351,7 @@ function renderSettings() {
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + profilesGroup()
-    + delegationGroup() + sprintGroup()
+    + delegationGroup() + sprintGroup() + noticesGroup()
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (outer.pets ? petSettings() : '')
     + securityGroup(box)
@@ -338,7 +369,7 @@ function renderSettings() {
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
-  bindDefaults(); bindProfiles(); bindDelegation();
+  bindDefaults(); bindProfiles(); bindDelegation(); bindNotices();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
   if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn;
     else outer.toast({ kind: 'settings', txt: 'Not saved. P9 will open where it did before.', level: 'bad' }, true);
