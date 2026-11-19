@@ -1177,20 +1177,22 @@ test('Settings > Notices (O197): one Note or Message row per kind of worker noti
   // FIX1: overlapping saves. Main holds back the answer to a save of Ready report until released, so a later save could answer
   // first; Compacting's save is refused. Shown values must end as P9 keeps them, and a pick still saving is never undone.
   await app.evaluate(({ ipcMain }) => { const real = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
-    globalThis.hold = () => new Promise((resolve) => { globalThis.release = resolve; }); globalThis.held = null;
+    globalThis.gates = [];
     ipcMain.handle('p9:chat', async (event, action, payload) => {
       if (action === 'notices' && payload?.set?.compacting) return { status: 500, body: { error: 'test-refused' } };
       const answer = await real(event, action, payload);
-      if (action === 'notices' && payload?.set?.ready) { globalThis.held = globalThis.hold(); await globalThis.held; }
+      if (action === 'notices' && payload?.set?.ready) await new Promise((resolve) => globalThis.gates.push(resolve));
       return answer;
     }); });
   const shown = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#setNotices [data-notice]')].map((s) => [s.dataset.notice, s.value])));
   const pick = (k, v) => page.locator(`#setNotices [data-notice="${k}"]`).selectOption(v);
+  // Lets the oldest held answer of a Ready report save through, once that save has reached main.
+  const release = () => app.evaluate(async () => { for (let i = 0; i < 200 && !globalThis.gates.length; i++) await new Promise((r) => setTimeout(r, 50)); globalThis.gates.shift()(); });
   const settled = () => page.waitForFunction(() => !document.querySelector('#setNotices [data-notice-saving]'), null, { timeout: 10000 });
   await pick('ready', 'message'); await page.waitForTimeout(300);
   await pick('question', 'note'); await page.waitForTimeout(500);
   assert.deepEqual([(await shown()).ready, (await shown()).question], ['message', 'note'], 'both picks shown while the first save waits');
-  await app.evaluate(() => globalThis.release());
+  await release();
   await settled(); await page.waitForTimeout(300);
   const kept1 = await call(instance, '/notices');
   assert.deepEqual([kept1.ready, kept1.question], ['message', 'note'], 'P9 kept both');
@@ -1199,12 +1201,22 @@ test('Settings > Notices (O197): one Note or Message row per kind of worker noti
   await pick('ready', 'note'); await page.waitForTimeout(300);
   await pick('compacting', 'message'); await page.waitForTimeout(500);
   assert.equal((await shown()).ready, 'note', 'a refused save did not undo a pick still saving');
-  await app.evaluate(() => globalThis.release());
+  await release();
   await settled(); await page.waitForTimeout(300);
   const kept2 = await call(instance, '/notices');
   assert.deepEqual([kept2.ready, kept2.compacting], ['note', 'note']);
   assert.deepEqual(await shown(), kept2, 'the rows show what P9 keeps after a refused save');
   assert.match(await page.locator('#setNotices [data-notice-note]').innerText(), /^Not saved/);
+  // FIX2: three saves of one row, A Message, B Note, C Message, each answer held and let through in order. A's answer must not
+  // count as C's (same value), so B's answer, P9's map with Note, may not show while C still saves.
+  await pick('ready', 'message'); await pick('ready', 'note'); await pick('ready', 'message'); await page.waitForTimeout(300);
+  await release(); await page.waitForTimeout(500);
+  assert.equal((await shown()).ready, 'message', 'after A answered, C still shown'); assert.equal(await page.locator('#setNotices[data-notice-saving]').count(), 1, 'still saving after A');
+  await release(); await page.waitForTimeout(500);
+  assert.equal((await shown()).ready, 'message', 'after B answered (Note), C still shown while it saves'); assert.equal(await page.locator('#setNotices[data-notice-saving]').count(), 1, 'still saving after B');
+  await release(); await settled(); await page.waitForTimeout(300);
+  const kept3 = await call(instance, '/notices');
+  assert.equal(kept3.ready, 'message'); assert.deepEqual(await shown(), kept3, 'the rows show what P9 keeps after three saves of one row');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT notices ' + (await page.locator('#setNotices').screenshot({ type: 'png' })).toString('base64'));
   console.log('PASS Settings > Notices');
 });
