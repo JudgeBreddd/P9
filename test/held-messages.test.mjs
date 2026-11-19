@@ -145,3 +145,74 @@ test('O109 FIX1: P9 killed just after a busy replay is held again sends it once 
   assert.equal((await sent()).length, 1, 'the replayed message after a crash between its re-hold and its receipt: ' + trail);
   console.log('PASS O109 FIX1 crash: killed just after the re-hold, the message went once after the next start');
 });
+
+// O109 remainder: P9 killed at each other point of a kept message's way. A crash-<point> file in the test home makes
+// chat.mjs SIGKILL itself once there. Whatever the point, after the next start the agent gets the message, and gets it
+// once; where P9 cannot know whether the agent already had it, the second copy says so (REPEAT).
+const REPEAT = '[P9: P9 restarted while this message was being sent, so it may have reached you already.]';
+async function crashCase(t, point, text, send) {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance), chat = a.conversation;
+  fs.writeFileSync(path.join(instance.workspace, 'log-prompts'), ''); // the fake agent logs every prompt and steer it takes
+  fs.writeFileSync(path.join(instance.directory, 'crash-' + point), '');
+  await send(instance, chat);
+  await stopped(instance.child);
+  assert.ok(!fs.existsSync(path.join(instance.directory, 'crash-' + point)), `the ${point} crash did not fire`);
+  instance = await restart(t, instance, 'state-2');
+  fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  const read = (file) => { try { return fs.readFileSync(path.join(instance.workspace, file), 'utf8').split('\n').filter((line) => line.includes(text)); } catch { return []; } };
+  const got = () => [...read('steers.log'), ...read('prompts.log')];
+  for (let i = 0; i < 300 && got().length < 1; i += 1) await pause(100);
+  await pause(5000);
+  const trail = JSON.stringify((await events(instance, chat)).filter((e) => ['held', 'unheld', 'user', 'interrupted', 'turn-end'].includes(e.type)).map((e) => [e.type, e.data?.why ?? e.data?.reason ?? String(e.data?.text ?? '').slice(-40)]));
+  return { got: got(), trail, instance, chat };
+}
+const gated = async (instance, chat) => {
+  assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202);
+  await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating');
+};
+const queue = (instance, chat, body) => call(instance, `/chat/${chat}/prompt`, 'POST', { when: 'queue', ...body }).catch(() => ({}));
+// Once, or twice with the second saying it may be a repeat: never lost, never a silent second copy.
+const once_ = (got, trail, what) => {
+  assert.ok(got.length >= 1, `${what}: the agent never got it: ` + trail);
+  assert.ok(got.length === 1 || (got.length === 2 && got[1].includes(REPEAT)), `${what}: the agent got it ${got.length} times: ` + JSON.stringify(got) + ' ' + trail);
+};
+
+test('O109 crash points: killed just after its held event, a queued message still reaches the agent once', { timeout: 240000 }, async (t) => {
+  const { got, trail } = await crashCase(t, 'held-event', 'kept past the held event', async (instance, chat) => { await gated(instance, chat); await queue(instance, chat, { text: 'kept past the held event' }); });
+  once_(got, trail, 'held event');
+  console.log('PASS O109 crash held-event: ' + got.length);
+});
+
+test('O109 crash points: killed after the hold is written, before the turn ends, a queued message reaches the agent once', { timeout: 240000 }, async (t) => {
+  const { got, trail } = await crashCase(t, 'hold-write', 'kept past the hold write', async (instance, chat) => { await gated(instance, chat); await queue(instance, chat, { text: 'kept past the hold write' }); });
+  assert.equal(got.length, 1, 'not once: ' + JSON.stringify(got) + ' ' + trail);
+  console.log('PASS O109 crash hold-write: once');
+});
+
+test('O109 crash points: killed mid drain, after the first prompt\'s user event, both queued messages reach the agent once', { timeout: 240000 }, async (t) => {
+  let second = [];
+  const { got, trail, instance } = await crashCase(t, 'user-event', 'first of the drain', async (instance, chat) => {
+    await gated(instance, chat);
+    // Two modes: two prompts at the turn's end, so the crash falls between them.
+    await queue(instance, chat, { text: 'first of the drain', mode: 'Plan' });
+    await queue(instance, chat, { text: 'second of the drain', mode: 'Manual' });
+    fs.writeFileSync(path.join(instance.workspace, 'go'), '');
+  });
+  second = fs.readFileSync(path.join(instance.workspace, 'prompts.log'), 'utf8').split('\n').filter((line) => line.includes('second of the drain'));
+  once_(got, trail, 'the first of the drain');
+  assert.equal(second.length, 1, 'the second of the drain: ' + JSON.stringify(second) + ' ' + trail);
+  console.log('PASS O109 crash mid drain: first ' + got.length + ', second once');
+});
+
+test('O109 crash points: killed after the agent took a held steer, before P9 recorded it, it is not sent again silently', { timeout: 240000 }, async (t) => {
+  const { got, trail } = await crashCase(t, 'steer-taken', 'steered past a crash', async (instance, chat) => {
+    assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'tools 2' })).status, 202);
+    await until(instance, (e) => e.conversation === chat && e.type === 'update' && e.data.sessionUpdate === 'tool_call');
+    const held = await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'steered past a crash', when: 'steer' }).catch(() => ({}));
+    assert.ok(held.body?.held, 'not held for the tool step: ' + JSON.stringify(held.body));
+  });
+  once_(got, trail, 'held steer');
+  console.log('PASS O109 crash steer-taken: ' + got.length);
+});
