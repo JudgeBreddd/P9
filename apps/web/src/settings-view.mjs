@@ -238,19 +238,32 @@ const NOTICE_ROWS = [['ready', 'Ready report', 'A worker marked its task ready.'
 // Saves go one after another (each answer is P9's whole map, so a late one could show values already replaced), and a pick
 // still saving is shown over that map until its own answer, so another answer never undoes it. A pick is cleared by its own
 // write number, not its value: Message, Note, Message on one row must not let the first answer stand for the third.
-let notices = null, noticesNote = '', noticesWant = {}, noticesSeq = 0, noticesSaves = Promise.resolve();
+let notices = null, noticesFailed = false, noticesNote = '', noticesWant = {}, noticesSeq = 0, noticesSaves = Promise.resolve();
 function noticesGroup() {
   if (!window.p9?.chat || !outer.liveChat?.on) return '';
   const off = notices ? '' : ' disabled', shown = { ...notices, ...Object.fromEntries(Object.entries(noticesWant).map(([k, [v]]) => [k, v])) };
   return `<fieldset class="set-group" id="setNotices"${Object.keys(noticesWant).length ? ' data-notice-saving' : ''}><legend>Notices ${info('How P9 tells a chat about its workers: a note, or a message that starts the chat\'s turn.', 'settings')}</legend>`
     + '<p class="muted sm">Note: a line in the chat that starts no turn. Message: it starts the chat\'s turn, or joins the one running. A chat that is stopped gets a note.</p>'
     + NOTICE_ROWS.map(([k, label, what]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${what}</span></span><span class="spacer"></span><select data-slot="input" data-notice="${k}" aria-label="${label}" style="width:9em"${off}>${[['note', 'Note'], ['message', 'Message']].map(([v, n]) => `<option value="${v}"${shown[k] === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`).join('')
-    + (notices ? '' : '<p class="muted sm" data-notice-wait>Reading from P9…</p>') + (noticesNote ? `<p class="muted sm" data-notice-note>${esc(noticesNote)}</p>` : '') + '</fieldset>';
+    + (notices ? '' : noticesFailed ? '<p class="muted sm" data-notice-failed>Could not read from P9. <button type="button" data-slot="button" data-variant="outline" data-size="sm" data-notice-retry>Try again</button></p>' : '<p class="muted sm" data-notice-wait>Reading from P9…</p>') + (noticesNote ? `<p class="muted sm" data-notice-note>${esc(noticesNote)}</p>` : '') + '</fieldset>';
 }
 function drawNotices() { const el = outer.$('#setNotices'); if (el) { el.outerHTML = noticesGroup(); bindNotices(); } }
 function bindNotices() {
   const el = outer.$('#setNotices'); if (!el) return;
-  if (!notices && !el.dataset.asked) { el.dataset.asked = '1'; window.p9.chat('notices', {}).then(r => { if (r?.status === 200) { notices = r.body; drawNotices(); } }).catch(() => {}); }
+  // O197: a refused, failed or unanswered first read says so and offers Try again. Only the first good read is used: once
+  // the rows are on, saves answer with what P9 keeps, and a late read could be older than them.
+  // ponytail: 10 s with no answer counts as failed; a slower read that lands later still fills the rows if none did.
+  if (!notices && !noticesFailed && !el.dataset.asked) {
+    el.dataset.asked = '1';
+    const fail = () => { if (!notices && !noticesFailed) { noticesFailed = true; drawNotices(); } };
+    const late = setTimeout(fail, 10000);
+    window.p9.chat('notices', {}).then(r => {
+      clearTimeout(late);
+      if (r?.status !== 200 || !r.body) return fail();
+      if (!notices) { notices = r.body; noticesFailed = false; drawNotices(); }
+    }).catch(() => { clearTimeout(late); fail(); });
+  }
+  el.querySelector('[data-notice-retry]')?.addEventListener('click', () => { noticesFailed = false; drawNotices(); });
   // One kind per save; the daemon answers with every kind, so the rows show what it keeps.
   el.querySelectorAll('[data-notice]').forEach(x => { x.onchange = () => {
     const k = x.dataset.notice, v = x.value, n = ++noticesSeq; noticesWant[k] = [v, n]; noticesNote = ''; el.dataset.noticeSaving = '';
