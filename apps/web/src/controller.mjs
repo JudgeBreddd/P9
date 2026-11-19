@@ -1036,8 +1036,10 @@ function wizRender() {
         return row(name, sub, l.running ? `<span class="muted sm">${device ? (l.code ? '' : 'Getting a code…') : 'Waiting for the browser…'}</span>` : on ? yes(true, 'Signed in') : yes(false, '', s[a] ? 'Sign-in expired' : 'Not signed in'),
           l.running ? (l.url ? btn('open:' + a, device ? 'Open the sign-in page' : "Browser didn't open?", device ? 'default' : undefined) : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : on ? 'Sign in again' : 'Sign in', on ? undefined : 'default'))
           + (l.running && device && l.code ? `<div class="set-row" data-device-code><span class="muted sm">Your one-time code, for 15 minutes</span><span class="spacer"></span><code style="font:600 18px ui-monospace,monospace;letter-spacing:.08em;user-select:all">${esc(l.code)}</code></div>` : '')
-          + (l.running && W.note[a]?.info ? `<p class="muted sm">${esc(W.note[a].info)}</p>` : '')
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
+          // O71: the note goes below the code box: the redraw matches nodes by position, so a note above it replaced the box
+          // and lost what the owner was typing.
+          + (l.running && W.note[a]?.info ? `<p class="muted sm">${esc(W.note[a].info)}</p>` : '')
           + (l.unsupported && !l.running ? '<p class="warn sm">This Codex has no sign-in with a code (P9 was built with Codex 0.166.0, which has one). Use Sign in in a terminal below and follow what Codex prints there.</p>'
             : ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
           // D8: its own sign-in command in a P9 terminal, run by the CLI P9 ships (item 15). Nothing runs before Enter.
