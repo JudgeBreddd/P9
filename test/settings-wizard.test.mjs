@@ -125,6 +125,8 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   // stress case for that shape, not a proof of the CI causal order, and the waits follow the real state: the
   // daemon's own login record first (the CLI really ended), then a UI watchdog for the window to catch up — not a
   // longer timeout from the click.
+  // O71: the two later CI sightings (the CLI still running 30 s after 'done') had another cause, shown red above: the
+  // open's note redraw replaced the code box, so 'done' was never sent.
   await writeFile(path.join(instance.workspace, 'login-exit-slow'), '');
   await page.click('[data-act="code:claude"]');
   for (let i = 0; i < 60; i++) { const s = await call(instance, '/setup/login'); if (s.claude && !s.claude.running && s.claude.exit !== null) break; await new Promise((r) => setTimeout(r, 500)); }
