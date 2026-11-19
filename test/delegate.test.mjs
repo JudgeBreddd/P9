@@ -995,6 +995,20 @@ const sevenSetup = async (t) => {
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: [] }); // One place free: Three runs
   return { instance, a, b, kids };
 };
+// PD-1 (f): a parent's effort is its model's, so a worker on another model starts on that agent's own default.
+test('Delegate: a worker whose Settings row names another model does not take its parent\'s effort; one on the parent\'s model does', async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false }); // Unrestricted: open_chat does not ask
+  const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude' });
+  await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp', config: { effort: 'high' } });
+  const a = await connect(t, instance, conversation);
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: five({ agent: 'claude', model: '', effort: '' }, { agent: 'claude', model: 'opus', effort: '' }) })).status, 200);
+  const same = await a.tool('open_chat', { text: 'config', title: 'Same model' });
+  assert.match((await a.done(same.chat)).last, /config:model=default,effort=high,/, 'a worker on its parent\'s model did not take its parent\'s effort');
+  const other = await a.tool('open_chat', { text: 'config', title: 'Other model' });
+  assert.match((await a.done(other.chat)).last, /config:model=opus,effort=medium,/, 'a worker on another model took its parent\'s effort');
+});
+
 // O132 / row 721: stop_chat close: true also archives what it stopped; a plain stop does not; under the agent lock a close
 // still stops but archives nothing. A closed worker is reached again only after archive_chat archived: false.
 test('Delegate O132: a close archives, a plain stop does not, a close under the agent lock stops without archiving; send, ask and compact refuse a closed worker until it is brought back', { timeout: 180000 }, async (t) => {
