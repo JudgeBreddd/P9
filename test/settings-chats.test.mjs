@@ -1220,3 +1220,155 @@ test('Settings > Notices (O197): one Note or Message row per kind of worker noti
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT notices ' + (await page.locator('#setNotices').screenshot({ type: 'png' })).toString('base64'));
   console.log('PASS Settings > Notices');
 });
+
+test('Settings > Notices (O197 gaps): a failed or hung first read says so and offers Try again', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-notices-gaps-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  // Main answers each read of the notices as the test says: 'refuse' (500), 'throw' (the call rejects), 'hang' (held until
+  // released) or 'real'; every save's answer is held until released, in the order the saves reached main.
+  await app.evaluate(({ ipcMain }) => { const real = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    globalThis.reads = []; globalThis.gates = []; globalThis.readHolds = [];
+    ipcMain.handle('p9:chat', async (event, action, payload) => {
+      if (action === 'notices' && !payload?.set) {
+        const how = globalThis.reads.shift() || 'real';
+        if (how === 'refuse') return { status: 500, body: { error: 'test-refused' } };
+        if (how === 'throw') throw new Error('test-thrown');
+        const answer = await real(event, action, payload); // a hung read is read now and answered late, so it is old by then
+        if (how === 'hang') await new Promise((resolve) => globalThis.readHolds.push(resolve));
+        return answer;
+      }
+      return real(event, action, payload);
+    }); });
+  const reads = (list) => app.evaluate((_, l) => { globalThis.reads = l; }, list);
+  const open = async () => {
+    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+    await page.click('[data-set-page="Chat Focus"]');
+    await page.locator('#setBody > [data-page="Chat Focus"] #setNotices').waitFor({ timeout: 10000 });
+  };
+  const close = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
+  const failed = async (why) => {
+    await page.locator('#setNotices [data-notice-failed]').waitFor({ timeout: 15000 }).catch(() => {});
+    const text = await page.locator('#setNotices').innerText();
+    assert.doesNotMatch(text, /Reading from P9/, why + ': still says Reading from P9: ' + text);
+    assert.match(text, /Could not read/, why + ': does not say the read failed: ' + text);
+    assert.equal(await page.locator('#setNotices [data-notice-retry]').count(), 1, why + ': no Try again');
+    assert.equal(await page.locator('#setNotices select:not([disabled])').count(), 0, why + ': rows usable without a read');
+  };
+  const usable = () => page.locator('#setNotices select:not([disabled])').first().waitFor({ timeout: 10000 });
+  // Refused, then Try again refused once more (still says so), then Try again reads.
+  await reads(['refuse', 'refuse']); await open();
+  await failed('refused read');
+  await page.click('#setNotices [data-notice-retry]');
+  await failed('second refused read');
+  await page.click('#setNotices [data-notice-retry]');
+  await usable();
+  assert.equal(await page.locator('#setNotices [data-notice-failed], #setNotices [data-notice-wait]').count(), 0, 'the failure line stayed after a good read');
+  console.log('PASS O197 gap a: refused');
+  await close(); await page.reload(); await page.locator('#rChat').waitFor();
+  await app.evaluate(({ ipcMain }) => { globalThis.gates = []; }); // reload keeps main's handler
+  // A read that throws.
+  await reads(['throw']); await open();
+  await failed('thrown read');
+  await page.click('#setNotices [data-notice-retry]'); await usable();
+  console.log('PASS O197 gap a: thrown');
+  await close(); await page.reload(); await page.locator('#rChat').waitFor();
+  // A read that never answers says it failed after a while; Try again works; the late answer of the first read changes nothing.
+  await reads(['hang']); await open();
+  await failed('hung read');
+  await page.click('#setNotices [data-notice-retry]'); await usable();
+  // A save lands, then the hung read answers with the map from before it: the rows keep what P9 keeps now.
+  const before = (await call(instance, '/notices')).ended, after = before === 'note' ? 'message' : 'note';
+  await page.locator('#setNotices [data-notice="ended"]').selectOption(after);
+  await page.waitForFunction(() => !document.querySelector('#setNotices[data-notice-saving]'), null, { timeout: 10000 }); await page.waitForTimeout(300);
+  assert.equal((await call(instance, '/notices')).ended, after);
+  await app.evaluate(() => { globalThis.readHolds.forEach((r) => r()); }); await page.waitForTimeout(500);
+  assert.equal(await page.locator('#setNotices select:not([disabled])').count(), 6, 'the late answer broke the rows');
+  assert.equal(await page.locator('#setNotices [data-notice="ended"]').inputValue(), after, 'a late first read put back a value from before a save');
+  console.log('PASS O197 gap a: hung');
+});
+
+test('Settings > Notices (O197 gap b): three or more held saves across different rows end as P9 keeps them', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-notices-rows-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  // Main answers each read of the notices as the test says: 'refuse' (500), 'throw' (the call rejects), 'hang' (held until
+  // released) or 'real'; every save's answer is held until released, in the order the saves reached main.
+  await app.evaluate(({ ipcMain }) => { const real = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    globalThis.reads = []; globalThis.gates = []; globalThis.readHolds = [];
+    ipcMain.handle('p9:chat', async (event, action, payload) => {
+      if (action === 'notices' && !payload?.set) {
+        const how = globalThis.reads.shift() || 'real';
+        if (how === 'refuse') return { status: 500, body: { error: 'test-refused' } };
+        if (how === 'throw') throw new Error('test-thrown');
+        if (how === 'hang') await new Promise((resolve) => globalThis.readHolds.push(resolve));
+        return real(event, action, payload);
+      }
+      const answer = await real(event, action, payload);
+      if (action === 'notices') await new Promise((resolve) => globalThis.gates.push(resolve));
+      return answer;
+    }); });
+  const open = async () => {
+    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+    await page.click('[data-set-page="Chat Focus"]');
+    await page.locator('#setBody > [data-page="Chat Focus"] #setNotices select:not([disabled])').first().waitFor({ timeout: 10000 });
+  };
+  await open();
+  // Gap b: three saves of three different rows, each answer held and let through in turn. While any saves, every pick stays
+  // shown; at the end the rows show what P9 keeps. Then the same with the middle one refused by P9.
+  const shown = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#setNotices [data-notice]')].map((s) => [s.dataset.notice, s.value])));
+  const pick = (k, v) => page.locator(`#setNotices [data-notice="${k}"]`).selectOption(v);
+  const release = () => app.evaluate(async () => { for (let i = 0; i < 200 && !globalThis.gates.length; i++) await new Promise((r) => setTimeout(r, 50)); globalThis.gates.shift()(); });
+  const settled = () => page.waitForFunction(() => !document.querySelector('#setNotices[data-notice-saving]'), null, { timeout: 10000 });
+  const want = { ready: 'message', question: 'note', compacting: 'message' };
+  for (const [k, v] of Object.entries(want)) await pick(k, v);
+  await page.waitForTimeout(300);
+  for (let i = 0; i < 3; i++) {
+    const now = await shown();
+    assert.deepEqual([now.ready, now.question, now.compacting], ['message', 'note', 'message'], 'a pick went back while saves waited (after ' + i + ' answers)');
+    await release(); await page.waitForTimeout(400);
+  }
+  await settled(); await page.waitForTimeout(300);
+  const kept = await call(instance, '/notices');
+  assert.deepEqual([kept.ready, kept.question, kept.compacting], ['message', 'note', 'message'], 'P9 did not keep all three');
+  assert.deepEqual(await shown(), kept, 'the rows do not show what P9 keeps after three saves across rows');
+  console.log('PASS O197 gap b: three rows');
+  // Four saves across rows, the third refused by main: the others stay, the refused row goes back and says so.
+  await app.evaluate(({ ipcMain }) => { const held = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (event, action, payload) => {
+      if (action === 'notices' && payload?.set?.ended) { await new Promise((resolve) => globalThis.gates.push(resolve)); return { status: 500, body: { error: 'test-refused' } }; }
+      return held(event, action, payload);
+    }); });
+  await pick('ready', 'note'); await pick('question', 'message'); await pick('ended', 'message'); await pick('sprint', 'message');
+  await page.waitForTimeout(300);
+  for (let i = 0; i < 4; i++) { await release(); await page.waitForTimeout(400); }
+  await settled(); await page.waitForTimeout(300);
+  const kept2 = await call(instance, '/notices');
+  assert.deepEqual([kept2.ready, kept2.question, kept2.ended, kept2.sprint], ['note', 'message', 'note', 'message']);
+  assert.deepEqual(await shown(), kept2, 'the rows do not show what P9 keeps after a refused save among four');
+  assert.match(await page.locator('#setNotices [data-notice-note]').innerText(), /^Not saved/);
+  console.log('PASS O197 gap b: four rows, one refused');
+  // One row picked twice around another row's save, each answer held: the second pick of ready stays shown throughout.
+  await pick('ready', 'message'); await pick('question', 'note'); await pick('ready', 'note');
+  await page.waitForTimeout(300);
+  for (let i = 0; i < 3; i++) {
+    const now = await shown();
+    assert.deepEqual([now.ready, now.question], ['note', 'note'], 'a pick went back while saves waited (after ' + i + ' answers)');
+    await release(); await page.waitForTimeout(400);
+  }
+  await settled(); await page.waitForTimeout(300);
+  const kept3 = await call(instance, '/notices');
+  assert.deepEqual([kept3.ready, kept3.question], ['note', 'note']);
+  assert.deepEqual(await shown(), kept3, 'the rows do not show what P9 keeps after a row saved twice around another');
+  console.log('PASS O197 gap b: one row twice around another');
+});
