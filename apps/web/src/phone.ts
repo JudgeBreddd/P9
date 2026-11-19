@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf } from './helpers.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -907,7 +907,7 @@ async function listen() {
 // would decline it), is kept here, on this phone, and goes once it can, with `when: 'queue'` so it waits for the turn's
 // end. Each goes once: it keeps one operation ID until the daemon answers (mutate), so a lost reply or a reload re-sends
 // the same message under the same ID and the daemon replays it. ponytail: this phone's storage only, as the desktop's queue.
-type Queued = { qid: string; text: string; mode?: string; model?: string; config?: Record<string, string> };
+type Queued = { qid: string; text: string; at?: number; mode?: string; model?: string; config?: Record<string, string> }; // at: when queued (O125)
 const queueKey = (id: string) => 'p9-queue:' + id;
 // F4 item 11: read from storage once per chat, then kept here; every change is written through. Another tab's change
 // (the storage event) drops what is kept.
@@ -938,12 +938,12 @@ const asking = perChat((events) => {
 // bar's "Working…" and the Stop button never disagree.
 const running = (id: string) => (digest().get(id)?.run ?? 'idle') !== 'idle';
 const turn = perChat((events) => {
-  const held = new Map<string, { text: string; when: string }>();
+  const held = new Map<string, { text: string; when: string; at: number }>();
   for (const event of events) {
     const kind = String(event.type), data = (event.data ?? {}) as Json;
     if (kind === 'user') { for (const sent of Array.isArray(data.held) ? data.held : []) held.delete(String(sent)); }
     else if (['interrupted', 'exited', 'stopped', 'error'].includes(kind)) held.clear();
-    else if (kind === 'held') held.set(String(data.id), { text: String(data.text), when: String(data.when) });
+    else if (kind === 'held') held.set(String(data.id), { text: String(data.text), when: String(data.when), at: Number(event.at) });
     else if (kind === 'unheld') held.delete(String(data.id));
   }
   return { held };
@@ -1001,9 +1001,14 @@ function renderQueue() {
   box.hidden = !count;
   const rows = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
     + items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
-  const html = `<details${queueOpen ? ' open' : ''}><summary>${count} queued ▸</summary><div class="list">${rows}</div></details>`;
+  // O125 (4), as the desktop's strip: how long the oldest has waited, held or kept here, so a stuck queue shows. One kept
+  // by an older build has no time and adds to the count only.
+  const oldest = Math.min(...[...held.map(([, item]) => item.at), ...items.map((item) => item.at)].map((at) => Number(at) || Infinity));
+  const html = `<details${queueOpen ? ' open' : ''}><summary>${count} queued${oldest < Infinity ? ', oldest waiting ' + ageOf(oldest) : ''} ▸</summary><div class="list">${rows}</div></details>`;
   if (html !== queueSig) { queueSig = html; box.innerHTML = html; } // unchanged, the open list keeps its scroll
 }
+// The age ticks while nothing else redraws (a stuck queue is exactly that case); unchanged text redraws nothing.
+setInterval(() => { if (!document.hidden && openId) renderQueue(); }, 15000);
 one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
 let draining = false;
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
@@ -1083,7 +1088,7 @@ async function submitFromBox(event: Event) {
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
-    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
+    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
@@ -1112,7 +1117,7 @@ async function submitFromBox(event: Event) {
   // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); spend(id, picked); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...body }]); spend(id, picked); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 }

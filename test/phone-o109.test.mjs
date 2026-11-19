@@ -22,7 +22,9 @@ function seed(server) {
   add('update', { sessionUpdate: 'tool_call', toolCallId: 't2', title: 'Waiting on worker phone', status: 'in_progress' });
   add('held', { id: 'h-delivered', text: 'already delivered', when: 'queue' });
   add('user', { text: 'already delivered', steered: true, held: ['h-delivered'] });
-  for (let i = 0; i < QUEUED; i++) add('held', { id: 'h' + i, text: `[p9] worker ${i} ended its turn and has a long note that runs past the width of a phone`, when: 'queue' });
+  // O125 (4): the first one has waited 2 h 5 min (and half a minute, so the floor holds while the test runs).
+  event.run(BUSY, 'held', JSON.stringify({ id: 'h0', text: '[p9] worker 0 ended its turn and has a long note that runs past the width of a phone', when: 'queue' }), at - 125.5 * 60000);
+  for (let i = 1; i < QUEUED; i++) add('held', { id: 'h' + i, text: `[p9] worker ${i} ended its turn and has a long note that runs past the width of a phone`, when: 'queue' });
   db.close();
   return (type, data) => { const again = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db')); again.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(BUSY, type, JSON.stringify(data), Date.now()); again.close(); };
 }
@@ -53,6 +55,7 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   // (2) One compact strip says how many wait; a delivered message is not among them; each row has its own remove.
   const strip = await page.evaluate(() => ({ text: document.querySelector('#queued summary')?.textContent ?? '', rows: [...document.querySelectorAll('#queued article')].filter((row) => row.checkVisibility()).length, height: Math.round(document.querySelector('#queued').getBoundingClientRect().height) }));
   assert.match(strip.text, new RegExp('^' + QUEUED + ' queued'), 'one strip names the count: ' + JSON.stringify(strip));
+  assert.match(strip.text, /^30 queued, oldest waiting 2 h 5 min ▸$/, 'O125 (4): the phone strip says how long the oldest has waited: ' + JSON.stringify(strip));
   assert.equal(strip.rows, 0, 'the rows are folded away until asked for');
   assert.ok(strip.height <= 60, 'the strip is one line: ' + strip.height + ' px');
   assert.doesNotMatch(await page.textContent('#queued'), /already delivered/, 'a delivered message is never still queued');

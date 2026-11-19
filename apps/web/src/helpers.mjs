@@ -91,6 +91,8 @@ export function chatFailed(action, body, ms) {
   const why = minutes >= 1 ? who + ' did not answer for ' + minutes + (minutes === 1 ? ' minute.' : ' minutes.') : who + ' is not answering.';
   return 'Could not ' + (CHAT_VERB[action] ?? 'reach the chat') + '. ' + why + (action === 'prompt' ? ' Your message is back in the box.' : ' Try again in a moment.');
 }
+// How long ago, as the queue strips and the sprint card show it (desktop and phone).
+export const ageOf = (at, now = Date.now()) => { const m = Math.max(0, Math.floor((now - at) / 60000)); return m < 1 ? '<1 min' : m < 60 ? m + ' min' : m < 1440 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + m % 60 + ' min' : '') : Math.floor(m / 1440) + ' d'; };
 export const agentWarning = text => /^Warning: ([^]*\S)\n\n$/.exec(String(text ?? ''))?.[1] ?? null;
 const WARNINGS = [[/falling back from websockets to https/i, 'Connection dropped · Codex retried', 'The connection to OpenAI dropped mid-reply. Codex retried another way and the reply came through. Nothing to do; if it shows on every message, OpenAI is having trouble.']];
 export const warnHtml = (raw, attrs = '') => {

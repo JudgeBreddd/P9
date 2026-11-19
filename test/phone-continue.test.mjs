@@ -135,6 +135,9 @@ for (const agent of ['claude', 'codex']) {
     await page.waitForSelector('#queued:not([hidden]) :text("typed offline")', { state: 'attached' });
     assert.equal(await page.inputValue('#prompt'), '');
     assert.deepEqual((await stored()).map((item) => item.text), ['typed offline']);
+    // O125 (4): a message kept on this phone has its time, and the strip names the wait.
+    assert.ok(Math.abs(Date.now() - (await stored())[0].at) < 60000, 'the kept message has the time it was queued');
+    assert.match(await page.textContent('#queued summary'), /^1 queued, oldest waiting <1 min ▸$/);
     assert.equal(prompts.length, 0, 'nothing is sent while offline');
     // The queue survives a reload.
     await page.reload();
