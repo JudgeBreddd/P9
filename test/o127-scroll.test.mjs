@@ -86,6 +86,18 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   assert.ok(gap < 24, `a reader at the bottom no longer follows: ${gap} px short`);
   // The window grew to keep the reader's block; following the bottom again puts it back to 200 blocks drawn.
   assert.equal(await pane.locator('.hist .col > [data-at]').count(), 200, 'back at the bottom, the drawn window is 200 steps again');
+  // CI #390 fix: up is judged against where the last paint left the scroll. A small scroll up just after the chat followed a
+  // long new reply still counts as reading up, so 250 new steps keep that reply drawn where it was.
+  await step(`ev.push({ t: 'agent', text: Array.from({ length: 40 }, (_, k) => 'long reply paragraph ' + k + '.').join('\\n\\n') })`);
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollTop - 150, behavior: 'instant' }));
+  const longAt = () => pane.locator('.hist').evaluate(h => { const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('long reply paragraph 0.'));
+    return el ? Math.round(el.getBoundingClientRect().top - h.getBoundingClientRect().top) : null; });
+  const l0 = await longAt();
+  await step(`for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Step ' + i, status: 'completed', output: 'hit' })`);
+  const l1 = await longAt();
+  assert.ok(l1 !== null && Math.abs(l1 - l0) <= 1, `a small scroll up after the chat followed holds the long reply: ${l1} px, was ${l0}`);
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
+  await step(`ev.push({ t: 'agent', text: 'Back down.' })`);
   // Show earlier pressed while the window is grown keeps the larger window: the user asked for it.
   await pane.locator('.hist').evaluate(h => h.scrollTo({ top: 0, behavior: 'instant' }));
   await step(`for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Find ' + i, status: 'completed', output: 'hit' })`);
