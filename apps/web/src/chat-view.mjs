@@ -526,9 +526,10 @@ function refreshPill() {
 async function pickMode(s, m) {
   if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(s.agent, m)) return;
   if (modes[s.agent].includes(m)) localStorage.setItem('p9-mode:' + s.agent, m);
-  if (busy(s)) s.modeNext = m === modeNow(s) ? null : m; else { setMode(s, m); s.modeNext = null; }
-  renderChats();
+  applyMode(s, m); renderChats();
 }
+// A mode for one chat, from its pill or from Unrestricted (MC-4): mid-turn it is queued for the turn's end; Codex's Plan goes off.
+function applyMode(s, m) { if (busy(s)) s.modeNext = m === modeNow(s) ? null : m; else { setMode(s, m); s.modeNext = null; } }
 // O29: an empty chat changes agent by being made again on the other one, in the same folder or project, with that agent's
 // defaults (startDefaults, startMode). Review (2026-11-09): what was typed and attached comes over, and the new chat takes the
 // old one's place: its pane in Split, the chat beside the editor in Dev Focus (SWAP, swapIn; the layout as it was at the pick).
@@ -1084,5 +1085,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
+  return { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
 }

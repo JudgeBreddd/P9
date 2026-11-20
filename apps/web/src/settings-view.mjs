@@ -149,8 +149,7 @@ async function setUnrestricted(on) {
   // that mode, or with it queued, goes back to the start mode. A chat with a turn running gets it queued, as a pick made
   // in its pill would be ("queued", applied when the turn ends). A profile chat keeps the profile's mode (O136).
   outer.S.sessions.forEach(s => { const m = LOOSEST[s.agent]; if (!m || s.profile) return;
-    const to = on ? m : s.mode === m || s.modeNext === m ? outer.startMode(s.agent) : null; if (!to) return;
-    if (s.state === 'running') s.modeNext = to === s.mode ? null : to; else { s.mode = to; s.modeNext = null; } });
+    const to = on ? m : outer.modeShown(s) === m ? outer.startMode(s.agent) : null; if (to) outer.applyMode(s, to); });
   outer.renderChats();
   if (!on) localStorage.removeItem('p9-link-ok'); // review 3 L5: off asks before agent links again
   renderSettings();

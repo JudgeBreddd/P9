@@ -361,6 +361,61 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   console.log('PASS Security settings: four switches, defaults unchanged; Unrestricted Keep changes nothing, Turn off frees all and a new Codex chat starts in Full access; off restores; with protection already off it asks itself');
 });
 
+const events = async (instance, id) => {
+  const all = [];
+  for (let after = 0, page; (page = await call(instance, '/chat/events?after=' + after + '&only=' + id)).events.length; after = page.cursor) all.push(...page.events);
+  return all;
+};
+test('MC-4: Unrestricted moves open Codex chats out of Plan: an idle one at once, a running one when its turn ends; off puts them back (review #378)', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-mc4-')), 'profile');
+  // Two Codex chats, each answered once so the agent's settings (its plan switch among them) are known.
+  const ids = [];
+  for (let i = 0; i < 2; i++) { const id = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation; ids.push(id);
+    await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' }); }
+  for (const id of ids) for (const end = Date.now() + 15000; !(await events(instance, id)).some((e) => e.type === 'turn-end');) { assert.ok(Date.now() < end, 'hello answered'); await new Promise((r) => setTimeout(r, 200)); }
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }); // "Turn off protection"
+  const idle = (id) => page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  const pane = (id) => page.locator('.pane[data-id="' + id + '"]');
+  const open = async (id) => { await idle(id).catch(() => {}); await page.locator('#nav .row[data-chat="' + id + '"]').click(); await pillOf(pane(id), 'Mode').waitFor(); return pane(id); };
+  const send = async (id, text) => { await pane(id).locator('.composer textarea').click(); await page.keyboard.type(text); await page.keyboard.press('Enter'); };
+  const said = (id, text) => pane(id).locator('.hist', { hasText: text }).waitFor({ timeout: 15000 });
+  const mode = (id) => pillValue(pane(id), 'Mode');
+  const unrestricted = async (want) => { await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree').waitFor(); await page.click('#setFree');
+    await page.waitForFunction((want) => document.querySelector('#setFree').checked === want, want, { timeout: 5000 });
+    await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
+  const [still, busy] = ids;
+  // Both chats in Plan; the second one then starts a turn that runs until it is stopped.
+  for (const id of ids) { await open(id); await pane(id).locator('[data-pill="Effort"][aria-label^="Effort: Medium"]').waitFor({ timeout: 10000 });
+    await choose(page, pane(id), 'Mode', 'Plan'); await pane(id).locator('[data-pill="Mode"][aria-label="Mode: Plan"]').waitFor(); }
+  await send(busy, 'slow'); await page.locator('#navList .rowwrap:has([data-busy]) .row[data-chat="' + busy + '"]').waitFor({ timeout: 15000 });
+  await unrestricted(true);
+  // Running: Full access is queued, shown with "queued"; the turn is still Plan.
+  await open(busy);
+  assert.equal(await mode(busy), 'Full access', 'the running chat shows Full access as queued');
+  assert.equal(await pane(busy).locator('[data-pill="Mode"] .mode-q').count(), 1, 'queued, not applied mid-turn');
+  // Idle: out of Plan at once; the agent is told so with the next message.
+  await open(still);
+  assert.equal(await mode(still), 'Full access', 'MC-4: the idle chat left Plan for Full access');
+  await send(still, 'config'); await said(still, 'collaboration_mode=default'); await idle(still);
+  assert.equal(await mode(still), 'Full access');
+  // The running turn ends: the queued mode applies, and Plan is off for the agent too.
+  await call(instance, '/chat/' + busy + '/cancel', 'POST', {}); await idle(busy);
+  await open(busy);
+  await pane(busy).locator('[data-pill="Mode"][aria-label="Mode: Full access"]:not(:has(.mode-q))').waitFor({ timeout: 10000 });
+  await send(busy, 'config'); await said(busy, 'collaboration_mode=default'); await idle(busy);
+  // Off: both back to Codex's start mode.
+  await unrestricted(false);
+  for (const id of ids) { await open(id); assert.equal(await mode(id), 'Auto review', 'off puts the chat back in its start mode'); }
+  console.log('PASS MC-4 Codex Plan: idle out at once, running queued to the turn end, off restores');
+});
+
 test('Pick: the workspace folder itself and a folder outside get their own refusals, in Settings and in the setup wizard (BL6)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
   // Starter settings on a folder with its own layout: Settings shows the files and the wizard offers its paths with Pick.
   const instance = await missionDaemon(t, true);
