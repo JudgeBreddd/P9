@@ -282,7 +282,7 @@ async function replay() {
   if (state.seen > 0) gapAfter(((await request('/chat/events?after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
   // Listed again after the read: a chat made meanwhile has events below base this read did not take, so it is a stub too.
   state.base = state.cursor;
-  state.conversations = (await request('/chat')).conversations ?? [];
+  const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; // MC-16: a Settings default changed meanwhile
   state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
 }
 async function fetchEvents(wait = 0) {
@@ -862,7 +862,9 @@ const picksOf = perChat((events) => ({ configs: events.filter((event) => event.t
 function renderPicks(id: string) {
   const { configs, set } = picksOf(id);
   // The agent is in the key: a chat made here can draw before its row is read, with no modes yet.
-  const key = id + ':' + provider(id) + ':' + configs.length + ':' + (set?.name ?? '');
+  // MC-16: the default mark is in the key too: a Settings change reaches the phone at a relist, with no event on this chat.
+  const mark = !state.conversations.find((entry) => entry.id === id)?.profile && (agentLists[provider(id)] as { mark?: { model: string | null; pickers?: Record<string, string> } } | null)?.mark;
+  const key = id + ':' + provider(id) + ':' + configs.length + ':' + (set?.name ?? '') + ':' + JSON.stringify(mark || null);
   if (key === picksFor) return;
   // The confirmed pick is kept: a redraw while the red warning is open (Codex reports its mode as it starts) must not
   // turn the pick waiting on that warning into the one Cancel goes back to.
@@ -874,12 +876,15 @@ function renderPicks(id: string) {
   const config = (configs.at(-1)?.data ?? agentLists[provider(id)] ?? {}) as { // O47: a chat not started yet offers its agent's kept lists
     model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
+  // MC-16: the option a new chat starts on says so, as on the desktop (the daemon's mark, above; not on a provider profile's
+  // chat, nor on an option whose own name already says default).
+  const dflt = (name: string, value: string, marked: string | null | undefined) => name + (mark && marked === value && !/default/i.test(name) ? ' (Default)' : '');
   model.hidden = !options.length; model.dataset.current = config.model?.current ?? '';
-  model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(o.name)}</option>`).join('');
+  model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(dflt(o.name, o.value, mark && mark.model))}</option>`).join('');
   const restoredModel = swapModel.get(id); if (restoredModel && [...model.options].some(option => option.value === restoredModel)) { model.value = restoredModel; swapModel.delete(id); }
   // P10: the agent's own effort, fast mode and plan switch (threat model row 22), each sent only when changed.
   one('#pickers').innerHTML = (config.pickers ?? []).map((p) => `<select data-config="${escape(p.id)}" data-current="${escape(p.current)}" aria-label="${escape(p.name)}">${(p.options ?? []).map((o) =>
-    `<option value="${escape(o.value)}"${o.value === p.current ? ' selected' : ''}>${escape(p.name + ': ' + o.name)}</option>`).join('')}</select>`).join('');
+    `<option value="${escape(o.value)}"${o.value === p.current ? ' selected' : ''}>${escape(p.name + ': ' + dflt(o.name, o.value, mark && mark.pickers?.[p.id]))}</option>`).join('')}</select>`).join('');
   // O64: a pick made here and not sent yet is still the pick after this redraw (the agent reported a setting, or the reader
   // came back from another chat): only what the agent offers, and a send clears it (the agent's own value is the truth again).
   for (const [key, pick] of chosen.get(id) ?? []) {
@@ -898,7 +903,7 @@ async function listen() {
       if (state.events.length === held) continue;
       // A chat made, used, stopped or closed anywhere moves in the picker.
       // A stub's row reads its state from the list, so a turn's end or a question asked or answered lists again too.
-      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered', 'project', 'renamed', 'archived', 'deleted'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; await loadPhoneProjects(request); fillPicker(); }
+      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered', 'project', 'renamed', 'archived', 'deleted'].includes(String(event.type)))) { const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; await loadPhoneProjects(request); fillPicker(); }
       render();
     }
     catch { await pause(3000); }
