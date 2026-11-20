@@ -289,7 +289,9 @@ export async function createDesktop({ state, open } = {}) {
       connecting = pending.then(s => attempt === serverTry ? null : s.close(), () => {}).catch(() => {});
       const s = await pending;
       if (attempt !== serverTry) return; // closed by connecting
+      const back = dropped; // O19: up again after a drop (the machine slept, rebooted or lost the network)
       server = s; serverError = null; dropped = false;
+      if (back) devAgain(true);
       if (/^(starting|done)$/.test(remoteInstall?.phase)) remoteInstall = null; // U6: a later no-P9 sets up again
       keeper.connected(serverHost, !!s.background);
       if (!serverUpdating) {
@@ -1222,6 +1224,19 @@ export async function createDesktop({ state, open } = {}) {
     devView.setVisible(shown);
     if (shown) devView.webContents.focus();
   };
+  // Server mode: the server's daemon may have restarted (an update, a reboot, an idle stop) and ended its editor, leaving the
+  // page on a dead editor ("Canceled", or VS Code's own reconnect giving up). Asks the daemon again; it hands back the same
+  // editor while that runs, and a new token reloads the page. Unsaved edits come back from the page's hot-exit backups.
+  // Run when Dev Focus is shown again, and (O19) when the tunnel is up again after a drop, so an editor left open comes back by itself.
+  // failed: a page that could not open (the drop came first) opens again; showing Dev Focus already does that itself.
+  const devAgain = (failed = false) => {
+    if (!devView || !serverHost) return;
+    if (failed && devFailed) return reopenDev();
+    if (!devToken) return;
+    const had = devToken;
+    // check() first: a restarted daemon has new credentials, and check() reads them (remote.mjs).
+    Promise.resolve(server?.check()).then(serverEditor).then(host => { if (devToken === had && host.token !== had) reopenDev(); }).catch(() => {});
+  };
   // A workspace change shows the new workspace, whatever folder was open.
   const devToWorkspace = () => { devFolder = null; reopenDev(); };
   // D5 (threat model row 52): Install on Dev Focus's error page. No arguments: main installs only the pinned download, one
@@ -1325,12 +1340,8 @@ export async function createDesktop({ state, open } = {}) {
     // left dev unset, so each placement (every frame of a drag) built a new view. Shown and failed, a placement only moves it; coming
     // back to Dev Focus tries again, as the page says.
     if (!(shown && devFailed)) openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
-    // Server mode: the server's daemon may have restarted (an update, a reboot, an idle stop) and ended its editor while the
-    // tunnel stayed up, leaving the page on a dead editor ("Canceled"). Coming back asks the daemon again; it hands back the same
-    // editor while that runs, and a new token reloads the page. Unsaved edits come back from the page's hot-exit backups.
-    if (!shown && serverHost && devToken) { const had = devToken;
-      // check() first: a restarted daemon has new credentials, and check() reads them (remote.mjs).
-      Promise.resolve(server?.check()).then(serverEditor).then(host => { if (devToken === had && host.token !== had) reopenDev(); }).catch(() => {}); }
+    // Server mode: coming back asks the server's daemon again, for an editor that ended while the tunnel stayed up (devAgain).
+    if (!shown) devAgain();
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
