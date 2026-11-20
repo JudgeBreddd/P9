@@ -15,7 +15,7 @@ test('Phase 9: session controls define all four exits and persistence is one cli
   const application = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, chromiumSandbox: true });
   const page = await application.firstWindow();
   await page.click('#themeBtn');
-  await page.click('[data-theme-pick="redline"]');
+  await page.click('[data-theme-pick="night-drive"]');
   await page.click('#stopAll');
   await page.waitForTimeout(500);
   const dialog = page.locator('#stopDlg');

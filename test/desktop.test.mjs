@@ -73,10 +73,10 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     console.log('PASS phase4 Electron: actual sandbox + isolation, exact bridge, CSP enforcement, sender/argument refusal, external navigation/popup blocked');
 
     assert.deepEqual(await page.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.hasAttribute('data-amoled')]), ['event-horizon-prime', true]);
-    await page.click('#themeBtn'); await page.click('[data-theme-pick="redline"]');
-    assert.equal(await page.locator('html').getAttribute('data-theme'), 'redline');
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="night-drive"]');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'night-drive');
     await page.reload(); await shellReady(page);
-    assert.equal(await page.locator('html').getAttribute('data-theme'), 'redline');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'night-drive');
     await page.click('#themeBtn'); await page.click('[data-theme-pick="event-horizon-prime"]'); await page.click('#themeBtn');
     console.log('PASS phase4 DUWOP: fresh Prime AMOLED, actual theme switch, saved look survives reload');
 

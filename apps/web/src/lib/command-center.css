@@ -1,45 +1,13 @@
-/* Command Center (@duwop/command-center): an add-on theme pack carrying three looks from Builder's design suite,
+/* Command Center (@duwop/command-center): an add-on theme pack carrying two looks from Builder's design suite,
    converted exactly from its hex tokens (the design file, 2026-10-11) to oklch.
-     Redline        true black, gunmetal surfaces, signature red glow, JetBrains Mono
      Night Drive    blue on night indigo (the Tokyo Night palette by enkia, MIT licence)
-     Event Horizon  near-black, steel blue, Space Grotesk; glow only on interaction
-   All three are dark-only. Each theme has three blocks:
+     Event Horizon Prime  near-black, steel blue, Space Grotesk, deep space and halos
+   Both are dark-only. Each theme has three blocks:
      1. --nh / --nc / --primary / --glow2, so the core shared rules still build a sane theme (and AMOLED works).
      2. .dark.dark.dark[...]: tokens that stay put with or without AMOLED. The tripled .dark is on purpose:
         four parts outrank the core shared rule (.dark[data-theme]:not(...), three parts) whichever CSS file
         loads first.
      3. .dark.dark[...]:not([data-amoled]): the exact surfaces (four parts), which AMOLED replaces with true black. */
-
-/* ---- Redline ---- */
-.dark[data-theme="redline"] {
-  --nh: 268;
-  --nc: 0.01;
-  --primary: oklch(0.601 0.175 24);
-  --glow2: oklch(0.52 0.139 24);
-}
-.dark.dark.dark[data-theme="redline"] {
-  --foreground: oklch(0.946 0.003 265);
-  --card-foreground: oklch(0.946 0.003 265);
-  --popover-foreground: oklch(0.946 0.003 265);
-  --secondary-foreground: oklch(0.946 0.003 265);
-  --accent-foreground: oklch(0.946 0.003 265);
-  --muted-foreground: oklch(0.579 0.015 267);
-  --primary-foreground: oklch(0 0 0); /* black on the red: 4.9:1. White is 3.7:1 */
-  --destructive: oklch(0.637 0.208 25);
-  --border: oklch(1 0 0 / 7%);
-  --input: oklch(1 0 0 / 10%);
-  --ring: oklch(0.601 0.175 24);
-  --glow: oklch(0.605 0.199 25);
-  --radius: 0.75rem;
-}
-.dark.dark[data-theme="redline"]:not([data-amoled]) {
-  --background: oklch(0 0 0);
-  --card: oklch(0.086 0.006 285);
-  --popover: oklch(0.173 0.009 264);
-  --secondary: oklch(0.205 0.01 268);
-  --muted: oklch(0.173 0.009 264);
-  --accent: oklch(0.218 0.012 271);
-}
 
 /* ---- Night Drive: Tokyo Night palette by enkia (github.com/enkia/tokyo-night-vscode-theme, MIT) ---- */
 .dark[data-theme="night-drive"] {
@@ -71,14 +39,14 @@
   --accent: oklch(0.306 0.037 273);
 }
 
-/* ---- Event Horizon: steel blue is the primary, ring and glow; the gunmetal panel is secondary / muted ---- */
-.dark:is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]) {
+/* ---- Event Horizon Prime's base: steel blue is the primary, ring and glow; the gunmetal panel is secondary / muted ---- */
+.dark[data-theme="event-horizon-prime"] {
   --nh: 253;
   --nc: 0.014;
   --primary: oklch(0.608 0.095 243);
   --glow2: oklch(0.586 0.132 278);
 }
-.dark.dark.dark:is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]) {
+.dark.dark.dark[data-theme="event-horizon-prime"] {
   --foreground: oklch(0.943 0.011 244);
   --card-foreground: oklch(0.943 0.011 244);
   --popover-foreground: oklch(0.943 0.011 244);
@@ -93,7 +61,7 @@
   --glow: oklch(0.608 0.095 243);
   --radius: 0.5rem;
 }
-.dark.dark:is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]):not([data-amoled]) {
+.dark.dark[data-theme="event-horizon-prime"]:not([data-amoled]) {
   --background: oklch(0.122 0.006 262);
   --card: oklch(0.211 0.014 253);
   --popover: oklch(0.211 0.014 253);
@@ -107,7 +75,7 @@
    fill on titles and main buttons, a lit hairline along each surface's top edge.
    A black hole: light bends around a dark centre. Fraunces italic headings, glass surfaces over deep space,
    the event horizon glowing behind the cards, halos that orbit in blue, amber and violet.
-   Base colours are Event Horizon's: duwop.css and d1.css share them with this look via :is(). */
+   Its base colours are in the block above (the plain Event Horizon theme they came from was taken out in O119). */
 
 .dark[data-theme="event-horizon-prime"] {
   --primary: oklch(0.72 0.14 243); /* Event Horizon's blue at chroma 0.14 (was 0.095), Gods run 0.12-0.20 */

@@ -163,7 +163,7 @@ test('D11: a Dev Focus that could not start keeps one editor view while the layo
 
 test('D12: the brand mark is the real P9 logo in every theme', { timeout: 90000 }, async (t) => {
   const { page, shot } = await launch(t);
-  for (const theme of ['event-horizon-prime', 'daylight', 'redline', 'ascii']) {
+  for (const theme of ['event-horizon-prime', 'daylight', 'night-drive', 'olympus']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('html').getAttribute('data-theme'), theme);

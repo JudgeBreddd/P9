@@ -12,7 +12,7 @@ export const duwopConfig: {
   storageKey: string;
   /** What a first-time visitor sees. */
   defaultLook: Look;
-  /** Theme ids users may pick, or "all". "custom" is the random palette roller. */
+  /** Theme ids users may pick, or "all". */
   themes: string[] | "all";
   /** Opt-in effects from add-on items (e.g. @duwop/popcorn), shown in the picker after the core ones. */
   extraEffects?: { id: string; name: string; note: string }[];
