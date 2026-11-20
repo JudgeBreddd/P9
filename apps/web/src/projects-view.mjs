@@ -103,9 +103,13 @@ export function installProjects(o, api) {
     if (sprintLead && o.S.view?.id === id) page.querySelector(`[data-sprint="${CSS.escape(sprintLead)}"]`)?.scrollIntoView({ block: 'start' });
     page.focus({ preventScroll: true }); // the page, not the editable name: a stray key must not rename the project
   }
-  const instrText = s => { const l = s.split('\n'), rest = l.slice(3);
-    return `<p class="instr">${esc(l.slice(0, 3).join('\n'))}${rest.length ? `<span hidden data-rest>\n${esc(rest.join('\n'))}</span>` : ''}</p>`
-      + (rest.length ? `<button class="instr-all" data-pj="all">Show ${rest.length} more line${rest.length > 1 ? 's' : ''}</button>` : ''); };
+  // O198: the project whose Instructions show every line. Each redraw writes the page from this markup, so an opening kept
+  // only on the page closed again at the next one (a chat in the project changing, about every 30 s). renderPage clears it
+  // as soon as anything else is shown.
+  let instrOpen = '';
+  const instrText = (s, id) => { const l = s.split('\n'), rest = l.slice(3), all = instrOpen === id;
+    return `<p class="instr">${esc(l.slice(0, 3).join('\n'))}${rest.length ? `<span${all ? '' : ' hidden'} data-rest>\n${esc(rest.join('\n'))}</span>` : ''}</p>`
+      + (rest.length ? `<button class="instr-all" data-pj="all" aria-expanded="${all}">${all ? 'Show fewer lines' : `Show ${rest.length} more line${rest.length > 1 ? 's' : ''}`}</button>` : ''); };
   const mark = s => { const st = stateOf(s, false); return st ? `<span class="mk mk-${st === 'running' ? 'run' : st}" title="${LABEL[st]}">${st === 'needs' ? I.hand : st === 'failed' ? svg.x : ''}</span>` : ''; };
   const chatRow = s => `<button class="crow" data-chat="${esc(s.id)}" data-s="${stateOf(s, false)}"><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${esc(s.title)}</span>${mark(s)}<span class="when">${fmt(when(s))}</span></button>`;
   function projectHtml(p) {
@@ -117,7 +121,7 @@ export function installProjects(o, api) {
         : `<span class="mono" title="Chats in this project start here">${esc(where(f))}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`}</div>`;
     const own = !mine && p.agentFiles?.length ? `<p class="ownfile">${svg.files}This folder has its own instructions (${p.agentFiles.map(esc).join(', ')}). Agents read them on their own.</p>` : '';
     const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(instrDrafts.get(p.id) ?? p.instructions ?? '')}</textarea>${instrDrafts.has(p.id) ? '<p class="hint" data-pj-draft>Not saved yet: P9 refused it last time. Kept here and sent again.</p>' : ''}`
-      : p.instructions ? instrText(p.instructions) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
+      : p.instructions ? instrText(p.instructions, p.id) : '<p class="hint">None yet. Add a few lines every chat in this project should follow.</p>';
     const files = p.files ?? [], open = spPage && (p.sprints ?? []).find(x => x.lead === spPage);
     if (open) return `<div class="wrap" data-page="${esc(p.id)}" data-sp-page="${esc(open.lead)}">
       <div class="ph"><div class="grow"><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spback" title="Back to the project's page">‹ ${esc(p.name)}</button><h1 data-sp-title>${open.prep ? 'Sprint Setup' : open.closed ? 'Closed sprint' : 'Sprint View'}</h1>
@@ -235,6 +239,7 @@ export function installProjects(o, api) {
   function renderPage() {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
     page.hidden = !on; chats.hidden = on;
+    if (!on || v.kind !== 'project' || v.id !== instrOpen) instrOpen = ''; // O198: another page (a chat, another project, Archived) closes it
     if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
     if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());
@@ -311,7 +316,7 @@ export function installProjects(o, api) {
     if (k === 'unchat') return archiveChat(find(b.dataset.id), false).then(renderPage);
     if (!cur) return;
     if (k === 'new') return o.newSession(o.lastAgent(), '', cur.id);
-    if (k === 'all') { page.querySelector('[data-rest]').hidden = false; return b.remove(); }
+    if (k === 'all') { instrOpen = instrOpen === cur.id ? '' : cur.id; return renderPage(); }
     // Instructions typed and not yet saved are saved before the box leaves the page; a refused save keeps box and page.
     const kept = async () => { if (!$('#pjInstr')) return true; clearTimeout(saveT); return await saveInstr() !== false; };
     if (k === 'edit') { if (edit && !await kept()) return; edit = !edit; renderPage(); return edit && $('#pjInstr')?.focus(); }

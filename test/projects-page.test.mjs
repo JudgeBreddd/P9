@@ -1396,3 +1396,46 @@ test('projects: Sprint Setup roles come in when their late chunk lands, a focuse
   assert.equal(await box.inputValue(), typed, 'the file box kept the text typed while the chunk was held');
   console.log('PASS Sprint Setup late roles: with sprint-view.mjs held and sprint.md focused and typed in, the role rows came in when it landed; the box kept its focus and its text');
 });
+
+// O198: Show more on a project's Instructions stays open through the page's redraws (a chat in the project changing redraws
+// the page, and that closed it again about every 30 s), until the user presses Show fewer lines or leaves the page.
+test('O198 Show more on project instructions stays open through redraws until closed or left', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Long notes', work: { kind: 'p9' } })).project;
+  assert.equal((await call(instance, '/projects/' + p.id, 'POST', { instructions: 'One.\nTwo.\nThree.\nFour.\nFive.' })).status, 200);
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
+  await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title First title' }); await ended(instance, chat);
+  const other = (await call(instance, '/projects', 'POST', { name: 'Other', work: { kind: 'p9' } })).project;
+  const { page, errors } = await launch(t, instance);
+  const rest = page.locator('#projPage [data-rest]'), more = page.locator('#projPage .instr-all');
+  // The page's chat row shows the new title once the page has drawn again: that is the redraw.
+  const redraw = async (title) => { await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title ' + title }); await ended(instance, chat);
+    await page.locator('#projPage .crow', { hasText: title }).waitFor({ timeout: 10000 }); };
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await more.filter({ hasText: 'Show 2 more lines' }).click({ timeout: 10000 });
+  await rest.waitFor({ state: 'visible', timeout: 3000 }); // opened
+  await redraw('Second title');
+  assert.equal(await rest.isVisible(), true, 'still open after the page drew again');
+  assert.equal(await more.textContent(), 'Show fewer lines');
+  assert.equal(await more.getAttribute('aria-expanded'), 'true');
+  await more.click();
+  assert.equal(await rest.isVisible(), false, 'Show fewer lines closes it');
+  await redraw('Third title');
+  assert.equal(await rest.isVisible(), false, 'and it stays closed through a redraw');
+  assert.equal(await more.textContent(), 'Show 2 more lines');
+  // Leaving the page (to the chat) and coming back shows it closed.
+  await more.click(); assert.equal(await rest.isVisible(), true);
+  await page.locator(`#projPage .crow[data-chat="${chat}"]`).click();
+  await page.locator('#projPage').waitFor({ state: 'hidden', timeout: 10000 });
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await more.filter({ hasText: 'Show 2 more lines' }).waitFor({ timeout: 10000 });
+  assert.equal(await rest.isVisible(), false, 'closed again after leaving the page');
+  // The same through another project's page.
+  await more.click(); assert.equal(await rest.isVisible(), true);
+  await page.locator(`#navList [data-proj="${other.id}"]`).click({ timeout: 10000 });
+  await page.locator('#pjName', { hasText: 'Other' }).waitFor({ timeout: 10000 });
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await more.filter({ hasText: 'Show 2 more lines' }).waitFor({ timeout: 10000 });
+  assert.equal(await rest.isVisible(), false, 'closed again after another project was shown');
+  assert.deepEqual(errors, []);
+});
