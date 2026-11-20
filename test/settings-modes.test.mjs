@@ -317,11 +317,20 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   await answers([0]);
   await page.click('#setFree'); await settled([true, true, true, false]);
   assert.deepEqual([await asked(), await daemonSide(), await local()], [['Turn off file protection?'], [true, true], [null, null, null, null]]);
+  // MC-4: a chat already open before Unrestricted is turned on (sample-free, idle) follows it on and back off.
+  const open = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await page.locator(`#nav .row[data-chat="${open}"]`).click();
+  const openMode = page.locator(`#chats .pane[data-id="${open}"] [data-pill="Mode"]`);
+  await openMode.waitFor(); assert.equal(await openMode.getAttribute('aria-label'), 'Mode: Auto review', 'the open chat starts in its own mode');
+  await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree').waitFor();
   // "Turn off protection": every restriction off, and new chats start in Full access and Bypass permissions.
   await answers([1]);
   await page.click('#setFree'); await settled([false, false, false, true]);
   assert.deepEqual([(await asked()).length, await daemonSide(), await local()], [1, [false, false], ['1', '1', 'Full access', 'Bypass permissions']]);
   assert.equal(await page.locator('[data-default-mode="codex"]').inputValue(), 'Full access', 'New chats start in shows it');
+  assert.match(await page.locator('#setFree').evaluate((b) => b.closest('label').textContent), /chats already open switch too/, 'the switch says open chats follow');
+  assert.equal(await openMode.getAttribute('aria-label'), 'Mode: Full access', 'MC-4: the chat already open switched too');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-security-unrestricted ' + (await page.locator('#setDlg').screenshot()).toString('base64'));
   await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
   const id = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
@@ -336,6 +345,10 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree:checked').waitFor();
   await page.click('#setFree'); await settled([false, true, true, false]);
   assert.deepEqual([await asked(), await daemonSide(), await local()], [[], [false, true], [null, null, null, null]]);
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await page.locator(`#nav .row[data-chat="${open}"]`).click(); await openMode.waitFor();
+  assert.equal(await openMode.getAttribute('aria-label'), 'Mode: Auto review', 'MC-4: off puts the open chat back in its start mode');
+  await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree').waitFor();
   assert.deepEqual([await page.evaluate(() => localStorage.getItem('p9-link-ok')), await page.locator('#setLinks').isChecked()], [null, true], 'off asks before agent links again');
   // Protection already off: no native warning comes, so Unrestricted asks once itself; Cancel changes nothing.
   await answers([1]); await page.click('#setProtect'); await settled([false, false, true, false]);
