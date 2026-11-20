@@ -182,7 +182,10 @@ delete process.env.P9_GITHUB_TOKEN;
 // ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
-const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, codexUsage: adapterOverride === undefined ? createCodexUsage() : codexUsageEntry && createCodexUsage({ read: () => readOnce(codexUsageEntry) }), claudeUsage: adapterOverride === undefined ? createClaudeUsage() : usageSdk && createClaudeUsage({ open: () => openQuery(usageSdk) }), instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
+// W2: kept here so stop() ends the processes they hold open (the unit's KillMode=process signals only the daemon).
+const codexUsage = adapterOverride === undefined ? createCodexUsage() : codexUsageEntry && createCodexUsage({ read: () => readOnce(codexUsageEntry) });
+const claudeUsage = adapterOverride === undefined ? createClaudeUsage() : usageSdk && createClaudeUsage({ open: () => openQuery(usageSdk) });
+const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, codexUsage, claudeUsage, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
   ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'],
   ...(values['update-turn-ms'] ? { updateTurnMs: Number(values['update-turn-ms']) } : {}) });
 try {
@@ -222,6 +225,8 @@ function stop() {
   // A stuck request or filesystem must not keep systemctl stop waiting indefinitely.
   setTimeout(() => { server.closeAllConnections(); process.exit(1); }, 10000).unref();
   if (server.remote) { server.remote.close(); server.remote.closeAllConnections(); }
+  // W2: the Claude usage poll's SDK process (claude) would outlive the daemon; Codex's app server ends with its stdin.
+  claudeUsage?.close(); codexUsage?.close();
   server.editor?.stop(); // Server mode's editor runs in its own systemd scope, so it would outlive the daemon
   // Agents stop first, alongside the request drain: an open long poll would otherwise hold server.close for 8 s.
   // The woken polls answer, then sit idle on keep-alive; close them once the agents are down.

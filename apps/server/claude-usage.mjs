@@ -27,7 +27,7 @@ export async function openQuery(sdk = sdkPath()) {
 // The poll both agents' reads share: every minute while someone looks at usage, stopped after 10 minutes with no look.
 // `read` answers the agent's windows or throws; `close` ends whatever it keeps open.
 export function createPoll({ name, read, close = () => {}, now = Date.now, log = (line) => console.error(line), wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()) }) {
-  let reading = null, looked = 0, running = false, said = '';
+  let reading = null, looked = 0, running = false, said = '', stopped = false;
   async function poll() {
     try { reading = { windows: await read(), at: now() }; said = ''; } catch (error) {
       // One line per kind of failure, never the answer; the process is restarted at the next poll.
@@ -38,16 +38,18 @@ export function createPoll({ name, read, close = () => {}, now = Date.now, log =
   async function loop() {
     running = true;
     try {
-      for (let idle = 0; idle < IDLE_MS; idle = now() - looked) {
+      // stopped: the daemon's stop came while a read was still opening; the finally closes what that read opened.
+      for (let idle = 0; idle < IDLE_MS && !stopped; idle = now() - looked) {
         if (idle <= LOOKING_MS) await poll();
-        await wait(POLL_MS);
+        if (!stopped) await wait(POLL_MS);
       }
     } finally { close(); running = false; }
   }
   return {
     // A /usage request: someone is looking. Returns the last good answer ({ windows, at }) or null.
-    look() { looked = now(); if (!running) void loop(); return reading; },
-    close,
+    look() { looked = now(); if (!running && !stopped) void loop(); return reading; },
+    // The daemon's stop: a look during its request drain starts nothing new.
+    close() { stopped = true; close(); },
   };
 }
 
