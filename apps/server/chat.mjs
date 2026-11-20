@@ -18,7 +18,7 @@ import { imageType, protection } from '../../packages/files/index.mjs';
 import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
-import { createMove, movedNote } from './move.mjs';
+import { createMove, movedNote, failedMoveNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
@@ -1597,7 +1597,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // The moved note goes in with the next message's user event; a command cannot carry it, so it waits for that one.
       if (bare && movedNote(db, id)) { release(); return refused(409, 'moved-note-waiting'); }
       setState(id, 'turn');
-      const note = movedNote(db, id); // read before this message's own user event
+      // O10: and the failed Send to remote's note, which a command does not carry or use up (its user event says command).
+      const note = [movedNote(db, id), bare ? null : failedMoveNote(db, id)].filter(Boolean).join('') || null; // read before this message's own user event
       // N1: the project's instructions and added files, when this chat has not been sent this exact text since its last
       // message named a project note (first message, moved in, or changed). projectNote names what was current. A steered
       // message (steer) carries none and is skipped, or one steer would resend the whole note (step 1c).
@@ -1606,7 +1607,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }) }); // hash and type only: events stay small
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }), ...(bare && { command: true }) }); // hash and type only: events stay small
       if (held?.length) crashAt('user-event');
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }

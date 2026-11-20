@@ -315,6 +315,43 @@ test('Move progress: a refusal ends in failed and move-failed; Cancel deletes th
   assert.equal((await listed(server, other.id)).state, 'stopped');
 });
 
+// O10: asked why a send failed, an agent that did not know P9 moves chats blamed git and offered to push to GitHub.
+// The next message after a failed Send to remote tells it what P9 did and said, once; a slash command does not use it up.
+test('O10: after a failed Send to remote the next message tells the agent it was P9\'s move and why, once', { skip, timeout: 60000 }, async (t) => {
+  const { laptop, move } = await pair(t);
+  await mkdir(path.join(laptop.workspace, 'only-here'));
+  const id = (await call(laptop, '/chat', 'POST', { provider: 'claude', folder: 'only-here' })).conversation;
+  await turn(laptop, id, 'hello');
+  assert.equal((await move(id)).body.error, 'move-failed');
+  await turn(laptop, id, 'why did it fail');
+  const users = async () => (await events(laptop, id)).filter((e) => e.type === 'user');
+  const told = (await users()).at(-1).data.note;
+  assert.match(told ?? '', /Send to remote, P9's own button that moves this chat to test-host/);
+  assert.match(told, /not git, GitHub or a cloud session/);
+  assert.match(told, /P9 said: "The remote has no folder only-here/);
+  assert.ok((await said(laptop, id)).some((text) => text.includes('not git, GitHub')), 'the agent got the note');
+  await turn(laptop, id, 'thanks');
+  assert.equal((await users()).at(-1).data.note, undefined, 'told twice');
+});
+
+// O10: the note's own rule, on a bare ledger: a command's user event (command: true) leaves it for the next message.
+test('O10: the failed-move note waits past a slash command and is gone after a message', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { failedMoveNote } = await import('../apps/server/move.mjs');
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE events (cursor INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL)');
+  const add = (type, data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, 0)').run('c', type, JSON.stringify(data));
+  add('user', { text: 'hello' });
+  assert.equal(failedMoveNote(db, 'c'), null);
+  add('move-failed', { host: 'bad host;rm', message: 'The remote refused the chat (x). The chat stays here.' });
+  assert.match(failedMoveNote(db, 'c'), /moves this chat, their other computer.*P9 said: "The remote refused the chat \(x\)/s);
+  add('move-failed', { host: 'box', message: 'Lost it.' });
+  add('user', { text: '/compact', command: true });
+  assert.match(failedMoveNote(db, 'c'), /to box, .*P9 said: "Lost it\."/s);
+  add('user', { text: 'next' });
+  assert.equal(failedMoveNote(db, 'c'), null);
+});
+
 // Item 23: outside a Syncthing folder the move sends the chat's folder over its own tunnel first, so the
 // server never waits for a sync; its bytes are in the move's total (specs/move-progress-events.md). The page's prompt and the
 // Syncthing check are main's and the window's (remote.test.mjs).
