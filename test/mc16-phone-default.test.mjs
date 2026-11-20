@@ -48,6 +48,19 @@ test('MC-16 phone: the Model sheet and the effort picker name the default, the S
   assert.ok((await page.locator('#sheetBody .opt').allTextContents()).includes('Haiku (Default)'), 'the Model sheet names the default');
   await page.keyboard.press('Escape');
 
+  // FIX1: Settings changes while this chat stays open (no reload, no navigation, no event on this chat). Another chat's
+  // event makes the phone list again, and the open chat's labels follow the new default.
+  // A pick made here and not sent yet (High; the chat runs on Medium) must stay the pick through that redraw.
+  await page.evaluate(() => { const s = document.querySelector('#pickers select[data-config="effort"]'); s.value = 'high'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+  assert.equal((await desk('/start-defaults', 'POST', { set: { claude: { model: 'opus', effort: 'low' } } })).status, 200);
+  await desk('/chat', 'POST', { provider: 'claude' });
+  await page.waitForFunction(() => [...document.querySelectorAll('#pickers select[data-config="effort"] option')].some((o) => o.textContent === 'Effort: Low (Default)'), null, { timeout: 20000 })
+    .catch(async () => assert.fail('FIX1: the open chat kept the old default after a relist: ' + (await page.evaluate(() => [...document.querySelectorAll('#pickers option, #model option')].map((o) => o.textContent).join(' | ')))));
+  const now = await page.evaluate(() => ({ models: [...document.querySelectorAll('#model option')].map((o) => o.textContent), chat: document.querySelector('#conversation')?.value }));
+  assert.equal(now.chat, id, 'still on the same chat');
+  assert.equal(await page.locator('#pickers select[data-config="effort"]').inputValue(), 'high', 'the unsent pick survived the redraw');
+  assert.ok(now.models.includes('Opus (Default)') && !now.models.includes('Haiku (Default)'), 'the model mark follows too: ' + now.models.join(' | '));
+
   // A Settings default the agent does not offer: the agent's own start value is the default (Medium; its model's own name says so).
   assert.equal((await desk('/start-defaults', 'POST', { set: { claude: { model: 'gone-model', effort: 'gone' } } })).status, 200);
   await page.reload(); seen = await read(id);

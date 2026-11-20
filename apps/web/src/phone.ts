@@ -862,7 +862,9 @@ const picksOf = perChat((events) => ({ configs: events.filter((event) => event.t
 function renderPicks(id: string) {
   const { configs, set } = picksOf(id);
   // The agent is in the key: a chat made here can draw before its row is read, with no modes yet.
-  const key = id + ':' + provider(id) + ':' + configs.length + ':' + (set?.name ?? '');
+  // MC-16: the default mark is in the key too: a Settings change reaches the phone at a relist, with no event on this chat.
+  const mark = !state.conversations.find((entry) => entry.id === id)?.profile && (agentLists[provider(id)] as { mark?: { model: string | null; pickers?: Record<string, string> } } | null)?.mark;
+  const key = id + ':' + provider(id) + ':' + configs.length + ':' + (set?.name ?? '') + ':' + JSON.stringify(mark || null);
   if (key === picksFor) return;
   // The confirmed pick is kept: a redraw while the red warning is open (Codex reports its mode as it starts) must not
   // turn the pick waiting on that warning into the one Cancel goes back to.
@@ -874,9 +876,8 @@ function renderPicks(id: string) {
   const config = (configs.at(-1)?.data ?? agentLists[provider(id)] ?? {}) as { // O47: a chat not started yet offers its agent's kept lists
     model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
-  // MC-16: the option a new chat starts on says so, as on the desktop (the daemon's mark; not on a provider profile's chat,
-  // nor on an option whose own name already says default).
-  const mark = !state.conversations.find((entry) => entry.id === id)?.profile && (agentLists[provider(id)] as { mark?: { model: string | null; pickers?: Record<string, string> } } | null)?.mark;
+  // MC-16: the option a new chat starts on says so, as on the desktop (the daemon's mark, above; not on a provider profile's
+  // chat, nor on an option whose own name already says default).
   const dflt = (name: string, value: string, marked: string | null | undefined) => name + (mark && marked === value && !/default/i.test(name) ? ' (Default)' : '');
   model.hidden = !options.length; model.dataset.current = config.model?.current ?? '';
   model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(dflt(o.name, o.value, mark && mark.model))}</option>`).join('');
