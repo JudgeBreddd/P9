@@ -494,6 +494,110 @@ test('U6: a fresh remote goes Connect, install, the Temporary or Always on quest
 // U6 gap a: P9 there starts (its start script says ok and leaves desktop.json) but its daemon never answers. The connecting
 // screen does not sit on "Starting P9" forever: about 30 s after the start, a plain line and Try again; nothing is installed
 // over it; Try again starts it again.
+// O8 rule 3b: Disconnect while P9 there is still being started (setUp's startServer in flight). The stop waits for that
+// start, so the start cannot land after it and leave P9 on there.
+test('O8 Disconnect while P9 there is still starting: the stop comes after the start, not before it', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), s = await stage(null), home = path.join(s.directory, 'home');
+  const profile = path.join(s.directory, 'profile'), run = path.join(home, '.local/share/p9/run'), asked = path.join(s.directory, 'asked');
+  await mkdir(profile); await mkdir(run, { recursive: true });
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  // The start takes 3 s and writes what it was asked when it ends; a stop writes at once.
+  // This stop does not work, so the window says so (a dialog: the window has reloaded on this computer by then).
+  await writeFile(path.join(run, 'start'), '[ "$1" = up ] && sleep 3\necho "$1" >> ' + JSON.stringify(asked) + '\n[ "$1" = stop ] && exit 1\nexit 0\n');
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await app.evaluate(({ dialog }) => { globalThis.told = []; dialog.showMessageBox = async (w, o) => { globalThis.told.push(o.title + ' | ' + o.message); return { response: 0 }; }; });
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  assert.equal(await readFile(asked, 'utf8').catch(() => ''), '', 'the start is still running');
+  await page.evaluate(() => { void window.p9.serverOff(); }); // Disconnect's own call
+  for (const end = Date.now() + 20000; Date.now() < end && !(await readFile(asked, 'utf8').catch(() => '')).includes('stop'); await new Promise((r) => setTimeout(r, 100)));
+  await new Promise((r) => setTimeout(r, 3500)); // a start still running after a stop would write after it
+  assert.equal(await readFile(asked, 'utf8'), 'up\nstop\n');
+  assert.equal(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).host, null, 'back on this computer');
+  assert.deepEqual(await app.evaluate(() => globalThis.told), ['P9 is still on test-host | P9 could not turn itself off on test-host.']);
+});
+
+// O8 FIX1: a window on a remote with no running P9 (so U6 starts it there), whose start script is start(asked, dir): it
+// writes each action it was asked to the file asked when it ends. Main's dialogs are recorded, not shown.
+async function offApp(t, start, saved = { host: 'test-host' }) {
+  const local = await daemon(t), s = await stage(null), home = path.join(s.directory, 'home');
+  const profile = path.join(s.directory, 'profile'), run = path.join(home, '.local/share/p9/run'), asked = path.join(s.directory, 'asked');
+  await mkdir(profile); await mkdir(run, { recursive: true });
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify(saved));
+  await writeFile(path.join(run, 'start'), start(JSON.stringify(asked), JSON.stringify(s.directory)));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await app.evaluate(({ dialog }) => { globalThis.told = []; dialog.showMessageBox = async (w, o) => { globalThis.told.push(o.title); return { response: 0 }; }; });
+  const read = () => readFile(asked, 'utf8').catch(() => '');
+  // A window call, retried while the window reloads after a switch.
+  const call = async (fn, arg) => { for (const end = Date.now() + 20000; ; await page.waitForTimeout(200)) { try { return await page.evaluate(fn, arg); } catch (error) { if (Date.now() > end) throw error; } } };
+  const until = async (check, ms = 20000) => { for (const end = Date.now() + ms; Date.now() < end && !(await check()); await page.waitForTimeout(100)); };
+  return { app, page, read, call, until, profile };
+}
+
+test('O8 FIX1 Connect again while Disconnect waits for a start: the newer Connect wins, and P9 there is not stopped', { skip, timeout: 90000 }, async (t) => {
+  const { page, read, call, profile } = await offApp(t, (asked) => '[ "$1" = up ] && sleep 3\necho "$1" >> ' + asked + '\nexit 0\n');
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  // Disconnect, then Connect to the same machine, before the start in flight has ended.
+  await call(() => { void window.p9.serverOff(); void window.p9.server('test-host'); });
+  await page.waitForTimeout(9000); // both starts (3 s each) end, and a stop would have come after them
+  assert.doesNotMatch(await read(), /stop/, 'stopped by the older Disconnect');
+  assert.equal(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).host, 'test-host', 'on the remote, as last asked');
+});
+
+test('O8 FIX1 Connect while that remote\'s stop is still running: the Connect waits for it, then P9 starts there again', { skip, timeout: 90000 }, async (t) => {
+  const { page, read, call, until } = await offApp(t, (asked) => '[ "$1" = stop ] && sleep 5\necho "$1" >> ' + asked + '\nexit 0\n');
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  await until(async () => (await read()) === 'up\n');
+  await call(() => { void window.p9.serverOff(); });
+  await page.waitForTimeout(1500); // the stop is running there (5 s)
+  assert.equal(await read(), 'up\n', 'the stop has not ended yet');
+  await call(() => { void window.p9.server('test-host'); });
+  await until(async () => (await read()).split('\n').length > 3);
+  await page.waitForTimeout(1000);
+  assert.equal(await read(), 'up\nstop\nup\n', 'started again after the stop, not before it');
+});
+
+test('O8 FIX2 a Connect held by that remote\'s stop gives way to a newer ask: Switch to another machine, or This computer', { skip, timeout: 150000 }, async (t) => {
+  for (const [to, want, saved] of [['other-host', 'up\nup\nstop\n', 'other-host'], [null, 'up\nstop\n', null]]) {
+    await t.test(String(to), async (t) => {
+      const { page, read, call, until, profile } = await offApp(t, (asked) => '[ "$1" = stop ] && sleep 5\necho "$1" >> ' + asked + '\nexit 0\n',
+        { host: 'test-host', remotes: ['test-host', 'other-host'] });
+      await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+      await until(async () => (await read()) === 'up\n');
+      await call(() => { void window.p9.serverOff(); });
+      await page.waitForTimeout(1500); // the stop is running there (5 s)
+      // Connect to it (held by the stop), then a newer ask while the stop still runs.
+      await call((to) => { void window.p9.server('test-host'); void window.p9.server(to); }, to);
+      await until(async () => /stop/.test(await read()));
+      await page.waitForTimeout(4000); // a held Connect would start P9 there again by now
+      assert.equal(await read(), want, 'P9 not started again on test-host after its stop');
+      assert.equal(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).host ?? null, saved, 'the window is where the newer ask put it');
+    });
+  }
+});
+
+test('O8 FIX1 Disconnect waits for every start there still running, also one begun before a switch to another machine', { skip, timeout: 120000 }, async (t) => {
+  // The first start takes 8 s; the others (other-host's, then test-host's again) end at once.
+  const { page, read, call, until } = await offApp(t, (asked, dir) => 'if [ "$1" = up ] && mkdir ' + JSON.stringify(JSON.parse(dir) + '/slow') + ' 2>/dev/null; then sleep 8; fi\necho "$1" >> ' + asked + '\nexit 0\n',
+    { host: 'test-host', remotes: ['test-host', 'other-host'] });
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  await call(() => { void window.p9.server('other-host'); });
+  await until(async () => (await read()) === 'up\n');
+  await call(() => { void window.p9.server('test-host'); });
+  await until(async () => (await read()) === 'up\nup\n');
+  await call(() => { void window.p9.serverOff(); });
+  await until(async () => /stop/.test(await read()), 20000);
+  await page.waitForTimeout(1000);
+  assert.equal(await read(), 'up\nup\nup\nstop\n', 'the stop came after the first start, which ended last');
+});
+
 test('U6: a remote P9 that starts but never answers stops with a plain line and Try again, not Starting P9 forever', { skip, timeout: 150000 }, async (t) => {
   const local = await daemon(t), s = await stage(null), home = path.join(s.directory, 'home');
   const profile = path.join(s.directory, 'profile'), run = path.join(home, '.local/share/p9/run'), dead = path.join(s.server, 'p9-foundation');
@@ -536,12 +640,17 @@ test('U6: a remote P9 that starts but never answers stops with a plain line and 
 
 // U9: Disconnect beside the remote label goes back to this computer (p9:server(null)), and U8: on the slim Temporary P9 the
 // window has no Mission Control button and the status line says it comes with Always on.
-test('U9 Disconnect on the remote label goes back to this computer; U8 the slim Temporary P9 hides Mission Control', { skip, timeout: 120000 }, async (t) => {
+test('U9 Disconnect on the remote label goes back to this computer and O8 turns P9 off there; U8 the slim Temporary P9 hides Mission Control', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
   const profile = path.join(s.directory, 'profile');
   await mkdir(profile);
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host', remotes: ['test-host'] }));
-  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  // O8: the remote's home has a start script that writes what it was asked (stopServer's Temporary branch), and no unit, so
+  // the stop never reaches this machine's own systemctl.
+  const home = path.join(s.directory, 'home'), run = path.join(home, '.local/share/p9/run'), asked = path.join(s.directory, 'asked');
+  await mkdir(run, { recursive: true });
+  await writeFile(path.join(run, 'start'), 'echo "$1" >> \'' + asked + '\'\n');
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -552,23 +661,28 @@ test('U9 Disconnect on the remote label goes back to this computer; U8 the slim 
   const disconnect = page.locator('#disconnectBtn:not([hidden])');
   await disconnect.waitFor({ timeout: 15000 });
   assert.equal(await disconnect.textContent(), 'Disconnect');
-  assert.match(await disconnect.getAttribute('title'), /^Back to this computer\. P9 keeps running on test-host\.$/);
+  assert.equal(await disconnect.getAttribute('title'), 'Back to this computer, and turns P9 off on test-host until you connect again or it restarts.');
   // The full P9 there: Mission Control is offered.
   assert.equal(await page.locator('#rMission').isVisible(), true);
   await evidence(page, 'u9-disconnect-remote');
   // The machine menu says it too.
   await page.locator('#serverBadge').click();
-  await page.locator('#serverPop #serverDisconnect', { hasText: 'Disconnect from test-host' }).waitFor({ timeout: 10000 });
+  await page.locator('#serverPop #serverDisconnect', { hasText: 'Disconnect and turn off P9 on test-host' }).waitFor({ timeout: 10000 });
   await page.keyboard.press('Escape');
+  assert.equal(await readFile(asked, 'utf8').catch(() => ''), '', 'nothing stopped before the press');
   await disconnect.click();
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor({ timeout: 30000 });
   await page.locator('#disconnectBtn').waitFor({ state: 'hidden', timeout: 15000 });
   assert.equal(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).host, null, 'remembered: this computer');
+  // O8: then P9 there was told to stop, once, after this window had left it.
+  for (const end = Date.now() + 10000; Date.now() < end && !(await readFile(asked, 'utf8').catch(() => '')); await new Promise((r) => setTimeout(r, 100)));
+  assert.equal(await readFile(asked, 'utf8'), 'stop\n');
   await evidence(page, 'u9-disconnected-local');
   // U8: main's answers for a slim Temporary P9 there, replayed (remote-keep.test.mjs runs what makes them).
   await app.evaluate(({ ipcMain }) => {
     const k = globalThis.slimTest = { calls: [] };
     ipcMain.removeHandler('p9:get-status'); ipcMain.handle('p9:get-status', () => ({ status: 'ok', mode: 'server', host: 'test-host', background: true, slim: true, ask: false }));
+    ipcMain.removeHandler('p9:server-off'); ipcMain.handle('p9:server-off', () => { k.calls.push(['off']); return { ok: true }; });
     ipcMain.removeHandler('p9:server'); ipcMain.handle('p9:server', (_, ...a) => { k.calls.push(a); return a.length ? { ok: true } : { host: 'test-host', last: 'test-host', connected: true, slim: true, error: null, hosts: [], remotes: ['test-host'], keep: {}, noKey: [] }; });
   });
   // Ctrl K offers Mission before slim (the control for the check after it).
@@ -579,7 +693,7 @@ test('U9 Disconnect on the remote label goes back to this computer; U8 the slim 
   await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'P9 on test-host is temporary (no Mission Control): it stops when you disconnect' }).waitFor({ timeout: 15000 });
   await page.locator('#rMission').waitFor({ state: 'hidden', timeout: 10000 });
   assert.equal(await page.locator('#rChat').isVisible(), true);
-  assert.match(await disconnect.getAttribute('title'), /temporary, so it stops there 5 minutes later/);
+  assert.equal(await disconnect.getAttribute('title'), 'Back to this computer, and turns P9 off on test-host.', 'O8: Temporary is turned off too');
   // The footer and Ctrl K do not claim Mission Control there.
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 10000 });
   assert.doesNotMatch(await page.locator('#dataNote').textContent(), /Mission/);
@@ -622,7 +736,7 @@ test('U9 Disconnect on the remote label goes back to this computer; U8 the slim 
   assert.deepEqual(await app.evaluate(() => globalThis.slimTest.agents), [['claude'], ['claude'], null]);
   await disconnect.click();
   for (const end = Date.now() + 5000; Date.now() < end && !(await app.evaluate(() => globalThis.slimTest.calls.some((c) => c.length)));) await page.waitForTimeout(100);
-  assert.deepEqual((await app.evaluate(() => globalThis.slimTest.calls)).filter((c) => c.length), [[null]], 'Disconnect is p9:server(null)');
+  assert.deepEqual((await app.evaluate(() => globalThis.slimTest.calls)).filter((c) => c.length), [['off']], 'O8: Disconnect is p9:server-off');
 });
 
 // D3: Settings > Remote lists only what this person has: the remotes added here and their own ~/.ssh/config Hosts, none built

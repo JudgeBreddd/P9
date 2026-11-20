@@ -12,7 +12,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { stage, bash, nodeLog, stopDaemon } from './install-runtime.test.mjs';
 import { createKeeper } from '../apps/desktop/keep.mjs';
-import { READ, remoteMode, restartServer, startServer } from '../apps/desktop/remote.mjs';
+import { READ, remoteMode, restartServer, startServer, stopServer } from '../apps/desktop/remote.mjs';
 import { watchIdle } from '../apps/server/idle.mjs';
 import { daemon, fixture, root } from './helpers.mjs';
 
@@ -188,6 +188,26 @@ test('Start P9 there: the user service where one is installed, the background st
   const none = await stage(true, 'refused', { installed: false });
   assert.equal(await startServer('test-host', path.join(none.bin, 'ssh')), 'none');
   assert.equal(await startServer('-oProxyCommand=x', path.join(none.bin, 'ssh')), 'failed', 'HOST check');
+});
+
+// O8: Disconnect turns P9 off there, Always on and Temporary alike (the owner's 2026-11-03 decision). Always on: its unit is stopped, not
+// disabled. Temporary: the daemon start runs is stopped, and P9 there answers no more.
+test('O8 Turn P9 off there: the user service where one is installed, the background daemon in background mode, none where neither', { skip, timeout: 60000 }, async (t) => {
+  const service = await stage(true);
+  assert.equal(await stopServer('test-host', path.join(service.bin, 'ssh')), 'ok');
+  assert.match(await read(service.systemctlLog), /^--user stop p9-foundation\.service$/m);
+  assert.doesNotMatch(await read(service.systemctlLog), /disable/);
+  const s = await background(t);
+  assert.ok(existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json')), 'running before');
+  assert.equal(await stopServer('test-host', path.join(s.bin, 'ssh')), 'ok');
+  assert.ok(await until(() => !existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json'))), 'stopped: P9 there answers no more');
+  assert.equal(await read(s.systemctlLog), '', 'background mode: not the service');
+  const none = await stage(true, 'refused', { installed: false });
+  assert.equal(await stopServer('test-host', path.join(none.bin, 'ssh')), 'none');
+  assert.equal(await stopServer('-oProxyCommand=x', path.join(none.bin, 'ssh')), 'failed', 'HOST check');
+  assert.equal(await stopServer('test-host', '/bin/false'), 'failed', 'ssh cannot reach it');
+  await mkdir(none.runDir, { recursive: true }); await writeFile(path.join(none.runDir, 'start'), 'exit 1\n');
+  assert.equal(await stopServer('test-host', path.join(none.bin, 'ssh')), 'failed', 'its stop did not work');
 });
 
 // RS2: Restart P9 there. A slim (Temporary) remote has no unit, so a systemctl restart did nothing there: start's restart

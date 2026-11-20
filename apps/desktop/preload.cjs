@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   installPets: text => ipcRenderer.invoke('p9:pet-install', String(text)),
   removePet: (name) => ipcRenderer.invoke('p9:pet-remove', name),
   server: (...host) => ipcRenderer.invoke('p9:server', ...host), // none: mode, remotes and ssh hosts; null: Local; a host: that remote
+  serverOff: () => ipcRenderer.invoke('p9:server-off'), // O8 Disconnect: back to this computer, then P9 on the remote is turned off
   remotes: (action, host) => ipcRenderer.invoke('p9:remotes', action, host), // 'add' or 'remove', one host name
   remoteKeep: (yes, remember) => ipcRenderer.invoke('p9:remote-keep', yes, remember), // row I1: Keep P9 running on this remote?
   remoteAgents: (names) => ipcRenderer.invoke('p9:remote-agents', names),
