@@ -228,14 +228,14 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // through speaking like every other run. ponytail: last runs live in memory; a restart waits N minutes again.
   // The clock is kept per Start: a new Start counts its first wait afresh, but a run still going from before it is still
   // waited for (never two runs of one row at once). Right before the spawn, after every await (the state read, the
-  // token), the row is checked again: still this Start, not paused or closed, still standing as it was read, and P9 not
+  // token), the row is checked again: the lead still there (not deleted), still this Start, not paused or closed, still standing as it was read, and P9 not
   // shutting down. Shutdown (chat.closing) stops the timer and every launch not yet spawned.
   const last = new Map(); // sprint + '\n' + name -> { at, going, start: the Start record's at it was run under }
   let timer = null, stopped = false;
   const stop = () => { stopped = true; if (timer) clearInterval(timer); timer = null; };
   const off = () => stopped || chat.closing?.() === true;
   const stands = (sprint, s, at) => { const start = chat.projects.started(sprint);
-    return !off() && Boolean(start) && (start.at ?? 0) === at && !chat.projects.closed(sprint) && !chat.paused?.(sprint) && standing(sprint).running.some((x) => same(x, s)); };
+    return !off() && chat.family().some((c) => c.id === sprint) && Boolean(start) && (start.at ?? 0) === at && !chat.projects.closed(sprint) && !chat.paused?.(sprint) && standing(sprint).running.some((x) => same(x, s)); };
   function tick(now = Date.now()) {
     if (off()) { stop(); return Promise.resolve([]); }
     const runs = [];

@@ -954,8 +954,8 @@ fs.appendFileSync(${JSON.stringify(ranFile)}, j.sprint.id + ' ' + (process.env.P
 while (fs.existsSync(hold)) await new Promise((r) => setTimeout(r, 20));
 process.exit(fs.existsSync(path.join(${JSON.stringify(dir)}, 'fail')) ? 1 : 0);\n`);
   const row = { name: 'pace', command: `${process.execPath} ${prog}`, point: 'every', blocking: false, every: 10 };
-  const r = { dir, row, paused: new Set(), closed: new Set(), files: {}, logs: [], allow: false, start: { at: 0, by: 'owner', plan: null, scripts: [row] }, gate: null, asked: 0, closing: false };
-  const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id: EA }, { id: EB }], list: () => [],
+  const r = { dir, row, paused: new Set(), closed: new Set(), gone: new Set(), files: {}, logs: [], allow: false, start: { at: 0, by: 'owner', plan: null, scripts: [row] }, gate: null, asked: 0, closing: false };
+  const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id: EA }, { id: EB }].filter((c) => !r.gone.has(c.id)), list: () => [],
     sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => r.allow, paused: (c) => r.paused.has(c),
     socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
     sprintFiles: { exists: () => true, read: (c, f) => (f === 'hooks.json' ? r.files[c] ?? null : null), folderOf: () => dir, log: (c, line) => r.logs.push(c + ' ' + line) },
@@ -1061,10 +1061,11 @@ test('Sprint scripts every: a row added after Start runs while it stands and sto
 
 // FIX1 (review): a run held in its state read, then the sprint changes under it. The tick read the row before the wait;
 // the spawn must not use that read. Each case holds both sprints' runs, changes sprint A (or P9 itself), then releases.
-test('Sprint scripts every held: a run held before its spawn starts nothing after a pause, a close, a new Start, an added row removed, or shutdown', { timeout: 60000 }, async () => {
+test('Sprint scripts every held: a run held before its spawn starts nothing after a pause, a close, a delete, a new Start, an added row removed, or shutdown', { timeout: 60000 }, async () => {
   const cases = {
     pause: (r) => r.paused.add(EA),
     close: (r) => r.closed.add(EA),
+    delete: (r) => r.gone.add(EA), // the lead's conversations row is gone; its saved Start survives (r.start)
     'Start again without the row': (r) => { r.start = { at: 5 * M, by: 'owner', plan: null, scripts: [] }; },
     'Start again with the row changed': (r) => { r.start = { at: 5 * M, by: 'owner', plan: null, scripts: [{ ...r.row, every: 20 }] }; },
     'added row removed': (r) => { r.files[EA] = JSON.stringify({ scripts: [] }); },
@@ -1082,7 +1083,7 @@ test('Sprint scripts every held: a run held before its spawn starts nothing afte
     assert.equal(r.count(EB), name === 'shutdown' || name.startsWith('Start again') ? 0 : 1, name + ': sprint B\'s run');
     if (name === 'shutdown') assert.deepEqual(await r.hooks.tick(20 * M), [], 'a tick after shutdown began ran something');
   }
-  console.log('PASS every held: pause, close, a new Start without or with a changed row, an added row removed and shutdown each stopped the held run of sprint A; B ran (not at shutdown or a new Start, which the rig shares)');
+  console.log('PASS every held: pause, close, delete, a new Start without or with a changed row, an added row removed and shutdown each stopped the held run of sprint A; B ran (not at shutdown or a new Start, which the rig shares)');
 });
 
 test('Sprint scripts every clock: a new Start counts its first wait afresh, and still waits for a run going from before it', { timeout: 60000 }, async () => {
