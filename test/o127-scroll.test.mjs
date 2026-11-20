@@ -59,7 +59,9 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o127-reader-held ' + shot);
   // A reader at the bottom still follows the new steps.
-  await pane.locator('.hist').evaluate(h => { h.scrollTop = h.scrollHeight; });
+  // instant: a repaint puts the pane's smooth scrolling back, and a smooth scroll would still be on its way
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
   await step(`ev.push({ t: 'agent', text: 'The last reply.' })`);
-  assert.ok(await pane.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight < 24), 'a reader at the bottom no longer follows');
+  const gap = await pane.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight);
+  assert.ok(gap < 24, `a reader at the bottom no longer follows: ${gap} px short`);
 });
