@@ -1434,6 +1434,63 @@ test('O19 FIX1 Dev Focus whose failed open is still loading when the remote come
   console.log('PASS O19 FIX1: a failed open still loading when the remote came back ended, then the editor opened by itself');
 });
 
+test('O19 FIX2 an older Dev Focus open still running while a newer one is shown: a reconnect waits for it, and it changes nothing', { skip, timeout: 240000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const remote = await editorDaemon(t, editor), local = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  // Open A: its page load is held in main, so A is still running.
+  await app.evaluate(({ webContents }) => {
+    const proto = Object.getPrototypeOf(webContents.getAllWebContents()[0]), load = proto.loadURL;
+    proto.loadURL = function (url, ...rest) {
+      if (!url.startsWith('p9://dev/') || globalThis.p9Held) return load.call(this, url, ...rest);
+      globalThis.p9Held = this;
+      return new Promise(resolve => { globalThis.p9Release = resolve; }).then(() => load.call(this, url, ...rest));
+    };
+  });
+  await shell.keyboard.press('Control+2');
+  for (let i = 0; i < 120 && !await app.evaluate(() => !!globalThis.p9Held); i++) await sleep(250);
+  assert.ok(await app.evaluate(() => !!globalThis.p9Held), 'open A reached its page load');
+  // A's page crashes (the renderer-gone path), so the next show starts open B while A is still running. B opens the editor.
+  const opened = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 90000 });
+  await app.evaluate(() => globalThis.p9Held.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 }));
+  await shell.keyboard.press('Control+1');
+  await shell.keyboard.press('Control+2');
+  const dev = await opened;
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
+  assert.equal(await dev.locator('#cause').count(), 0, await dev.locator('#cause').textContent().catch(() => ''));
+  const token = (await dev.evaluate(() => window.p9dev.config())).token;
+  // The tunnel drops and comes back (the remote's P9 and editor keep running) while A is still held.
+  let reloaded = 0; app.on('window', page => { if (page.url().startsWith('p9://dev/')) reloaded++; });
+  const tunnels = async () => (await s.calls()).filter(c => c.argv.includes('-L'));
+  const before = (await tunnels()).length;
+  for (const call of await tunnels()) try { process.kill(call.pid, 'SIGTERM'); } catch {}
+  for (let i = 0; i < 120 && (await tunnels()).length === before; i++) await sleep(250);
+  await shell.waitForFunction(() => window.p9.getStatus().then(s => s.status === 'ok'), null, { timeout: 60000, polling: 500 });
+  await sleep(1000);
+  // Main still answers (no endless wait on B's finished open), and A ends.
+  const answered = await Promise.race([app.evaluate(() => { globalThis.p9Release(); return 'answered'; }), sleep(20000).then(() => 'main did not answer')]);
+  assert.equal(answered, 'answered');
+  await sleep(3000);
+  // A, ended late, changed nothing: B's page is the one shown, on the same editor, and nothing reloaded.
+  const pages = app.windows().filter(page => page.url().startsWith('p9://dev/'));
+  assert.ok(pages.length === 1 && pages[0] === dev, 'only B\'s page is left: ' + pages.length);
+  assert.equal(await dev.evaluate(() => !!window.devFocusReady), true);
+  assert.equal(await dev.locator('#cause').count(), 0);
+  assert.equal((await dev.evaluate(() => window.p9dev.config())).token, token, 'the same editor');
+  assert.equal(reloaded, 0, 'no reload');
+  console.log('PASS O19 FIX2: a reconnect with an older open still running waited for it; it ended without touching the page shown');
+});
+
 test('Dev Focus\'s page when the editor server cannot start: no systemd user session says what to do', { skip, timeout: 120000 }, async (t) => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
