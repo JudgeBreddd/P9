@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
 import { shellReady } from './helpers.mjs';
+import { itemsOf } from '../apps/server/sprint-files.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const MIN = 60000;
@@ -309,4 +310,38 @@ test('Sprint card stays open when displaced left of the centered column', { time
   assert.equal(geometry.folded, 'false', 'the card has room to the left of the text');
   assert.ok(geometry.right <= geometry.left, 'the card overlaps the text');
   await shotAt(page, app, 'sprint-card-displaced');
+});
+
+// Row 722: a worker holding a role works its role's plan items (work, chat.mjs queueOf), so its card row says Work Queue
+// and names the item it is on: its open_chat task when it has one, else the first item not yet passed (as ready picks it),
+// and says when all have passed. A worker with no queue keeps its task or 'No item set'. A verdict moves it on in place.
+test('Sprint card: a queue worker\'s row says Work Queue and names its next item', { timeout: 90000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await sizeTo(app, 1400, 900);
+  const lead = 's-claude-2';
+  await page.evaluate(id => document.querySelector('#navList .row[data-chat="' + id + '"]')?.click(), lead);
+  // The queue as the server builds it (chat.mjs queueOf): itemsOf over plan lines, each text carrying its own id; a line with no id parses to id ''.
+  const plan = (n) => Array.from({ length: n }, (_, i) => `- [ ] O${i + 1}: item ${i + 1}. Role w`).join('\n');
+  const items = (...states) => { const rows = itemsOf(plan(states.length), 'w'); return { done: 0, total: rows.length, items: rows.map((r, i) => ({ ...r, state: states[i], fixes: 0, merged: false })) }; };
+  const noId = itemsOf('- [ ] : no id here. Role w', 'w'); assert.equal(noId[0].id, '', 'the parser gives a line with no id the id \'\'');
+  await page.evaluate(w => window.__sprint.add(...w), [
+    worker('q-next', 'Queue next', { work: items('passed', 'fix', 'todo') }),
+    worker('q-task', 'Queue task', { task: { item: 'O9 its task' }, work: items('todo') }),
+    worker('q-done', 'Queue done', { work: items('passed', 'passed') }),
+    worker('q-none', 'No queue', {}),
+    worker('q-old', 'Task only', { task: { item: 'A1 login form' } }),
+    worker('q-noid', 'No id', { work: { done: 0, total: 1, items: noId.map(r => ({ ...r, state: 'todo', fixes: 0, merged: false })) } }),
+    worker('q-bare', 'Bare item', { work: { done: 0, total: 1, items: [{ state: 'todo' }] } }), // no id, no text: never undefined
+    worker('q-notext', 'Empty text', { work: { done: 0, total: 1, items: [{ id: 'O5', text: '', state: 'todo' }] } }), // empty text: its id
+  ]);
+  await page.locator('.sprint').waitFor({ timeout: 5000 });
+  if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]');
+  const rows = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.sprint .sp-row')].map(r => [r.dataset.sprintOpen, [r.querySelector('.sp-item').textContent, r.querySelector('.sp-item').hasAttribute('data-work-queue')]])));
+  assert.deepEqual(await rows(), {
+    'q-next': ['Work Queue · O2: item 2. Role w', true], 'q-task': ['Work Queue · O9 its task', true], 'q-done': ['Work Queue · all 2 passed', true],
+    'q-none': ['No item set', false], 'q-old': ['A1 login form', false], 'q-noid': ['Work Queue · : no id here. Role w', true], 'q-bare': ['Work Queue · next item', true], 'q-notext': ['Work Queue · O5', true] });
+  // The Reviewer passes O2: the row moves on to O3 without a reload.
+  await page.evaluate(w => window.__sprint.set('q-next', { work: w }), items('passed', 'passed', 'todo'));
+  assert.deepEqual((await rows())['q-next'], ['Work Queue · O3: item 3. Role w', true]);
+  await shotAt(page, app, 'sprint-card-work-queue');
 });
