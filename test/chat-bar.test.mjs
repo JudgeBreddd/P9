@@ -83,16 +83,17 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   assert.equal(await pane.locator('select').count(), 0, 'no selects left in the pane');
   assert.equal(await pane.locator('.composer .bar .hint').count(), 0, 'the hint text is gone while idle');
   assert.deepEqual(await pane.locator('.composer .bar .pills [data-pill]').evaluateAll((l) => l.map((b) => [b.tagName, b.getAttribute('aria-haspopup'), b.getAttribute('aria-label')])),
-    [['BUTTON', 'menu', 'Agent: Claude'], ['BUTTON', 'menu', 'Mode: Auto'], ['BUTTON', 'menu', 'Model: Default (recommended)'], ['BUTTON', 'menu', 'Effort: Medium (Default)']]); // MC-16: the closed pill names the default
+    [['BUTTON', 'menu', 'Agent: Claude'], ['BUTTON', 'menu', 'Mode: Manual'], ['BUTTON', 'menu', 'Model: Default (recommended)'], ['BUTTON', 'menu', 'Effort: Medium (Default)']]); // MC-16: the closed pill names the default; MC-3: setup's hello named no mode, so the chat runs in Manual and says so
   // Keyboard: Enter on a pill opens its menu (role=menu, menuitemradio items, the current one checked and focused); arrows move;
   // Enter picks and puts focus back on the pill; Escape closes and does the same.
   await pillOf(pane, 'Mode').focus(); await page.keyboard.press('Enter');
   const menu = page.locator('#pillMenu');
   await menu.waitFor();
   assert.deepEqual(await menu.evaluate((m) => [m.getAttribute('role'), [...m.querySelectorAll('.item')].map((b) => b.getAttribute('role') + ':' + b.firstElementChild.textContent + ':' + b.getAttribute('aria-checked'))]),
-    ['menu', ['menuitemradio:Manual:false', 'menuitemradio:Auto:true', 'menuitemradio:Accept edits:false', 'menuitemradio:Plan:false', 'menuitemradio:Bypass permissions:false']]);
-  assert.equal(await focused(page), 'Auto', 'the current choice has the focus');
+    ['menu', ['menuitemradio:Manual:true', 'menuitemradio:Auto:false', 'menuitemradio:Accept edits:false', 'menuitemradio:Plan:false', 'menuitemradio:Bypass permissions:false']]);
+  assert.equal(await focused(page), 'Manual', 'the current choice has the focus');
   await shot(page, 'menu-mode');
+  await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'Auto');
   await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'Accept edits');
   await page.keyboard.press('ArrowUp'); await page.keyboard.press('ArrowUp'); assert.equal(await focused(page), 'Manual');
   await page.keyboard.press('Enter');
