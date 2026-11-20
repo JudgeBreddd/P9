@@ -25,12 +25,17 @@ function pullTopLevels() {
 }
 const secWorst = (g, l) => { const w = worst(l), v = secLv[g]; return w === 'bad' || v === 'bad' ? 'bad' : w === 'warn' || v === 'warn' ? 'warn' : w; };
 const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
-const usage = { state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
+const noUsage = () => ({ state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } });
+const usage = noUsage();
 async function loadUsage() {
   if (!window.p9?.usage) return;
   const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
-  // O190 FIX1: tokens is optional (an older daemon sends none), so each answer sets it or clears it.
-  Object.assign(usage, { tokens: undefined }, result.status === 200 ? result.body : { state: 'unavailable' });
+  // O190/O191 FIX1: each answer replaces the last one whole, so a field an older daemon does not send (tokens, profiles,
+  // limits) or a failed read leaves nothing of the previous answer behind. A failed read keeps only the plan limits: they
+  // carry their own age (limitLine: "N min old", muted after 1 h), and dropping them would blank every chat's meter on a blip.
+  const kept = result.status === 200 ? result.body : { limits: usage.limits };
+  for (const key of Object.keys(usage)) delete usage[key];
+  Object.assign(usage, noUsage(), kept);
   outer.renderMission();
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn

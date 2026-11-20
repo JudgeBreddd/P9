@@ -141,6 +141,25 @@ test('O191: the Usage window shows a provider profile as its own row, apart from
   assert.equal(await win.locator('[data-tokens]').count(), 0, 'no stale label in the Usage window');
   assert.equal(await page.locator('#fMission [data-panel="musage"] [data-tokens]').count(), 0, 'no stale label on the Mission panel');
   await shot(win, 'o191-usage-profile');
+  // FIX1 (Reviewer P2), rule 3b: each answer replaces the last whole, without a reload, on the window and the panel. An answer
+  // with no profiles (an older daemon after a reconnect) or a failed read leaves no profile line; one with no limits leaves
+  // no plan-limit list. Only the plan limits outlive a failed read (they carry their own age). The totals need no check: a
+  // failed read reads 'unavailable', which hides them everywhere (musage is always a panel, PANELS, never a card).
+  const refresh = async (body, check) => {
+    await app.evaluate(({ ipcMain }, body) => { ipcMain.removeHandler('p9:usage');
+      ipcMain.handle('p9:usage', () => { if (!body) throw new Error('daemon gone'); return { status: 200, body: { ...body, updatedAt: Date.now() } }; }); }, body);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    for (let i = 0; i < 100; i += 1) { if (await check()) return; await page.waitForTimeout(100); }
+    assert.fail('after ' + (body ? JSON.stringify(Object.keys(body)) : 'a failed read') + ': window ' + JSON.stringify(await win.innerText()) + ' panel ' + JSON.stringify(await panel.innerText())); };
+  const shown = async () => [await win.locator('[data-profile]').count(), await panel.locator('[data-profile]').count(), await win.locator('[data-limits]').count()].join();
+  const base = { state: 'ok', samples: 1, discarded: 0, totals: { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 }, contexts: [] };
+  const limits = { claude: { fiveHour: { usedPercent: 40 }, sevenDay: { usedPercent: 20 }, asOf: Date.now() }, codex: null, signedOut: [] };
+  await refresh({ ...base, profiles: [FAR] }, async () => (await shown()) === '1,1,0');
+  await refresh(base, async () => (await shown()) === '0,0,0');
+  await refresh({ ...base, profiles: [FAR], limits }, async () => (await shown()) === '1,1,1');
+  await refresh(base, async () => (await shown()) === '0,0,0');
+  await refresh({ ...base, profiles: [FAR], limits }, async () => (await shown()) === '1,1,1');
+  await refresh(null, async () => (await shown()) === '0,0,1' && (await win.locator('.empty', { hasText: 'No chat token records yet.' }).count()) === 1);
   // FIX1: /usage's state counts Claude records only, so a profile's spend alone (its chats deleted, or token-only events)
   // reads 'unavailable'; the profile row still shows, under "No chat token records yet."
   await app.evaluate(({ ipcMain }, FAR) => { ipcMain.removeHandler('p9:usage');
