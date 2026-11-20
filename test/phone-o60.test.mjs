@@ -148,6 +148,27 @@ test('O21: the open chat keeps its pick when the rebuilt chat list lacks it, and
   console.log('PASS O21: the picker kept the open chat after a list without it, and the send went');
 });
 
+test('O21: a new chat opened before the chat list has it is picked, and a send goes to it', { timeout: 120000 }, async (t) => {
+  const C = '00000000-0000-4000-8000-0000000000c3';
+  const server = await remoteDaemon(t, {});
+  seed(server, A, 'Chat A', turn('hello a'));
+  const { page } = await phone(t, server);
+  const attempts = await prompts(page, [202]);
+  await page.waitForSelector('h1:text("Chats")');
+  // New makes chat C; the lists read after it do not have C yet.
+  await page.route((url) => url.pathname === '/chat', (route) => route.request().method() === 'POST'
+    ? route.fulfill({ status: 201, json: { conversation: C } }) : route.continue());
+  await page.click('#newChat'); await page.click('#sheet [data-new="claude"]');
+  await page.waitForFunction((C) => location.hash.includes(C), C, { timeout: 10000 });
+  await page.waitForTimeout(300);
+  assert.equal(await page.inputValue('#conversation'), C, 'the picker lost the new chat');
+  await page.fill('#prompt', 'to the new chat');
+  await page.click('#send');
+  for (let i = 0; i < 100 && !attempts.length; i++) await page.waitForTimeout(100);
+  assert.deepEqual(attempts.map((attempt) => [attempt.chat, attempt.body.text]), [[C, 'to the new chat']], 'the send did not go to the new chat');
+  console.log('PASS O21: a new chat not yet listed stayed picked, and the send went');
+});
+
 test('O21: a tap that sends nothing says why under the box', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server, A, 'Chat A', turn('hello a'));

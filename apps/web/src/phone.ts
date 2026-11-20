@@ -217,10 +217,14 @@ function fillPicker() {
     || '<option value="">No conversations yet</option>';
   // An open chat stays picked even when it left the list (stopped before its first message, or closed): the select's
   // fallback to its first (newest) option sent that chat's composer to another chat. On the list the newest is the default.
-  // O21: a list without the open chat (it reads moving, or a refresh caught it between states) keeps its option, as it read last.
-  if (openId && ![...select.options].some((option) => option.value === openId)) select.prepend(kept ?? new Option('This chat', openId));
-  if (openId) select.value = openId;
+  if (openId) pickOpen(select, kept);
   else if ([...select.options].some((option) => option.value === was)) select.value = was;
+}
+// O21: the open chat is always picked. A list without it (it reads moving, a refresh caught it between states, or a new
+// chat opened before the list has it) keeps its option as it read last, or 'This chat': set to a missing value, a select reads ''.
+function pickOpen(select: HTMLSelectElement, kept?: HTMLOptionElement) {
+  if (![...select.options].some((option) => option.value === openId)) select.prepend(kept ?? new Option('This chat', openId));
+  select.value = openId;
 }
 // PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
 // link changes on an open page).
@@ -622,7 +626,7 @@ function route(id: string) {
   const changed = id !== openId, was = openId; openId = id;
   if (was) markRead(was); if (id) markRead(id); // O66: what was on screen is read
   if (id) localStorage.setItem('p9-last-chat', id); // item 3: the next open reads this chat's events first
-  const select = one<HTMLSelectElement>('#conversation'); if (id) select.value = id;
+  if (id) pickOpen(one<HTMLSelectElement>('#conversation'));
   one<HTMLElement>('#chatList').hidden = !!id; one<HTMLElement>('#chatArea').hidden = !id; one<HTMLElement>('#composerSlot').hidden = !id;
   document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
   barSig = '';
