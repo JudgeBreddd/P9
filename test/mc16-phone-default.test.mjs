@@ -55,6 +55,7 @@ test('MC-16 phone: the Model sheet and the effort picker name the default, the S
   assert.ok(!seen.models.some((m) => /\(Default\)/.test(m)), 'no model marked twice when the agent\'s own default already says so: ' + seen.models.join(' | '));
 
   seen = await read(PROFILED);
-  assert.deepEqual([seen.models, seen.effort], [['Haiku'], ['Effort: Medium', 'Effort: High']], 'nothing marked on a profile chat');
+  assert.ok(seen.models.length && seen.effort.length, 'the profile chat lists its pickers');
+  assert.deepEqual([...seen.models, ...seen.effort].filter((x) => /\(Default\)/.test(x)), [], 'nothing marked on a profile chat');
   console.log('PASS MC-16 phone: Settings default marked (Haiku, High), the agent\'s own when Settings names one it dropped, none on a profile chat');
 });

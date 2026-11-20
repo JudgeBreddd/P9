@@ -1408,6 +1408,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
     } });
+  // MC-16: the option each picker marks "(Default)" for the phone, by the desktop's rule (controller.mjs isDefault): the
+  // Settings start default (Default model, Default effort) while the agent still offers it, else what the agent starts on.
+  const markOf = (agent, l) => {
+    const mine = api.newChatDefaults()[agent] ?? {}, offered = (list, v) => Boolean(v) && Array.isArray(list) && list.some((o) => o?.value === v);
+    const effort = l?.pickers?.find((p) => p.category === 'thought_level' || !p.category && /effort|thought/i.test(p.id + p.name));
+    return { model: offered(l?.model?.options, mine.model) ? mine.model : l?.def?.model ?? null,
+      pickers: { ...l?.def?.pickers, ...(effort && offered(effort.options, mine.effort) && { [effort.id]: mine.effort }) } };
+  };
   const api = {
     socketPath, // O189: what a sprint script is given to reach its sprint's chats (sprint-hooks.mjs say); undefined without the daemon
     db, // O140: the schedules table (schedules.mjs) lives in the ledger's database
@@ -1472,7 +1480,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     // lists (O47): { agent: { model, pickers, def, at, state } | null }; state 'loading' while this run's one fresh read is on.
-    lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], state: readState[agent] ?? 'kept' } : null])); },
+    lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], mark: markOf(agent, lists[agent]), state: readState[agent] ?? 'kept' } : null])); },
     // How many chats have a turn running: the idle watch and the update's turn wait ask only this (finding 12).
     turning: () => db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE state = 'turn'").get().n,
     list: (plans = new Map()) => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent, key,
