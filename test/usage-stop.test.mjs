@@ -51,3 +51,45 @@ await import(${JSON.stringify(pathToFileURL(path.join(root, 'test/fake-codex-app
   assert.deepEqual({ claude: alive(started.claude), codex: alive(started.codex) }, { claude: false, codex: false }, 'still running after the daemon stopped');
   console.log('PASS W2 stop ends the usage processes');
 });
+
+// W2 FIX1: the stop comes while the poll is still loading the SDK (held here until the file `go` exists). The daemon waits
+// for that read: the query opens after the stop, its child is closed, and only then does the daemon exit cleanly.
+test('W2 FIX1 a stop while the Claude usage query is still opening: the daemon waits, closes its child, then exits cleanly', { timeout: 90000 }, async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), 'p9-usage-stop-open-')), pids = path.join(folder, 'pids'), go = path.join(folder, 'go');
+  await writeFile(pids, '');
+  const sdk = path.join(folder, 'sdk.mjs');
+  await writeFile(sdk, `import { spawn } from 'node:child_process';
+import { appendFileSync, existsSync } from 'node:fs';
+appendFileSync(${JSON.stringify(pids)}, 'loading 0\\n');
+while (!existsSync(${JSON.stringify(go)})) await new Promise((resolve) => setTimeout(resolve, 50));
+const later = (hours) => new Date(Date.now() + hours * 3600e3).toISOString();
+export const query = () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
+  appendFileSync(${JSON.stringify(pids)}, 'claude ' + child.pid + '\\n');
+  return { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ rate_limits_available: true,
+    rate_limits: { five_hour: { utilization: 37, resets_at: later(2) }, seven_day: { utilization: 63, resets_at: later(96) } } }),
+    close() { child.kill(); } };
+};
+`);
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs'), '--usage-sdk', sdk] }));
+  const read = async () => Object.fromEntries((await readFile(pids, 'utf8')).split('\n').filter(Boolean).map((line) => [line.split(' ')[0], Number(line.split(' ')[1])]));
+  let started = {};
+  t.after(() => { if (started.claude && alive(started.claude)) process.kill(started.claude, 'SIGKILL'); });
+  await http({ socketPath: path.join(instance.state, 'daemon.sock'), route: '/usage', headers: authenticated(instance.credentials) });
+  for (const end = Date.now() + 20000; !('loading' in started); await new Promise((resolve) => setTimeout(resolve, 50))) {
+    if (Date.now() > end) assert.fail('the poll did not start loading the SDK');
+    started = await read();
+  }
+  instance.child.kill('SIGTERM');
+  const exited = once(instance.child, 'exit');
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(instance.child.exitCode, null, 'the daemon waits for the read still opening');
+  await writeFile(go, '');
+  const [code] = await exited;
+  started = await read();
+  assert.ok(started.claude, 'the held query opened after the stop');
+  assert.equal(code, 0, 'a clean stop');
+  for (const end = Date.now() + 3000; alive(started.claude) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(alive(started.claude), false, 'its child was closed before the exit');
+  console.log('PASS W2 FIX1 stop waits for the opening read');
+});

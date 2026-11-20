@@ -226,7 +226,7 @@ function stop() {
   setTimeout(() => { server.closeAllConnections(); process.exit(1); }, 10000).unref();
   if (server.remote) { server.remote.close(); server.remote.closeAllConnections(); }
   // W2: the Claude usage poll's SDK process (claude) would outlive the daemon; Codex's app server ends with its stdin.
-  claudeUsage?.close(); codexUsage?.close();
+  const usage = Promise.all([claudeUsage?.close(), codexUsage?.close()]);
   server.editor?.stop(); // Server mode's editor runs in its own systemd scope, so it would outlive the daemon
   // Agents stop first, alongside the request drain: an open long poll would otherwise hold server.close for 8 s.
   // The woken polls answer, then sit idle on keep-alive; close them once the agents are down.
@@ -235,6 +235,7 @@ function stop() {
     try {
       if ((await work).some((value) => String(value).startsWith('cleanup-failed'))) console.error('P9_CLEANUP_FAILED');
       await drainSaves();
+      await usage; // W2 FIX1: a usage read still opening closes its process before the exit
       server.closeAllConnections();
       await unlink(path.join(values.state, 'desktop.json'));
       if (windows) await new Promise((resolve) => workspaceLock.close(resolve));
