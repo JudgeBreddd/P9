@@ -159,7 +159,7 @@ test('P15: the Files tab opens a folder outside the workspace by its path, saves
   await shot(page, 'c23-phone-files-outside');
   await page.click('#fileList button[data-name="index.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+A'); await page.keyboard.type('saved from the phone');
-  await page.click('#save'); await page.waitForSelector('#fileState:text("Saved")', { timeout: 10000 });
+  await page.click('#save'); await page.waitForSelector('#fileState:text-is("Saved")', { timeout: 10000 });
   assert.equal(await (await import('node:fs/promises')).readFile(path.join(outside, 'index.txt'), 'utf8'), 'saved from the phone');
   await page.click('#closeFile');
   await page.click('#pickFolder'); await page.click('[data-folder-home]');
