@@ -707,10 +707,11 @@ function paint(root, ss, only) {
   const split = root.id === 'chats' && root.querySelector(':scope > .handle-v'); // morph keeps the bar by position; wire it once
   if (split && !outer.wiredBars.has(split)) { outer.wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: outer.lifetime.signal }); }
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
-    const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = outer.view[root.id + ':' + s.id];
-    const place = () => { h.scrollTo({ top: !v || v.pinned ? 1e6 : held(s, h, v.anchor) ?? v.top, behavior: 'instant' }); if (v) v.at = h.scrollTop; }; // at: where it was left, for up
+    const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), k = root.id + ':' + s.id, first = !outer.view[k];
+    const v = outer.view[k] ??= { pinned: true }; // a new pane follows the bottom; its record holds where place() left it (FIX2: up needs that from the first paint)
+    const place = () => { h.scrollTo({ top: v.pinned ? 1e6 : held(s, h, v.anchor) ?? v.top, behavior: 'instant' }); v.at = h.scrollTop; }; // at: where it was left, for up
     h.querySelectorAll(':scope > .col > [data-at]').forEach(el => AT.set(el, s.events[el.dataset.at]));
-    place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
+    place(); if (first) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
     p.querySelectorAll('details[data-ev]').forEach(d => { const e = s.events[d.dataset.ev]; DRAWN.set(d, [e, d.open]); d.ontoggle = () => { if (e) e.open = d.open; DRAWN.set(d, [e, d.open]); }; });
     p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
     // A7: a card answers the chat it came from (data-ask): this one, or a worker of it.

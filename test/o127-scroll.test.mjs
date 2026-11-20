@@ -108,4 +108,19 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
   await step(`ev.push({ t: 'agent', text: 'After Show earlier.' })`);
   assert.ok(await pane.locator('.hist .col > [data-at]').count() > grown, 'following the bottom after Show earlier keeps the window the user asked for');
+  // FIX2 (review of the CI fix): a newly drawn pane had no view record until its next paint, so content growing below the
+  // reader before that paint (an image loading) read as reading up. A fresh pane, content grows below it with no repaint
+  // in between, then 250 steps arrive: the reader never scrolled, so 200 steps stay drawn.
+  const id2 = 's-codex-1', pane2 = page.locator(`.pane[data-id="${id2}"]`);
+  await page.evaluate(id2 => { window.__o127b = Array.from({ length: 30 }, (_, i) => ({ t: 'agent', text: `fresh ${i}.` })); }, id2);
+  await page.evaluate(id2 => { const s = window.__o127b; window.__sprint.set(id2, { events: s }); document.querySelector('#navList .row[data-chat="' + id2 + '"]')?.click(); }, id2);
+  await pane2.locator('.hist .col > [data-at]').last().waitFor({ timeout: 5000 });
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))));
+  // The browser's scroll anchoring follows content appended below a reader at the bottom (run 164346: scrollTop 1208 -> 1822),
+  // but not an image growing in place, which is what CI hit. Anchoring off stands in for that.
+  const gap2 = await pane2.locator('.hist').evaluate(h => { h.style.overflowAnchor = 'none'; const d = document.createElement('div'); d.style.height = '600px'; h.querySelector(':scope > .col').append(d);
+    return h.scrollHeight - h.scrollTop - h.clientHeight; });
+  assert.ok(gap2 > 24, `content grown below the fresh pane leaves the reader short of the bottom: ${gap2} px`);
+  await page.evaluate(id2 => { for (let i = 0; i < 250; i++) window.__o127b.push({ t: 'tool', title: 'Late ' + i, status: 'completed', output: 'hit' }); window.__sprint.set(id2, { events: window.__o127b }); }, id2);
+  assert.equal(await pane2.locator('.hist .col > [data-at]').count(), 200, 'a fresh pane whose content grew below the reader still draws 200 steps');
 });
