@@ -172,11 +172,16 @@ const show = id => { outer.S.view = null; outer.S.open = [id, ...outer.S.open.fi
 // the panel's list; a message sent to it starts it again.
 function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
 const untab = id => { outer.S.open = outer.S.open.map(o => o === id ? (outer.S.sessions.find(x => !x.hidden && !outer.S.open.includes(x.id)) || {}).id : o).filter(Boolean); outer.renderTabs(); renderChats(); };
+let waitingNew = null;
 function newSession(agent, model, project = null, profile = '') {
   outer.usedAgent(agent);
   // Dev Focus had no way to start a new chat: one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
   if (outer.liveChat.on) return outer.liveChat.create(agent, '', project, model, profile);
+  // O57: before the daemon answers there is no model or usage to show, and a chat made here would be dropped once it does.
+  // The press is kept and the chat is made on the daemon when it answers (the newest press wins).
+  if (!outer.sampleView && window.p9?.chat) { waitingNew = [agent, model, project, profile];
+    return outer.toast({ kind: 'chat', txt: 'Connecting to the P9 daemon. Your new chat opens once it answers.', level: 'warn' }, true); }
   const s = { id: 's-' + Date.now(), agent, title: `${outer.names[agent]} ${outer.S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: outer.startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: outer.M.sessions?.[agent === 'claude' ? 0 : 1]?.limits ?? { h5: 0, d7: 0 }, cacheMin: null, cwd: outer.M.sessions?.[0]?.cwd ?? 'P9 workspace', events: [] };
   s.project = project; outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
 }
@@ -1031,7 +1036,7 @@ async function loadChat() {
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
     if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; await new Promise(res => outer.setTimeout(res, outer.liveChat.on ? 2000 : 5000)); continue; }
-    if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); }
+    if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); if (waitingNew) { const a = waitingNew; waitingNew = null; newSession(...a); } }
     // A tail can leave out a chat's created event, so its tab comes from the list.
     if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), archived: c.archived, parent: c.parent ?? null });
     const ended = [], answered_ = [];

@@ -24,7 +24,8 @@ test('O57: New chat while connecting waits for the daemon and opens the chat onc
     await page.locator('#rChat').waitFor();
     // The window has tried the daemon and found none (the status line no longer says it is checking).
     await page.waitForFunction(() => !/checking/.test(document.querySelector('#daemonStatus')?.textContent), null, { timeout: 15000 });
-    await page.evaluate(() => document.querySelector('#newBtn').click());
+    // Pressed twice while waiting (nothing seemed to happen): one chat, not two.
+    await page.evaluate(() => { document.querySelector('#newBtn').click(); document.querySelector('#newBtn').click(); });
     await page.waitForTimeout(500);
     before = await page.evaluate(() => ({ panes: [...document.querySelectorAll('#chats .pane')].map((p) => p.textContent.replace(/\s+/g, ' ')),
       toasts: [...document.querySelectorAll('#toasts .toast')].map((x) => x.textContent) }));
