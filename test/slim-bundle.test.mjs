@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { bundleDaemon, slimBundle } from '../scripts/bundle-daemon.mjs';
 import { slimArchive } from '../apps/desktop/remote-install.mjs';
-import { authenticated, daemon, http, root } from './helpers.mjs';
+import { authenticated, daemon, http, root, writeFifo } from './helpers.mjs';
 
 const skip = process.platform === 'win32' ? 'sh and tar' : false;
 const run = (command, args, options = {}) => new Promise((resolve) => execFile(command, args, { timeout: 60000, ...options }, (error, out, err) => resolve({ code: error?.code ?? 0, out: out + err })));
@@ -85,7 +85,7 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
     for (let i = 0; i < 100 && !(await readdir(path.join(there, 'node_modules')).then((n) => n.some((x) => x.startsWith('.agents-')), () => false)); i++) await new Promise((r) => setTimeout(r, 100));
     const second = await Promise.race([fetchAgents(held, { claude: true, codex: false }), new Promise((r) => setTimeout(() => r({ status: 0, text: '{"error":"still waiting: it ran a second fetch"}' }), 5000))]);
     assert.deepEqual([second.status, JSON.parse(second.text).error], [409, 'fetch-running'], 'a second fetch while one runs');
-    await writeFile(fifo, 'not the package');
+    await writeFifo(fifo, 'not the package');
     assert.equal((await first).status, 500, 'the first ends on the checksum');
     await rm(fifo); await writeFile(fifo, 'not the package');
     assert.equal((await fetchAgents(held, { claude: true, codex: false })).status, 500, 'after the first ends a fetch runs again');
@@ -95,6 +95,22 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
   const perDownload = Number(/AbortSignal\.timeout\((\d+)\)/.exec(await readFile(path.join(root, 'scripts', 'agents.mjs'), 'utf8'))[1]);
   const desktop = Number(/'\/setup\/agents-fetch'[^\n]*undefined, (\d+)\)/.exec(await readFile(path.join(root, 'apps', 'desktop', 'main.mjs'), 'utf8'))[1]);
   assert.ok(AGENTS_FETCH_MS > 2 * perDownload && desktop > AGENTS_FETCH_MS, [perDownload, AGENTS_FETCH_MS, desktop].join(' '));
+});
+
+// The Linux CI hang: U8 timed out at 240 s and its file's process lived 960 s more with no child, until the per-file limit
+// killed it. A FIFO nobody opens must fail the write within its limit and let the process exit.
+test('U8: a FIFO write with no reader fails within its limit and leaves nothing holding the test process', { skip, timeout: 60000 }, async () => {
+  const fifo = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-fifo-')), 'agent.tgz');
+  assert.equal((await run('mkfifo', [fifo])).code, 0);
+  const helpers = new URL('./helpers.mjs', import.meta.url).href;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `const { writeFifo } = await import(${JSON.stringify(helpers)});
+    const timer = setTimeout(() => { console.log('timed out'); process.exitCode = 3; }, 2000);
+    await writeFifo(${JSON.stringify(fifo)}, 'x', 500).then(() => console.log('written'), (e) => console.log(e.code));
+    clearTimeout(timer);`], { stdio: ['ignore', 'pipe', 'inherit'] });
+  let out = ''; child.stdout.on('data', (d) => { out += d; });
+  const ended = await Promise.race([new Promise((r) => child.once('exit', (code) => r('exit ' + code))), new Promise((r) => setTimeout(() => r('alive'), 20000))]);
+  if (ended === 'alive') child.kill('SIGKILL');
+  assert.deepEqual([ended, out.trim()], ['exit 0', 'ENXIO'], 'the write ends on its own and the process exits');
 });
 
 // U8, packaged: a packaged app sends resources/daemon (main.mjs slimFolder), never a fresh slimBundle. This lays that folder

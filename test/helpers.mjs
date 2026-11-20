@@ -1,5 +1,5 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { readdirSync } from 'node:fs';
+import { mkdtemp, mkdir, open, readFile, writeFile } from 'node:fs/promises';
+import { constants as fsConstants, readdirSync } from 'node:fs';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
@@ -203,6 +203,18 @@ export function http({ socketPath, port, route = '/health', method = 'GET', head
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(body);
   });
+}
+// Linux CI hang (OPEN-ITEMS, no ID; run 44201371127 linux (6)): writeFile on a FIFO blocks a libuv thread until a reader
+// opens it, and no test timeout or after hook can end that wait, so the file's process outlived U8 by 960 s with no child
+// left. A non-blocking open answers ENXIO while no reader has the FIFO open, so this waits on a timer and fails by ms.
+// ponytail: one non-blocking write; data past the pipe's 64 KiB buffer fails with EAGAIN (loud, not a hang).
+export async function writeFifo(fifo, data, ms = 30000) {
+  for (const end = Date.now() + ms; ; await new Promise((r) => setTimeout(r, 50))) {
+    const file = await open(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK).catch((error) => {
+      if (error.code !== 'ENXIO' || Date.now() > end) throw Object.assign(error, { message: 'no reader opened ' + fifo + ' in ' + ms + ' ms: ' + error.message });
+    });
+    if (file) { try { return await file.writeFile(data); } finally { await file.close(); } }
+  }
 }
 export function authenticated(credentials) {
   return { host: 'p9.local', origin: 'http://p9.local', cookie: `p9=${credentials.cookie}`, 'x-p9-csrf': credentials.csrf };
