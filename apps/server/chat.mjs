@@ -344,7 +344,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // Peer help (SECURITY.md § Delegate, "Asking a chat beside you"): a message that is another chat's question, kept
   // beside the body like its sender. end(outcome) is a promise's resolve, so the first outcome is the only one.
   const solos = new WeakMap();
-  const sender = (body) => (senders.has(body) ? { from: senders.get(body) } : {});
+  // O73: and the sending chat's title as it was at send time, so the window and phone name it (not "You") even after the chat
+  // is renamed or deleted; no title (a chat already deleted, or 'p9') draws as "a deleted chat" or P9 there.
+  const sender = (body) => {
+    if (!senders.has(body)) return {};
+    const from = senders.get(body), title = ID.test(from) ? row(from)?.title : null;
+    return { from, ...(typeof title === 'string' && title && { fromTitle: title }) };
+  };
   // A reply sent a second time (seen on the server 2026-11-09 to 11, 9 times in 3 days, Claude chats only): after a
   // compaction, or after a message that joined work the agent had begun by itself, the adapter sends a whole reply
   // again in one piece, under its own message id or a new one. P9 had streamed it already, so it showed twice. A piece
