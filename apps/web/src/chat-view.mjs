@@ -396,7 +396,7 @@ const TAIL = 200;
 function shown(s) {
   const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), from = Math.max(0, list.length - (s.tail || TAIL));
   return (from || s.more !== undefined ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier${from ? ` (${from.toLocaleString()} more)` : ''}</button>` : '')
-    + list.slice(from).map(e => event(e, s)).join('');
+    + list.slice(from).map(e => event(e, s).replace(/^<([a-z]+)/, `<$1 data-at="${s.events.indexOf(e)}"`)).join(''); // O127: paint() keeps the reader's block by this
 }
 /* ---------- the message bar's pills (0.1.8): Mode, Model and Effort, one menu kept outside the panes ----------
    Panes are rebuilt from S on every change (every 18 ms while a reply streams); morph keeps each pill button by position and
@@ -660,6 +660,18 @@ function renderChats(only) {
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
 // E2: with only, and the same panes still shown in the same order, just those panes are rebuilt and re-wired. Before,
 // each daemon batch rebuilt every pane shown, so a quiet 200-step chat beside a streaming one cost the same each time.
+// O127: a reader scrolled up keeps the block they read at the same offset. Restoring scrollTop in pixels moved them
+// whenever anything above changed height: the 200-step window sliding by one block per new step, a running tool
+// above closing as it finished. The anchor is the first block on screen, kept by its event (not its index, which
+// shifts when a step is removed); held() returns where to scroll so it sits where it was, or undefined if it is gone.
+// AT: each drawn block's event, bound when it is drawn. By the next paint s.events has already changed, so data-at on
+// the old blocks may name another event (one removed or added above it, review #377 FIX1).
+const AT = new WeakMap();
+const anchorOf = h => { const top = h.getBoundingClientRect().top;
+  const el = [...h.querySelectorAll(':scope > .col > [data-at]')].find(c => c.getBoundingClientRect().bottom > top);
+  return el && AT.has(el) ? { ev: AT.get(el), off: el.getBoundingClientRect().top - top } : null; };
+const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
+  return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
 function paint(root, ss, only) {
   const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
   const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
@@ -668,7 +680,7 @@ function paint(root, ss, only) {
   const touched = part && new Set([...only].flatMap(up));
   const panes = part ? old.filter(p => only.has(p.dataset.id) || touched.has(p.dataset.id)) : old;
   if (part && !panes.length) return;
-  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); outer.view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
+  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); outer.view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
   panes.forEach(p => p.querySelectorAll('details[data-ev]').forEach(d => { const w = DRAWN.get(d); if (w?.[0] && d.open !== w[1]) w[0].open = d.open; }));
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); outer.addHalos(t.content); outer.attrs(p, t.content.firstElementChild); outer.sync(p, t.content.firstElementChild); });
@@ -677,7 +689,8 @@ function paint(root, ss, only) {
   if (split && !outer.wiredBars.has(split)) { outer.wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: outer.lifetime.signal }); }
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = outer.view[root.id + ':' + s.id];
-    const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
+    const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : held(s, h, v.anchor) ?? v.top, behavior: 'instant' });
+    h.querySelectorAll(':scope > .col > [data-at]').forEach(el => AT.set(el, s.events[el.dataset.at]));
     place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
     p.querySelectorAll('details[data-ev]').forEach(d => { const e = s.events[d.dataset.ev]; DRAWN.set(d, [e, d.open]); d.ontoggle = () => { if (e) e.open = d.open; DRAWN.set(d, [e, d.open]); }; });
     p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
