@@ -281,3 +281,34 @@ test('M4a onboarding (server): a fresh profile is empty; the guide and templates
   for (const space of ['../x', 'a b', '', 7]) assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space })).status, 400, JSON.stringify(space));
   console.log('PASS M4a onboarding server: fresh profile empty, guide shipped, bad provider and extra fields refused, Claude and Codex chats start with the guide');
 });
+
+// MC-1: Build with Claude/Codex sent only text, so the build ran in the agent's default (Manual) while the pill showed the
+// window's start mode (Bypass under Unrestricted). The window now names that mode and the first prompt sets it; a name that
+// is not the agent's is refused before any chat is made. Without one (the phone, an older window) the chat says the mode it
+// runs in (MC-3), so the pill shows that instead of a guess.
+test('MC-1: a build names its start mode and runs in it; a wrong name makes no chat; without one the mode event tells', { timeout: 90000 }, async (t) => {
+  const instance = await start(t);
+  // The mode the first prompt ran in: the chat's last mode event once the agent has answered (Codex also says its start mode at connect).
+  const modeOf = async (id) => {
+    await until(instance, (event) => event.conversation === id && event.data?.content?.text?.startsWith('echo:'));
+    return (await call(instance, '/chat/events?after=0')).body.events.filter((event) => event.conversation === id && event.type === 'mode').at(-1);
+  };
+  for (const [provider, mode] of [['claude', 'Bypass permissions'], ['claude', 'Plan'], ['codex', 'Read-only']]) {
+    const made = await call(instance, '/mission/build', 'POST', { provider, mode });
+    assert.equal(made.status, 201, provider + ' ' + mode + ': ' + JSON.stringify(made.body));
+    assert.equal((await modeOf(made.body.conversation)).data.name, mode, provider + ': the build runs in the mode it named');
+  }
+  const before = (await call(instance, '/chat')).body.length;
+  for (const body of [{ provider: 'claude', mode: 'Read-only' }, { provider: 'codex', mode: 'Plan' }, { provider: 'claude', mode: 'auto' }, { provider: 'claude', mode: 7 }, { provider: 'claude', mode: '' }]) {
+    assert.equal((await call(instance, '/mission/build', 'POST', body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await call(instance, '/chat')).body.length, before, 'a refused build made no chat');
+  const bare = await call(instance, '/mission/build', 'POST', { provider: 'claude' });
+  assert.equal((await modeOf(bare.body.conversation)).data.name, 'Manual', 'a build with no mode says it runs in Manual');
+  // The agent lock still wins: a build that names Bypass runs in the no-write mode, and its mode event says so.
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).body.on, true);
+  const narrow = (await modeOf((await call(instance, '/mission/build', 'POST', { provider: 'claude', mode: 'Bypass permissions' })).body.conversation)).data;
+  assert.deepEqual([narrow.name, narrow.lock], ['Plan', true], 'a build under the agent lock ran wider than Plan');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  console.log('PASS MC-1: builds ran in Bypass permissions, Plan and Read-only; 5 wrong names refused with no chat; no mode told Manual; under the agent lock a Bypass build ran in Plan');
+});

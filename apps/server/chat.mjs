@@ -771,9 +771,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const modeFor = (provider) => locked ? NARROW[provider] : provider === 'claude' ? 'default' : 'agent';
   // One set at a time per session, sent in the order asked: a set that answers late can never land after a later one.
   // modeWaits counts the sets not settled yet; while there is one, a prompt sets its own mode instead of trusting session.mode.
+  // MC-3: the mode event the window's and the phone's pills show. told: this run of the session has said its mode, so a
+  // prompt that set none (its mode was already the session's) still tells it once (prompt, below).
+  const tellMode = (session, provider) => { session.told = true; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); };
   const setMode = (session, provider, value = modeFor(provider), tell = true) => {
     const send = () => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
-      .then((result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
+      .then((result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) tellMode(session, provider); return result; }); // P6: the phone's pill shows the mode set
     session.modeWaits = (session.modeWaits ?? 0) + 1;
     const set = (session.modeChain ?? Promise.resolve()).then(send);
     session.modeChain = set.catch(() => {}).finally(() => { session.modeWaits -= 1; });
@@ -1145,7 +1148,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         // O53: with the agent lock on, the mode is the lock's on purpose; that is not a setting that failed to come back.
         if (!locked && was.mode && was.mode !== session.mode) changes.push('Mode: ' + (Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode ?? 'unknown'));
-        if (was.mode && was.mode !== session.mode && session.mode) emit(conversation.id, 'mode', { mode: session.mode, name: Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode, lock: locked });
+        // MC-3: also when the chat has no mode on record (made before P9 told its mode), so the pill never shows a guess.
+        if (session.mode && was.mode !== session.mode) tellMode(session, conversation.provider); else session.told = true;
         emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: label(session.models) }), ...(changes.length && { restoreNotice: changes }) });
         if (session.models) emit(conversation.id, 'config', configOf(session));
       } else {
@@ -1621,6 +1625,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.' }); return refused(500, 'mode-failed'); }
       }
       if (!solo) session.back = undefined;
+      // MC-3: a prompt with no mode, or with the one the session is already in, set none; the pill learns it here once.
+      if (!solo && !session.told && session.mode) tellMode(session, conversation.provider);
       if (body.model && body.model !== session.models?.current) {
         if (!session.models?.options.some((o) => o.value === body.model)) {
           if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.' }); return refused(400, 'model-unknown');

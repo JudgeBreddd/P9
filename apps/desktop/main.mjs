@@ -638,11 +638,11 @@ export async function createDesktop({ state, open } = {}) {
     card: ({ id: card }) => id(card) && ['GET', '/mission/card?' + new URLSearchParams({ id: card })], // a card's HTML (row M5)
     dataAllow: ({ id: tile }) => id(tile) && ['POST', '/mission/data/allow', { id: tile }],
     spaceLog: ({ name }) => typeof name === 'string' && ['GET', '/mission/space-log?' + new URLSearchParams({ name })],
-    fix: ({ id: item, path: file }) => id(item) && typeof file === 'string' && ['POST', '/mission/fix', { id: item, path: file }],
+    fix: ({ id: item, path: file, mode }) => id(item) && typeof file === 'string' && ['POST', '/mission/fix', { id: item, path: file, ...(typeof mode === 'string' ? { mode } : {}) }], // MC-1: the pill's mode; the daemon checks it
     // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
     guide: () => ['GET', '/mission/guide'],
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
-    build: ({ provider, space }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}) }],
+    build: ({ provider, space, mode }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}), ...(typeof mode === 'string' ? { mode } : {}) }],
     space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
     deleteSpace: ({ name, confirm }) => typeof name === 'string' && ['POST', '/mission/space/delete', { name, ...(confirm !== undefined ? { confirm } : {}) }],
     saveTemplate: ({ name, about, replace }) => typeof name === 'string' && ['POST', '/mission/template/save', { name, ...(about !== undefined ? { about } : {}), ...(replace !== undefined ? { replace } : {}) }],
