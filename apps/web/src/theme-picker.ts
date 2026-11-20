@@ -1,4 +1,4 @@
-import { applyLook, loadLook, lookForTheme, allowedThemes, allThemes, allEffects, fonts, isDark, paletteVars, rollPalette, onLookChange, type Look } from './lib/theme';
+import { applyLook, loadLook, lookForTheme, allowedThemes, allThemes, allEffects, fonts, isDark, onLookChange, type Look } from './lib/theme';
 
 // The look's colours as #rrggbbaa for the Dev Focus editor, which cannot read the oklch tokens: each one is painted on a
 // 1x1 canvas and read back, with the theme id (a theme with its own editor theme uses it). Sent to main on every change (desktop only; the phone has no window.p9.look).
@@ -41,24 +41,19 @@ function refresh() {
   all('[data-theme-pick]').forEach(card => {
     card.setAttribute('aria-pressed', String(card.dataset.themePick === look.theme));
     card.toggleAttribute('data-amoled', look.amoled);
-    if (card.dataset.themePick === 'custom' && look.palette) for (const [k, v] of Object.entries(paletteVars(look.palette))) card.style.setProperty(k, v);
   });
   all('[data-font-pick]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.fontPick === look.font)));
   all('[data-font-note]').forEach(note => { note.textContent = fonts.find(f => f.id === look.font)?.note ?? ''; });
-  const backdrop = look.effects.includes('ambient') || look.effects.includes('horizon');
+  const backdrop = look.effects.includes('ambient');
   all<HTMLButtonElement>('[data-fx-pick]').forEach(button => {
     button.setAttribute('aria-checked', String(look.effects.includes(button.dataset.fxPick!)));
     button.disabled = button.dataset.fxPick === 'motion' && !backdrop;
   });
   all<HTMLButtonElement>('[data-amoled-switch]').forEach(button => { button.setAttribute('aria-checked', String(look.amoled)); button.disabled = !theme?.dark; });
-  all('[data-roll]').forEach(button => { button.hidden = look.theme !== 'custom'; });
   all('[data-theme-label]').forEach(label => { label.textContent = allowedThemes().find(t => t.id === look.theme)?.name ?? ''; });
 }
 function change(patch: Partial<Look>) { applyLook({ ...loadLook(), ...patch }); refresh(); }
-function set(id: string) {
-  const look = loadLook();
-  change({ ...lookForTheme(id, look), palette: id === 'custom' ? (look.palette ?? rollPalette()) : look.palette });
-}
+function set(id: string) { change(lookForTheme(id, loadLook())); }
 
 export const DUWOP = {
   init() { applyLook(loadLook()); refresh(); },
@@ -77,9 +72,7 @@ export const DUWOP = {
       card.append(dots, el('b', '', theme.name), el('small', '', theme.note));
       card.onclick = () => set(theme.id); grid.append(card);
     }
-    const roll = el('button', 'roll', 'Roll again'); roll.type = 'button'; roll.dataset.roll = '';
-    roll.onclick = () => change({ palette: rollPalette() });
-    container.append(grid, roll, el('p', 'tnote', 'Picking a theme also sets its own font and effects. You can change them below.'),
+    container.append(grid, el('p', 'tnote', 'Picking a theme also sets its own font and effects. You can change them below.'),
       toggleSwitch('AMOLED mode', 'True black backgrounds: easier on OLED screens and their batteries. Works with every dark theme.', 'data-amoled-switch',
         () => change({ amoled: !loadLook().amoled })));
     container.append(el('div', 'hd eyebrow sect', 'Font'));

@@ -22,47 +22,6 @@ export type Theme = {
 export const themes: Theme[] = [
   { id: "duskwood", name: "Duskwood", note: "Gold on deep ink. The house look.", dark: true },
   { id: "midnight", name: "Midnight", note: "Electric blue, after dark.", dark: true },
-  { id: "ember", name: "Ember", note: "Warm orange glow.", dark: true },
-  { id: "forest", name: "Forest", note: "Deep green and emerald.", dark: true },
-  { id: "synthwave", name: "Synthwave", note: "Neon pink and cyan.", dark: true },
-  { id: "rose", name: "Rose", note: "Soft pink on plum.", dark: true },
-  { id: "arctic", name: "Arctic", note: "Ice blue on slate.", dark: true },
-  { id: "mono", name: "Mono", note: "Black and white, no colour.", dark: true },
-  {
-    id: "outrun",
-    name: "Outrun",
-    note: "80s arcade racer: sunset orange on violet.",
-    dark: true,
-    font: "chakra",
-    effects: ["underglow", "ambient", "horizon", "motion"],
-  },
-  {
-    id: "cyberpunk",
-    name: "Cyberpunk",
-    note: "Hazard yellow and cyan, hard edges.",
-    dark: true,
-    font: "chakra",
-    effects: ["underglow", "neon"],
-    display: "Orbitron",
-  },
-  {
-    id: "8bit",
-    name: "8-bit",
-    note: "Pixel frames, arcade titles, cartridge colours.",
-    dark: true,
-    font: "pixelify",
-    effects: ["underglow"],
-    display: "Press Start 2P",
-  },
-  {
-    id: "ascii",
-    name: "ASCII",
-    note: "Green phosphor terminal: text boxes, [ buttons ], scanlines.",
-    dark: true,
-    font: "jetbrains",
-    effects: ["underglow", "neon"],
-  },
-  { id: "custom", name: "Roll the dice", note: "A random palette. Roll again for another.", dark: true },
   { id: "daylight", name: "Daylight", note: "Light mode.", dark: false },
   {
     id: "linen",
@@ -77,10 +36,8 @@ export const themes: Theme[] = [
 export const effects = [
   { id: "underglow", name: "Underglow", note: "Cards lift and glow in the theme's colour when you point at them." },
   { id: "ambient", name: "Ambient glow", note: "A soft wash of the theme's colours behind the page." },
-  { id: "motion", name: "Drifting glow", note: "Moves the ambient glow and the horizon grid. Needs one of them on." },
+  { id: "motion", name: "Drifting glow", note: "Moves the ambient glow. Needs Ambient glow on." },
   { id: "shine", name: "Shine", note: "A sweep of light across a card on hover." },
-  { id: "horizon", name: "Horizon", note: "An 80s neon grid running to the horizon." },
-  { id: "neon", name: "Neon", note: "Headings glow like neon tubes, with the odd flicker." },
 ] as const;
 
 /** The core effects plus this app's opt-in add-ons (extraEffects in duwop-config), for the picker. */
@@ -128,13 +85,10 @@ export function lookForTheme(id: string, look: Look): Look {
 const googleFont = (family: string) =>
   `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@400;500;600;700&display=swap`;
 
-/** A rolled palette: neutral hue and chroma, accent hue, second-glow hue. */
-export type Palette = { nh: number; nc: number; ph: number; gh: number };
-
 /** light / dark / system, for themes with both looks. System follows the device and updates live. */
 export type Mode = "light" | "dark" | "system";
 
-export type Look = { theme: string; effects: string[]; amoled: boolean; font: string; palette?: Palette; mode?: Mode };
+export type Look = { theme: string; effects: string[]; amoled: boolean; font: string; mode?: Mode };
 
 const prefersDark = () => typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
 
@@ -146,27 +100,16 @@ export const isDark = (theme: Theme, mode: Mode = "dark") =>
 export const allowedThemes = () =>
   duwopConfig.themes === "all" ? allThemes : allThemes.filter((t) => duwopConfig.themes.includes(t.id));
 
-/** A random, readable palette for the "custom" theme: any neutral hue, an accent on the opposite side of
- *  the wheel, lightness and chroma kept in the range every other dark theme uses. */
-export function rollPalette(): Palette {
-  const nh = Math.round(Math.random() * 360);
-  const ph = Math.round(nh + 120 + Math.random() * 120) % 360;
-  return { nh, nc: Math.round((0.01 + Math.random() * 0.04) * 1000) / 1000, ph, gh: (ph + 40 + Math.round(Math.random() * 60)) % 360 };
-}
-
-/** The CSS variables a palette sets on <html>. */
-export const paletteVars = (p: Palette): Record<string, string> => ({
-  "--nh": String(p.nh),
-  "--nc": String(p.nc),
-  "--primary": `oklch(0.78 0.16 ${p.ph})`,
-  "--glow2": `oklch(0.68 0.18 ${p.gh})`,
-});
-const PALETTE_VARS = ["--nh", "--nc", "--primary", "--glow2"];
-
 /** Theme ids that were renamed, so looks saved under the old id keep working. duwop-boot.js has its own copy. */
 export const renamedThemes: Record<string, string> = { trove: "duskwood" };
-const current = (look: Look): Look =>
-  renamedThemes[look.theme] ? { ...look, theme: renamedThemes[look.theme] } : look;
+/** A saved look made under a renamed theme takes the new id. One whose theme P9 no longer has (O119 took out 16
+ *  themes) gets the default look, as duwop-boot.js does; an effect it no longer has (Horizon, Neon) is dropped. */
+const current = (look: Look): Look => {
+  const theme = renamedThemes[look.theme] ?? look.theme;
+  if (!allThemes.some((t) => t.id === theme)) return duwopConfig.defaultLook;
+  const { palette: _rolled, ...kept } = look as Look & { palette?: unknown }; // old Roll the dice colours
+  return { ...kept, theme, effects: look.effects.filter((e) => allEffects.some((x) => x.id === e)) };
+};
 
 const listeners = new Set<(look: Look) => void>();
 
@@ -195,11 +138,11 @@ export function loadLook(): Look {
 }
 
 /** Puts a look on the page now, remembers it for the next load, and tells onLookChange subscribers.
- *  Returns the look as applied (the "custom" theme gains a palette if it had none). */
+ *  Returns the look as applied (a removed theme or effect comes back as the default look). */
 export function applyLook(look: Look): Look {
   look = current(look);
   const html = document.documentElement;
-  const theme = allThemes.find((t) => t.id === look.theme) ?? themes[0];
+  const theme = allThemes.find((t) => t.id === look.theme)!; // current() made it one of allThemes
   const font = fonts.find((f) => f.id === look.font) ?? fonts[0];
   // loadFonts: false = the app hosts its fonts itself (a strict CSP, no Google calls); only the names are set.
   const google = duwopConfig.loadFonts !== false;
@@ -208,8 +151,6 @@ export function applyLook(look: Look): Look {
   const displayUrl = google && theme.display
     ? `https://fonts.googleapis.com/css2?family=${encodeURIComponent(theme.display)}&display=swap`
     : "";
-  if (theme.id === "custom" && !look.palette) look = { ...look, palette: rollPalette() };
-  const vars = theme.id === "custom" && look.palette ? paletteVars(look.palette) : {};
 
   html.dataset.theme = theme.id;
   html.dataset.fx = look.effects.join(" ");
@@ -220,8 +161,6 @@ export function applyLook(look: Look): Look {
   html.style.setProperty("--app-font", font.family ? `"${font.family}"` : "system-ui");
   if (font.adjust) html.style.setProperty("--app-font-adjust", String(font.adjust));
   else html.style.removeProperty("--app-font-adjust");
-  for (const v of PALETTE_VARS) html.style.removeProperty(v);
-  for (const [k, v] of Object.entries(vars)) html.style.setProperty(k, v);
   if (theme.display) html.style.setProperty("--app-display", `"${theme.display}"`);
   else html.style.removeProperty("--app-display");
   loadFont(url);
@@ -238,7 +177,6 @@ export function applyLook(look: Look): Look {
         family: font.family,
         adjust: font.adjust,
         url,
-        vars,
         display: theme.display ?? "",
         displayUrl,
       }),

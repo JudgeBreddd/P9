@@ -250,7 +250,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const editorAccent = () => dev.evaluate(() => getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue('--vscode-button-background').trim().toLowerCase());
   const loads = await dev.evaluate(() => performance.getEntriesByType('navigation').length + ':' + performance.timeOrigin);
   const seen = [];
-  for (const theme of ['redline', 'duskwood', 'event-horizon-prime']) {
+  for (const theme of ['night-drive', 'duskwood', 'event-horizon-prime']) {
     const want = await shell.evaluate(theme => {
       document.querySelector('#themeBtn').click(); document.querySelector('[data-theme-pick="' + theme + '"]').click();
       const ctx = document.createElement('canvas').getContext('2d');

@@ -2,7 +2,7 @@
 // DUWOP boot for Astro (@duwop/boot). Put <DuwopBoot /> in the layout's <head>, before any stylesheet
 // links, so the saved look (or this app's default) is on <html> before the first paint.
 import { duwopConfig } from "@/lib/duwop-config";
-import { allThemes, fonts } from "@/lib/theme";
+import { allEffects, allThemes, fonts } from "@/lib/theme";
 
 const d = duwopConfig.defaultLook;
 const font = fonts.find((f) => f.id === d.font) ?? fonts[0];
@@ -25,4 +25,5 @@ const fallback = JSON.stringify({
 });
 ---
 
-<script is:inline src="/duwop-boot.js" data-key={duwopConfig.storageKey} data-default={fallback}></script>
+<script is:inline src="/duwop-boot.js" data-key={duwopConfig.storageKey} data-default={fallback}
+  data-themes={JSON.stringify(allThemes.map((t) => t.id))} data-effects={JSON.stringify(allEffects.map((e) => e.id))}></script>

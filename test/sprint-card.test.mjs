@@ -155,7 +155,7 @@ test('Sprint card: a chat with workers shows one row per worker with its item, s
   await sizeTo(app, 1400, 900); await settle(page, 1400);
   await page.click('#chats .pane [data-tool="split"]');
   await page.locator('#navList .row[data-chat="' + lead + '"]').click();
-  for (const look of ['redline', 'duskwood']) {
+  for (const look of ['night-drive', 'duskwood']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + look + '"]'); await page.keyboard.press('Escape');
     await shot('sprint-card-' + look);
   }

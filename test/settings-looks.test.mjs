@@ -25,6 +25,9 @@ const menuItem = (page, label) => page.locator('#pillMenu .item').filter({ has: 
 const pillItems = async (page, pane, kind) => { await pillOf(pane, kind).click(); await page.locator('#pillMenu:not([hidden])').waitFor(); const items = await page.locator('#pillMenu .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent + (b.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))); await page.keyboard.press('Escape'); return items; };
 const choose = async (page, pane, kind, ...labels) => { await pillOf(pane, kind).click(); for (const label of labels) await menuItem(page, label).click(); };
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
+// O119: the themes kept, in picker order, and the ones taken out (a look saved under one loads as the default).
+const KEPT = ['duskwood', 'midnight', 'daylight', 'linen', 'event-horizon-prime', 'night-drive', 'olympus', 'hades', 'aphrodite-blue', 'aphrodite-charcoal', 'p9-event-horizon-azure'];
+const GONE = ['ember', 'forest', 'synthwave', 'rose', 'arctic', 'mono', 'outrun', 'cyberpunk', '8bit', 'ascii', 'custom', 'redline', 'event-horizon', 'apollo', 'athena', 'poseidon', 'ra'];
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
   body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => JSON.parse(result.text));
@@ -217,7 +220,7 @@ test('One look for every focus mode: a pick in Chat or Mission sets Dev Focus to
   console.log(`PASS looks: ${first} then ${second} in every focus, Dev Focus included; an old per-focus profile loads with the one look`);
 });
 
-test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offered, each repaints the page, its fonts load from P9 itself', { timeout: 120000 }, async (t) => {
+test('DUWOP themes: exactly the 11 kept themes are offered (O119), and the command palette names only kept ones; each repaints the page, its fonts load from P9 itself', { timeout: 120000 }, async (t) => {
   // Every DUWOP theme, not a subset
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-themes-')), 'profile');
@@ -229,8 +232,11 @@ test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offe
   const remote = []; page.on('request', (r) => { if (!/^(p9|data|blob):/.test(r.url())) remote.push(r.url()); });
   await page.locator('#rChat').waitFor();
   const ids = await page.locator('[data-theme-pick]').evaluateAll((buttons) => buttons.map((b) => b.dataset.themePick));
-  assert.equal(ids.length, 28, ids.join());
-  for (const id of ['duskwood', 'outrun', '8bit', 'daylight', 'linen', 'redline', 'olympus', 'hades', 'ra', 'aphrodite-blue', 'aphrodite-charcoal', 'p9-event-horizon-azure']) assert.ok(ids.includes(id), id);
+  assert.deepEqual(ids, KEPT, 'the picker offers exactly the kept themes');
+  await page.keyboard.press('Control+k'); await page.locator('#palIn').fill('Look:');
+  // A row's text ends with its Enter hint on a second line; the look's name is the first.
+  assert.deepEqual((await page.locator('#palList li[data-i]').allInnerTexts()).map((x) => x.split('\n')[0]), ['Look: Night Drive', 'Look: Duskwood'], 'the command palette names only kept looks');
+  await page.keyboard.press('Escape');
   const looks = new Map(), missing = [];
   for (const id of ids) {
     await page.click('#themeBtn'); await page.click(`[data-theme-pick="${id}"]`); await page.keyboard.press('Escape');
@@ -248,7 +254,7 @@ test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offe
   console.log(`PASS DUWOP themes: ${ids.length} offered, ${new Set(looks.values()).size} distinct colour sets, every named font loaded locally, 0 remote requests`);
 });
 
-test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus AMOLED, the bundled fonts, every effect and Roll again', { timeout: 120000 }, async (t) => {
+test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus AMOLED, the bundled fonts and every effect', { timeout: 120000 }, async (t) => {
   // The cards and all the themes (DUWOP's _engine/registry/appearance/appearance.tsx)
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-picker-')), 'profile');
@@ -264,10 +270,10 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
     const css = getComputedStyle(c), dot = getComputedStyle(c.querySelector('.dots i'));
     return { id: c.dataset.themePick, bg: css.backgroundColor, dot: dot.backgroundColor, primary: css.getPropertyValue('--primary').trim(), name: c.querySelector('b').textContent, note: c.querySelector('small').textContent };
   }));
-  assert.equal(cards.length, 28);
+  assert.equal(cards.length, KEPT.length);
   assert.ok(cards.every((c) => c.name && c.note), 'every card has a name and a note');
-  assert.equal(new Set(cards.map((c) => c.bg + c.dot)).size, 28, 'every card is painted in its own colours');
-  for (const id of ['outrun', 'redline', 'olympus', 'daylight']) {
+  assert.equal(new Set(cards.map((c) => c.bg + c.dot)).size, KEPT.length, 'every card is painted in its own colours');
+  for (const id of ['night-drive', 'midnight', 'olympus', 'daylight']) {
     await page.click(`[data-theme-pick="${id}"]`);
     assert.equal(await html('--primary'), cards.find((c) => c.id === id).primary, `${id}: the card shows the colour the page gets`);
     assert.equal(await page.locator(`[data-theme-pick="${id}"]`).getAttribute('aria-pressed'), 'true');
@@ -279,28 +285,57 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
   assert.equal(await html('--app-font'), '"JetBrains Mono"');
   assert.equal(await page.locator('[data-font-note]').textContent(), 'Monospace, for the nerds.');
   const fx = () => page.evaluate(() => document.documentElement.dataset.fx);
-  assert.equal(await page.locator('[data-fx-pick]').count(), 6);
-  assert.ok(await page.locator('[data-fx-pick="motion"]').isDisabled(), 'Drifting glow waits for Ambient glow or Horizon');
-  await page.click('[data-fx-pick="horizon"]');
-  assert.match(await fx(), /\bhorizon\b/);
+  assert.deepEqual(await page.locator('[data-fx-pick]').evaluateAll((l) => l.map((b) => b.dataset.fxPick)), ['underglow', 'ambient', 'motion', 'shine'], 'Horizon and Neon are gone (O119)');
+  assert.ok(await page.locator('[data-fx-pick="motion"]').isDisabled(), 'Drifting glow waits for Ambient glow');
+  await page.click('[data-fx-pick="ambient"]');
+  assert.match(await fx(), /\bambient\b/);
   assert.ok(await page.locator('[data-fx-pick="motion"]').isEnabled());
   await page.click('[data-fx-pick="shine"]');
   assert.doesNotMatch(await fx(), /\bshine\b/);
   const amoled = await page.evaluate(() => document.documentElement.hasAttribute('data-amoled'));
   await page.click('[data-amoled-switch]');
   assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-amoled')), !amoled);
-  assert.equal(await page.locator('[data-theme-pick="ember"]').evaluate((c) => c.hasAttribute('data-amoled')), !amoled, 'the cards follow AMOLED');
-  assert.ok(await page.locator('[data-roll]').isHidden());
-  await page.click('[data-theme-pick="custom"]');
-  const first = await html('--primary');
-  // --primary is oklch(0.78 0.16 <hue>) with a random whole-degree hue, so one roll in about 360 repeats the hue.
-  // A repeat is a fair roll, not a broken button: roll up to 5 times (all 5 repeating is about 1 in 6e12).
-  let rolled = first;
-  for (let i = 0; i < 5 && rolled === first; i++) { await page.click('[data-roll]'); rolled = await html('--primary'); }
-  assert.notEqual(rolled, first, 'Roll again changes the palette');
-  assert.equal(await page.locator('[data-theme-pick="custom"]').evaluate((c) => getComputedStyle(c).getPropertyValue('--primary').trim()), rolled, 'the dice card shows the rolled palette');
+  assert.equal(await page.locator('[data-theme-pick="midnight"]').evaluate((c) => c.hasAttribute('data-amoled')), !amoled, 'the cards follow AMOLED');
+  assert.equal(await page.locator('[data-roll]').count(), 0, 'no Roll again button (Roll the dice is gone)');
   await page.click('[data-theme-pick="event-horizon-prime"]');
   if (process.env.P9_EVIDENCE) await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'look-picker.png') });
-  console.log(`PASS look picker: ${cards.length} cards in their own colours (4 matched the page), ${fonts.length} fonts, 6 effects, AMOLED, Roll again`);
+  console.log(`PASS look picker: ${cards.length} cards in their own colours (4 matched the page), ${fonts.length} fonts, 4 effects, AMOLED`);
 });
 
+test('O119: a look saved under a removed theme or effect loads as the default, from the boot script on, with no error', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t);
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-gone-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.locator('#rChat').waitFor();
+  // What the boot script paints, before the app's module runs: the first data-theme and data-fx put on <html>.
+  await page.addInitScript(() => {
+    const first = (window.__first = {});
+    new MutationObserver((list) => { for (const m of list) if (!(m.attributeName in first)) first[m.attributeName] = document.documentElement.getAttribute(m.attributeName); })
+      .observe(document, { subtree: true, attributes: true, attributeFilter: ['data-theme', 'data-fx'] }); // <html> may not exist yet
+  });
+  const state = () => page.evaluate(() => ({ first: window.__first, theme: document.documentElement.dataset.theme, fx: document.documentElement.dataset.fx,
+    inline: document.documentElement.style.getPropertyValue('--primary'), saved: JSON.parse(localStorage.getItem('p9-look')) }));
+  const load = async (saved) => {
+    await page.evaluate((v) => localStorage.setItem('p9-look', JSON.stringify(v)), saved);
+    await page.reload(); await page.locator('#rChat').waitFor();
+    return state();
+  };
+  // The shape applyLook saved on main for each of these, a rolled Roll the dice palette included.
+  const old = (theme, effects) => ({ theme, effects, amoled: false, font: 'inter', dark: true, both: false, family: 'Inter', adjust: 0, url: '', display: '', displayUrl: '',
+    palette: { nh: 10, nc: 0.03, ph: 140, gh: 200 }, vars: { '--primary': 'oklch(0.78 0.16 140)', '--nh': '10' } });
+  const want = { theme: 'event-horizon-prime', fx: 'underglow motion shine' };
+  for (const id of [...GONE, 'no-such-theme']) { // any id the app doesn't have, not just a list
+    const s = await load(old(id, ['underglow', 'horizon', 'neon', 'motion']));
+    assert.deepEqual([s.first['data-theme'], s.theme, s.fx, s.inline, s.saved.theme, s.saved.palette, s.saved.vars], [want.theme, want.theme, want.fx, '', want.theme, undefined, undefined], id);
+  }
+  // A kept theme saved with a removed effect keeps the theme and drops the effect.
+  const s = await load(old('duskwood', ['underglow', 'neon', 'horizon', 'ambient']));
+  assert.deepEqual([s.first['data-theme'], s.first['data-fx'], s.theme, s.fx, s.saved.effects], ['duskwood', 'underglow ambient', 'duskwood', 'underglow ambient', ['underglow', 'ambient']]);
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log(`PASS O119: ${GONE.length} removed themes and an unknown one load as Event Horizon Prime from the first paint; Horizon and Neon drop from a kept look; 0 page errors`);
+});
