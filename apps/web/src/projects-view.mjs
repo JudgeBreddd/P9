@@ -239,7 +239,7 @@ export function installProjects(o, api) {
   function renderPage() {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
     page.hidden = !on; chats.hidden = on;
-    if (!on || v.kind !== 'project' || v.id !== instrOpen) instrOpen = ''; // O198: another page (a chat, another project, Archived) closes it
+    if (!on || v.kind !== 'project' || v.id !== instrOpen || spPage) instrOpen = ''; // O198: another page (a chat, another project, Archived, a sprint's page) closes it
     if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
     if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());

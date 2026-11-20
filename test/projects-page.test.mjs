@@ -1406,6 +1406,7 @@ test('O198 Show more on project instructions stays open through redraws until cl
   const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
   await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title First title' }); await ended(instance, chat);
   const other = (await call(instance, '/projects', 'POST', { name: 'Other', work: { kind: 'p9' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Docs prep' }); assert.ok(prep.sprint, JSON.stringify(prep));
   const { page, errors } = await launch(t, instance);
   const rest = page.locator('#projPage [data-rest]'), more = page.locator('#projPage .instr-all');
   // The page's chat row shows the new title once the page has drawn again: that is the redraw.
@@ -1437,5 +1438,13 @@ test('O198 Show more on project instructions stays open through redraws until cl
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
   await more.filter({ hasText: 'Show 2 more lines' }).waitFor({ timeout: 10000 });
   assert.equal(await rest.isVisible(), false, 'closed again after another project was shown');
+  // The same through the project's own Sprint Setup page and its Back.
+  await more.click(); assert.equal(await rest.isVisible(), true);
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click({ timeout: 10000 });
+  await page.locator(`[data-sp-page="${prep.sprint}"]`).waitFor({ timeout: 10000 });
+  await page.locator('[data-pj="spback"]').click();
+  await more.waitFor({ timeout: 10000 });
+  assert.equal(await more.textContent(), 'Show 2 more lines', 'closed again after the project\'s Sprint Setup page was shown');
+  assert.equal(await rest.isVisible(), false);
   assert.deepEqual(errors, []);
 });
