@@ -1,0 +1,63 @@
+// O127: a reader scrolled up in a desktop chat stays on the same block at the same offset while tool calls start, update,
+// finish and the agent's text streams. Real Electron with the sample data; the chat's events are set through the sample
+// door (window.__sprint.set), which repaints through the same paint() a live batch does.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { _electron } from '@playwright/test';
+import { shellReady } from './helpers.mjs';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+
+test('O127: a scrolled-up desktop chat does not move while tool calls arrive, finish and text streams', { timeout: 120000 }, async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-o127-'));
+  const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
+  t.after(() => app.close());
+  const page = await app.firstWindow({ timeout: 15000 });
+  page.on('pageerror', e => console.log('PAGEERROR ' + e.message));
+  await shellReady(page, { timeout: 15000 });
+  await page.evaluate(() => window.__setup({ writable: false }));
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const id = 's-claude-2';
+  await page.evaluate(id => document.querySelector('#navList .row[data-chat="' + id + '"]')?.click(), id);
+  const pane = page.locator(`.pane[data-id="${id}"]`);
+  await pane.locator('.hist').waitFor({ timeout: 5000 });
+  // 260 steps (more than the 200 drawn), so every new event slides the drawn window. Event 100 is a tool still running
+  // (drawn open, with output) above the reader; the reader reads 'reply 130.'.
+  await page.evaluate(id => {
+    const ev = [];
+    for (let i = 0; i < 260; i++) ev.push(i % 3 === 0 ? { t: 'user', text: `msg ${i}.` } : i % 3 === 1 ? { t: 'agent', text: `reply ${i}.\n\nA second paragraph for ${i}.` }
+      : { t: 'tool', title: `Read file${i}.txt`, status: 'completed', output: `out ${i}` });
+    ev[100] = { t: 'tool', title: 'Bash long run', status: 'in_progress', output: Array.from({ length: 12 }, (_, k) => 'line ' + k).join('\n') };
+    window.__o127 = ev; window.__sprint.set(id, { events: ev });
+  }, id);
+  await page.waitForFunction(() => [...document.querySelectorAll('.hist .col > *')].some(c => c.textContent.includes('reply 130.')), null, { timeout: 5000 });
+  await pane.locator('.hist').evaluate(h => { h.style.scrollBehavior = 'auto'; const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 130.'));
+    h.scrollTop += el.getBoundingClientRect().top - h.getBoundingClientRect().top - 100; });
+  const offset = () => pane.locator('.hist').evaluate(h => { const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 130.'));
+    return el ? Math.round(el.getBoundingClientRect().top - h.getBoundingClientRect().top) : null; });
+  assert.equal(await offset(), 100, 'the reader starts at 100 px');
+  const step = (fn, arg) => page.evaluate(([id, fn, arg]) => { new Function('ev', 'arg', fn)(window.__o127, arg); window.__sprint.set(id, { events: window.__o127 }); }, [id, fn, arg]);
+  const steps = [
+    ['a tool call starts', `ev.push({ t: 'tool', title: 'Bash npm test', status: 'in_progress' })`],
+    ['its output arrives', `ev.at(-1).output = 'ok 1\\nok 2\\nok 3'`],
+    ['it finishes', `ev.at(-1).status = 'completed'`],
+    ['the running tool above the reader finishes and closes', `ev[100].status = 'completed'`],
+    ['the agent starts a reply', `ev.push({ t: 'agent', text: 'Strea' })`],
+    ['its text streams', `ev.at(-1).text += 'ming a longer reply.\\n\\nWith a second paragraph.'`],
+    ['thirty more tool calls', `for (let i = 0; i < 30; i++) ev.push({ t: 'tool', title: 'Grep ' + i, status: 'completed', output: 'hit' })`],
+  ];
+  for (const [what, fn] of steps) { await step(fn); assert.equal(await offset(), 100, `the reader moved when ${what}`); }
+  await pane.locator('textarea').click(); await page.keyboard.type('typing here');
+  assert.equal(await offset(), 100, 'typing in the box moved the chat');
+  const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o127-reader-held ' + shot);
+  // A reader at the bottom still follows the new steps.
+  await pane.locator('.hist').evaluate(h => { h.scrollTop = h.scrollHeight; });
+  await step(`ev.push({ t: 'agent', text: 'The last reply.' })`);
+  assert.ok(await pane.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight < 24), 'a reader at the bottom no longer follows');
+});
