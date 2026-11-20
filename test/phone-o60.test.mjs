@@ -124,6 +124,30 @@ test('O62: the message goes to the chat on screen, whatever the chat list says',
   console.log('PASS O62: sent to the open chat with the list select empty');
 });
 
+test('O21: the open chat keeps its pick when the rebuilt chat list lacks it, and a send goes to it', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  seed(server, A, 'Chat A', turn('hello a')); seed(server, B, 'Chat B', turn('hello b'));
+  const { page } = await phone(t, server);
+  const attempts = await prompts(page, [202]);
+  await open(page, server, A);
+  // From here the chat list arrives without the open chat (it reads moving, or a refresh caught it between states).
+  let relists = 0;
+  await page.route((url) => url.pathname === '/chat', async (route) => {
+    const { body } = await server.desk('/chat'); // the daemon's own list, read over its socket
+    relists++; await route.fulfill({ json: { ...body, conversations: body.conversations.filter((c) => c.id !== A) } });
+  });
+  later(server, B, [['renamed', { title: 'Chat B again' }]]); // another chat's change makes the phone read the list and rebuild the picker
+  for (let i = 0; i < 150 && !relists; i++) await page.waitForTimeout(100);
+  assert.ok(relists, 'the phone never read the chat list again');
+  await page.waitForTimeout(300);
+  assert.equal(await page.inputValue('#conversation'), A, 'the rebuilt picker lost the open chat');
+  await page.fill('#prompt', 'still to A');
+  await page.click('#send');
+  for (let i = 0; i < 100 && !attempts.length; i++) await page.waitForTimeout(100);
+  assert.deepEqual(attempts.map((attempt) => [attempt.chat, attempt.body.text]), [[A, 'still to A']], 'the send did not go to the open chat');
+  console.log('PASS O21: the picker kept the open chat after a list without it, and the send went');
+});
+
 test('O21: a tap that sends nothing says why under the box', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server, A, 'Chat A', turn('hello a'));

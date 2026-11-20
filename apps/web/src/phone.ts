@@ -210,13 +210,15 @@ async function readChat() {
 // message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
 // apart. The chat shown stays picked.
 function fillPicker() {
-  const select = one<HTMLSelectElement>('#conversation'), was = select.value;
+  const select = one<HTMLSelectElement>('#conversation'), was = select.value, kept = [...select.options].find((option) => option.value === openId);
   const option = (item: Json) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`;
   const group = (label: string, items: Json[]) => items.length ? `<optgroup label="${label}">${items.map(option).join('')}</optgroup>` : '';
   select.innerHTML = group('Open', state.conversations.filter(isOpen)) + group('History', state.conversations.filter((item) => !isOpen(item) && item.sent))
     || '<option value="">No conversations yet</option>';
   // An open chat stays picked even when it left the list (stopped before its first message, or closed): the select's
   // fallback to its first (newest) option sent that chat's composer to another chat. On the list the newest is the default.
+  // O21: a list without the open chat (it reads moving, or a refresh caught it between states) keeps its option, as it read last.
+  if (openId && ![...select.options].some((option) => option.value === openId)) select.prepend(kept ?? new Option('This chat', openId));
   if (openId) select.value = openId;
   else if ([...select.options].some((option) => option.value === was)) select.value = was;
 }
