@@ -11,6 +11,7 @@ import { _electron } from '@playwright/test';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 import { once } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -727,4 +728,35 @@ test('window-4: the worker report floats folded to its title above the box, slid
   await until(async () => await card.count() === 0, 'closed from its x on the short window');
   assert.deepEqual(errors, []);
   console.log('PASS window-4: report arrives folded to its title above the box, the last chat row clear of it; its title slides it up (aria-expanded) and down (Enter); the chat box, scroll and last row stay put opened and closed; a new report arrives folded and takes no height from the history; a pinned card and the report show two titles; on a short window under a tall pin, the opened report keeps its title and close inside the pane and clickable');
+});
+
+// O109-repeat-visible: a message P9 resent after a restart carries repeat: true on its user event (chat.mjs deliver, the
+// pause and the steer paths); the agent saw the label, so the chat's own row says it too. A plain message and one the
+// event marks repeat: false say nothing; a steered resend and a note's resend say it beside their own heading.
+test('O109-repeat-visible: a resent message says on its row that it may be a repeat', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Resent' })).conversation;
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
+  try {
+    const add = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
+    for (const data of [{ text: 'plain one' }, { text: 'resent one', repeat: true }, { text: 'said no', repeat: false },
+      { text: 'steered resend', steered: true, repeat: true }, { text: 'note resend', info: true, repeat: true }]) add.run(chat, 'user', JSON.stringify(data), Date.now());
+  } finally { db.close(); }
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList .row[data-chat="${chat}"]`).click();
+  const row = (text) => page.locator(`.pane[data-id="${chat}"] .msg.user`, { hasText: text });
+  await row('note resend').waitFor({ timeout: 20000 });
+  const seen = {};
+  for (const text of ['plain one', 'resent one', 'said no', 'steered resend', 'note resend']) seen[text] = await row(text).locator('.who').innerText();
+  const says = (w) => w.includes('sent again after a restart, may be a repeat');
+  assert.deepEqual(Object.fromEntries(Object.entries(seen).map(([k, v]) => [k, says(v)])),
+    { 'plain one': false, 'resent one': true, 'said no': false, 'steered resend': true, 'note resend': true }, JSON.stringify(seen));
+  assert.ok(seen['note resend'].startsWith('Note from'), 'the note keeps its own heading: ' + seen['note resend']);
+  // One heading line (.who is flex): the label is in the heading's own text, not an item of its own with a gap before it.
+  assert.equal(await row('resent one').locator('.who[data-repeat]').count(), 1);
+  assert.equal(await row('resent one').locator('.who > *').count(), 0, 'the label is a separate flex item');
+  assert.ok(!(await row('resent one').innerText()).includes('[P9:'), 'the agent\'s label text is not drawn into the message');
+  await shot(page, 'o109-repeat-visible');
+  assert.deepEqual(errors, []);
+  console.log('PASS O109-repeat-visible: ' + JSON.stringify(seen));
 });
