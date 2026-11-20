@@ -675,6 +675,7 @@ function showTerm() {
   dock.hidden = !open; dock.classList.toggle('float', float);
   $('#dFloat').hidden = f === 'dev';
   pressed('term', open);
+  if (open && !dockTerm) loadDock();
   if (open && dockTerm && !dockTerm.open) openDock();
 }
 // A terminal the daemon just made (Hand off, the wizard's agent commands): the dock opens on it.
@@ -823,7 +824,14 @@ const openDock = () => docking ??= (async () => {
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING_HERE, unavailableText: text }) => {
+// O118: the terminal chunk (xterm, about a third of the shell's JS) is not on the startup path: it loads once the window has
+// loaded and is idle, or at once when the terminal is opened before that (showTerm). At most once, unless it failed: then the
+// next open tries again.
+let dockLoad = null;
+function loadDock() {
+  if (!window.p9?.terminalOpen || dockLoad) return;
+  $('#dState').textContent = ''; // a retry does not keep saying the last try failed
+  dockLoad = import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING_HERE, unavailableText: text }) => {
   if (lifetime.signal.aborted) return;
   tmuxMissing = TMUX_MISSING_HERE; unavailableText = text;
   dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, open: url => window.p9.openLink(url).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true)), state: (text, on) => {
@@ -834,7 +842,9 @@ if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TM
   observe(() => dockTerm.fit()).observe($('#termView'));
   lifetime.signal.addEventListener('abort', () => dockTerm.close());
   showTerm();
-});
+}, () => { dockLoad = null; $('#dState').textContent = 'Terminal did not load. Open it again to retry'; }); }
+const dockIdle = () => requestIdleCallback(loadDock, { timeout: 2000 });
+if (document.readyState === 'complete') dockIdle(); else addEventListener('load', dockIdle, { once: true, signal: lifetime.signal });
 const dock = $('#dock');
 dragBar($('#grip'), { axis: 'y', dir: -1, get: () => dock.offsetHeight, set: px => { dock.style.height = px + 'px'; }, min: 120, max: () => innerHeight * .7, signal: lifetime.signal });
 $('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
