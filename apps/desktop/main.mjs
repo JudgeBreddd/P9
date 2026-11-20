@@ -1097,7 +1097,7 @@ export async function createDesktop({ state, open } = {}) {
   // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
   // devServing: the folder the loaded page was given (its saves go there).
   let cardsView = null, cardsItems = [], cardsHide = null;
-  let devToken = null, devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
+  let devToken = null, devFailed = false, devOpens = 0, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   // The editor page's build (about 18 MB; review item 22), kept while its index.html keeps the same mtime: every Dev Focus open
   // and reopen used to read it all again. Any build (Rebuild or a hand-run pnpm build:dev, which empties and rewrites dist)
   // writes a new index.html, so the next open reads the new build. A failed stat or read is tried again on the next open.
@@ -1146,6 +1146,7 @@ export async function createDesktop({ state, open } = {}) {
     return { port: relay.port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
   };
   const openDev = () => dev ??= (async () => {
+    devOpens++;
     const devSession = session.fromPartition('persist:p9-dev');
     if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview'));
     // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
@@ -1213,7 +1214,7 @@ export async function createDesktop({ state, open } = {}) {
     devToken = config.error ? null : config.token;
     if (config.error) dev = null;
     return config;
-  })().catch(error => { dev = null; throw error; });
+  })().finally(() => { devOpens--; }).catch(error => { dev = null; throw error; });
   // A new folder (Open Folder, a workspace change) loads a new editor page in the same place; its open-ready delivers what is queued.
   const reopenDev = () => {
     if (!devView) return;
@@ -1231,6 +1232,9 @@ export async function createDesktop({ state, open } = {}) {
   // failed: a page that could not open (the drop came first) opens again; showing Dev Focus already does that itself.
   const devAgain = (failed = false) => {
     if (!devView || !serverHost) return;
+    // An open still running may have failed before this connection was up (FIX1): once it ends, look again, if this
+    // connection is still the one. ponytail: an open whose promise is gone (renderer crashed) is polled every 250 ms.
+    if (failed && devOpens) { const s = server, p = dev; return Promise.resolve(p ?? new Promise(resolve => setTimeout(resolve, 250))).catch(() => {}).then(() => { if (server === s) devAgain(true); }); }
     if (failed && devFailed) return reopenDev();
     if (!devToken) return;
     const had = devToken;

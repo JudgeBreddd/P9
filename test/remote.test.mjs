@@ -1381,6 +1381,59 @@ test('O19 Dev Focus opened while the remote is away says so, then opens by itsel
   console.log('PASS O19: Dev Focus opened while the remote was away opened by itself when it came back');
 });
 
+test('O19 FIX1 Dev Focus whose failed open is still loading when the remote comes back opens by itself once it ends', { skip, timeout: 240000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const remote = await editorDaemon(t, editor), local = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  // The remote goes away (its P9 stops, the tunnel drops).
+  remote.child.kill('SIGTERM');
+  await once(remote.child, 'exit');
+  for (const call of (await s.calls()).filter(c => c.argv.includes('-L'))) try { process.kill(call.pid, 'SIGTERM'); } catch {}
+  await shell.waitForFunction(() => window.p9.getStatus().then(s => s.status !== 'ok'), null, { timeout: 30000, polling: 250 });
+  // The next Dev Focus page load is held in main: the open has already failed, its error page is still loading.
+  await app.evaluate(({ webContents }) => {
+    const proto = Object.getPrototypeOf(webContents.getAllWebContents()[0]), load = proto.loadURL;
+    proto.loadURL = function (url, ...rest) {
+      if (!url.startsWith('p9://dev/') || globalThis.p9Held) return load.call(this, url, ...rest);
+      globalThis.p9Held = 'held';
+      return new Promise(resolve => { globalThis.p9Release = resolve; }).then(() => load.call(this, url, ...rest));
+    };
+  });
+  await shell.keyboard.press('Control+2');
+  for (let i = 0; i < 120 && await app.evaluate(() => globalThis.p9Held) !== 'held'; i++) await sleep(250);
+  assert.equal(await app.evaluate(() => globalThis.p9Held), 'held', 'the failed open reached its page load');
+  // It comes back while that open is still running, and the window is connected again before the page finishes.
+  const second = await restart(t, remote, 'state-2');
+  await rm(path.join(s.server, 'p9-foundation'), { recursive: true, force: true });
+  await symlink(second.state, path.join(s.server, 'p9-foundation'));
+  await shell.waitForFunction(() => window.p9.getStatus().then(s => s.status === 'ok'), null, { timeout: 60000, polling: 250 });
+  await sleep(1000);
+  await app.evaluate(() => globalThis.p9Release());
+  // Nothing is pressed: the editor opens on the remote that came back, and only that page is left.
+  const devPages = () => app.windows().filter(page => page.url().startsWith('p9://dev/'));
+  let ready = null;
+  for (let i = 0; i < 480 && !ready; i++) {
+    for (const page of devPages()) if (await page.evaluate(() => !!window.devFocusReady).catch(() => false)) ready = page;
+    if (!ready) await sleep(250);
+  }
+  assert.ok(ready, 'the editor opened by itself: ' + await Promise.all(devPages().map(page => page.locator('#cause').textContent().catch(() => '')))); 
+  assert.equal(await ready.locator('#cause').count(), 0);
+  assert.equal((await ready.evaluate(() => window.p9dev.config())).server, 'test-host');
+  await sleep(3000);
+  assert.equal(devPages().length, 1, 'one Dev Focus page, no stale error page left');
+  console.log('PASS O19 FIX1: a failed open still loading when the remote came back ended, then the editor opened by itself');
+});
+
 test('Dev Focus\'s page when the editor server cannot start: no systemd user session says what to do', { skip, timeout: 120000 }, async (t) => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
