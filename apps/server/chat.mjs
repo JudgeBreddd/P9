@@ -276,6 +276,32 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const line = String(text ?? '').trim().split('\n')[0].trim();
     return line.length > 100 ? line.slice(0, 99) + '…' : line;
   };
+  // O200: the panel's search also finds a chat by what was said in it, not only by its title. One pass over the prompts and
+  // reply chunks in cursor order; a reply's chunks are joined before matching, so a word split across two chunks matches.
+  // ponytail: a scan of the whole ledger per search (timed in the PR); an FTS index if a long history makes it slow.
+  const sayings = db.prepare(`SELECT conversation AS id, type, CASE type WHEN 'user' THEN json_extract(${valid}, '$.text')
+    ELSE json_extract(${valid}, '$.content.text') END AS text FROM events WHERE type = 'user'
+    OR (type = 'update' AND json_extract(${valid}, '$.sessionUpdate') = 'agent_message_chunk') ORDER BY cursor`);
+  const search = (q) => {
+    const want = typeof q === 'string' ? q.trim().toLowerCase() : '';
+    if (want.length < 2 || want.length > 200) return { status: 400, error: 'bad-query' };
+    const found = new Map(), replies = new Map();
+    const check = (id, text) => {
+      const i = typeof text === 'string' ? text.toLowerCase().indexOf(want) : -1;
+      if (i < 0) return;
+      const from = Math.max(0, i - 30), cut = text.slice(from, i + want.length + 50).replace(/\s+/g, ' ').trim();
+      found.set(id, (from ? '…' : '') + cut + (i + want.length + 50 < text.length ? '…' : ''));
+    };
+    for (const { id, type, text } of sayings.iterate()) {
+      if (found.has(id)) continue;
+      if (type === 'user') { check(id, replies.get(id)); replies.delete(id); if (!found.has(id)) check(id, text); continue; }
+      const joined = (replies.get(id) ?? '') + (typeof text === 'string' ? text : '');
+      // A long reply is matched in pieces, each keeping the end of the last so a word across the cut still matches.
+      if (joined.length > 65536) { check(id, joined); replies.set(id, joined.slice(-want.length)); } else replies.set(id, joined);
+    }
+    for (const [id, text] of replies) if (!found.has(id)) check(id, text);
+    return { status: 200, matches: [...found].map(([chat, snippet]) => ({ chat, snippet })) };
+  };
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
   // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
   // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. A deleted chat takes the ones no other chat names (O35).
@@ -1481,6 +1507,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     // lists (O47): { agent: { model, pickers, def, at, state } | null }; state 'loading' while this run's one fresh read is on.
     lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], mark: markOf(agent, lists[agent]), state: readState[agent] ?? 'kept' } : null])); },
+    search, // O200
     // How many chats have a turn running: the idle watch and the update's turn wait ask only this (finding 12).
     turning: () => db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE state = 'turn'").get().n,
     list: (plans = new Map()) => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent, key,

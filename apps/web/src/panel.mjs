@@ -55,7 +55,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const $ = s => document.querySelector(s), nav = $('#nav'), list = $('#navList'), strip = $('#rBots'), body = nav.parentElement;
   const key = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
   // open: the projects shown open; null until one is toggled, when every project is open.
-  const P = { q: '', more: {}, subs: {}, open: (k => k ? new Set(JSON.parse(k)) : null)(localStorage.getItem('p9-panel-open')), collapsed: localStorage.getItem('p9-panel-collapsed') === '1',
+  const P = { q: '', found: null, more: {}, subs: {}, open: (k => k ? new Set(JSON.parse(k)) : null)(localStorage.getItem('p9-panel-open')), collapsed: localStorage.getItem('p9-panel-collapsed') === '1',
     w: Math.min(420, Math.max(220, Number(localStorage.getItem('p9-panel-w')) || 272)), narrow: false, overlay: false, moved: null, noclick: false };
   const projects = () => (o.S.projects || []).filter(p => !p.archived);
   const find = id => o.S.sessions.find(s => s.id === id);
@@ -75,6 +75,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
   // Two chats with one title (two new chats of one agent both read "Claude") get a number by age, as the old strip's #n did.
   const title = s => { const same = o.S.sessions.filter(x => x.title === s.title); return same.length > 1 && same[0] !== s ? s.title + ' ' + (same.indexOf(s) + 1) : s.title; };
   const stripped = () => P.collapsed || o.S.focus !== 'chat' || (P.narrow && !P.overlay);
+  // O200: a chat the daemon found by what was said in it (GET /chat/search), and the words that matched, for this search only.
+  const snip = s => P.q && P.found?.q === P.q ? P.found.m.get(s.id) : undefined;
   const hl = t => { const i = P.q ? t.toLowerCase().indexOf(P.q.toLowerCase()) : -1; return i < 0 ? esc(t) : esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + P.q.length)) + '</mark>' + esc(t.slice(i + P.q.length)); };
   const mark = (st, s) => st === 'running' ? `<span class="mk mk-run"${busy(s) ? ' data-busy' : ''} title="${busy(s) ? 'Working' : LABEL.running}"></span>`
     : st === 'needs' ? `<span class="mk mk-needs" title="${LABEL.needs}">${I.hand}</span>` : st === 'failed' ? `<span class="mk mk-failed" title="${LABEL.failed}">${svg.x}</span>`
@@ -82,6 +84,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   // Builder's build fix 1: a row's state mark takes the time's place; the time shows on hover and focus (panel.css).
   const chatRow = (s, depth = 0) => { const st = stateOf(s, busy(s)), cur = shown().includes(s.id), m = mark(st, s);
     return `<div class="rowwrap"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
+      + (P.q && snip(s) && !s.title.toLowerCase().includes(P.q.toLowerCase()) ? `<div class="snip">${hl(snip(s))}</div>` : '')
       + (live(s) ? `<button class="rstop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
       + `<button class="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
   // A7: a zone's rows with each worker under the chat that started it (nested, above).
@@ -89,8 +92,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} workers</span></button>`;
   function renderList() {
     const q = P.q.toLowerCase(), hit = t => !q || String(t).toLowerCase().includes(q), all = ordered(listedChats(o.S.sessions)), ps = projects();
-    const groups = ps.map(p => ({ p, kids: all.filter(s => s.project === p.id && (hit(s.title) || hit(p.name))) })).filter(g => hit(g.p.name) || g.kids.length);
-    const general = all.filter(s => !projectOf(s, ps) && hit(s.title));
+    const groups = ps.map(p => ({ p, kids: all.filter(s => s.project === p.id && (hit(s.title) || snip(s) || hit(p.name))) })).filter(g => hit(g.p.name) || g.kids.length);
+    const general = all.filter(s => !projectOf(s, ps) && (hit(s.title) || snip(s)));
     // A search shows only the sections it matched; without one, Chats stays as the drop target that takes a chat out of a project.
     let h = q && !groups.length ? '' : `<div class="sh"><h3>Projects${ps.length ? ` <span class="n">${ps.length}</span>` : ''}</h3>${o.newProject ? `<button class="hadd" data-newproj title="New project" aria-label="New project">${svg.plus}</button>` : ''}</div>`;
     if (!ps.length && !q) h += `<div class="pempty"><p>Projects keep chats, instructions and files together.</p>${o.newProject ? `<button data-newproj>${I.folderPlus}New project</button>` : ''}</div>`;
@@ -146,7 +149,14 @@ export function installPanel(o, { focus, stopChat, busy }) {
     }
     o.morph(strip, html);
   }
+  // O200: searched: the newest chat activity the last search saw; a chat used since (a new message) searches again.
+  let searchT, searched = 0;
+  function research() { clearTimeout(searchT); const q = P.q; if (q.length < 2 || !o.liveChat.on) return;
+    searched = Math.max(0, ...o.S.sessions.map(when));
+    searchT = setTimeout(async () => { const r = await o.liveChat.call('search', { q }, { quiet: true }).catch(() => null);
+      if (r?.status === 200 && P.q === q) { P.found = { q, m: new Map(r.body.matches.map(x => [x.chat, x.snippet])) }; renderPanel(); } }, 250); }
   function renderPanel() {
+    if (P.q.length >= 2 && o.S.sessions.some(s => when(s) > searched)) research();
     const known = new Set(o.S.sessions.map(s => s.id));
     if (o.liveChat.on) for (const id of positions.keys()) if (!known.has(id)) positions.delete(id);
     ordered(o.S.sessions);
@@ -297,7 +307,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
     // Ctrl Tab flips to the chat shown before this one (S.open keeps the last two, newest first).
     if (e.ctrlKey && e.key === 'Tab' && o.S.focus === 'chat' && o.S.open[1] && !e.target.closest?.('#dock')) { e.preventDefault(); openChat(o.S.open[1]); }
   }, { signal: o.lifetime.signal });
-  $('#navQ').addEventListener('input', e => { P.q = e.target.value.trim(); renderPanel(); });
+  // O200: the titles filter at once; the daemon's search by message text follows a moment after typing stops.
+  $('#navQ').addEventListener('input', e => { P.q = e.target.value.trim(); renderPanel(); research(); });
   $('#navQ').addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.value) { e.stopPropagation(); e.target.value = ''; P.q = ''; renderPanel(); } });
 
   // ---- Width: drag or arrow keys on the grip, kept across restarts; narrow windows fold to the strip by themselves. ----

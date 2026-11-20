@@ -548,6 +548,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/projects/:id/files', async (c) => reply(c, await chat.projects.addFile(c.req.param('id'), await json(c))));
   api.post('/projects/:id/files/remove', async (c) => { const body = await json(c);
     return reply(c, body && typeof body === 'object' && Object.keys(body).join() === 'name' ? await chat.projects.removeFile(c.req.param('id'), body.name) : { status: 400, error: 'request-refused' }); });
+  api.get('/chat/search', (c) => reply(c, chat.search(c.req.query('q')))); // O200: chats by what was said in them
   api.get('/chat/started-in', (c) => reply(c, chat.projects.chats.startedIn(c.req.query('folder'))));
   api.post('/chat/:id/project', async (c) => reply(c, await chat.projects.chats.move(c.req.param('id'), await json(c))));
   api.post('/chat/:id/rename', async (c) => reply(c, chat.projects.chats.rename(c.req.param('id'), await json(c))));

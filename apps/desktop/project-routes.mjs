@@ -38,6 +38,7 @@ export const projectRoutes = (uuid) => {
     sprintSettings: ({ id, source, setup, ...rest }) => uuid(id) && typeof source === 'string' && typeof setup === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-settings', { source, setup }],
     removeProjectFile: ({ id, name, ...rest }) => uuid(id) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files/remove', { name }],
     startedIn: ({ folder, ...rest }) => typeof folder === 'string' && folder.length <= 4096 && !Object.keys(rest).length && ['GET', '/chat/started-in?' + new URLSearchParams({ folder })],
+    search: ({ q, ...rest }) => typeof q === 'string' && q.length <= 200 && !Object.keys(rest).length && ['GET', '/chat/search?' + new URLSearchParams({ q })], // O200
     moveChat: ({ id, project, ...rest }) => uuid(id) && (project === null || uuid(project)) && !Object.keys(rest).length && ['POST', `/chat/${id}/project`, { project }],
     renameChat: ({ id, title, ...rest }) => uuid(id) && typeof title === 'string' && !Object.keys(rest).length && ['POST', `/chat/${id}/rename`, { title }],
     archiveChat: ({ id, archived, ...rest }) => uuid(id) && typeof archived === 'boolean' && !Object.keys(rest).length && ['POST', `/chat/${id}/archive`, { archived }],

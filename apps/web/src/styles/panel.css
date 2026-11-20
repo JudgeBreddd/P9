@@ -71,6 +71,9 @@
 .lpanel .row{position:relative;display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:calc(var(--radius) - 4px);font-size:13px;color:var(--foreground);text-align:left;background:none;border:0;cursor:pointer;min-width:0;touch-action:pan-y}
 .lpanel .row:hover{background:var(--accent)}
 .lpanel .row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* O200: why a search found a chat whose title does not say it; the row's buttons stay level with its first line. */
+.lpanel .snip{margin-top:-4px;padding:0 8px 5px 24px;font-size:11.5px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+.lpanel .rowwrap:has(.snip) :is(.more,.rstop){top:15px}
 .lpanel .row[data-s="unread"] .t{font-weight:600}
 .lpanel .row .n{font-size:11px;color:var(--muted-foreground);min-width:16px;text-align:right;font-variant-numeric:tabular-nums}
 /* The tail: the state mark in the time's place; the time on hover and focus (Builder's build fix 1). One width, so titles line up. */
