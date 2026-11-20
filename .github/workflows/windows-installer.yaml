@@ -69,7 +69,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 26.10.0
+          node-version: 26.13.1
           cache: pnpm
       # Retried: a GitHub/npm 50x during install (Electron's zip comes from github.com) failed whole runs (2026-11-08 outage).
       - run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
@@ -980,7 +980,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 26.10.0
+          node-version: 26.13.1
           cache: pnpm
       # Retried: a GitHub/npm 50x during install (Electron's zip comes from github.com) failed whole runs (2026-11-08 outage).
       - run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
@@ -1084,7 +1084,7 @@ jobs:
           ref: ${{ inputs.tag || github.sha }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 26.10.0
+          node-version: 26.13.1
           package-manager-cache: false
       - uses: actions/download-artifact@v8
         with:
