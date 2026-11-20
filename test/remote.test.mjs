@@ -1298,6 +1298,89 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   console.log('PASS server Dev Focus in the window: missing names the server, Install there, the server\'s file opened and saved; after a server daemon restart a new editor, the unsaved edit kept');
 });
 
+test('O19 Dev Focus left open on a remote that went away and came back: the editor reloads onto the new one by itself', { skip, timeout: 240000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const remote = await editorDaemon(t, editor), local = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  const devPage = (timeout = 60000) => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout });
+  const ready = async dev => {
+    await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
+    assert.equal(await dev.locator('#cause').count(), 0, await dev.locator('#cause').textContent().catch(() => ''));
+    return (await dev.evaluate(() => window.p9dev.config())).token;
+  };
+  let opened = devPage();
+  await shell.keyboard.press('Control+2');
+  let dev = await opened;
+  const first = await ready(dev);
+  const drop = async () => { for (const call of (await s.calls()).filter(c => c.argv.includes('-L'))) try { process.kill(call.pid, 'SIGTERM'); } catch {} };
+  // A blip first: the tunnel drops and comes back, the remote's P9 and editor keep running. The page stays (no reload, so
+  // nothing open is lost) and its editor answers again through the same local port.
+  let reloaded = false; app.on('window', page => { if (page.url().startsWith('p9://dev/')) reloaded = true; });
+  await drop();
+  await shell.waitForFunction(() => window.p9.getStatus().then(s => s.status === 'ok'), null, { timeout: 60000, polling: 500 });
+  await writeFile(path.join(remote.workspace, 'blip.txt'), 'after the blip\n');
+  assert.equal(await dev.evaluate(async () => (await window.devFocus.open('blip.txt')).document.getText()), 'after the blip\n', 'the same page reads the remote again');
+  assert.equal(reloaded, false, 'a blip does not reload the editor');
+  // The remote goes away while Dev Focus stays open: its P9 stops (ending its editor) and the tunnel drops. Then it comes back,
+  // with a new P9 (new credentials, a new editor when asked). Nothing is pressed here.
+  remote.child.kill('SIGTERM');
+  await once(remote.child, 'exit');
+  const second = await restart(t, remote, 'state-2');
+  await rm(path.join(s.server, 'p9-foundation'), { recursive: true, force: true });
+  await symlink(second.state, path.join(s.server, 'p9-foundation'));
+  opened = devPage(90000);
+  await drop();
+  const token = await ready(await opened);
+  assert.notEqual(token, first, 'a new editor, not the dead one');
+  console.log('PASS O19: the editor left open came back by itself after the remote went away and came back');
+});
+
+test('O19 Dev Focus opened while the remote is away says so, then opens by itself when the remote is back', { skip, timeout: 240000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const remote = await editorDaemon(t, editor), local = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  const devPage = (timeout = 60000) => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout });
+  // The remote goes away (its P9 stops, the tunnel drops), then Dev Focus is opened: its page says it cannot reach it.
+  remote.child.kill('SIGTERM');
+  await once(remote.child, 'exit');
+  for (const call of (await s.calls()).filter(c => c.argv.includes('-L'))) try { process.kill(call.pid, 'SIGTERM'); } catch {}
+  await shell.waitForFunction(() => window.p9.getStatus().then(s => s.status !== 'ok'), null, { timeout: 30000, polling: 250 });
+  let opened = devPage();
+  await shell.keyboard.press('Control+2');
+  const down = await opened;
+  await down.locator('#cause').waitFor({ timeout: 60000 });
+  // It comes back. Dev Focus is still the one shown, and nothing is pressed.
+  const second = await restart(t, remote, 'state-2');
+  await rm(path.join(s.server, 'p9-foundation'), { recursive: true, force: true });
+  await symlink(second.state, path.join(s.server, 'p9-foundation'));
+  opened = devPage(120000);
+  const dev = await opened;
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
+  assert.equal(await dev.locator('#cause').count(), 0, await dev.locator('#cause').textContent().catch(() => ''));
+  assert.equal((await dev.evaluate(() => window.p9dev.config())).server, 'test-host');
+  console.log('PASS O19: Dev Focus opened while the remote was away opened by itself when it came back');
+});
+
 test('Dev Focus\'s page when the editor server cannot start: no systemd user session says what to do', { skip, timeout: 120000 }, async (t) => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
