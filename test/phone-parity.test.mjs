@@ -334,6 +334,27 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await page.reload();
   await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 5, null, { timeout: 15000 });
 });
+// CI job 135799199043: after the reload P8 saw fewer than its 5 sent photos for 15 s. The chat's folder answer redraws the
+// chat while a photo is still loading; the redraw kept the list's key (the photo cache's size, unchanged when a photo lands),
+// so the photo that arrived next drew nothing. Here the photo's answer is held until the folder answer has been drawn.
+test('P8: a sent photo shows after a reload when the chat folder answer arrives before the photo', { timeout: 60000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  await newChat(page, 'claude');
+  await page.evaluate((b64) => {
+    const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'p.png', { type: 'image/png' }));
+    document.querySelector('#prompt').dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+  }, png);
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-img').length === 1, null, { timeout: 10000 });
+  await send(page, 'look');
+  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 1, null, { timeout: 15000 });
+  const folder = page.waitForResponse((r) => /\/chat\/[^/]+\/folder$/.test(new URL(r.url()).pathname), { timeout: 15000 });
+  let held = 0;
+  await page.route('**/images/**', async (route) => { held += 1; await folder; await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50)))); await route.continue(); });
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 1, null, { timeout: 15000 })
+    .catch(async (e) => { throw new Error('the photo never drew (image requests held: ' + held + ', imgs: ' + await page.locator('#events .user-imgs img').count() + '): ' + e.message); });
+});
 test('P4: one tap on send posts the message and the box keeps focus (the keyboard stays up)', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
