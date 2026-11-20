@@ -59,11 +59,21 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   for (const [what, fn] of steps) { await step(fn); await near(what); }
   await pane.locator('textarea').click(); await page.keyboard.type('typing here');
   await near('typing in the box');
-  // The reader's own block removed: no block to hold, so the old pixel position stays (no jump, no error).
-  const topBefore = await pane.locator('.hist').evaluate(h => h.scrollTop);
+  // A block below the held one removed (reply 130 itself): the held block stays where it was on screen.
+  const heldAt = () => pane.locator('.hist').evaluate(h => { const top = h.getBoundingClientRect().top;
+    const el = [...h.querySelectorAll(':scope > .col > [data-at]')].find(c => c.getBoundingClientRect().bottom > top); return { y: el.getBoundingClientRect().top - top, text: el.textContent }; });
+  const h0 = await heldAt();
   await step(`ev.splice(ev.findIndex(e => e.text?.startsWith('reply 130.')), 1)`);
-  assert.equal(await offset(), null, 'the reader\'s block is gone');
-  assert.ok(Math.abs(await pane.locator('.hist').evaluate(h => h.scrollTop) - topBefore) <= 1, 'with its block gone the reader stays at the same scroll position');
+  const h1 = await heldAt();
+  assert.equal(h1.text, h0.text, 'the same block is first on screen');
+  assert.ok(Math.abs(h1.y - h0.y) <= 1, `the held block moved when the block below it was removed: ${h1.y}, was ${h0.y}`);
+  // The held block itself (the first one on screen) removed: nothing to hold, so the old pixel position stays (no jump, no error).
+  const before = await pane.locator('.hist').evaluate(h => { const top = h.getBoundingClientRect().top;
+    const el = [...h.querySelectorAll(':scope > .col > [data-at]')].find(c => c.getBoundingClientRect().bottom > top); return { top: h.scrollTop, at: +el.dataset.at, text: el.textContent }; });
+  await step('ev.splice(arg, 1)', before.at);
+  const after = await pane.locator('.hist').evaluate((h, text) => ({ top: h.scrollTop, still: [...h.querySelectorAll(':scope > .col > [data-at]')].some(c => c.textContent === text) }), before.text);
+  assert.equal(after.still, false, `the held block is gone: ${before.text.slice(0, 60)}`);
+  assert.ok(Math.abs(after.top - before.top) <= 1, `with its block gone the reader stays at the same scroll position: ${after.top}, was ${before.top}`);
   const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o127-reader-held ' + shot);
   // A reader at the bottom still follows the new steps.
