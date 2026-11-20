@@ -676,6 +676,15 @@ const AT = new WeakMap();
 const anchorOf = h => { const top = h.getBoundingClientRect().top;
   const el = [...h.querySelectorAll(':scope > .col > [data-at]')].find(c => c.getBoundingClientRect().bottom > top);
   return el && AT.has(el) ? { ev: AT.get(el), off: el.getBoundingClientRect().top - top } : null; };
+// O127 rest: more than TAIL new steps arriving while the reader sits up would slide the drawn window past their block, and
+// held() would find nothing to hold. The window grows to keep it drawn, and goes back to its size once the reader follows
+// the bottom again or never scrolled up (s.grown: the size before it grew). Show earlier while it is grown keeps the larger window: the user asked for it.
+const keepIn = (s, v) => {
+  if (!s || !v) return;
+  if (!v.up) { if (s.grown !== undefined) { s.tail = s.grown || undefined; delete s.grown; } return; }
+  const list = v.anchor?.ev && s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), i = list ? list.indexOf(v.anchor.ev) : -1;
+  if (i >= 0 && list.length - i > (s.tail || TAIL)) { s.grown ??= s.tail || 0; s.tail = list.length - i; }
+};
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
   return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
 function paint(root, ss, only) {
@@ -686,7 +695,11 @@ function paint(root, ss, only) {
   const touched = part && new Set([...only].flatMap(up));
   const panes = part ? old.filter(p => only.has(p.dataset.id) || touched.has(p.dataset.id)) : old;
   if (part && !panes.length) return;
-  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); outer.view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
+  // up: the reader scrolled up themselves. Not at the bottom only because content below them grew (an image loading
+  // after the paint, CI #390) is not reading up, so it does not grow the window (keepIn). Compared with where place() left it.
+  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'), k = root.id + ':' + p.dataset.id, was = outer.view[k], pinned = h.scrollHeight - h.scrollTop - h.clientHeight < 24;
+    outer.view[k] = { top: h.scrollTop, pinned, up: !pinned && (!was || was.up || h.scrollTop < (was.at ?? was.top)), selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
+  panes.forEach(p => keepIn(outer.S.sessions.find(x => x.id === p.dataset.id), outer.view[root.id + ':' + p.dataset.id]));
   panes.forEach(p => p.querySelectorAll('details[data-ev]').forEach(d => { const w = DRAWN.get(d); if (w?.[0] && d.open !== w[1]) w[0].open = d.open; }));
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); outer.addHalos(t.content); outer.attrs(p, t.content.firstElementChild); outer.sync(p, t.content.firstElementChild); });
@@ -694,10 +707,11 @@ function paint(root, ss, only) {
   const split = root.id === 'chats' && root.querySelector(':scope > .handle-v'); // morph keeps the bar by position; wire it once
   if (split && !outer.wiredBars.has(split)) { outer.wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: outer.lifetime.signal }); }
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
-    const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = outer.view[root.id + ':' + s.id];
-    const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : held(s, h, v.anchor) ?? v.top, behavior: 'instant' });
+    const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), k = root.id + ':' + s.id, first = !outer.view[k];
+    const v = outer.view[k] ??= { pinned: true }; // a new pane follows the bottom; its record holds where place() left it (FIX2: up needs that from the first paint)
+    const place = () => { h.scrollTo({ top: v.pinned ? 1e6 : held(s, h, v.anchor) ?? v.top, behavior: 'instant' }); v.at = h.scrollTop; }; // at: where it was left, for up
     h.querySelectorAll(':scope > .col > [data-at]').forEach(el => AT.set(el, s.events[el.dataset.at]));
-    place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
+    place(); if (first) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
     p.querySelectorAll('details[data-ev]').forEach(d => { const e = s.events[d.dataset.ev]; DRAWN.set(d, [e, d.open]); d.ontoggle = () => { if (e) e.open = d.open; DRAWN.set(d, [e, d.open]); }; });
     p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
     // A7: a card answers the chat it came from (data-ask): this one, or a worker of it.
@@ -780,7 +794,7 @@ function paint(root, ss, only) {
       if (s.fetching) return;
       const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
       if (s.more !== undefined && s.events.filter(e => e.t !== 'approval' && e.t !== 'question').length < (s.tail || TAIL) + TAIL) { s.fetching = true; try { await earlier(s); } finally { s.fetching = false; } }
-      s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
+      s.tail = (s.tail || TAIL) + TAIL; delete s.grown; renderChats(); h.scrollTop = h.scrollHeight - below;
     };
     const folder = p.querySelector('[data-chat-folder]'); if (folder) folder.onclick = () => void pickChatFolder(s);
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); outer.renderTabs(); renderChats(); };

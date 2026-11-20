@@ -50,6 +50,8 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
     ['the agent starts a reply', `ev.push({ t: 'agent', text: 'Strea' })`],
     ['its text streams', `ev.at(-1).text += 'ming a longer reply.\\n\\nWith a second paragraph.'`],
     ['thirty more tool calls', `for (let i = 0; i < 30; i++) ev.push({ t: 'tool', title: 'Grep ' + i, status: 'completed', output: 'hit' })`],
+    // O127 rest: more new steps than the 200 drawn, so the drawn window would slide past the reader's block
+    ['250 more tool calls (more than the drawn window)', `for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Glob ' + i, status: 'completed', output: 'hit' })`],
     // review #377 FIX1: the list changes before the reader, so every drawn block's index shifts by one
     ['a step above the reader is removed', `ev.splice(120, 1)`],
     ['a step is added at the start (history loaded)', `ev.unshift({ t: 'user', text: 'an older message.' })`],
@@ -82,4 +84,43 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   await step(`ev.push({ t: 'agent', text: 'The last reply.' })`);
   const gap = await pane.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight);
   assert.ok(gap < 24, `a reader at the bottom no longer follows: ${gap} px short`);
+  // The window grew to keep the reader's block; following the bottom again puts it back to 200 blocks drawn.
+  assert.equal(await pane.locator('.hist .col > [data-at]').count(), 200, 'back at the bottom, the drawn window is 200 steps again');
+  // CI #390 fix: up is judged against where the last paint left the scroll. A small scroll up just after the chat followed a
+  // long new reply still counts as reading up, so 250 new steps keep that reply drawn where it was.
+  await step(`ev.push({ t: 'agent', text: Array.from({ length: 40 }, (_, k) => 'long reply paragraph ' + k + '.').join('\\n\\n') })`);
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollTop - 150, behavior: 'instant' }));
+  const longAt = () => pane.locator('.hist').evaluate(h => { const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('long reply paragraph 0.'));
+    return el ? Math.round(el.getBoundingClientRect().top - h.getBoundingClientRect().top) : null; });
+  const l0 = await longAt();
+  await step(`for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Step ' + i, status: 'completed', output: 'hit' })`);
+  const l1 = await longAt();
+  assert.ok(l1 !== null && Math.abs(l1 - l0) <= 1, `a small scroll up after the chat followed holds the long reply: ${l1} px, was ${l0}`);
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
+  await step(`ev.push({ t: 'agent', text: 'Back down.' })`);
+  // Show earlier pressed while the window is grown keeps the larger window: the user asked for it.
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: 0, behavior: 'instant' }));
+  await step(`for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Find ' + i, status: 'completed', output: 'hit' })`);
+  const grown = await pane.locator('.hist .col > [data-at]').count();
+  assert.ok(grown > 200, `the window grew to keep the top block: ${grown} drawn`);
+  await pane.locator('[data-earlier]').click();
+  await page.waitForFunction(([id, n]) => document.querySelectorAll(`.pane[data-id="${id}"] .hist .col > [data-at]`).length > n, [id, grown], { timeout: 5000 });
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
+  await step(`ev.push({ t: 'agent', text: 'After Show earlier.' })`);
+  assert.ok(await pane.locator('.hist .col > [data-at]').count() > grown, 'following the bottom after Show earlier keeps the window the user asked for');
+  // FIX2 (review of the CI fix): a newly drawn pane had no view record until its next paint, so content growing below the
+  // reader before that paint (an image loading) read as reading up. A fresh pane, content grows below it with no repaint
+  // in between, then 250 steps arrive: the reader never scrolled, so 200 steps stay drawn.
+  const id2 = 's-codex-1', pane2 = page.locator(`.pane[data-id="${id2}"]`);
+  await page.evaluate(id2 => { window.__o127b = Array.from({ length: 30 }, (_, i) => ({ t: 'agent', text: `fresh ${i}.` })); }, id2);
+  await page.evaluate(id2 => { const s = window.__o127b; window.__sprint.set(id2, { events: s }); document.querySelector('#navList .row[data-chat="' + id2 + '"]')?.click(); }, id2);
+  await pane2.locator('.hist .col > [data-at]').last().waitFor({ timeout: 5000 });
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))));
+  // The browser's scroll anchoring follows content appended below a reader at the bottom (run 164346: scrollTop 1208 -> 1822),
+  // but not an image growing in place, which is what CI hit. Anchoring off stands in for that.
+  const gap2 = await pane2.locator('.hist').evaluate(h => { h.style.overflowAnchor = 'none'; const d = document.createElement('div'); d.style.height = '600px'; h.querySelector(':scope > .col').append(d);
+    return h.scrollHeight - h.scrollTop - h.clientHeight; });
+  assert.ok(gap2 > 24, `content grown below the fresh pane leaves the reader short of the bottom: ${gap2} px`);
+  await page.evaluate(id2 => { for (let i = 0; i < 250; i++) window.__o127b.push({ t: 'tool', title: 'Late ' + i, status: 'completed', output: 'hit' }); window.__sprint.set(id2, { events: window.__o127b }); }, id2);
+  assert.equal(await pane2.locator('.hist .col > [data-at]').count(), 200, 'a fresh pane whose content grew below the reader still draws 200 steps');
 });
