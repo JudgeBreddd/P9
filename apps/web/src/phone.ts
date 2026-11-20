@@ -327,6 +327,7 @@ type Block = { kind: string; text: string; at?: string; id?: unknown; status?: s
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
+let sentLanded = 0; // photos fetched into sentCache: the list key counts these, since a landing photo leaves sentCache.size as it was
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
 // answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
 // for a multi choice); an empty optional field is left out of the answer.
@@ -464,7 +465,7 @@ let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
 let sigsKept = new Map<string, { run: Block[]; extra: string; sig: string }>();
 function itemsOf(blocks: Block[]) {
   // O712: a closed report shows its chat row; window-3: so does one whose worker was archived (same blocks, same SHUT), so the pinned one is in the key
-  const key = sentCache.size + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
+  const key = sentLanded + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
   const out: Entry[] = [], sigs = new Map<string, { run: Block[]; extra: string; sig: string }>();
   const sign = (key: string, run: Block[], extra: string, make: () => string) => {
@@ -1268,7 +1269,7 @@ function sentImgs(id: string, hashes?: string[]) {
     sentCache.set(hash, '');
     request('/chat/' + encodeURIComponent(id) + '/images/' + hash).then((image) => {
       const src = imgSrc({ type: 'image', mimeType: image.mimeType, data: image.data });
-      if (src) { sentCache.set(hash, src); render(); }
+      if (src) { sentCache.set(hash, src); sentLanded += 1; render(); }
     }, () => {});
   }
   return `<div class="user-imgs">${hashes.map((hash) => sentCache.get(hash) ? `<img src="${sentCache.get(hash)}" alt="Sent image">` : '').join('')}</div>`;
