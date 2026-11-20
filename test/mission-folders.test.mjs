@@ -124,6 +124,11 @@ test('P11: a space folder inside _private lists and opens with File protection o
   assert.equal((await call(instance, '/file-protection', 'POST', { on: false })).body.on, false);
   const off = await fix();
   assert.notEqual(off.body?.error, 'file-protection', 'Fix with File protection off: ' + JSON.stringify(off));
+  // MC-1: Fix with Claude takes the pill's start mode like a build: the chat runs in it; another agent's name is refused.
+  const picked = await call(instance, '/mission/fix', 'POST', { id: 'solo', path: '_' + 'private/solo-runs/run.md', mode: 'Accept edits' });
+  assert.equal(picked.status, 201, JSON.stringify(picked.body));
+  assert.equal((await until(instance, (e) => e.conversation === picked.body.conversation && e.type === 'mode')).hit.data.name, 'Accept edits', 'Fix runs in the mode it named');
+  assert.equal((await call(instance, '/mission/fix', 'POST', { id: 'solo', path: '_' + 'private/solo-runs/run.md', mode: 'Full access' })).status, 400, 'a Codex mode on Fix with Claude');
   console.log('PASS P11: _' + 'private/solo-runs lists run.md and opens it with File protection on; .env.md hidden; /files refuses; Fix refused until File protection is off');
 });
 

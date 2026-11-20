@@ -48,7 +48,7 @@ test('a turn streams through the event log; reconnecting from any cursor gives t
   const id = await create(instance);
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' })).status, 202);
   const { seen } = await until(instance, (event) => event.type === 'turn-end');
-  assert.deepEqual(seen.map((event) => event.type).filter((type) => type !== 'update'), ['created', 'user', 'connected', 'config', 'turn-end']);
+  assert.deepEqual(seen.map((event) => event.type).filter((type) => type !== 'update'), ['created', 'user', 'connected', 'config', 'mode', 'turn-end']); // MC-3: a prompt naming no mode says the one it runs in
   assert.ok(seen.some(said(id, 'echo:hello')));
   const cursors = seen.map((event) => event.cursor);
   assert.deepEqual(cursors, [...new Set(cursors)].sort((a, b) => a - b));
@@ -1097,6 +1097,32 @@ test('O130: a helper agent\'s model never becomes the chat\'s, live or after a r
   await turn(second, { text: 'config' }, 0);
   assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > helped.cursor, 0)).hit.data.content.text, 'config:model=opus,effort=high,fast=off,sandbox=on', 'the resume put back a helper\'s model');
   console.log('PASS O130: a helper\'s Haiku sent no config; the resume is on opus, high');
+});
+
+// MC-3: P9 starts a Claude session in Manual quietly, and a prompt in the mode the session already has sets nothing, so a chat
+// could run with no mode event at all and the pill showed the window's own start mode. Now the session says its mode once per
+// run: at the first prompt that set none, or at a resume of a chat with no mode on record. Not again on the next prompt.
+test('MC-3: a chat with no mode set says the mode it runs in, once, and again after a resume with none on record', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  const modes = async (after = 0) => (await json(call(instance, `/chat/events?after=${after}`))).body.events.filter((e) => e.conversation === id && e.type === 'mode');
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const first = await until(instance, said(id, 'mode:'));
+  assert.equal(first.hit.data.content.text, 'mode:default');
+  assert.deepEqual(first.seen.filter((e) => e.conversation === id && e.type === 'mode').map((e) => e.data.name), ['Manual'], 'the first prompt told Manual');
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode: 'Manual' })).status, 202);
+  const next = await until(instance, said(id, 'mode:'), first.cursor);
+  assert.equal((await modes()).length, 1, 'a second prompt in the same mode told it again');
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  db.prepare("DELETE FROM events WHERE conversation = ? AND type = 'mode'").run(id); // a chat from before P9 told its mode
+  db.close();
+  const second = await restart(t, instance, 'state-mc3');
+  assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const back = await until(second, said(id, 'mode:'), next.cursor);
+  assert.deepEqual(back.seen.filter((e) => e.conversation === id && e.type === 'mode').map((e) => e.data.name), ['Manual'], 'the resume told Manual once');
+  console.log('PASS MC-3: first prompt told Manual once, the next did not repeat it, a resume with no mode on record told it once');
 });
 
 // O134: config events a helper wrote before O130 are still in old ledgers (four chats, e.g. 66468657 cursor 596370: Haiku, one

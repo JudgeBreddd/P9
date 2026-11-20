@@ -379,14 +379,16 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // Fix with Claude: the daemon reads the file again and seeds a Claude chat with it; the client names only the folder
   // and file, never prompt text.
   api.post('/mission/fix', async (c) => {
-    const { id, path: file } = (await json(c)) ?? {};
+    // MC-1: mode, the start mode the window shows on its pill, so the chat runs in what the pill says (one of Claude's names).
+    const { id, path: file, mode } = (await json(c)) ?? {};
+    if (mode !== undefined && !chat.modeNames('claude').includes(mode)) return reply(c, { status: 400, error: 'request-refused' });
     // Wall 15: a space folder's file. The folder's own fix text (the user's space file) leads; the daemon reads both again.
     if (id !== undefined) {
       const read = await mission.folderRead(id, file, { toAgent: true });
       if (read.status !== 200) return reply(c, read);
       if (!read.fix) return reply(c, { status: 404, error: 'no-fix', detail: 'This folder has no fix text in the space file.' });
       const made = await chat.create({ provider: 'claude', title: 'Fix: ' + file.split('/').pop().slice(0, 100) });
-      const sent = await chat.prompt(made.conversation, { text: `${read.fix}\n\nThe file is ${file}:\n\n${read.text.slice(-90_000)}` });
+      const sent = await chat.prompt(made.conversation, { text: `${read.fix}\n\nThe file is ${file}:\n\n${read.text.slice(-90_000)}`, ...(mode && { mode }) });
       return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
     }
     return reply(c, { status: 400, error: 'bad-request' });
@@ -435,11 +437,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   api.post('/mission/build', async (c) => {
     // space (threat model row 72): + Add builds into a new scratch space; one that exists is never named, so never rewritten.
-    const { provider, space, ...rest } = (await json(c)) ?? {};
-    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider) || (space !== undefined && !draftAt(drafts, space))) return reply(c, { status: 400, error: 'request-refused' });
+    // MC-1: mode, the start mode the window shows on its pill, so the build runs in what the pill says. Without one (an older
+    // window, the phone) the agent's default runs and the chat's mode event says which (chat.mjs tellMode).
+    const { provider, space, mode, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider) || (space !== undefined && !draftAt(drafts, space))
+      || (mode !== undefined && !chat.modeNames(provider).includes(mode))) return reply(c, { status: 400, error: 'request-refused' });
     if (space !== undefined && (await draftNames(drafts)).includes(space)) return reply(c, { status: 409, error: 'space-exists' });
     const made = await chat.create({ provider, title: 'Build Mission Control' });
-    const sent = await chat.prompt(made.conversation, { text: buildPrompt(space) });
+    const sent = await chat.prompt(made.conversation, { text: buildPrompt(space), ...(mode && { mode }) });
     return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation, ...(space === undefined ? {} : { space }) } : sent);
   });
   // The space picker (threat model row 71): Main (null) or a scratch space that is there, recorded as settings.space_name.
