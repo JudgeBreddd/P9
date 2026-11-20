@@ -31,9 +31,12 @@ test('MC-16 phone: the Model sheet and the effort picker name the default, the S
   db.close();
 
   const { page } = await phone(t, server);
-  const read = async (chat) => {
+  // models: the chat's own model list (marks aside), when the one on screen before it could still be drawn: a hash change
+  // picks the chat at once, and its pickers are redrawn only when its history is in.
+  const read = async (chat, models) => {
     await page.goto(server.origin + '/phone/#chat=' + chat);
-    await page.waitForFunction((chat) => document.querySelector('#conversation')?.value === chat && document.querySelector('#model option'), chat, { timeout: 15000 });
+    await page.waitForFunction(({ chat, models }) => document.querySelector('#conversation')?.value === chat && document.querySelector('#model option')
+      && (!models || [...document.querySelectorAll('#model option')].map((o) => o.textContent.replace(' (Default)', '')).join('|') === models), { chat, models }, { timeout: 15000 });
     return page.evaluate(() => ({ models: [...document.querySelectorAll('#model option')].map((o) => o.textContent),
       effort: [...document.querySelectorAll('#pickers select[data-config="effort"] option')].map((o) => o.textContent),
       bar: document.querySelector('#modelBtn')?.textContent.trim() }));
@@ -67,7 +70,11 @@ test('MC-16 phone: the Model sheet and the effort picker name the default, the S
   assert.deepEqual(seen.effort, ['Effort: Low', 'Effort: Medium (Default)', 'Effort: High'], 'a Settings effort the agent dropped falls back to the agent\'s own');
   assert.ok(!seen.models.some((m) => /\(Default\)/.test(m)), 'no model marked twice when the agent\'s own default already says so: ' + seen.models.join(' | '));
 
-  seen = await read(PROFILED);
+  // The profile chat's history arrives late (held 1.5 s here, as on a slow link): what is read must be its own pickers, not
+  // the previous chat's left on screen (they mark Medium, which failed CI as "nothing marked on a profile chat").
+  await page.route((url) => url.pathname === '/chat/events' && (url.searchParams.get('only') ?? '').split(',').includes(PROFILED),
+    async (route) => { await new Promise((resolve) => setTimeout(resolve, 1500)); await route.continue(); });
+  seen = await read(PROFILED, 'Haiku');
   assert.ok(seen.models.length && seen.effort.length, 'the profile chat lists its pickers');
   assert.deepEqual([...seen.models, ...seen.effort].filter((x) => /\(Default\)/.test(x)), [], 'nothing marked on a profile chat');
   console.log('PASS MC-16 phone: Settings default marked (Haiku, High), the agent\'s own when Settings names one it dropped, none on a profile chat');
