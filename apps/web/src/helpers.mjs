@@ -193,6 +193,9 @@ export async function readImage(file) {
   if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
   return { mimeType, data, name: file.name };
 }
+// O191: a provider profile's chats (/usage profiles), outside the Claude totals; its cost is the adapter's estimate, never a
+// Claude bill. Drawn whatever /usage's state: state counts Claude records only. Old daemon (no profiles): nothing.
+export const profileLines = (usage, cls = 'sm') => (usage.profiles ?? []).map(p => `<p class="${cls}" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');
 export const limitLine = (name, limits, now = Date.now(), signedOut = false) => {
   if (signedOut) return { name, text: name + ' not logged in', stale: true };
   if (!limits) return { name, text: 'no plan limits recorded yet', stale: true };

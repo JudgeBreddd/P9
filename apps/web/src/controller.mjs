@@ -1,4 +1,4 @@
-import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -552,7 +552,7 @@ const wins = {
   musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's plan windows as rows with the pace tick
     inline: () => { const rows = usageRows();
-      return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>${tokensSay()}`); } },
+      return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>${tokensSay()}`) + profileLines(usage); } },
 };
 // M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
 let guide = null;

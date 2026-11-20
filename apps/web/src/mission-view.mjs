@@ -1,6 +1,6 @@
 // Mission Control's page: sections, windows, the space menu, notes and file modals. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { tileLevel, tileAnswer, tileHtml, quickNoteHtml, linkHtml, quickNotePath, quickNoteWords } from './data-tiles.mjs';
-import { esc, limitLine, FILE_IMAGE, copy, fileImageSrc, fileImageError, sprintTimes, md } from './helpers.mjs';
+import { esc, limitLine, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImageError, sprintTimes, md } from './helpers.mjs';
 import { editItems, editorModal } from './mission-editor.mjs';
 import { freeName, templateWords } from './onboarding.mjs';
 import { checklistHtml, checklistAnswer, checklistAction } from './checklist.mjs';
@@ -25,12 +25,17 @@ function pullTopLevels() {
 }
 const secWorst = (g, l) => { const w = worst(l), v = secLv[g]; return w === 'bad' || v === 'bad' ? 'bad' : w === 'warn' || v === 'warn' ? 'warn' : w; };
 const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
-const usage = { state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
+const noUsage = () => ({ state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } });
+const usage = noUsage();
 async function loadUsage() {
   if (!window.p9?.usage) return;
   const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
-  // O190 FIX1: tokens is optional (an older daemon sends none), so each answer sets it or clears it.
-  Object.assign(usage, { tokens: undefined }, result.status === 200 ? result.body : { state: 'unavailable' });
+  // O190/O191 FIX1: each answer replaces the last one whole, so a field an older daemon does not send (tokens, profiles,
+  // limits) or a failed read leaves nothing of the previous answer behind. A failed read keeps only the plan limits: they
+  // carry their own age (limitLine: "N min old", muted after 1 h), and dropping them would blank every chat's meter on a blip.
+  const kept = result.status === 200 ? result.body : { limits: usage.limits };
+  for (const key of Object.keys(usage)) delete usage[key];
+  Object.assign(usage, noUsage(), kept);
   outer.renderMission();
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
@@ -206,9 +211,7 @@ const tokensSay = () => usage.tokens ? `<p class="sm" data-tokens>Tokens counted
 const usageBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div>${tokensSay()}<p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`)
-  // O191: a provider profile's chats, outside the Claude totals; its cost is the adapter's estimate, never a Claude bill. Drawn
-  // whatever the Claude state: state counts Claude records only, so a profile's spend alone reads 'unavailable'.
-  + (usage.profiles ?? []).map(p => `<p class="sm" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');
+  + profileLines(usage);
 // Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
 // shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
 const art = (kind, key) => outer.M.art?.[kind]?.[key] || {};
