@@ -51,9 +51,11 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
     ['its text streams', `ev.at(-1).text += 'ming a longer reply.\\n\\nWith a second paragraph.'`],
     ['thirty more tool calls', `for (let i = 0; i < 30; i++) ev.push({ t: 'tool', title: 'Grep ' + i, status: 'completed', output: 'hit' })`],
   ];
-  for (const [what, fn] of steps) { await step(fn); assert.equal(await offset(), 100, `the reader moved when ${what}`); }
+  // Scroll positions are whole pixels and block heights are not, so 'the same offset' is within 1 px (main moves it 78 px).
+  const near = async (what) => { const o = await offset(); assert.ok(Math.abs(o - 100) <= 1, `the reader moved when ${what}: ${o} px, was 100`); };
+  for (const [what, fn] of steps) { await step(fn); await near(what); }
   await pane.locator('textarea').click(); await page.keyboard.type('typing here');
-  assert.equal(await offset(), 100, 'typing in the box moved the chat');
+  await near('typing in the box');
   const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o127-reader-held ' + shot);
   // A reader at the bottom still follows the new steps.

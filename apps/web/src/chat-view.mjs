@@ -668,7 +668,7 @@ const anchorOf = (p, h) => { const top = h.getBoundingClientRect().top, s = oute
   const el = [...h.querySelectorAll(':scope > .col > [data-at]')].find(c => c.getBoundingClientRect().bottom > top);
   return el && s ? { ev: s.events[el.dataset.at], off: el.getBoundingClientRect().top - top } : null; };
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
-  return el ? h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off : undefined; };
+  return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
 function paint(root, ss, only) {
   const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
   const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
