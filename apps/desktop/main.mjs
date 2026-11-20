@@ -289,7 +289,9 @@ export async function createDesktop({ state, open } = {}) {
       connecting = pending.then(s => attempt === serverTry ? null : s.close(), () => {}).catch(() => {});
       const s = await pending;
       if (attempt !== serverTry) return; // closed by connecting
+      const back = dropped; // O19: up again after a drop (the machine slept, rebooted or lost the network)
       server = s; serverError = null; dropped = false;
+      if (back) devAgain(true);
       if (/^(starting|done)$/.test(remoteInstall?.phase)) remoteInstall = null; // U6: a later no-P9 sets up again
       keeper.connected(serverHost, !!s.background);
       if (!serverUpdating) {
@@ -1095,7 +1097,7 @@ export async function createDesktop({ state, open } = {}) {
   // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
   // devServing: the folder the loaded page was given (its saves go there).
   let cardsView = null, cardsItems = [], cardsHide = null;
-  let devToken = null, devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
+  let devToken = null, devFailed = false, devGen = 0, devOpening = new Set(), dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   // The editor page's build (about 18 MB; review item 22), kept while its index.html keeps the same mtime: every Dev Focus open
   // and reopen used to read it all again. Any build (Rebuild or a hand-run pnpm build:dev, which empties and rewrites dist)
   // writes a new index.html, so the next open reads the new build. A failed stat or read is tried again on the next open.
@@ -1143,7 +1145,9 @@ export async function createDesktop({ state, open } = {}) {
     }
     return { port: relay.port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
   };
-  const openDev = () => dev ??= (async () => {
+  const openDev = () => dev ??= trackOpen((async () => {
+    // FIX2: a newer open (reopenDev) owns the page from here; an older one still running when it ends writes nothing.
+    const mine = ++devGen, next = {};
     const devSession = session.fromPartition('persist:p9-dev');
     if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview'));
     // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
@@ -1186,12 +1190,12 @@ export async function createDesktop({ state, open } = {}) {
       // window.p9dev (threat model row 5; images were blocked). VS Code injects an inline script into each
       // page, so inline scripts run there; the page's own CSP narrows that, and index-*.html carries its own hash-only CSP.
       const isWebview = name => /^\/assets\/(index-[^/]+\.html|fake-[^/]+\.html|service-worker-[^/]+\.js)$/.test(name);
-      sites.webview = { files: new Map([...devFiles].filter(([name]) => isWebview(name))), csp: "default-src 'none'; script-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; "
+      next.webview = { files: new Map([...devFiles].filter(([name]) => isWebview(name))), csp: "default-src 'none'; script-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; "
         + "style-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; img-src 'self' data: blob: https:; font-src 'self' data: https://*.vscode-cdn.net; "
         + "media-src 'self' blob: https://*.vscode-cdn.net; connect-src 'self' https://*.vscode-cdn.net; worker-src 'self'; frame-src 'self'; "
         + "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors p9://dev p9://webview" };
       const devScripts = [...devFiles].filter(([name]) => name.endsWith('.html') && !isWebview(name)).flatMap(([, data]) => inlineHashes(data.toString('utf8')));
-      sites.dev = { files: devFiles, csp: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval' ${devScripts.join(' ')}; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; `
+      next.dev = { files: devFiles, csp: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval' ${devScripts.join(' ')}; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; `
         // Images from any https host: extension icons (Open VSX) and README images (badges, raw.githubusercontent.com)
         // (threat model row 5; A/B: with Open VSX only, all 5 of the YAML README's images stay blank). Gallery search, installs
         // and README text come through the editor host, so connect-src stays local.
@@ -1199,19 +1203,26 @@ export async function createDesktop({ state, open } = {}) {
         + "frame-src 'self' p9://webview; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'" };
       // workspace is the guard root (the folder saves are relative to); folder is the one the editor shows.
       if (devFolder?.outside && (await daemonRequest(state, 'POST', '/dev/root', { path: devFolder.path }).catch(() => null))?.status !== 200) devFolder = null;
-      devServing = devFolder;
+      next.serving = devFolder;
       config = { port: host.port, token: host.token, commit: host.commit, server: host.server, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
     } catch (error) {
       if (serverHost && error.server === undefined) error.server = serverHost;
-      sites.dev = devErrorPage(error, editorCopy ?? editorDownload());
+      next.dev = devErrorPage(error, editorCopy ?? editorDownload());
       config = { error: error.message };
     }
-    await devView.webContents.loadURL(DEV_URL);
+    if (mine !== devGen) return config;
+    if ('serving' in next) { devServing = next.serving; delete next.serving; }
+    Object.assign(sites, next);
+    // A newer open closes this page's view; that load's rejection is not this open's to report.
+    await devView.webContents.loadURL(DEV_URL).catch(error => { if (mine === devGen) throw error; });
+    if (mine !== devGen) return config;
     devFailed = !!config.error;
     devToken = config.error ? null : config.token;
     if (config.error) dev = null;
     return config;
-  })().catch(error => { dev = null; throw error; });
+  })()).catch(error => { dev = null; throw error; });
+  // Every open still running, older ones included (reopenDev starts a new one without waiting): devAgain waits for them.
+  function trackOpen(open) { devOpening.add(open); open.finally(() => devOpening.delete(open)).catch(() => {}); return open; }
   // A new folder (Open Folder, a workspace change) loads a new editor page in the same place; its open-ready delivers what is queued.
   const reopenDev = () => {
     if (!devView) return;
@@ -1221,6 +1232,22 @@ export async function createDesktop({ state, open } = {}) {
     devView.setBounds(bounds);
     devView.setVisible(shown);
     if (shown) devView.webContents.focus();
+  };
+  // Server mode: the server's daemon may have restarted (an update, a reboot, an idle stop) and ended its editor, leaving the
+  // page on a dead editor ("Canceled", or VS Code's own reconnect giving up). Asks the daemon again; it hands back the same
+  // editor while that runs, and a new token reloads the page. Unsaved edits come back from the page's hot-exit backups.
+  // Run when Dev Focus is shown again, and (O19) when the tunnel is up again after a drop, so an editor left open comes back by itself.
+  // failed: a page that could not open (the drop came first) opens again; showing Dev Focus already does that itself.
+  const devAgain = (failed = false) => {
+    if (!devView || !serverHost) return;
+    // An open still running may have failed before this connection was up (FIX1): once every open running now has ended,
+    // look again, if this connection is still the one. Each ended open leaves devOpening, so this waits on real work only.
+    if (failed && devOpening.size) { const s = server; return Promise.allSettled([...devOpening]).then(() => { if (server === s) devAgain(true); }); }
+    if (failed && devFailed) return reopenDev();
+    if (!devToken) return;
+    const had = devToken;
+    // check() first: a restarted daemon has new credentials, and check() reads them (remote.mjs).
+    Promise.resolve(server?.check()).then(serverEditor).then(host => { if (devToken === had && host.token !== had) reopenDev(); }).catch(() => {});
   };
   // A workspace change shows the new workspace, whatever folder was open.
   const devToWorkspace = () => { devFolder = null; reopenDev(); };
@@ -1325,12 +1352,8 @@ export async function createDesktop({ state, open } = {}) {
     // left dev unset, so each placement (every frame of a drag) built a new view. Shown and failed, a placement only moves it; coming
     // back to Dev Focus tries again, as the page says.
     if (!(shown && devFailed)) openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
-    // Server mode: the server's daemon may have restarted (an update, a reboot, an idle stop) and ended its editor while the
-    // tunnel stayed up, leaving the page on a dead editor ("Canceled"). Coming back asks the daemon again; it hands back the same
-    // editor while that runs, and a new token reloads the page. Unsaved edits come back from the page's hot-exit backups.
-    if (!shown && serverHost && devToken) { const had = devToken;
-      // check() first: a restarted daemon has new credentials, and check() reads them (remote.mjs).
-      Promise.resolve(server?.check()).then(serverEditor).then(host => { if (devToken === had && host.token !== had) reopenDev(); }).catch(() => {}); }
+    // Server mode: coming back asks the server's daemon again, for an editor that ended while the tunnel stayed up (devAgain).
+    if (!shown) devAgain();
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
