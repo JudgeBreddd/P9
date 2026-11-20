@@ -55,7 +55,7 @@ test('Sprint scripts: hooks.json is refused by row and field; a run gets its inp
   bad([{ ...one, point: 'sprint-start' }], /blocking: only at before-start, before-new-worker, before-merge, before-close/);
   assert.equal(said(one), 'check (before-start, blocking): node check.mjs');
   assert.equal(clean('a |\u0007 b\n' + 'c'.repeat(400)).length, 300); assert.equal(clean(' a |\u0007  b\tc '), 'a b c');
-  assert.ok(BLOCKING.every((p) => POINTS.includes(p)) && FIRED.every((p) => POINTS.includes(p)) && POINTS.length === 12);
+  assert.ok(BLOCKING.every((p) => POINTS.includes(p)) && FIRED.every((p) => POINTS.includes(p)) && POINTS.length === 13);
   assert.deepEqual(planItems('# P\n\n- [ ] A1: x. Role w1\n- [x] A2: y\nnot an item\n'), [{ id: 'A1', text: 'A1: x. Role w1', role: 'w1', ticked: false }, { id: 'A2', text: 'A2: y', role: null, ticked: true }]);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-hooks-'));
@@ -940,4 +940,152 @@ test('Sprint Setup tools: every field read with its hash, a file and a role row 
   st = await status();
   assert.deepEqual([st.phases, st.phase_now], [[], null]);
   console.log('PASS Sprint Setup tools: read every Setup file with its hash and the rows (owns, mode); a file, a new file ("") and a role row saved; a stale hash refused for a file, a row and a removal with nothing written; names outside Setup refused; lock refuses the save; Start took owns; phases 2 from the headings (0 of 2, 0 of 1, current 0), none = [] / null');
+});
+
+// O189 (1): a row at point every runs again and again, N minutes apart, while its sprint is started, not paused and not
+// closed. The clock is the test's: tick(now) is called with made-up times (ticking: false), and a minute is 1000 of them.
+// Two sprints, A and B, each with the row approved at Start (at 0). Each run appends "<sprint> <token>" to ran.txt; a run
+// whose sprint has a hold-<id> file waits until it is removed, and every run exits 1 while the file 'fail' exists.
+const M = 1000, EA = '33333333-3333-4333-8333-333333333333', EB = '44444444-4444-4444-8444-444444444444';
+function everyRig() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-every-')), prog = path.join(dir, 'every.mjs'), ranFile = path.join(dir, 'ran.txt');
+  fs.writeFileSync(prog, `import fs from 'node:fs'; import path from 'node:path'; const j = JSON.parse(fs.readFileSync(0, 'utf8')), hold = path.join(${JSON.stringify(dir)}, 'hold-' + j.sprint.id);
+fs.appendFileSync(${JSON.stringify(ranFile)}, j.sprint.id + ' ' + (process.env.P9_SCRIPT_TOKEN ?? 'none') + '\\n');
+while (fs.existsSync(hold)) await new Promise((r) => setTimeout(r, 20));
+process.exit(fs.existsSync(path.join(${JSON.stringify(dir)}, 'fail')) ? 1 : 0);\n`);
+  const row = { name: 'pace', command: `${process.execPath} ${prog}`, point: 'every', blocking: false, every: 10 };
+  const r = { dir, row, paused: new Set(), closed: new Set(), files: {}, logs: [], allow: false };
+  const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id: EA }, { id: EB }], list: () => [],
+    sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => r.allow, paused: (c) => r.paused.has(c),
+    socketPath: '/nowhere', note: async () => ({}),
+    sprintFiles: { exists: () => true, read: (c, f) => (f === 'hooks.json' ? r.files[c] ?? null : null), folderOf: () => dir, log: (c, line) => r.logs.push(c + ' ' + line) },
+    projects: { started: () => ({ at: 0, by: 'owner', plan: null, scripts: [row] }), closed: (c) => (r.closed.has(c) ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
+  r.make = (bootAt = 0) => createHooks({ chat, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, minute: M, bootAt, ticking: false });
+  r.ran = () => (fs.existsSync(ranFile) ? fs.readFileSync(ranFile, 'utf8').split('\n').filter(Boolean).map((l) => l.split(' ')) : []);
+  r.count = (s) => r.ran().filter((x) => x[0] === s).length;
+  r.hooks = r.make();
+  return r;
+}
+
+test('Sprint scripts every: the approval text says the row repeats; every is needed at point every and refused elsewhere', () => {
+  const row = { name: 'pace', command: 'node pace.mjs', point: 'every', every: 10 };
+  assert.equal(said(row), 'pace (repeats every 10 minutes while the sprint is started and not paused, until it is closed): node pace.mjs');
+  assert.deepEqual(parse(JSON.stringify({ scripts: [row] })).scripts, [{ ...row, blocking: false }]);
+  for (const bad of [{ ...row, every: 121 }, { ...row, every: 9 }, { ...row, every: 10.5 }, { ...row, every: '10' }, { name: 'x', command: 'x', point: 'every' }, { name: 'x', command: 'x', point: 'pause', every: 10 }, { ...row, blocking: true }])
+    assert.match(parse(JSON.stringify({ scripts: [bad] })).error ?? 'accepted', /every|blocking/, JSON.stringify(bad));
+  console.log('PASS every: the approval text says it repeats every 10 minutes until closed; seven bad rows refused');
+});
+
+test('Sprint scripts every: each sprint\'s row runs once each N minutes, each run with its own token that dies when the run ends', { timeout: 60000 }, async () => {
+  const r = everyRig();
+  assert.deepEqual(await r.hooks.tick(9 * M), []);
+  await r.hooks.tick(10 * M);
+  assert.deepEqual([r.count(EA), r.count(EB)], [1, 1], JSON.stringify(r.ran()));
+  await r.hooks.tick(15 * M);
+  assert.deepEqual([r.count(EA), r.count(EB)], [1, 1], 'a row ran before its N minutes had passed since its last run');
+  await r.hooks.tick(20 * M);
+  const tokens = r.ran().map((x) => x[1]);
+  assert.equal(tokens.length, 4);
+  for (const t of tokens) assert.match(t, /^[0-9a-f]{64}$/);
+  assert.equal(new Set(tokens).size, 4, 'two runs shared a token');
+  assert.equal((await r.hooks.say(tokens[0], { action: 'note', chat: EA, text: 'late' })).status, 401, 'a finished run\'s token still worked');
+  assert.match(r.logs[0], /\| every \| pace \| exit 0 \|/);
+  console.log('PASS every: runs at 10 and 20, not at 9 or 15, in both sprints; four runs, four tokens, a finished one refused (401)');
+});
+
+test('Sprint scripts every: a tick is skipped while the row\'s last run is still going, and the first tick after it ends runs it once', { timeout: 60000 }, async () => {
+  const r = everyRig();
+  fs.writeFileSync(path.join(r.dir, 'hold-' + EA), '');
+  const slow = r.hooks.tick(10 * M);
+  await eventually(() => r.count(EA) === 1, 'the held run started');
+  await r.hooks.tick(20 * M); await r.hooks.tick(30 * M);
+  assert.equal(r.count(EA), 1, 'a tick started a second run while the last one was still going');
+  assert.equal(r.count(EB), 3, 'a slow run in one sprint held another sprint\'s row');
+  fs.rmSync(path.join(r.dir, 'hold-' + EA)); await slow;
+  await r.hooks.tick(31 * M); await r.hooks.tick(32 * M);
+  assert.equal(r.count(EA), 2, 'the first tick after the slow run ended did not run it once');
+  console.log('PASS every: while A\'s run was held the ticks at 20 and 30 skipped it (B ran each time); after it ended, one run at 31');
+});
+
+test('Sprint scripts every: a failing run is logged and the row keeps its clock', { timeout: 60000 }, async () => {
+  const r = everyRig();
+  fs.writeFileSync(path.join(r.dir, 'fail'), '');
+  await r.hooks.tick(10 * M);
+  assert.match(r.logs.find((l) => l.startsWith(EA)), /\| every \| pace \| exit 1 \|/);
+  await r.hooks.tick(20 * M);
+  assert.equal(r.count(EA), 2, 'a row stopped after a failed run');
+  console.log('PASS every: exit 1 logged, the row ran again at 20');
+});
+
+test('Sprint scripts every: a paused sprint runs nothing however long, another sprint keeps running, and resume runs the row once', { timeout: 60000 }, async () => {
+  const r = everyRig();
+  r.paused.add(EA);
+  for (let m = 10; m <= 40; m += 10) await r.hooks.tick(m * M);
+  assert.deepEqual([r.count(EA), r.count(EB)], [0, 4], 'a paused sprint ran its every row, or pausing it stopped the other');
+  r.paused.delete(EA);
+  await r.hooks.tick(41 * M); await r.hooks.tick(42 * M);
+  assert.equal(r.count(EA), 1, 'resume ran the row other than once for the ticks missed while paused');
+  console.log('PASS every: paused 40 minutes, A ran 0 times and B 4; after resume A ran once');
+});
+
+test('Sprint scripts every: a closed sprint runs its row no more', { timeout: 60000 }, async () => {
+  const r = everyRig();
+  await r.hooks.tick(10 * M);
+  r.closed.add(EA);
+  for (let m = 20; m <= 50; m += 10) await r.hooks.tick(m * M);
+  assert.deepEqual([r.count(EA), r.count(EB)], [1, 5], 'a closed sprint ran its every row');
+  console.log('PASS every: after Close A ran no more (1 run), B ran 5');
+});
+
+test('Sprint scripts every: after a restart the row waits N minutes from P9\'s own start, not running at once for a Start long ago', { timeout: 60000 }, async () => {
+  const r = everyRig(), after = r.make(105 * M);
+  await after.tick(106 * M);
+  assert.equal(r.count(EA), 0, 'a restart ran the row at once');
+  await after.tick(115 * M);
+  assert.equal(r.count(EA), 1);
+  console.log('PASS every: a P9 started at 105 (Start at 0) ran nothing at 106 and the row at 115');
+});
+
+test('Sprint scripts every: a row added after Start runs while it stands and stops when it is removed; the Start-approved row keeps running', { timeout: 60000 }, async () => {
+  const r = everyRig();
+  r.allow = true; r.files[EA] = JSON.stringify({ scripts: [r.row, { ...r.row, name: 'added' }] });
+  await r.hooks.tick(10 * M);
+  assert.equal(r.logs.filter((l) => l.includes('| added |')).length, 1, 'an added every row did not run');
+  r.files[EA] = JSON.stringify({ scripts: [] });
+  await r.hooks.tick(20 * M);
+  assert.equal(r.logs.filter((l) => l.includes('| added |')).length, 1, 'a removed added row kept running');
+  assert.equal(r.count(EA), 3, 'the row approved at Start stopped when hooks.json dropped it');
+  console.log('PASS every: the added row ran once and stopped after its removal; the approved row ran at 10 and 20');
+});
+
+// The same, wired: the daemon's own timer (its minute shortened to 100 ms, honoured only under the test home) runs the
+// row, each run with a new token, and Pause and Resume reach the tick. The rig tests above call tick by hand.
+test('Sprint scripts every live: the daemon\'s own timer runs the row, each run with a new token; Pause stops it and Resume starts it again', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake], env: { P9_EVERY_MINUTE_MS: '100' } }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Pace' })).body, sprint = s.sprint;
+  const write = (name, body) => fs.writeFileSync(path.join(s.folder, name), body);
+  write('roles.json', JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] })); write('roles/lead.work.md', 'mcp');
+  write('sprint.md', '# Pace\n\n- [ ] B4: the one item. Role w1\n');
+  const hook = path.join(ws, 'pace.mjs'), outFile = path.join(ws, 'pace-out.jsonl');
+  fs.writeFileSync(hook, `import fs from 'node:fs'; let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => fs.appendFileSync(${JSON.stringify(outFile)}, JSON.stringify({ point: JSON.parse(s).point, token: process.env.P9_SCRIPT_TOKEN ?? null }) + '\\n'));`);
+  const out = () => (fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  write('hooks.json', JSON.stringify({ scripts: [{ name: 'pace', command: `${process.execPath} ${hook}`, point: 'every', every: 10 }] }));
+  const shown = (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json');
+  const got = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: shown.hash });
+  assert.equal(got.status, 200, JSON.stringify(got.body));
+  const runs = await eventually(() => out().length >= 2 && out(), 'the every row did not run twice on the daemon\'s own timer');
+  assert.ok(runs.every((r) => r.point === 'every' && typeof r.token === 'string' && r.token.length > 0), JSON.stringify(runs));
+  assert.notEqual(runs[0].token, runs[1].token, 'two runs shared a token');
+  assert.equal((await call(instance, `/sprints/${sprint}/pause`, 'POST', {})).status, 200);
+  await new Promise((r) => setTimeout(r, 500)); const held = out().length; // a run started just before the pause may land
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.equal(out().length, held, 'a paused sprint\'s every row ran');
+  assert.equal((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).status, 200);
+  await eventually(() => out().length > held, 'Resume did not start the row again');
 });

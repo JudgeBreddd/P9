@@ -42,7 +42,7 @@ export function installProjects(o, api) {
   // The server parses hooks.json for real and refuses a file it cannot read; this only shows it.
   const scriptsOf = sp => { const text = sp.files.find(f => f.name === 'hooks.json')?.text ?? ''; if (!text.trim()) return [];
     try { const rows = JSON.parse(text)?.scripts; return Array.isArray(rows) && rows.every(r => r && typeof r.name === 'string' && typeof r.command === 'string' && typeof r.point === 'string') ? rows : null; } catch { return null; } };
-  const scriptLine = s => `${s.name} (${s.point}${s.blocking === true ? ', blocking' : ''}): ${s.command}`;
+  const scriptLine = s => `${s.name} (${s.point === 'every' ? `repeats every ${s.every} minutes` : s.point}${s.blocking === true ? ', blocking' : ''}): ${s.command}`;
   const scriptsHtml = sp => { const file = scriptsOf(sp), ok = sp.started?.scripts ?? [], same = file && JSON.stringify(file.map(scriptLine)) === JSON.stringify(ok.map(scriptLine));
     const list = rows => `<ul class="sp-scripts">${rows.map(s => `<li class="mono">${esc(scriptLine(s))}</li>`).join('')}</ul>`;
     return (ok.length ? `<div class="hint" data-sp-scripts="approved">Scripts you approved at Start. P9 runs these as you, outside every agent's mode, and only these:${list(ok)}</div>` : '')

@@ -1253,7 +1253,8 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   optionally `"blocking": true`. At most 12 rows, a name of at most 60 characters, a command of at most 200. The
   points are `before-start`, `before-new-worker`, `before-merge`, `before-close` (these four may block) and
   `sprint-start`, `worker-folder-made`, `before-ready`, `ci-red`, `gate-passed`, `pause`, `resume`, `after-close`
-  (notice only: `blocking` there is refused). A file P9 cannot read as that refuses Start, by row and field.
+  and `every` (notice only: `blocking` there is refused). A row at `every` also says `"every": N`, a whole number of
+  minutes from 10 to 120, and no other point takes that field (§ "Repeating scripts", below). A file P9 cannot read as that refuses Start, by row and field.
 - **A script runs as you.** P9 runs the command as your user, outside every agent's mode and sandbox: no shell (the
   command is split on spaces into a program and its arguments), the short allow-list environment, the sprint folder
   as its working folder, the sprint's state as JSON on its input, a limit of 60 seconds for a blocking run and 300
@@ -1361,6 +1362,21 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   tool changes it. The agent lock refuses `request_sprint_scripts`. At most 24 rows can be approved between one Start
   and the next (`too-many-scripts`); Start again approves the file as it is. Run now, yours and the agent's, runs
   what stands: the copies approved at Start and the additional ones running, never a waiting row.
+- **Repeating scripts (O189).** A row at the point `every` runs again and again: P9 looks once a minute, and runs it
+  when N minutes have passed since its last run, as long as the sprint is started, not paused and not closed. So one
+  approval runs it many times, for the life of the sprint: the question for an agent's `start_sprint` or
+  `request_sprint_scripts` says so on the row ("repeats every N minutes while the sprint is started and not paused,
+  until it is closed"), and so does the project page's line beside Start. Each run is a notice like any other: the
+  allow-list environment, the 300-second limit, its own `P9_SCRIPT_TOKEN` (made for that run, dead when it ends),
+  one line in `hooks.log`, and a failure only logged (the row keeps its clock). A row whose last run is still going
+  skips the tick and runs on the first tick after it ends; a pause, however long, ends in one run, not one for each
+  tick missed. The first wait counts from Start, or from P9's own start when that is later, so a restart does not run
+  every row at once; when the last run was is kept in memory only, so after a restart a row waits N minutes again.
+  Pause stops new runs and Close ends them for good; a run already going when you pause or close finishes (Close
+  refuses its token, as for any run). The rule above holds for repeating rows too: a row approved at Start keeps
+  running when it is removed from `hooks.json`, until your next Start or Close. Each run adds a line to `hooks.log`,
+  which keeps its last 100, so a row every 10 minutes fills it in about 17 hours and older lines of other points
+  scroll out.
 - **Where the owner's routes are.** `GET` and `POST /sprint-scripts`, `POST /sprints/:id/run-script`,
   `POST /sprint-scripts/allow` (the switch) and `POST /sprints/:id/approve-scripts` exist on the desktop's connection
   only: a phone session gets 404, as for Start.

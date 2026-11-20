@@ -32,6 +32,7 @@ export function installScripts(d) {
       <section data-ss-sec="library"><h3>Your library, for any sprint in any project</h3>${ssList(ss.library, 'library', [['libedit', 'Edit'], ['add', 'Add to sprint'], ['librm', 'Remove']], 'Nothing saved yet.')}</section>
       <section class="ss-form" aria-label="A script"><label>Name<input data-slot="input" name="name" value="${esc(f.name)}" maxlength="60" autocomplete="off" spellcheck="false"></label>
         <label>When<select data-slot="select" name="point">${ss.points.map(p => `<option${p === f.point ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+        <label>Every (minutes)<input data-slot="input" type="number" name="every" min="10" max="120" step="1" value="${esc(f.every)}"${f.point === 'every' ? '' : ' disabled'}></label>
         <label class="wide">Command<input data-slot="input" class="mono" name="command" value="${esc(f.command)}" maxlength="200" autocomplete="off" spellcheck="false" placeholder="/path/to/program argument"></label>
         <label class="chk wide"><input type="checkbox" name="blocking"${f.blocking && ss.blocking.includes(f.point) ? ' checked' : ''}${ss.blocking.includes(f.point) ? '' : ' disabled'}>Blocking: a failure refuses the step (only before a step)</label></section>
       <p class="said${ss.bad ? ' err' : ''}" data-ss-said role="status">${esc(ss.said)}</p>
@@ -42,22 +43,22 @@ export function installScripts(d) {
   const stands = b => ({ allowed: b.allowed === true, additional: b.additional ?? [], waiting: b.waiting ?? [], hash: b.hash ?? '' });
   async function show(lead) {
     const r = await call('scriptLibrary', { sprint: lead }, { quiet: true }); if (r.status !== 200) return failed(r);
-    ss = { lead, library: r.body.library, points: r.body.points, blocking: r.body.blocking, ...stands(r.body), warn: false, form: { name: '', command: '', point: r.body.points[0], blocking: false }, said: '', bad: false, busy: false };
+    ss = { lead, library: r.body.library, points: r.body.points, blocking: r.body.blocking, ...stands(r.body), warn: false, form: { name: '', command: '', point: r.body.points[0], blocking: false, every: '' }, said: '', bad: false, busy: false };
     drawScripts(); if (ss && !sdlg.open) sdlg.showModal();
   }
   sdlg.addEventListener('close', () => { ss = null; });
-  // What is typed stays through a redraw; Blocking is offered only at the points that can refuse a step.
+  // What is typed stays through a redraw; Blocking is offered only at the points that can refuse a step, Every only at every (O189).
   sdlg.addEventListener('input', e => { if (!ss || !e.target.name) return; const q = n => sdlg.querySelector(`[name=${n}]`), at = q('point').value;
-    q('blocking').disabled = !ss.blocking.includes(at); if (q('blocking').disabled) q('blocking').checked = false;
-    ss.form = { name: q('name').value, command: q('command').value, point: at, blocking: q('blocking').checked }; });
+    q('blocking').disabled = !ss.blocking.includes(at); if (q('blocking').disabled) q('blocking').checked = false; q('every').disabled = at !== 'every';
+    ss.form = { name: q('name').value, command: q('command').value, point: at, blocking: q('blocking').checked, every: q('every').value }; });
   sdlg.addEventListener('click', async e => {
     const b = e.target.closest('[data-ss]'); if (!b || !ss) return;
     const k = b.dataset.ss, name = b.dataset.name, mine = ss, lead = ss.lead, id = d.cur()?.id, sp = d.cur()?.sprints?.find(x => x.lead === lead);
     if (k === 'close') return sdlg.close();
     if (ss.busy || !sp) return;
     const row = (k === 'libedit' ? ss.library : scriptsOf(sp) ?? []).find(s => s.name === name);
-    if (k === 'edit' || k === 'libedit') { if (row) ss.form = { name: row.name, command: row.command, point: row.point, blocking: row.blocking === true }; ss.said = ''; ss.bad = false; drawScripts(); return sdlg.querySelector('[name=command]').focus(); }
-    const f = ss.form, typed = { name: f.name.trim(), command: f.command.trim(), point: f.point, ...(f.blocking && ss.blocking.includes(f.point) && { blocking: true }) };
+    if (k === 'edit' || k === 'libedit') { if (row) ss.form = { name: row.name, command: row.command, point: row.point, blocking: row.blocking === true, every: String(row.every ?? '') }; ss.said = ''; ss.bad = false; drawScripts(); return sdlg.querySelector('[name=command]').focus(); }
+    const f = ss.form, typed = { name: f.name.trim(), command: f.command.trim(), point: f.point, ...(f.blocking && ss.blocking.includes(f.point) && { blocking: true }), ...(f.point === 'every' && { every: Number(f.every) }) };
     if (k === 'allow' && !ss.allowed) { ss.warn = true; ss.said = ''; ss.bad = false; return drawScripts(); } // on is asked first; off is not
     if (k === 'allowno') { ss.warn = false; return drawScripts(); }
     // Said after what stands is read again: waiting is the daemon's word, not a guess from the switch.

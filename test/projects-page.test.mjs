@@ -927,6 +927,18 @@ test('projects: Sprint scripts S18 window makes, removes, keeps in the library, 
   assert.deepEqual([await dlg.locator('[name=name]').inputValue(), await dlg.locator('[name=command]').inputValue(), await dlg.locator('[name=point]').inputValue()], [script.name, script.command, 'after-close']);
   await dlg.locator('[name=command]').fill('/usr/bin/touch other.txt'); await press('savelib'); await says(/^In your library: mark/);
   assert.deepEqual([(await library())[0].command, (await onDisk())[0].command], ['/usr/bin/touch other.txt', script.command], 'a library edit changed the sprint, or did not save');
+  // O189: Every (minutes) is offered at the point every alone; P9 refuses a number out of range; the row says it repeats.
+  const every = dlg.locator('[name=every]');
+  assert.equal(await every.isDisabled(), true, 'Every offered at after-close');
+  await dlg.locator('[name=name]').fill('tick'); await dlg.locator('[name=command]').fill('/usr/bin/true'); await dlg.locator('[name=point]').selectOption('every');
+  assert.equal(await every.isDisabled(), false, 'Every not offered at every');
+  await every.fill('5'); await press('savelib'); await says(/^Not done: .*every: .*10 to 120/);
+  await every.fill('15'); await press('savelib'); await says(/^In your library: tick\.$/);
+  assert.deepEqual((await library()).find((s) => s.name === 'tick'), { name: 'tick', command: '/usr/bin/true', point: 'every', blocking: false, every: 15 });
+  assert.ok((await rows('library')).includes('tick (repeats every 15 minutes): /usr/bin/true'), 'the library row does not say it repeats');
+  await dlg.locator('[name=point]').selectOption('after-close'); await press('libedit', 'library', 'tick');
+  assert.deepEqual([await every.inputValue(), await every.isDisabled()], ['15', false], 'Edit did not bring back the minutes');
+  await press('librm', 'library', 'tick'); await says(/^Removed from your library: tick/);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-scripts ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   // Start approves the sprint's copy: only then is Run now offered, and it runs that copy in the sprint's folder.
   await press('close'); assert.equal(await dlg.evaluate((d) => d.open), false);

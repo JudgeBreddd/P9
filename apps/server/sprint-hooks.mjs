@@ -14,9 +14,12 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // the count merged so far, which is that hour's count: no huge rate from a few minutes' run.
 const perHour = (merged, ms) => Math.round((merged * 10) / Math.max(1, ms / 3_600_000)) / 10;
 export const BLOCKING = ['before-start', 'before-new-worker', 'before-merge', 'before-close'];
-export const POINTS = [...BLOCKING, 'sprint-start', 'worker-folder-made', 'before-ready', 'ci-red', 'gate-passed', 'pause', 'resume', 'after-close'];
+// every (O189): not a step of the sprint but a clock. Its row says "every": N minutes (EVERY_MIN to EVERY_MAX), and P9
+// runs it again and again while the sprint is started, not paused and not closed (tick, in createHooks).
+export const POINTS = [...BLOCKING, 'sprint-start', 'worker-folder-made', 'before-ready', 'ci-red', 'gate-passed', 'pause', 'resume', 'after-close', 'every'];
 // The points P9 has an action for today; the rest are accepted, approved and never run (SECURITY.md says so).
-export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'worker-folder-made', 'before-ready', 'before-close', 'after-close'];
+export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'worker-folder-made', 'before-ready', 'before-close', 'after-close', 'every'];
+export const EVERY_MIN = 10, EVERY_MAX = 120;
 export const MAX_SCRIPTS = 12, MAX_LIBRARY = 100, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
 const TIMEOUT = { blocking: 60_000, notice: 300_000 }; // ponytail: fixed, no per-script setting; add one when a real script needs longer
 const KEEP = 64 * 1024;
@@ -26,7 +29,8 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 // One line of text safe for the page, the log and a tool result: no control characters, no table bar, single spaces, at most LINE.
 export const clean = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029|\s]+/g, ' ').trim().slice(0, LINE);
 
-// hooks.json as text -> { scripts } (each { name, command, point, blocking, notify? }), or { error } naming the row and field.
+// hooks.json as text -> { scripts } (each { name, command, point, blocking, notify?, every? }), or { error } naming the row and field.
+// every: the minutes between two runs, on a row at point every and only there (each needs the other).
 // notify (O189 2b): one chat outside the sprint (a chat id, e.g. the coordinator) this script's POST /script may also reach.
 // No file, or an empty one, is no scripts. The library (S18) is the same list under another name and a larger limit.
 export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
@@ -38,7 +42,7 @@ export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
   const scripts = [];
   for (const [i, r] of rows.entries()) {
     const at = `${what}, script ${i + 1}`;
-    if (!r || typeof r !== 'object' || Array.isArray(r) || Object.keys(r).some((k) => !['name', 'command', 'point', 'blocking', 'notify'].includes(k))) return { error: `${at}: only name, command, point, blocking and notify.` };
+    if (!r || typeof r !== 'object' || Array.isArray(r) || Object.keys(r).some((k) => !['name', 'command', 'point', 'blocking', 'notify', 'every'].includes(k))) return { error: `${at}: only name, command, point, blocking, notify and every.` };
     const ok = (v, max) => typeof v === 'string' && v.trim() === v && v.length > 0 && v.length <= max && !CONTROL.test(v) && v.isWellFormed();
     if (!ok(r.name, MAX_NAME) || r.name.includes('|')) return { error: `${at}, name: 1 to ${MAX_NAME} characters, one line, no |.` };
     if (scripts.some((s) => s.name === r.name)) return { error: `${at}, name: "${r.name}" is used twice.` };
@@ -47,13 +51,16 @@ export function parse(text, what = 'hooks.json', max = MAX_SCRIPTS) {
     if (r.blocking !== undefined && typeof r.blocking !== 'boolean') return { error: `${at} (${r.name}), blocking: true or false.` };
     if (r.blocking && !BLOCKING.includes(r.point)) return { error: `${at} (${r.name}), blocking: only at ${BLOCKING.join(', ')}.` };
     if (r.notify !== undefined && !(typeof r.notify === 'string' && ID.test(r.notify))) return { error: `${at} (${r.name}), notify: a chat id.` };
-    scripts.push({ name: r.name, command: r.command, point: r.point, blocking: r.blocking === true, ...(r.notify && { notify: r.notify }) });
+    if ((r.point === 'every') !== (r.every !== undefined) || (r.every !== undefined && !(Number.isInteger(r.every) && r.every >= EVERY_MIN && r.every <= EVERY_MAX)))
+      return { error: `${at} (${r.name}), every: the point every needs "every": a whole number of minutes, ${EVERY_MIN} to ${EVERY_MAX}, and no other point takes it.` };
+    scripts.push({ name: r.name, command: r.command, point: r.point, blocking: r.blocking === true, ...(r.notify && { notify: r.notify }), ...(r.every !== undefined && { every: r.every }) });
   }
   return { scripts };
 }
 // What the owner is shown before approving: one line per script, the whole command.
 const DRAIN = 250; // ms after the script ends for its last output to arrive
-export const said = (s) => `${s.name} (${s.point}${s.blocking ? ', blocking' : ''}${s.notify ? ', may also message chat ' + s.notify : ''}): ${s.command}`;
+// An every row says it repeats (new trust: one yes runs it many times).
+export const said = (s) => `${s.name} (${s.point === 'every' ? `repeats every ${s.every} minutes while the sprint is started and not paused, until it is closed` : s.point}${s.blocking ? ', blocking' : ''}${s.notify ? ', may also message chat ' + s.notify : ''}): ${s.command}`;
 
 // One run: no shell, the allow-list environment, input on stdin, the last KEEP bytes of output kept. Never throws.
 // -> { exit (the code, or null), reason (null | 'timeout' | 'not-started' | 'killed'), ms, line (the last output line) }.
@@ -92,7 +99,8 @@ export function run(command, input, { cwd, timeout, say }) {
 }
 
 // chat: the chat service; usage: () => what GET /usage answers (or absent); stateOf, rolesOf: delegate's own.
-export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
+// minute, bootAt: the every point's clock (tests give a short minute and drive tick themselves; ticking: false).
+export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 60_000, bootAt = Date.now(), ticking = true }) {
   const approved = (sprint) => { const s = chat.projects.started(sprint)?.scripts; return Array.isArray(s) ? s : []; };
   // Scripts added after Start (sprint spec S20; SECURITY.md § Sprint scripts, "Scripts added after Start"; threat model
   // row S20). A hooks.json row that is new, or differs in any field from the Start-approved row of its name, is an
@@ -212,6 +220,36 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     return null;
   }
 
+  // O189 (1), the every point. One tick a minute looks at every started sprint that is not paused or closed and runs
+  // each standing every row whose N minutes have passed since its last run. The first wait is counted from Start, or
+  // from P9's own start when that is later, so a restart does not run every row at once. A row whose last run is still
+  // going skips the tick and runs on the first tick after it ends; a pause or a long run is caught up with one run, never
+  // several. Each run is a notice (a failure is only logged, the row keeps its clock) with its own #328 token, made
+  // through speaking like every other run. ponytail: last runs live in memory; a restart waits N minutes again.
+  const last = new Map(); // sprint + '\n' + name -> { at, going }
+  function tick(now = Date.now()) {
+    const runs = [];
+    for (const { id: sprint } of chat.family()) {
+      const start = chat.projects.started(sprint);
+      if (!start || !ID.test(sprint) || chat.projects.closed(sprint) || chat.paused?.(sprint)) continue;
+      for (const s of standing(sprint).running) {
+        if (s.point !== 'every' || !Number.isInteger(s.every)) continue;
+        const key = sprint + '\n' + s.name, was = last.get(key);
+        if (was?.going || now - (was?.at ?? Math.max(start.at ?? 0, bootAt)) < s.every * minute) continue;
+        const mine = { at: now, going: true };
+        last.set(key, mine); // before any wait, so a tick that overlaps this one sees the run going
+        runs.push((async () => {
+          let base; try { base = await state(sprint, 'every', { every: s.every }); } catch { base = { contract: 1, point: 'every', error: 'state-unavailable' }; }
+          const r = await speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking: false, script: { name: s.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.notice, say }), s.notify);
+          record(sprint, s, r);
+          return r;
+        })().catch(() => null).finally(() => { mine.going = false; }));
+      }
+    }
+    return Promise.all(runs);
+  }
+  if (ticking) setInterval(() => { try { tick(); } catch { /* the next tick tries again */ } }, Math.min(minute, 60_000)).unref?.();
+
   // sprint_scripts: what is approved, what the file holds now, whether they differ, the last runs. Reads only.
   // The sprint a tool call means: the one named (in the caller's project), else the caller's own.
   function where(caller, named) {
@@ -319,7 +357,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
     return { sprint, file: { scripts: next.scripts, hash: hashOf(body) }, pending: JSON.stringify(next.scripts) !== JSON.stringify(approved(sprint)),
       note: 'In hooks.json. Before Start, Start approves it. In a started sprint it waits (sprint_scripts: additional.waiting; request_sprint_scripts asks the user) unless the user allows additional scripts.' };
   }
-  const rowOf = (a) => ({ name: a.name, command: a.command, point: a.point, ...(a.blocking !== undefined && { blocking: a.blocking }) });
+  const rowOf = (a) => ({ name: a.name, command: a.command, point: a.point, ...(a.blocking !== undefined && { blocking: a.blocking }), ...(a.every !== undefined && { every: a.every }) });
   const locked = (caller) => (chat.lock(caller).on ? { error: 'agent-lock-on' } : null);
   // sprint_script_save: one script, made or replaced by name, in the sprint's hooks.json or (library: true) the library.
   function save(caller, args) {
@@ -444,5 +482,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed }) {
       return script.error ? script : runNow(sprint, script, 'owner', still);
     },
   };
-  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say };
+  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say, tick };
 }
