@@ -1,7 +1,7 @@
 // Settings and the setup wizard. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { esc, info, modes, LOOSE, runnerPicks, profileModel } from './helpers.mjs';
 import { missionKeys, missionShown, missionValue, PATH_KEYS } from './mission-files.mjs';
-import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts } from './security.mjs';
+import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts, LOOSEST } from './security.mjs';
 import { maintenanceGroup, MAINTENANCE } from './maintenance.mjs';
 
 export function installSettings(outer) {
@@ -125,6 +125,7 @@ function serverRow() {
 }
 // c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
 const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
+const OPEN_TOO = ' On this computer the chats already open switch too, and back when it is turned off.'; // MC-4
 function securityGroup(box) {
   const [lock, protect, warn, free] = [SECURITY.lock, SECURITY.protect, SECURITY.warn, SECURITY.unrestricted], both = window.p9?.chat && window.p9?.fileProtection;
   return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way. The phone has the same four.', 'security-settings')}</legend>`
@@ -132,18 +133,24 @@ function securityGroup(box) {
     + (window.p9?.fileProtection ? box('setProtect', protect[0], outer.fileProtect !== false, outer.fileProtect === null ? SECURITY.unknown : outer.fileProtect ? protect[1] : SECURITY.protectOff, outer.fileProtect === null, protect[2], 'file-protection') : '')
     + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
     + (window.p9?.openLink ? box('setLinks', SECURITY.links[0], !localStorage.getItem('p9-link-ok'), SECURITY.links[1], false, SECURITY.links[2], 'security-settings') : '')
-    + (both ? box('setFree', free[0], unrestricted(outer.agentLock, outer.fileProtect, START), free[1], outer.agentLock === null || outer.fileProtect === null, free[2], 'security-settings') : '')
+    + (both ? box('setFree', free[0], unrestricted(outer.agentLock, outer.fileProtect, START), free[1] + OPEN_TOO, outer.agentLock === null || outer.fileProtect === null, free[2], 'security-settings') : '')
     + '</fieldset>';
 }
 // On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
 // protection already off that warning never shows, so Unrestricted asks once itself (row 25a: no silent loosened default).
 async function setUnrestricted(on) {
-  if (on && outer.fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1])) return renderSettings();
+  if (on && outer.fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + OPEN_TOO)) return renderSettings();
   const r = outer.fileProtect === !on ? null : await window.p9.fileProtection(!on).catch(() => null);
   outer.fileProtect = r?.status === 200 ? r.body.on : outer.fileProtect;
   if (outer.fileProtect !== !on) return renderSettings();
   if (on && outer.agentLock) { const l = await outer.liveChat.call('setLock', { on: false }); outer.agentLock = l.status === 200 ? l.body.on : outer.agentLock; }
   setWarnsLoose(!on); setStarts(on, START);
+  // MC-4: the chats already open follow too, not only new ones. On: each goes to its agent's loosest mode. Off: one in
+  // that mode, or with it queued, goes back to the start mode. A chat with a turn running gets it queued, as a pick made
+  // in its pill would be ("queued", applied when the turn ends). A profile chat keeps the profile's mode (O136).
+  outer.S.sessions.forEach(s => { const m = LOOSEST[s.agent]; if (!m || s.profile) return;
+    const to = on ? m : outer.modeShown(s) === m ? outer.startMode(s.agent) : null; if (to) outer.applyMode(s, to); });
+  outer.renderChats();
   if (!on) localStorage.removeItem('p9-link-ok'); // review 3 L5: off asks before agent links again
   renderSettings();
 }
