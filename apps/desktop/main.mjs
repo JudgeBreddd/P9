@@ -277,7 +277,10 @@ export async function createDesktop({ state, open } = {}) {
   // O8: each remote's starts and installs in flight (setUp, runInstall), chained per host so a later one, or another
   // remote's, never hides an earlier one. Disconnect waits for them before its stop, so a start or a slim reinstall that
   // lands after the stop cannot leave P9 on there. stopping: that remote's stop in flight, which a Connect to it waits for.
+  // intent: counts the Connect, Switch, Local and Disconnect asks in the order they came, so one that waited (for a stop)
+  // can tell a newer ask came meanwhile and leave the window where that one put it.
   const remoteBusy = new Map(), stopping = new Map();
+  let intent = 0;
   const busyWith = (host, job) => { remoteBusy.set(host, Promise.all([remoteBusy.get(host), job]).then(() => {}, () => {})); return job; };
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
@@ -850,8 +853,10 @@ export async function createDesktop({ state, open } = {}) {
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
     if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, slim: !!server?.slim, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey, openOn };
+    const mine = ++intent;
     endDock();
-    await stopping.get(args[0]); // O8: a Connect right after Disconnect waits for that stop, then starts P9 again
+    // O8: a Connect right after Disconnect waits for that stop, then starts P9 again, unless a newer ask came meanwhile.
+    if (stopping.has(args[0])) { await stopping.get(args[0]); if (mine !== intent) return { ok: true, superseded: true }; }
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
     devFolder = null; devServing = null;
@@ -866,6 +871,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
     const host = serverHost;
     if (!host) return { ok: false };
+    ++intent;
     endDock();
     await useServer(null);
     devFolder = null; devServing = null;

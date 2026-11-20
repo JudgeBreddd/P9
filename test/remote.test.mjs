@@ -564,6 +564,25 @@ test('O8 FIX1 Connect while that remote\'s stop is still running: the Connect wa
   assert.equal(await read(), 'up\nstop\nup\n', 'started again after the stop, not before it');
 });
 
+test('O8 FIX2 a Connect held by that remote\'s stop gives way to a newer ask: Switch to another machine, or This computer', { skip, timeout: 150000 }, async (t) => {
+  for (const [to, want, saved] of [['other-host', 'up\nup\nstop\n', 'other-host'], [null, 'up\nstop\n', null]]) {
+    await t.test(String(to), async (t) => {
+      const { page, read, call, until, profile } = await offApp(t, (asked) => '[ "$1" = stop ] && sleep 5\necho "$1" >> ' + asked + '\nexit 0\n',
+        { host: 'test-host', remotes: ['test-host', 'other-host'] });
+      await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+      await until(async () => (await read()) === 'up\n');
+      await call(() => { void window.p9.serverOff(); });
+      await page.waitForTimeout(1500); // the stop is running there (5 s)
+      // Connect to it (held by the stop), then a newer ask while the stop still runs.
+      await call((to) => { void window.p9.server('test-host'); void window.p9.server(to); }, to);
+      await until(async () => /stop/.test(await read()));
+      await page.waitForTimeout(4000); // a held Connect would start P9 there again by now
+      assert.equal(await read(), want, 'P9 not started again on test-host after its stop');
+      assert.equal(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).host ?? null, saved, 'the window is where the newer ask put it');
+    });
+  }
+});
+
 test('O8 FIX1 Disconnect waits for every start there still running, also one begun before a switch to another machine', { skip, timeout: 120000 }, async (t) => {
   // The first start takes 8 s; the others (other-host's, then test-host's again) end at once.
   const { page, read, call, until } = await offApp(t, (asked, dir) => 'if [ "$1" = up ] && mkdir ' + JSON.stringify(JSON.parse(dir) + '/slow') + ' 2>/dev/null; then sleep 8; fi\necho "$1" >> ' + asked + '\nexit 0\n',
