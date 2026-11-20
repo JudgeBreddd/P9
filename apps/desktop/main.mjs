@@ -10,7 +10,7 @@ import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, useInstalledDaemon, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
 import { daemonOffer, keptCheckout, keepText, failureOf, guarded } from './use-installed.mjs';
-import { connectServer, forwardPath, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
+import { connectServer, forwardPath, restartServer, startServer, stopServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
@@ -274,6 +274,11 @@ export async function createDesktop({ state, open } = {}) {
   let setUp = () => {};
   // U8: the same for runInstall, which Keep on a slim remote and a slim remote's update call.
   let runInstall = () => ({ ok: false });
+  // O8: each remote's starts and installs in flight (setUp, runInstall), chained per host so a later one, or another
+  // remote's, never hides an earlier one. Disconnect waits for them before its stop, so a start or a slim reinstall that
+  // lands after the stop cannot leave P9 on there. stopping: that remote's stop in flight, which a Connect to it waits for.
+  const remoteBusy = new Map(), stopping = new Map();
+  const busyWith = (host, job) => { remoteBusy.set(host, Promise.all([remoteBusy.get(host), job]).then(() => {}, () => {})); return job; };
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
@@ -846,12 +851,39 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
     if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, slim: !!server?.slim, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey, openOn };
     endDock();
+    await stopping.get(args[0]); // O8: a Connect right after Disconnect waits for that stop, then starts P9 again
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
     devFolder = null; devServing = null;
     if (devView) reopenDev();
     setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
     return { ok: true };
+  });
+  // O8: Disconnect turns P9 off on the remote it leaves (stopServer); Switch (p9:server with another host) leaves it running.
+  // This computer first, then the stop: stopped while still in use, the dropped tunnel would reconnect, find no P9 there
+  // and start it again (setUp, U6). The window reloads with the switch, so a failed stop is said in a dialog.
+  ipcMain.handle('p9:server-off', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    const host = serverHost;
+    if (!host) return { ok: false };
+    endDock();
+    await useServer(null);
+    devFolder = null; devServing = null;
+    if (devView) reopenDev();
+    setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
+    for (let busy; busy !== remoteBusy.get(host);) await (busy = remoteBusy.get(host)); // a full-there install hands on to a second one
+    // Connected to it again meanwhile: that newer Connect wins, and P9 there stays on.
+    if (serverHost === host) return { ok: true, stopped: 'kept' };
+    const stop = stopServer(host, sshCommand), done = stop.then(() => {});
+    stopping.set(host, done);
+    const stopped = await stop;
+    if (stopping.get(host) === done) stopping.delete(host);
+
+    if (stopped === 'failed' && !window.isDestroyed()) {
+      dialog.showMessageBox(window, { type: 'warning', title: 'P9 is still on ' + host, message: 'P9 could not turn itself off on ' + host + '.',
+        detail: 'This window is back on this computer. P9 on ' + host + ' keeps running: connect to it and press Disconnect again, or stop it there.' }).catch(() => {});
+    }
+    return { ok: true, stopped };
   });
   // D15a, since U6 run by setUp below (pressing Connect is the yes). Only this window's remote, only while it
   // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
@@ -875,7 +907,7 @@ export async function createDesktop({ state, open } = {}) {
     remoteInstall = { phase: 'running', line: '', started };
     // A wrong password keeps what the window showed: the same list and command, asked again.
     const tell = e => { if (serverHost === host) remoteInstall = { ...(/^(wrong-password|not-allowed)$/.test(e.error ?? '') && { need: asked?.need, command: asked?.command }), ...e, started }; };
-    (async () => {
+    const job = (async () => {
       const slim = full || keep ? null : await slimFolder();
       try {
         const e = slim ? await installRemote({ host, ssh: sshCommand, version: ownVersion, archive: slimArchive(slim.folder), slim: true, admin, tell })
@@ -888,6 +920,7 @@ export async function createDesktop({ state, open } = {}) {
         if (slim?.built) await rm(slim.folder, { recursive: true, force: true }).catch(() => {});
       }
     })().catch(error => { remoteInstall = { phase: 'failed', error: error.message, started }; });
+    busyWith(host, job);
     return { ok: true };
   };
   // U6 (threat model row 50 U6): pressing Connect is the yes. A remote that answers without a running P9 gets it started
@@ -899,12 +932,12 @@ export async function createDesktop({ state, open } = {}) {
     if (!remoteInstall) {
       const started = Date.now();
       remoteInstall = { phase: 'starting', started };
-      startServer(host, sshCommand).then(r => {
+      busyWith(host, startServer(host, sshCommand).then(r => {
         if (serverHost !== host || remoteInstall?.started !== started) return;
         if (r !== 'ok') return void (answers ? (remoteInstall = { phase: 'failed', error: 'not-answering', started }) : runInstall());
         remoteInstall = { phase: 'starting', started, until: Date.now() + 30000 };
         return useServer(host);
-      }).catch(error => { remoteInstall = { phase: 'failed', error: error.message, started }; });
+      }).catch(error => { remoteInstall = { phase: 'failed', error: error.message, started }; }));
     } else if (!answers && remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
   };
   // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's

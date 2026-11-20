@@ -166,6 +166,19 @@ export function startServer(host, ssh = 'ssh') {
     resolve(/^P9_START (ok|none)$/m.exec(out ?? '')?.[1] ?? 'failed')));
 }
 
+// O8 stopServer(host): Disconnect turns P9 off there (the owner's 2026-11-03 decision), Always on
+// and Temporary alike: its user service where one is installed and P9 is not in background mode (stopped, not disabled, so
+// it starts again at the remote's next boot), else the background start script's stop. The daemon's own stop (main.mjs
+// SIGTERM) ends its agents, terminals and editor. Fixed argv, BatchMode. -> 'ok' | 'none' (no P9 there to stop) | 'failed'.
+export function stopServer(host, ssh = 'ssh') {
+  if (!HOST.test(host)) return Promise.resolve('failed');
+  const command = 'b=' + RUN + '; export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; '
+    + 'if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] && [ ! -f "$b/background" ]; then systemctl --user stop p9-foundation.service >/dev/null 2>&1; '
+    + 'elif [ -f "$b/start" ]; then sh "$b/start" stop >/dev/null 2>&1; else echo P9_STOP none; exit 0; fi && echo P9_STOP ok || echo P9_STOP failed';
+  return new Promise(resolve => execFile(ssh, [...sshOptions(), host, command], { timeout: 60000 }, (error, out) =>
+    resolve(/^P9_STOP (ok|none)$/m.exec(out ?? '')?.[1] ?? 'failed')));
+}
+
 // restartServer(host): Restart P9 there, with what runs it there (as startServer picks): its user service where one is installed
 // and P9 is not in background mode (Always on), restarted as the local one is (teh.mjs RESTART_UNIT: a hung daemon killed after
 // the grace); else the background start script's restart (Temporary, the slim P9 too), which has no unit. Fixed argv, BatchMode.

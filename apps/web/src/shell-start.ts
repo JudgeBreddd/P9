@@ -2,7 +2,7 @@
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering' | 'missing-library'; library?: string; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; remoteAgents?(names: Agent[] | null): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering' | 'missing-library'; library?: string; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; remoteAgents?(names: Agent[] | null): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; serverOff?(): Promise<{ ok: boolean; stopped?: 'ok' | 'none' | 'failed' }>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
@@ -203,14 +203,14 @@ export function startShell() {
         if (ok) { connected = true; shown = result.host ?? ''; if (layer?.open) layer.close(); } else waited = true;
         if (label && (ok || !known)) {
           label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
-          label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Disconnect switches back to this computer.';
+          label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Disconnect switches back to this computer and turns P9 off there.';
         }
-        // U9: Disconnect beside the label, the same switch as Settings > Remote Connect's This computer (p9:server(null)). A
-        // Temporary P9 there stops on its own 5 minutes after its last client (row I1, --idle-exit 300).
+        // U9: Disconnect beside the label goes back to this computer; O8 (the owner's 2026-11-03 decision): it also turns P9 off there, Always
+        // on or Temporary (p9:server-off). Switching to another machine leaves it running.
         if (disconnect && ok) {
           disconnect.hidden = false;
-          disconnect.title = 'Back to this computer.' + (result.background ? ' P9 on ' + result.host + ' is temporary, so it stops there 5 minutes later.' : ' P9 keeps running on ' + result.host + '.');
-          disconnect.onclick = () => { (disconnect as HTMLButtonElement).disabled = true; void window.p9?.server?.(null); };
+          disconnect.title = 'Back to this computer, and turns P9 off on ' + result.host + (result.background ? '.' : ' until you connect again or it restarts.');
+          disconnect.onclick = () => { (disconnect as HTMLButtonElement).disabled = true; void (window.p9?.serverOff ? window.p9.serverOff() : window.p9?.server?.(null)); };
         }
         const agentLine = ok && !keySaid && result.agents ? agentsLine(result.host ?? '', result.agents) : null;
         const note = document.getElementById('keepNote'), line: [string, string] | null = ok ? (keySaid ? [keySaid, ''] : agentLine ?? keepLine(result.host ?? '', result.background, result.keeping, result.slim)) : null;
