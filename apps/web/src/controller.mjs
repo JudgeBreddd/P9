@@ -974,6 +974,7 @@ setTimeout(firstStart, 3000); // settings never answered: run it anyway
 // The shell stays hidden until this code has wired it (shell.css, .shell[data-pending]): the page draws it before the
 // shell's code chunk loads, and a button clicked in that gap does nothing. The landing page's data-pending did this before.
 $('.shell').removeAttribute('data-pending');
+performance.mark('p9-shell-usable'); // O124: time to usable, read by test/shell-bundle.test.mjs against its budget
 
 /* ---------- start (O122: P9 opens in Chat, or the first view still on if Chat is off; the landing page is gone) ---------- */
 // The walkthrough runs once, on the first start, in Chat and back to the focus it began in, after the setup wizard while a
