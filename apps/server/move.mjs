@@ -320,3 +320,19 @@ export function movedNote(db, id) {
   return `[P9: this chat moved here from another computer. Its working folder there was ${data.from}; here it is ${data.to}. `
     + `A path under ${data.from} is at the same place under ${data.to}.]\n\n`;
 }
+
+// O10: the next prompt after a failed Send to remote. Asked why a send failed, an agent that did not know P9 moves chats
+// blamed git and cloud sessions and offered to push the folder to GitHub. It is told what P9 did and what P9 said, once:
+// a later message (not a slash command, which carries no note) has had it. message is desktop main's own text (moved, at
+// most 600), host passed HOST there.
+export function failedMoveNote(db, id) {
+  const last = db.prepare("SELECT type, data FROM events WHERE conversation = ? AND (type = 'move-failed' OR (type = 'user' AND json_valid(data) AND data ->> '$.command' IS NULL)) ORDER BY cursor DESC LIMIT 1").get(id);
+  if (last?.type !== 'move-failed') return null;
+  let data;
+  try { data = JSON.parse(last.data); } catch { return null; }
+  const to = typeof data?.host === 'string' && HOST.test(data.host) ? ' to ' + data.host : '';
+  const said = typeof data?.message === 'string' && data.message ? ' P9 said: "' + data.message.slice(0, 600) + '"' : '';
+  return `[P9: the user pressed Send to remote, P9's own button that moves this chat${to}, their other computer, over SSH. `
+    + `The move did not finish, and the chat stayed on this computer as it was.${said} This was P9's move of the chat, not git, GitHub or a cloud session. `
+    + `If the user asks why it failed, tell them what P9 said; pressing Send to remote again tries the move again.]\n\n`;
+}
