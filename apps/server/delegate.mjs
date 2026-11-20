@@ -12,7 +12,7 @@ import { WORKER } from './worker-folders.mjs';
 import { decide } from './carry.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
-import { BLOCKING, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
+import { BLOCKING, EVERY_MAX as SCRIPT_EVERY_MAX, EVERY_MIN as SCRIPT_EVERY_MIN, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -37,7 +37,7 @@ const PROFILE = /^profile:[\w-]{1,80}$/; // a provider profile, as a provider: S
 export const DELEGATE_TOOLS = (input) => {
   const chat = { type: 'string', description: 'A chat ID from open_chat or list_chats.' };
   const sprintArg = { type: 'string', description: 'A sprint id in your project. Left out: your own sprint.' };
-  const scriptRow = { name: { type: 'string', description: '1 to 60 characters, one line, no |.' }, command: { type: 'string', description: '1 to 200 characters, one line.' }, point: { type: 'string', enum: POINTS }, blocking: { type: 'boolean' } };
+  const scriptRow = { name: { type: 'string', description: '1 to 60 characters, one line, no |.' }, command: { type: 'string', description: '1 to 200 characters, one line.' }, point: { type: 'string', enum: POINTS }, blocking: { type: 'boolean' }, every: { type: 'integer', minimum: SCRIPT_EVERY_MIN, maximum: SCRIPT_EVERY_MAX, description: 'Only at point every, and needed there: the minutes between two runs. P9 runs it again and again while the sprint is started and not paused.' } };
   const notFor = {
     open_chat: 'Do not start workers for work you have not assigned.', set_rules: 'Do not use rules to override the user.',
     send_chat: 'Do not use a note to request work.', wait_chat: 'Do not treat an ended turn as task completion.',
@@ -146,7 +146,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'which may block, which P9 fires today, the scripts the user approved at Start (the only ones that run), what hooks.json in the sprint folder holds now (or why it is refused), whether the two differ (pending), and the last lines of hooks.log. '
       + 'Also returns the library: the user\'s saved scripts, usable in any sprint of any project (only text; nothing in it runs). To add or change a script use sprint_script_save, or copy one from the library with sprint_script_add; in a started sprint it waits (request_sprint_scripts asks the user) unless the user allows additional scripts; before Start, Start approves it. This tool changes nothing.',
     input({ sprint: sprintArg })],
-    ['sprint_script_save', 'Make or replace one sprint script by name: in a sprint\'s hooks.json, or with library: true in the user\'s library (kept for other sprints, in any project). A script is a name, a command (split on spaces, run without a shell, as the user), a point (' + POINTS.join(', ') + ') and blocking (only at ' + BLOCKING.join(', ') + '). '
+    ['sprint_script_save', 'Make or replace one sprint script by name: in a sprint\'s hooks.json, or with library: true in the user\'s library (kept for other sprints, in any project). A script is a name, a command (split on spaces, run without a shell, as the user), a point (' + POINTS.join(', ') + '), blocking (only at ' + BLOCKING.join(', ') + ') and, at point every only, every: the minutes between runs (' + SCRIPT_EVERY_MIN + ' to ' + SCRIPT_EVERY_MAX + '). '
       + 'Saving approves nothing: before Start, Start approves a sprint\'s script; in a started sprint it waits (request_sprint_scripts asks the user) unless the user allows additional scripts; and a change to the library changes no sprint. Refused while the agent lock is on.',
     input({ ...scriptRow, library: { type: 'boolean', description: 'true: save to the library instead of a sprint.' }, sprint: sprintArg }, ['name', 'command', 'point'])],
     ['sprint_script_remove', 'Remove one script by name from a sprint\'s hooks.json, or with library: true from the library. A script the user approved at Start keeps running until the user starts the sprint again. Refused while the agent lock is on.',
@@ -459,7 +459,8 @@ export function createDelegate({ chat, allowed, usage }) {
     return { folder: parsed.folder, lead: checked.find((r) => r.key === 'lead'), rest };
   }
   // The sprint's scripts (sprint-hooks.mjs). A notice never delays or refuses: fire starts it and comes back.
-  const hooks = createHooks({ chat, usage, stateOf, rolesOf, allowed });
+  // P9_EVERY_MINUTE_MS (the every point's minute) is honoured only under the test home, as P9_WAKE_AFTER_MS is below.
+  const hooks = createHooks({ chat, usage, stateOf, rolesOf, allowed, ...(process.env.P9_TEST_HOME && Number(process.env.P9_EVERY_MINUTE_MS) > 0 && { minute: Number(process.env.P9_EVERY_MINUTE_MS) }) });
   const notice = (sprint, point, subject) => hooks.fire(sprint, point, subject).catch(() => null);
   const STAGGER_MS = 1500; // ponytail: a guess at "so we don't crash or conflict", not measured
   const pause = (ms, signal) => new Promise((resolve) => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true }); });
