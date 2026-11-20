@@ -281,12 +281,17 @@ test('Delegate window: New chat does not crash while the daemon is connecting', 
   try {
     await until(() => page.evaluate(() => typeof document.querySelector('#newBtn')?.onclick === 'function'), 'New chat handler');
     await page.locator('#newBtn').click();
-    await page.locator('#chats > .pane').first().waitFor({ timeout: 15000 });
+    // O57: while connecting, New chat makes no local chat with made-up values; it says it waits for the daemon.
+    await page.locator('#toasts .toast', { hasText: 'Connecting' }).waitFor({ timeout: 15000 });
+    assert.equal(await page.locator('#chats > .pane').count(), 0, 'no chat is drawn before the daemon answers');
     assert.deepEqual(errors, []);
     await shot(page, 'connecting-chat');
   } finally { resume(); }
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
-  console.log('CONNECTING_CHAT_PANES_AFTER ' + await page.locator('#chats > .pane').count());
+  // The chat the user asked for opens on the daemon once it answers.
+  await page.locator('#chats > .pane').first().waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#chats > .pane').count(), 1);
+  assert.deepEqual(errors, []);
 });
 
 test('project cut keeps an opened worker group together', { timeout: 60000 }, async (t) => {
