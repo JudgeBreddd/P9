@@ -85,6 +85,14 @@ test('W2 live Claude usage: a stop while the query is still opening closes it on
   assert.equal(made.opened, 1, 'a look after the stop opens nothing');
 });
 
+test('W2 live Claude usage: a look after the stop opens no query', { timeout: 10000 }, async () => {
+  const { made, open } = standIn(() => answer(5, 5));
+  const usage = createClaudeUsage({ open, wait: () => new Promise(() => {}) });
+  usage.close();
+  assert.equal(usage.look(), null); await settle();
+  assert.equal(made.opened, 0);
+});
+
 test('the bundled Claude Agent SDK still declares the usage call (an SDK upgrade that drops it fails here, not silently)', { timeout: 10000 }, async () => {
   const sdk = sdkPath();
   const types = await readFile(path.join(path.dirname(sdk), 'sdk.d.ts'), 'utf8');
