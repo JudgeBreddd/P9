@@ -392,8 +392,18 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     else await route.continue();
   });
   const put = (status) => page.waitForResponse((r) => r.url().endsWith('/files') && r.request().method() === 'PUT' && r.status() === status);
+  // The response event comes with the headers; the app is done only after it read the body (mutate() drops the ID, then
+  // saveFile() draws the state). slowBody() holds every body read 500 ms, so the test always runs the order where the
+  // answer has arrived and the app has not handled it yet; it waits for the app's own state, not for the response.
+  const slowBody = () => page.evaluate(() => { const json = Response.prototype.json; window.p9Json = json; Response.prototype.json = async function () { await new Promise((r) => setTimeout(r, 500)); return json.call(this); }; });
+  const fastBody = () => page.evaluate(() => { Response.prototype.json = window.p9Json; });
+  const pendingGone = (id) => page.waitForFunction((op) => !Object.values(JSON.parse(localStorage.getItem('p9-pending') ?? '{}')).some((p) => p.id === op), id);
+  await slowBody();
   await Promise.all([put(503), page.click('#save')]);
+  await pendingGone(busy[0]); // the 503 is final for its ID: the next tap must get a new one
   await Promise.all([put(409), page.click('#save')]);
+  await page.waitForSelector('#fileState:text-is("Conflict")');
+  await fastBody();
   assert.equal(busy.length, 2); assert.notEqual(busy[0], busy[1]);
   await page.unroute('**/files');
   // A reopened app has its cookie but no CSRF token: it sends nothing and goes to log in (R1-4).
@@ -430,7 +440,10 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   // above), so this Save is a conflict, as keptFile() means it to be. The wait used to be :text("Saved"), which also matches
   // "Kept through sign-in, not saved" (substring, any case): it passed before the answer came, and timed out when the
   // 409 came first. The answer is awaited, then the exact state read.
+  await slowBody();
   await Promise.all([put(409), page.click('#save')]);
+  await page.waitForSelector('#fileState:text-is("Conflict")');
+  await fastBody();
   assert.equal(await page.locator('#fileState').textContent(), 'Conflict');
   assert.notEqual(fresh, used401);
   await page.unroute('**/files');
