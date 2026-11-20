@@ -50,12 +50,20 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
     ['the agent starts a reply', `ev.push({ t: 'agent', text: 'Strea' })`],
     ['its text streams', `ev.at(-1).text += 'ming a longer reply.\\n\\nWith a second paragraph.'`],
     ['thirty more tool calls', `for (let i = 0; i < 30; i++) ev.push({ t: 'tool', title: 'Grep ' + i, status: 'completed', output: 'hit' })`],
+    // review #377 FIX1: the list changes before the reader, so every drawn block's index shifts by one
+    ['a step above the reader is removed', `ev.splice(120, 1)`],
+    ['a step is added at the start (history loaded)', `ev.unshift({ t: 'user', text: 'an older message.' })`],
   ];
   // Scroll positions are whole pixels and block heights are not, so 'the same offset' is within 1 px (main moves it 78 px).
   const near = async (what) => { const o = await offset(); assert.ok(Math.abs(o - 100) <= 1, `the reader moved when ${what}: ${o} px, was 100`); };
   for (const [what, fn] of steps) { await step(fn); await near(what); }
   await pane.locator('textarea').click(); await page.keyboard.type('typing here');
   await near('typing in the box');
+  // The reader's own block removed: no block to hold, so the old pixel position stays (no jump, no error).
+  const topBefore = await pane.locator('.hist').evaluate(h => h.scrollTop);
+  await step(`ev.splice(ev.findIndex(e => e.text?.startsWith('reply 130.')), 1)`);
+  assert.equal(await offset(), null, 'the reader\'s block is gone');
+  assert.ok(Math.abs(await pane.locator('.hist').evaluate(h => h.scrollTop) - topBefore) <= 1, 'with its block gone the reader stays at the same scroll position');
   const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64'));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o127-reader-held ' + shot);
   // A reader at the bottom still follows the new steps.
