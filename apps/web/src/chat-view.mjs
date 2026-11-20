@@ -676,6 +676,15 @@ const AT = new WeakMap();
 const anchorOf = h => { const top = h.getBoundingClientRect().top;
   const el = [...h.querySelectorAll(':scope > .col > [data-at]')].find(c => c.getBoundingClientRect().bottom > top);
   return el && AT.has(el) ? { ev: AT.get(el), off: el.getBoundingClientRect().top - top } : null; };
+// O127 rest: more than TAIL new steps arriving while the reader sits up would slide the drawn window past their block, and
+// held() would find nothing to hold. The window grows to keep it drawn, and goes back to its size once the reader follows
+// the bottom again (s.grown: the size before it grew). Show earlier while it is grown keeps the larger window: the user asked for it.
+const keepIn = (s, v) => {
+  if (!s || !v) return;
+  if (v.pinned) { if (s.grown !== undefined) { s.tail = s.grown || undefined; delete s.grown; } return; }
+  const list = v.anchor?.ev && s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), i = list ? list.indexOf(v.anchor.ev) : -1;
+  if (i >= 0 && list.length - i > (s.tail || TAIL)) { s.grown ??= s.tail || 0; s.tail = list.length - i; }
+};
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
   return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
 function paint(root, ss, only) {
@@ -687,6 +696,7 @@ function paint(root, ss, only) {
   const panes = part ? old.filter(p => only.has(p.dataset.id) || touched.has(p.dataset.id)) : old;
   if (part && !panes.length) return;
   panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); outer.view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
+  panes.forEach(p => keepIn(outer.S.sessions.find(x => x.id === p.dataset.id), outer.view[root.id + ':' + p.dataset.id]));
   panes.forEach(p => p.querySelectorAll('details[data-ev]').forEach(d => { const w = DRAWN.get(d); if (w?.[0] && d.open !== w[1]) w[0].open = d.open; }));
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); outer.addHalos(t.content); outer.attrs(p, t.content.firstElementChild); outer.sync(p, t.content.firstElementChild); });
@@ -780,7 +790,7 @@ function paint(root, ss, only) {
       if (s.fetching) return;
       const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
       if (s.more !== undefined && s.events.filter(e => e.t !== 'approval' && e.t !== 'question').length < (s.tail || TAIL) + TAIL) { s.fetching = true; try { await earlier(s); } finally { s.fetching = false; } }
-      s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
+      s.tail = (s.tail || TAIL) + TAIL; delete s.grown; renderChats(); h.scrollTop = h.scrollHeight - below;
     };
     const folder = p.querySelector('[data-chat-folder]'); if (folder) folder.onclick = () => void pickChatFolder(s);
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); outer.renderTabs(); renderChats(); };

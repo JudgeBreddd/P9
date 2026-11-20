@@ -50,6 +50,8 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
     ['the agent starts a reply', `ev.push({ t: 'agent', text: 'Strea' })`],
     ['its text streams', `ev.at(-1).text += 'ming a longer reply.\\n\\nWith a second paragraph.'`],
     ['thirty more tool calls', `for (let i = 0; i < 30; i++) ev.push({ t: 'tool', title: 'Grep ' + i, status: 'completed', output: 'hit' })`],
+    // O127 rest: more new steps than the 200 drawn, so the drawn window would slide past the reader's block
+    ['250 more tool calls (more than the drawn window)', `for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Glob ' + i, status: 'completed', output: 'hit' })`],
     // review #377 FIX1: the list changes before the reader, so every drawn block's index shifts by one
     ['a step above the reader is removed', `ev.splice(120, 1)`],
     ['a step is added at the start (history loaded)', `ev.unshift({ t: 'user', text: 'an older message.' })`],
@@ -82,4 +84,16 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   await step(`ev.push({ t: 'agent', text: 'The last reply.' })`);
   const gap = await pane.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight);
   assert.ok(gap < 24, `a reader at the bottom no longer follows: ${gap} px short`);
+  // The window grew to keep the reader's block; following the bottom again puts it back to 200 blocks drawn.
+  assert.equal(await pane.locator('.hist .col > [data-at]').count(), 200, 'back at the bottom, the drawn window is 200 steps again');
+  // Show earlier pressed while the window is grown keeps the larger window: the user asked for it.
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: 0, behavior: 'instant' }));
+  await step(`for (let i = 0; i < 250; i++) ev.push({ t: 'tool', title: 'Find ' + i, status: 'completed', output: 'hit' })`);
+  const grown = await pane.locator('.hist .col > [data-at]').count();
+  assert.ok(grown > 200, `the window grew to keep the top block: ${grown} drawn`);
+  await pane.locator('[data-earlier]').click();
+  await page.waitForFunction(([id, n]) => document.querySelectorAll(`.pane[data-id="${id}"] .hist .col > [data-at]`).length > n, [id, grown], { timeout: 5000 });
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
+  await step(`ev.push({ t: 'agent', text: 'After Show earlier.' })`);
+  assert.ok(await pane.locator('.hist .col > [data-at]').count() > grown, 'following the bottom after Show earlier keeps the window the user asked for');
 });
