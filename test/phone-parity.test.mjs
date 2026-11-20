@@ -214,8 +214,10 @@ test('P6: the composer stays on the chat on screen when that chat leaves the lis
   const { page, server } = await phoneOn(t);
   const other = await newChat(page, 'claude'), id = await newChat(page, 'codex');
   assert.equal((await server.desk('/chat/' + id + '/stop', 'POST')).status, 200);
-  await page.waitForFunction((id) => ![...document.querySelectorAll('#conversation option')].some((option) => option.value === id), id, { timeout: 10000 });
+  // The list drops it (O21: the picker keeps the open chat's own option, outside the list's groups, so the composer stays on it).
+  await page.waitForFunction((id) => ![...document.querySelectorAll('#conversation optgroup option')].some((option) => option.value === id), id, { timeout: 10000 });
   assert.notEqual(await page.inputValue('#conversation'), other, 'the composer on the stopped chat now sends to another chat');
+  assert.equal(await page.inputValue('#conversation'), id, 'the composer is still on the chat on screen');
 });
 
 test('P10: an agent\'s question is answered or declined on the phone', { timeout: 90000 }, async (t) => {
