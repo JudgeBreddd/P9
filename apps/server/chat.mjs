@@ -279,8 +279,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // O200: the panel's search also finds a chat by what was said in it, not only by its title. One pass over the prompts and
   // reply chunks in cursor order; a reply's chunks are joined before matching, so a word split across two chunks matches.
   // ponytail: a scan of the whole ledger per search (timed in the PR); an FTS index if a long history makes it slow.
+  // A reply ends at the next prompt or at the end of its turn (an unprompted turn has no prompt after it), never joined to the next.
+  const ENDS = "'turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error'";
   const sayings = db.prepare(`SELECT conversation AS id, type, CASE type WHEN 'user' THEN json_extract(${valid}, '$.text')
-    ELSE json_extract(${valid}, '$.content.text') END AS text FROM events WHERE type = 'user'
+    ELSE json_extract(${valid}, '$.content.text') END AS text FROM events WHERE type IN ('user', ${ENDS})
     OR (type = 'update' AND json_extract(${valid}, '$.sessionUpdate') = 'agent_message_chunk') ORDER BY cursor`);
   const search = (q) => {
     const want = typeof q === 'string' ? q.trim().toLowerCase() : '';
@@ -294,7 +296,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     };
     for (const { id, type, text } of sayings.iterate()) {
       if (found.has(id)) continue;
-      if (type === 'user') { check(id, replies.get(id)); replies.delete(id); if (!found.has(id)) check(id, text); continue; }
+      if (type !== 'update') { check(id, replies.get(id)); replies.delete(id); if (type === 'user' && !found.has(id)) check(id, text); continue; }
       const joined = (replies.get(id) ?? '') + (typeof text === 'string' ? text : '');
       // A long reply is matched in pieces, each keeping the end of the last so a word across the cut still matches.
       if (joined.length > 65536) { check(id, joined); replies.set(id, joined.slice(-want.length)); } else replies.set(id, joined);

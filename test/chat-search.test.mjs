@@ -84,3 +84,31 @@ test('O200 search timed: 36 chats over 200 MB, a word said once in the last chat
   console.log('O200 search ms (36 chats, 230 turns each, 3 runs): ' + times.join(' '));
   assert.deepEqual(Object.keys(found(result)), [id(36)]);
 });
+
+test('O200 FIX1 search: replies of separate turns with no prompt between are not joined into one match', async (t) => {
+  const { chat, chatOf, user, say, add } = await setup(t);
+  const ends = ['turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error'];
+  ends.forEach((type, n) => { chatOf(n + 1); user(id(n + 1), 'what fruit'); say(id(n + 1), 'A pine'); add(id(n + 1), type, {}); say(id(n + 1), 'apple, later.'); });
+  chatOf(9); user(id(9), 'and you'); say(id(9), 'A pine'); add(id(9), 'turn-end', {}); say(id(9), 'cone'); say(id(9), 'pineapple in one reply');
+  assert.deepEqual(Object.keys(found(chat.search('pineapple'))), [id(9)], 'a word across a turn boundary is not a match');
+  assert.equal(Object.keys(found(chat.search('apple, later'))).length, ends.length, 'the reply after the boundary is still searched');
+});
+
+test('O200 FIX1 panel search: only the newest answer is used (same words after new activity, Q then R then Q, a cleared box)', async () => {
+  const { searcher } = await import('../apps/web/src/panel.mjs');
+  const pending = [], applied = [];
+  const ask = searcher(() => new Promise((resolve) => pending.push(resolve)), (q, m) => applied.push(q + ':' + m.map((x) => x.chat).join()));
+  const answer = (i, chats) => pending[i]({ status: 200, body: { matches: chats.map((chat) => ({ chat, snippet: '' })) } });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  // The search typed first is slow and finds nothing; a message arrives, the same words are searched again and found.
+  let a = ask('pine'), b = ask('pine'); await flush();
+  answer(1, ['x']); await b; answer(0, []); await a;
+  assert.deepEqual(applied, ['pine:x'], 'the late answer of the first search does not replace the newer one');
+  applied.length = 0; pending.length = 0;
+  a = ask('q1'); b = ask('r1'); const c = ask('q1'); await flush();
+  answer(2, ['new']); await c; answer(1, ['r']); await b; answer(0, ['old']); await a;
+  assert.deepEqual(applied, ['q1:new'], 'Q, R, Q: only the last Q counts');
+  applied.length = 0; pending.length = 0;
+  a = ask('q2'); await flush(); void ask(''); answer(0, ['y']); await a;
+  assert.deepEqual(applied, [], 'an answer arriving after the box is cleared is dropped');
+});

@@ -51,6 +51,11 @@ export const projectOf = (s, projects) => (s.project && projects.find(p => p.id 
 const fmt = t => { if (!t) return ''; const m = Math.floor((Date.now() - t) / 60000), D = 1440;
   return m < 1 ? 'now' : m < 60 ? m + 'm' : m < D ? Math.floor(m / 60) + 'h' : m < 7 * D ? Math.floor(m / D) + 'd' : new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 
+// O200 FIX1: only the newest search's answer is used. Each ask (an empty one: the box cleared) makes every answer still
+// out of date, so a slow answer for an older search, even for the same words, never replaces a newer one.
+export const searcher = (call, apply) => { let n = 0;
+  return async q => { const my = ++n; if (!q) return; const r = await Promise.resolve().then(() => call(q)).catch(() => null);
+    if (my === n && r?.status === 200) apply(q, r.body.matches); }; };
 export function installPanel(o, { focus, stopChat, busy }) {
   const $ = s => document.querySelector(s), nav = $('#nav'), list = $('#navList'), strip = $('#rBots'), body = nav.parentElement;
   const key = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
@@ -151,10 +156,10 @@ export function installPanel(o, { focus, stopChat, busy }) {
   }
   // O200: searched: the newest chat activity the last search saw; a chat used since (a new message) searches again.
   let searchT, searched = 0;
-  function research() { clearTimeout(searchT); const q = P.q; if (q.length < 2 || !o.liveChat.on) return;
+  const ask = searcher(q => o.liveChat.call('search', { q }, { quiet: true }), (q, matches) => { if (P.q === q) { P.found = { q, m: new Map(matches.map(x => [x.chat, x.snippet])) }; renderPanel(); } });
+  function research() { clearTimeout(searchT); const q = P.q; if (q.length < 2 || !o.liveChat.on) return void ask('');
     searched = Math.max(0, ...o.S.sessions.map(when));
-    searchT = setTimeout(async () => { const r = await o.liveChat.call('search', { q }, { quiet: true }).catch(() => null);
-      if (r?.status === 200 && P.q === q) { P.found = { q, m: new Map(r.body.matches.map(x => [x.chat, x.snippet])) }; renderPanel(); } }, 250); }
+    searchT = setTimeout(() => ask(q), 250); }
   function renderPanel() {
     if (P.q.length >= 2 && o.S.sessions.some(s => when(s) > searched)) research();
     const known = new Set(o.S.sessions.map(s => s.id));
@@ -309,7 +314,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   }, { signal: o.lifetime.signal });
   // O200: the titles filter at once; the daemon's search by message text follows a moment after typing stops.
   $('#navQ').addEventListener('input', e => { P.q = e.target.value.trim(); renderPanel(); research(); });
-  $('#navQ').addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.value) { e.stopPropagation(); e.target.value = ''; P.q = ''; renderPanel(); } });
+  $('#navQ').addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.value) { e.stopPropagation(); e.target.value = ''; P.q = ''; renderPanel(); research(); } });
 
   // ---- Width: drag or arrow keys on the grip, kept across restarts; narrow windows fold to the strip by themselves. ----
   dragBar(nav.querySelector('.p-grip'), { axis: 'x', get: () => P.w, set: px => { P.w = px; nav.style.setProperty('--pw', px + 'px'); }, min: 220, max: 420,
