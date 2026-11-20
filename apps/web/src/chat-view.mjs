@@ -314,8 +314,9 @@ const SPRINT = { folded: new Map() };
 const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null, work: c.queue ?? null, paused: !!c.paused }, c.named && { named: true, title: c.title }); // O172: a name that stays (the user's, or a sprint chat's role) also on a chat started while the window is open. The contract's optional fields: a chat without them looks as it does today. work: the daemon's work queue {done, total, items} (its queue; s.queue here is the composer's)
 // Row 722 (the work queue): a worker holding a role works its role's plan items in order, so its row says Work Queue and
 // names the item it is on: its open_chat task if it has one, else the first one not yet passed (as ready picks it).
+// Its text is the plan line as planItems reads it, id included ("O7: do thing. Role w"), so the id is not added again.
 const itemLine = k => { const q = k.work?.items; if (!q?.length) return k.task?.item || 'No item set';
-  const next = q.find(i => i.state !== 'passed'); return 'Work Queue · ' + (k.task?.item || (next ? next.id + ': ' + next.text : 'all ' + q.length + ' passed')); };
+  const next = q.find(i => i.state !== 'passed'); return 'Work Queue · ' + (k.task?.item || (next ? next.text || next.id || 'next item' : 'all ' + q.length + ' passed')); };
 const SP_LABEL = { paused: 'Paused', working: 'Working', idle: 'Idle', asked: 'Asked', ready: 'Ready', passed: 'Passed', fix: 'Fix', stopped: 'Stopped' };
 // A verdict belongs to one exact commit (spec C): one for an older commit than the one reported ready is not a pass of this version.
 const verdictOf = k => k.verdict?.commit && k.ready?.commit && k.verdict.commit === k.ready.commit ? k.verdict : null; // no ready commit, or no commit on the verdict: nothing is verified
