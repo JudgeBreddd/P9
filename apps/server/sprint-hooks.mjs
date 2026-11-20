@@ -226,29 +226,45 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // going skips the tick and runs on the first tick after it ends; a pause or a long run is caught up with one run, never
   // several. Each run is a notice (a failure is only logged, the row keeps its clock) with its own #328 token, made
   // through speaking like every other run. ponytail: last runs live in memory; a restart waits N minutes again.
-  const last = new Map(); // sprint + '\n' + name -> { at, going }
+  // The clock is kept per Start: a new Start counts its first wait afresh, but a run still going from before it is still
+  // waited for (never two runs of one row at once). Right before the spawn, after every await (the state read, the
+  // token), the row is checked again: still this Start, not paused or closed, still standing as it was read, and P9 not
+  // shutting down. Shutdown (chat.closing) stops the timer and every launch not yet spawned.
+  const last = new Map(); // sprint + '\n' + name -> { at, going, start: the Start record's at it was run under }
+  let timer = null, stopped = false;
+  const stop = () => { stopped = true; if (timer) clearInterval(timer); timer = null; };
+  const off = () => stopped || chat.closing?.() === true;
+  const stands = (sprint, s, at) => { const start = chat.projects.started(sprint);
+    return !off() && Boolean(start) && (start.at ?? 0) === at && !chat.projects.closed(sprint) && !chat.paused?.(sprint) && standing(sprint).running.some((x) => same(x, s)); };
   function tick(now = Date.now()) {
+    if (off()) { stop(); return Promise.resolve([]); }
     const runs = [];
     for (const { id: sprint } of chat.family()) {
       const start = chat.projects.started(sprint);
       if (!start || !ID.test(sprint) || chat.projects.closed(sprint) || chat.paused?.(sprint)) continue;
+      const at = start.at ?? 0;
       for (const s of standing(sprint).running) {
         if (s.point !== 'every' || !Number.isInteger(s.every)) continue;
         const key = sprint + '\n' + s.name, was = last.get(key);
-        if (was?.going || now - (was?.at ?? Math.max(start.at ?? 0, bootAt)) < s.every * minute) continue;
-        const mine = { at: now, going: true };
+        if (was?.going || now - (was?.start === at ? was.at : Math.max(at, bootAt)) < s.every * minute) continue;
+        const mine = { at: now, going: true, start: at };
         last.set(key, mine); // before any wait, so a tick that overlaps this one sees the run going
+        let ran = false;
         runs.push((async () => {
           let base; try { base = await state(sprint, 'every', { every: s.every }); } catch { base = { contract: 1, point: 'every', error: 'state-unavailable' }; }
-          const r = await speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking: false, script: { name: s.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.notice, say }), s.notify);
-          record(sprint, s, r);
+          if (!stands(sprint, s, at)) return null;
+          const r = await speaking(sprint, s.name, (say) => { if (!stands(sprint, s, at)) return null; ran = true; return run(s.command, JSON.stringify({ ...base, blocking: false, script: { name: s.name } }), { cwd: chat.sprintFiles.folderOf(sprint), timeout: TIMEOUT.notice, say }); }, s.notify);
+          if (r) record(sprint, s, r);
           return r;
-        })().catch(() => null).finally(() => { mine.going = false; }));
+        })().catch(() => null).finally(() => {
+          mine.going = false;
+          if (!ran && last.get(key) === mine) { if (was) last.set(key, was); else last.delete(key); } // nothing ran: the clock is as it was
+        }));
       }
     }
     return Promise.all(runs);
   }
-  if (ticking) setInterval(() => { try { tick(); } catch { /* the next tick tries again */ } }, Math.min(minute, 60_000)).unref?.();
+  if (ticking) { timer = setInterval(() => { try { tick(); } catch { /* the next tick tries again */ } }, Math.min(minute, 60_000)); timer.unref?.(); }
 
   // sprint_scripts: what is approved, what the file holds now, whether they differ, the last runs. Reads only.
   // The sprint a tool call means: the one named (in the caller's project), else the caller's own.
@@ -482,5 +498,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       return script.error ? script : runNow(sprint, script, 'owner', still);
     },
   };
-  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say, tick };
+  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say, tick, stop };
 }

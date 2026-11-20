@@ -1371,7 +1371,7 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   one line in `hooks.log`, and a failure only logged (the row keeps its clock). A row whose last run is still going
   skips the tick and runs on the first tick after it ends; a pause, however long, ends in one run, not one for each
   tick missed. The first wait counts from Start, or from P9's own start when that is later, so a restart does not run
-  every row at once; when the last run was is kept in memory only, so after a restart a row waits N minutes again.
+  every row at once, and a new Start counts it afresh (a run still going from before it is still waited for); when the last run was is kept in memory only, so after a restart a row waits N minutes again. Right before each spawn, after the state is read, P9 checks the row again: still the same Start, not paused or closed, still standing as read, and P9 not shutting down; otherwise nothing runs. Shutdown stops the timer.
   Pause stops new runs and Close ends them for good; a run already going when you pause or close finishes (Close
   refuses its token, as for any run). The rule above holds for repeating rows too: a row approved at Start keeps
   running when it is removed from `hooks.json`, until your next Start or Close. Each run adds a line to `hooks.log`,

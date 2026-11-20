@@ -1807,6 +1807,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     sprint: sprintOf,
     // S13 (delegate.mjs pause_sprint / resume_sprint and the project page's buttons). pause: false when already paused.
     paused: (lead) => pausedOf(lead) !== null,
+    closing: () => closing, // shutdown has begun (sprint-hooks.mjs: the every timer stops and launches nothing more)
     lastMode,
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
