@@ -80,9 +80,13 @@ export function createTerminal({ screen, state, connect, open }) {
     const probe = document.createElement('span');
     probe.textContent = 'W'.repeat(40); probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:13px "JetBrains Mono",ui-monospace,monospace';
     document.body.append(probe); const cell = probe.getBoundingClientRect(); probe.remove();
-    const box = screen.getBoundingClientRect();
+    // O179: the box's own padding (the phone's 4px 6px, the window's 6px 0 0 10px), not a fixed 10 px: the phone lost a
+    // row to 2 px, leaving a band taller than a row under the last line. A drawn row's height is xterm's own, used once there.
+    const box = screen.getBoundingClientRect(), pad = getComputedStyle(screen);
+    const width = box.width - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight), height = box.height - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
+    const row = view.element.querySelector('.xterm-rows > div')?.getBoundingClientRect().height || cell.height;
     if (!box.width || !cell.width) return;
-    const cols = Math.max(2, Math.min(500, Math.floor((box.width - 10) / (cell.width / 40)))), rows = Math.max(1, Math.min(200, Math.floor((box.height - 10) / cell.height)));
+    const cols = Math.max(2, Math.min(500, Math.floor(width / (cell.width / 40)))), rows = Math.max(1, Math.min(200, Math.floor(height / row)));
     if (cols !== view.cols || rows !== view.rows) view.resize(cols, rows);
     if (term.socket?.readyState === WebSocket.OPEN) term.socket.send(JSON.stringify({ resize: [view.cols, view.rows] }));
   }
