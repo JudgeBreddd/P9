@@ -13,6 +13,13 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // O162 PRs an hour: items merged (each item is one PR) per hour since Start, to one decimal. Within the first hour it is
 // the count merged so far, which is that hour's count: no huge rate from a few minutes' run.
 const perHour = (merged, ms) => Math.round((merged * 10) / Math.max(1, ms / 3_600_000)) / 10;
+// O162 (usage): what the sprint's chats have used so far, each field the sum of every chat's spent (list_chats' fold);
+// null until one has reported any. A field a chat does not report counts 0.
+const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'turns'];
+const spentOf = (workers) => {
+  const got = workers.map((w) => w.spent).filter(Boolean);
+  return got.length ? Object.fromEntries(SPENT.map((k) => [k, got.reduce((n, x) => n + (Number.isFinite(x[k]) && x[k] >= 0 ? x[k] : 0), 0)])) : null;
+};
 export const BLOCKING = ['before-start', 'before-new-worker', 'before-merge', 'before-close'];
 // every (O189): not a step of the sprint but a clock. Its row says "every": N minutes (EVERY_MIN to EVERY_MAX), and P9
 // runs it again and again while the sprint is started, not paused and not closed (tick, in createHooks).
@@ -414,6 +421,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       standing_merge: chat.projects.merge(sprint),
       // O162: PRs an hour, the items merged per hour since Start (perHour); null before Start.
       prs_per_hour: ms === null ? null : perHour(merged, ms),
+      spent: spentOf(s.workers),
       // phases (I1): each "## Phase" heading of the plan with its items merged and its total; current: the first
       // with an item not merged (null once all have merged). [] for a plan with no such heading: the page shows no phase line.
       ...phasesView(chat.sprintFiles.read(sprint, 'sprint.md'), s.items),
