@@ -62,6 +62,26 @@ test('O73 phone: another chat\'s message is drawn under its title, apart from th
   await shot(page, 'o73-phone');
 });
 
+// #394 FIX1: a message sent before titles were kept names its sender by the title it has now, so with the chat open and no
+// reload, a rename of the sender, then its deletion, redraws that heading; a heading with the send-time title stays.
+test('O73 phone: a heading with no send-time title follows a rename and a deletion of the sender without a reload', { timeout: 180000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  seed(server.directory);
+  const { page } = await phone(t, server);
+  await page.evaluate((id) => history.replaceState(null, '', '#chat=' + id), WORKER);
+  await page.reload();
+  await page.waitForFunction(() => /Which file holds the parser\?/.test(document.querySelector('#events')?.textContent ?? ''), null, { timeout: 30000 });
+  await page.evaluate(() => { window.o73Kept = true; });
+  const heads = () => page.locator('#events article[data-kind="user"] .who').evaluateAll((all) => all.map((m) => m.textContent));
+  const until = async (want, why) => { await page.waitForFunction((w) => [...document.querySelectorAll('#events article[data-kind="user"] .who')].map((m) => m.textContent).join('|') === w, want.join('|'), { timeout: 20000 }).catch(() => {}); assert.deepEqual(await heads(), want, why); };
+  assert.deepEqual(await heads(), HEADINGS);
+  assert.equal((await server.desk('/chat/' + LEAD + '/rename', 'POST', { title: 'Lead again' })).status, 200);
+  await until(HEADINGS.map((h) => h === 'Message from Lead renamed' ? 'Message from Lead again' : h), 'the rename redraws the heading with no send-time title, and only it');
+  assert.equal((await server.desk('/chat/' + LEAD + '/delete', 'POST', {})).status, 200);
+  await until(HEADINGS.map((h) => h === 'Message from Lead renamed' ? 'Message from a deleted chat' : h), 'the deletion redraws it as a deleted chat; send-time titles stay');
+  assert.equal(await page.evaluate(() => window.o73Kept), true, 'the page did not reload');
+});
+
 // O73: on the phone's chat list, a chat whose newest line is another chat's message has something the reader has not read;
 // only the reader's own message leaves it unmarked. Three finished chats, each read on this phone at an older line.
 const OWN = '00000000-0000-4000-8000-000000007311', TOLD = '00000000-0000-4000-8000-000000007312', REPLIED = '00000000-0000-4000-8000-000000007313';

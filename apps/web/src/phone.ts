@@ -328,7 +328,7 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: string; pinned?: boolean };
+type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
@@ -396,8 +396,8 @@ function foldBlocks(now: Folded, events: Json[]) {
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
     // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
     if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
-    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)), who: whoSent(data) });
-    else if (kind === 'note') add('user', data.text, { who: whoSent({ ...data, info: true }) }); // another chat's note, waiting for this chat's next message
+    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)), who: sentBy(data) });
+    else if (kind === 'note') add('user', data.text, { who: sentBy({ ...data, info: true }) }); // another chat's note, waiting for this chat's next message
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
@@ -446,14 +446,16 @@ function foldBlocks(now: Folded, events: Json[]) {
 const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
 // O73: a message another chat's agent sent names that chat (its title when it sent, else now, else "a deleted chat"; P9's
 // own notes say P9), as the desktop window does; the user's own messages have no heading.
-function whoSent(data: Json) {
-  if (data.from === undefined && !data.ask && !data.info) return undefined;
+// The block keeps who sent it, not the heading: a title looked up now follows a rename or a deletion (itemsOf signs it).
+const sentBy = (data: Json) => data.from === undefined && !data.ask && !data.info ? undefined : { from: data.from, fromTitle: data.fromTitle, ask: data.ask, info: data.info };
+function whoSent(data?: Json) {
+  if (!data) return undefined;
   const title = data.fromTitle || (data.from === 'p9' ? 'P9' : state.conversations.find((item) => item.id === data.from)?.title), name = String(title || (typeof data.from === 'string' ? 'a deleted chat' : 'another chat'));
   return data.ask ? 'Question from ' + name + ' · answered read-only' : data.info ? 'Note from ' + name + ' · information only' : 'Message from ' + name;
 }
 function blockHtml(block: Block) {
   const kind = block.kind;
-  if (kind === 'user') return `<article data-kind="user" class="msg user"${block.who ? ' data-from' : ''}>${block.who ? `<div class="who">${escape(block.who)}</div>` : ''}${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
+  if (kind === 'user') { const who = whoSent(block.who); return `<article data-kind="user" class="msg user"${who ? ' data-from' : ''}>${who ? `<div class="who">${escape(who)}</div>` : ''}${escape(block.text)}${sentImgs(openId, block.sent)}</article>`; }
   if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
@@ -479,7 +481,7 @@ let itemsKept: { blocks: Block[]; key: string; out: Entry[] } | null = null;
 let sigsKept = new Map<string, { run: Block[]; extra: string; sig: string }>();
 function itemsOf(blocks: Block[]) {
   // O712: a closed report shows its chat row; window-3: so does one whose worker was archived (same blocks, same SHUT), so the pinned one is in the key
-  const key = sentLanded + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned); // F4 item 9: a poll that changed no block signs none again
+  const key = sentLanded + ':' + codeColoursVersion() + ':' + SHUT.get().size + ':' + blocks.findLastIndex((block) => block.pinned) + ':' + blocks.map((block) => whoSent(block.who) ?? '').join(''); // F4 item 9: a poll that changed no block signs none again
   if (itemsKept?.blocks === blocks && itemsKept.key === key) return itemsKept.out;
   const out: Entry[] = [], sigs = new Map<string, { run: Block[]; extra: string; sig: string }>();
   const sign = (key: string, run: Block[], extra: string, make: () => string) => {
@@ -495,7 +497,7 @@ function itemsOf(blocks: Block[]) {
       out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, '', () => JSON.stringify(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
       i = j;
     } else {
-      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion();
+      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion() + (whoSent(block.who) ?? '');
       out.push({ key: 'b' + block.at, sig: sign('b' + block.at, [block], extra, () => JSON.stringify(block) + extra), html: () => blockHtml(block) });
     }
   }
