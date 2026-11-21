@@ -216,7 +216,7 @@ export const fileImageError = { 'not-an-image': 'Not a PNG, JPEG, GIF or WebP im
   'request-refused': 'P9 does not show this file: it is over 6 MB, a link, or a locked name.', 'not-found': 'This file is no longer on disk.' };
 export const fileImageSrc = body => /^image\/(png|jpeg|gif|webp)$/.test(body?.mimeType) && typeof body.data === 'string' && /^[A-Za-z0-9+/]+=*$/.test(body.data)
   ? 'data:' + body.mimeType + ';base64,' + body.data : null;
-// One Agent / Model / Effort picker wherever a chat's runner is chosen (Settings > Delegation, a sprint's role rows), so
+// One Provider / Model / Effort picker (O227: it lists Claude, Codex and provider profiles) wherever a chat's runner is chosen (Settings > Delegation, a sprint's role rows), so
 // both offer the same agents, models and efforts. w: { agent, model, effort }; first: the Agent list's empty choice;
 // attr(kind) and aria(kind) give each select ('agent', 'model', 'effort') its attributes and label. empty: the agent's
 // lists are not known yet (they arrive when one chat of it has started). O170: the Model pick shows what the file holds
@@ -228,6 +228,6 @@ export function runnerPicks(o, w, { first, attr, aria, off = '' }) {
   const ml = [['', 'Not set'], ...(prof ? prof.models.map(m => [m, m]) : (o.lastModels[a]?.options || []).map(x => [x.value, x.name]))];
   const el = [['', 'Not set'], ...(o.lastPickers[a]?.find(p => o.pickerKind(p) === 'effort')?.options || []).map(x => [x.value, x.name])];
   const agents = [first, ...Object.keys(modes).map(x => [x, o.names[x]]), ...o.profiles.map(p => ['profile:' + p.id, p.name])];
-  return { a, empty: !!a && ml.length < 2 && el.length < 2, html: sel('agent', 'Agent', agents, w.agent)
+  return { a, empty: !!a && ml.length < 2 && el.length < 2, html: sel('agent', 'Provider', agents, w.agent)
     + (w.agent ? sel('model', 'Model', ml, w.model) + sel('effort', 'Effort', el, w.effort) : '') };
 }
