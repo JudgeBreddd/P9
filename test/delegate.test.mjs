@@ -572,7 +572,10 @@ test('I3: send_chat moves a worker its caller started to another model or effort
   const no = async (args, error, field) => { const r = await a.tool('send_chat', { chat: made.chat, text: 'config', ...args }); assert.deepEqual([r.error, r.field], [error, field], JSON.stringify(r)); return r; };
   // Refused by field, in words the agent can act on; nothing reaches the worker.
   assert.match((await no({ model: 'haiku' }, 'delegation-refused', 'model')).detail, /^model "haiku" is not one the user allows for this worker: no Settings > Delegation row starts it\. Allowed model: default, opus\.$/);
-  assert.match((await no({ effort: 'low' }, 'delegation-refused', 'effort')).detail, /Allowed effort: medium, high\.$/);
+  // One field alone is checked as the pair it makes with the other, as it runs now: default/high and opus/medium, no row's.
+  await no({ effort: 'high' }, 'delegation-refused', 'effort');
+  assert.match((await no({ model: 'opus' }, 'delegation-refused', 'effort')).detail, /^effort "medium" \(what it runs on now\) is not one .* with model "opus"\. Allowed effort: high\.$/);
+  assert.match((await no({ effort: 'low' }, 'delegation-refused', 'effort')).detail, /with model "default"\. Allowed effort: medium\.$/);
   assert.match((await no({ model: 'opus', effort: 'medium' }, 'delegation-refused', 'effort')).detail, /starts it with model "opus"\. Allowed effort: high\.$/);
   assert.match((await no({ model: 'opus', when: 'note' }, 'request-refused')).detail, /never a note/);
   assert.match((await no({ model: '' }, 'request-refused')).detail, /1 to 200 characters/);
@@ -586,6 +589,9 @@ test('I3: send_chat moves a worker its caller started to another model or effort
   // What a row starts: the message's own turn runs on it, and the next turns stay on it.
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'config', model: 'opus', effort: 'high' })).sent, 'started a turn');
   assert.match((await a.done(made.chat)).last, /^config:model=opus,effort=high,/, 'the new model and effort did not reach the next turn');
+  // On opus/high now: effort medium alone would be opus/medium, and model default alone default/high. Both refused.
+  assert.match((await no({ effort: 'medium' }, 'delegation-refused', 'effort')).detail, /^effort "medium" is not one .* with model "opus"\. Allowed effort: high\.$/);
+  await no({ model: 'default' }, 'delegation-refused', 'effort');
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'config' })).sent, 'started a turn');
   assert.match((await a.done(made.chat)).last, /^config:model=opus,effort=high,/, 'the worker went back to its row');
   // A running turn keeps its model: refused, and the turn is not changed.
@@ -598,6 +604,8 @@ test('I3: send_chat moves a worker its caller started to another model or effort
   // A stopped worker starts again on what the message names.
   await call(instance, `/chat/${made.chat}/stop`, 'POST', {});
   assert.equal((await a.tool('wait_chat', { chat: made.chat })).state, 'stopped');
+  // Stopped, the pair is checked against what it last ran on (opus/high): effort medium alone is still refused.
+  await no({ effort: 'medium' }, 'delegation-refused', 'effort');
   const back = await a.tool('send_chat', { chat: made.chat, text: 'config', model: 'default', effort: 'medium' });
   assert.equal(back.sent, 'started a turn', JSON.stringify(back));
   assert.match((await a.done(made.chat)).last, /^config:model=default,effort=medium,/, 'a stopped worker did not start on the new model');

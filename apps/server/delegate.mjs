@@ -985,13 +985,17 @@ export function createDelegate({ chat, allowed, usage }) {
       rows = chat.delegation().workers.map((row) => { const w = pick(row, me, {}, undefined); return { ...seen(w), profile: w.profile?.profile ?? null }; });
     }
     let fit = rows.filter((r) => r.provider === target.provider && r.profile === (target.profile?.id ?? null));
+    // The pair the worker would run on is checked, not only the fields named: the one left out stays what it is now (the
+    // live session's, else the newest config event's), so opus/high then effort medium alone is opus/medium, refused.
+    const now = chat.gauge(target.id);
+    const want = { model: args.model ?? target.model ?? now.model, effort: args.effort ?? target.effort?.value ?? now.effort };
     for (const k of ['model', 'effort']) {
-      if (args[k] === undefined) continue;
-      const next = fit.filter((r) => r[k] === args[k]);
+      if (k === 'model' ? target.profile : !effortId) continue; // a profile's model, an unknown effort list: nothing changes them here
+      const next = fit.filter((r) => r[k] === want[k]);
       if (!next.length) {
         const allowed = [...new Set(fit.map((r) => r[k]).filter(Boolean))].join(', ') || 'none';
         return { error: sprint ? 'role-refused' : 'delegation-refused', ...(sprint && { role: target.key ?? null }), field: k,
-          detail: `${k} "${args[k]}" is not one the user allows for this worker: no ${sprint ? 'roles.json row (but the lead\'s)' : 'Settings > Delegation row'} starts it${k === 'effort' && args.model !== undefined ? ` with model "${args.model}"` : ''}. Allowed ${k}: ${allowed}.` };
+          detail: `${k} "${want[k]}"${args[k] === undefined ? ' (what it runs on now)' : ''} is not one the user allows for this worker: no ${sprint ? 'roles.json row (but the lead\'s)' : 'Settings > Delegation row'} starts it${k === 'effort' && !target.profile ? ` with model "${want.model}"` : ''}. Allowed ${k}: ${allowed}.` };
       }
       fit = next;
     }
