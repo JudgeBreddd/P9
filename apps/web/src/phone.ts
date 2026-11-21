@@ -621,8 +621,11 @@ let barSig = '';
 let agentLists: Record<string, unknown> = {}; // O47: each agent's lists as the daemon keeps them (GET /chat)
 function chatBar(id: string, run: string) {
   const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
-  const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
-  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
+  const agent = item?.provider === 'codex' ? 'Codex' : 'Claude', picked = model.selectedOptions[0]?.textContent || '', current = model.dataset.current ?? '';
+  // O204 (O133's rule, as the desktop): the bar names the model the chat runs (its last config); a pick not taken yet is pending,
+  // kept in view beside it (the running name is the part that shortens on a narrow bar).
+  const name = [...model.options].find((option) => option.value === current)?.textContent || picked, pending = current && model.value !== current ? picked || model.value : '';
+  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="${escape('Model: ' + (name || agent) + (pending ? ', ' + pending + ' pending' : ''))}"><span class="now">${escape(agent + (name ? ' · ' + name : ''))}</span>${pending ? ` <span class="pick-q">→ ${escape(pending)}</span>` : ''} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
   barSig = html; const next = document.createElement('template'); next.innerHTML = html;
   patchBar(one('[data-bar="chat"]'), next.content); // O107, O108: a later draw (the folder answer, the model's name, the run state) keeps a focused button

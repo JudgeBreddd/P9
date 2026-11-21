@@ -831,6 +831,39 @@ test('O48 on the phone: New chat lists each provider profile\'s models; the chat
   console.log('PASS O48 on the phone: names read as id, name, models only (no base URL, key or key kind; 401 with no session; /profiles still 404); the sheet listed both models with the name as text; the chat started on the profile and model picked; an unlisted model was refused with no chat');
 });
 
+// O204 (O133's rule on the phone): the top bar names the model the chat runs, from its last config, not the last pick. A pick
+// not taken yet shows as pending beside it, mid-turn and after a turn with no config, until a config reports it.
+test('O204: a model picked mid-turn on the phone shows as pending; the bar keeps the running model until the config reports the pick', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
+  const bar = () => page.evaluate(() => { const b = document.querySelector('#modelBtn'); return [b.textContent.trim(), b.getAttribute('aria-label')]; });
+  // The visible text first, so the old bar (the last pick, a bare 'Model' label) fails on what the reader sees.
+  const is = async ([text, label], why = 'the bar') => { const [t1, l1] = await bar(); assert.equal(t1, text, why); assert.equal(l1, label, why); };
+  const pick = async (value) => { await page.click('#modelBtn'); await page.click(`#sheet[open] [data-model="${value}"]`); await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 }); };
+  const running = ['Claude · Default (recommended)', 'Model: Default (recommended)'];
+  await newChat(page, 'claude');
+  await send(page, 'model'); await replied('model:default');
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 15000 });
+  assert.equal((await bar())[0], running[0]);
+  // Picked and picked back: nothing pending.
+  await pick('haiku'); await is(['Claude · Default (recommended) → Haiku', 'Model: Default (recommended), Haiku pending']);
+  await pick('default'); await is(running);
+  // Mid-turn (a tool call running): the pick is pending, the running model stays named.
+  await send(page, 'tools 1'); await page.locator('[data-bar="chat"] .run').waitFor({ timeout: 10000 });
+  await pick('opus');
+  const pending = ['Claude · Default (recommended) → Opus', 'Model: Default (recommended), Opus pending'];
+  await is(pending, 'mid-turn: the running model, the pick pending');
+  await shot(page, 'o204-pending');
+  assert.ok(await page.evaluate(() => { const q = document.querySelector('#modelBtn .pick-q').getBoundingClientRect(), b = document.querySelector('#modelBtn').getBoundingClientRect(); return q.width > 0 && q.right <= b.right + 0.5; }), 'the pending pick is in view on a 390 px bar beside Stop');
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 20000 });
+  await is(pending, 'the turn ended with no config for the pick: still pending');
+  // The pick goes with the next send; the config that reports it moves the bar.
+  await send(page, 'config'); await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim().startsWith('config:model=opus')), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelector('#modelBtn').getAttribute('aria-label') === 'Model: Opus', null, { timeout: 10000 });
+  assert.equal((await bar())[0], 'Claude · Opus');
+  await shot(page, 'o204-taken');
+});
+
 // O59: the chat header names the model the chat's Model sheet shows. A Claude chat next to a Codex chat on another
 // model (as a chat that started a child chat on another agent): back on the Claude chat, no header it draws names the
 // other chat's model. Every header text is recorded as it is drawn, so a wrong first draw fails even if a later one fixes it.
