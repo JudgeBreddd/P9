@@ -624,6 +624,14 @@ const connection = acp.connectAgent(stream, {
       return { stopReason: 'end_turn' };
     }
     // O222: a Codex (ACP v2) edit as acp-v2.mjs stores it: the lines once, in _meta.hunks, and _meta.added; no old text.
+    // O121 part 4b: a v2 rename and a v2 delete, as acp-v2.mjs stores them.
+    if (text === 'v2 kinds') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-v2k', title: 'Edit files', kind: 'edit', status: 'completed', content: [
+        { type: 'diff', path: 'moved.md', newText: '', _meta: { added: false, from: 'was.md', hunks: [{ old: 1, new: 1, rows: [['del', 'a'], ['add', 'b']] }] } },
+        { type: 'diff', path: 'gone.md', newText: '', _meta: { added: false, deleted: true, hunks: [{ old: 1, new: 0, rows: [['del', 'x']] }] } }] } });
+      await say('v2 kinds done');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'v2 diff') {
       await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-v2', title: 'Edit kept.md', kind: 'edit', status: 'completed', content: [
         { type: 'diff', path: 'kept.md', newText: '', _meta: { added: false, hunks: [{ old: 3, new: 3, rows: [['ctx', 'two'], ['del', 'old line'], ['add', 'new line']] }] } },

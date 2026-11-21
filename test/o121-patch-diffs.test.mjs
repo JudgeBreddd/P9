@@ -86,3 +86,45 @@ test('O222: a v2 diff is stored once, and the window still tells a created file 
   // The rows still come from the hunks alone.
   assert.deepEqual(composer.diffRows([created], 200), [['hunk', '@@ -0 +1 @@'], ['add', 'hello']]);
 });
+
+// O121 part 4b: a rename, a delete, a binary file, a mode-only change and an empty new file. Before, the last three had
+// no ---/+++ line and were dropped, a rename lost where it came from, and a delete was not marked.
+const kinds = [
+  'diff --git /w/old.md /w/new.md', 'similarity index 90%', 'rename from /w/old.md', 'rename to /w/new.md', '--- /w/old.md', '+++ /w/new.md', '@@ -1 +1 @@', '-a', '+b',
+  'diff --git /w/gone.md /w/gone.md', 'deleted file mode 100644', 'index 1111111..0000000', '--- /w/gone.md', '+++ /dev/null', '@@ -1 +0,0 @@', '-x',
+  'diff --git /w/logo.png /w/logo.png', 'index 1111111..2222222 100644', 'Binary files /w/logo.png and /w/logo.png differ',
+  'diff --git /w/my run.sh /w/my run.sh', 'old mode 100644', 'new mode 100755',
+  'diff --git /w/empty.txt /w/empty.txt', 'new file mode 100644', 'index 0000000..e69de29',
+  'diff --git /w/pic.png /w/pic.png', 'new file mode 100644', 'index 0000000..3333333', 'GIT binary patch', 'literal 3', 'KcmZ?wbN~PV', '', 'literal 0', 'HcmV?d00001', '',
+].join('\n');
+
+test('O121 part 4b: a rename, a delete, a binary file and a mode-only change each reach the chat, marked', () => {
+  const out = diffs({ patch: { text: kinds } });
+  assert.deepEqual(out.map((d) => [d.path, d.newText, d._meta]), [
+    ['/w/new.md', '', { added: false, from: '/w/old.md', hunks: [{ old: 1, new: 1, rows: [['del', 'a'], ['add', 'b']] }] }],
+    ['/w/gone.md', '', { added: false, deleted: true, hunks: [{ old: 1, new: 0, rows: [['del', 'x']] }] }],
+    ['/w/logo.png', '', { added: false, binary: true, hunks: [] }],
+    ['/w/my run.sh', '', { added: false, mode: '100644 → 100755', hunks: [] }],
+    ['/w/empty.txt', '', { added: true, hunks: [] }],
+    ['/w/pic.png', '', { added: true, binary: true, hunks: [] }],
+  ]);
+  const { diffRows, diffCreated, diffDeleted } = composer;
+  assert.equal(typeof diffDeleted, 'function', 'no diffDeleted: the Changes tab cannot say a file was deleted');
+  assert.deepEqual(out.map((d) => diffRows([d], 200)), [
+    [['hunk', 'Renamed from /w/old.md'], ['hunk', '@@ -1 +1 @@'], ['del', 'a'], ['add', 'b']],
+    [['hunk', 'Deleted'], ['hunk', '@@ -1 +0 @@'], ['del', 'x']],
+    [['hunk', 'Binary file: the change is not shown']],
+    [['hunk', 'Mode 100644 → 100755']],
+    [],
+    [['hunk', 'Binary file: the change is not shown']],
+  ]);
+  assert.deepEqual(out.map(diffCreated), [false, false, false, false, true, true]);
+  assert.deepEqual(out.map(diffDeleted), [false, true, false, false, false, false]);
+  // Two files: each file's line, then its marks, then its hunks.
+  assert.deepEqual(diffRows(out.slice(0, 2), 200).slice(0, 3), [['file', '/w/new.md'], ['hunk', 'Renamed from /w/old.md'], ['hunk', '@@ -1 +1 @@']]);
+  // _meta is any agent's: a mark that is not the type P9 writes is ignored, never drawn; v1 diffs are never deleted.
+  const odd = { type: 'diff', path: '/w/a', newText: '', _meta: { added: false, deleted: 'yes', from: { toString: null }, binary: 1, mode: 7, hunks: [] } };
+  assert.deepEqual(diffRows([odd], 200), []);
+  assert.equal(diffDeleted(odd), false);
+  assert.equal(diffDeleted({ type: 'diff', path: '/w/a', oldText: 'x', newText: '', _meta: { deleted: true } }), false);
+});
