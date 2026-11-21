@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { _electron } from '@playwright/test';
-import { xState } from '../scripts/launch-diag.mjs';
+import { execFileSync } from 'node:child_process';
 
 // O58 diagnostic: CI has had Electron fail to start with "Missing X server or $DISPLAY" and no cause in the log. Under
 // with-tmp.mjs (CI, the dev space) a failed _electron.launch now prints the X state, then throws the same error.
@@ -36,5 +36,9 @@ test('O58 diagnostic: a launch that works prints nothing and returns the app', {
 });
 
 test('O58 diagnostic: on the live display the socket line says connected', { skip: process.platform !== 'linux' || !process.env.DISPLAY }, async () => {
-  assert.match(await xState(), /socket \/tmp\/\.X11-unix\/X<n> for that DISPLAY: connected/);
+  // In a child: importing launch-diag.mjs here would wrap this file's launch itself and hide a with-tmp.mjs that forgot it.
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  const url = new URL('../scripts/launch-diag.mjs', import.meta.url).href;
+  const text = execFileSync(process.execPath, ['--input-type=module', '-e', `console.log(await (await import(${JSON.stringify(url)})).xState())`], { env, encoding: 'utf8' });
+  assert.match(text, /socket \/tmp\/\.X11-unix\/X<n> for that DISPLAY: connected/);
 });
