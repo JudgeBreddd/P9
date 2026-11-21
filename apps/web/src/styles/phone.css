@@ -227,6 +227,8 @@ body.inchat nav{display:none}
 #chatList .row[data-run=working] small{color:var(--cyan)}
 #chatList .row[data-run=needs] small{color:var(--amber)}#chatList .row[data-run=needs] .dot{background:var(--amber)}
 .bar .sub{min-height:0;min-width:0;display:flex;align-items:center;gap:2px;padding:2px 0;border-radius:6px;color:var(--dim);font-size:12px;font-weight:400;text-align:left;overflow:hidden;white-space:nowrap}
+.bar .sub .now{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.bar .sub .pick-q{flex-shrink:0;margin-left:2px;color:var(--amber)}
 .bar .sub svg{flex:none;width:12px;height:12px}
 .bar .run{flex:none;width:16px;height:16px;margin:0 6px;border-radius:50%}
 .bar .run[data-run=idle]{display:none}
