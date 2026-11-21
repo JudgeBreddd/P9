@@ -7,6 +7,7 @@ import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { acpAsk } from '../apps/server/chat.mjs';
 import { diffs, v1Stream } from '../apps/server/acp-v2.mjs';
+import { agentWarning } from '../apps/web/src/helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-v2-agent.mjs');
 const start = (t, env = {}) => daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake], env }));
@@ -48,7 +49,7 @@ test('an agent that answers ACP 2 reaches the ledger in ACP 1 shapes: turn end, 
   const output = updates(seen, 'tool_call_update').filter((data) => data.toolCallId === 'exec-2').flatMap((data) => data.content ?? []);
   assert.deepEqual(output, [{ type: 'content', content: { type: 'text', text: 'one\nthree\n' } }]);
   assert.deepEqual(updates(seen, 'plan')[0]?.entries.map((entry) => entry.content), ['Check the file']);
-  assert.ok(says(seen).includes('Warning: A setting was ignored.'));
+  assert.ok(says(seen).includes('Warning: A setting was ignored.\n\n'), 'O221: the warning line shape');
   // Nothing v2-only is stored, and the sign-in notices' email reaches neither the ledger nor the event stream.
   const kinds = new Set(seen.filter((event) => event.type === 'update').map((event) => event.data.sessionUpdate));
   for (const kind of ['state_update', 'user_message_chunk', 'terminal_update', 'plan_update', 'notice']) assert.ok(!kinds.has(kind), kind);
@@ -248,4 +249,20 @@ test('O220: a failed or killed Codex command\'s exit goes on as p9/exit; exit 0 
   await p.step({ sessionUpdate: 'state_update', state: 'running' }, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' }, run('t7')[1]);
   assert.deepEqual(exits('t7'), [], 'forgotten at the idle');
   console.log('PASS O220: p9/exit for exit 2, SIGTERM, early exit; none for 0, junk or after the idle');
+});
+
+// O221 (O121 part 4): a v2 notice is the agent program's own line, not words of the reply. The window and phone draw a
+// reply chunk that is exactly "Warning: <text>\n\n" as the grey warning line (agentWarning, helpers.mjs) and the chat
+// list leaves it out of the preview; any other shape was added to the reply text as if the agent had said it.
+test('O221: a Codex notice reaches the window and phone as the warning line, never as reply text', async () => {
+  const { step, said } = await v2Pipe();
+  const odd = { toString: null };
+  await step({ sessionUpdate: 'notice', severity: 'warning', title: 'A setting was ignored.' },
+    { sessionUpdate: 'notice', severity: 'warning', title: ' Model changed ', description: 'Using a smaller model.\n' },
+    { sessionUpdate: 'notice', severity: 'error', title: 'The sandbox failed.' },
+    { sessionUpdate: 'notice', severity: 'warning', title: '', description: '  ' },
+    { sessionUpdate: 'notice', severity: 'warning', title: odd, description: odd });
+  const texts = said.map((m) => m.params?.update?.content?.text);
+  assert.deepEqual(texts.map(agentWarning), ['A setting was ignored.', 'Model changed\nUsing a smaller model.', 'Error: The sandbox failed.'], JSON.stringify(texts));
+  assert.ok(said.every((m) => m.params.update.sessionUpdate === 'agent_message_chunk' && m.params.update.messageId === undefined));
 });
