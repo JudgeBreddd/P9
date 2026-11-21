@@ -1474,10 +1474,20 @@ test('Delegate O147: ready records the sent commit, refuses one git does not kno
     assert.equal(got.error, 'unknown-commit', commit + ': ' + JSON.stringify(got));
   }
   fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n'); // unsaved change to a tracked file
-  assert.equal((await send(head)).error, 'dirty-folder', 'a commit that is HEAD keeps the dirty check');
-  assert.equal((await send('0123abcd')).error, 'dirty-folder', 'the older refusal comes first: an unknown commit from a dirty folder reads dirty-folder');
+  const dirtyHead = await send(head), dirtyOther = await send('0123abcd');
+  assert.equal(dirtyHead.error, 'dirty-folder', 'a commit that is HEAD keeps the dirty check');
+  assert.equal(dirtyOther.error, 'dirty-folder', 'the older refusal comes first: an unknown commit from a dirty folder reads dirty-folder');
+  // O224: the refusal says which, so a worker whose commit is in another repository can see it and tell its lead.
+  assert.match(dirtyHead.detail ?? '', /unsaved changes and the commit is what it has checked out/, JSON.stringify(dirtyHead));
+  assert.match(dirtyOther.detail ?? '', /its repository has no commit by that id.*tell your lead/, JSON.stringify(dirtyOther));
   const other = await send(work);
   assert.equal(other.ready?.commit, work, 'a commit other than HEAD is a fixed tree: unsaved work in the folder is not in it ' + JSON.stringify(other));
+  // O224: the open_chat item (C1) is the worker's first item only: a later row it names is its task with its own checks,
+  // and a row id may hold a space ("Work Queue"). Before, the first item's checks refused every later row.
+  const later = await kid.tool('ready', { commit: work, row: 'Work Queue', results: [{ check: 'own check', result: 'passed' }], weakest: 'w' });
+  assert.equal(later.ready?.item, 'Work Queue', JSON.stringify(later));
+  const same = await kid.tool('ready', { commit: work, row: 'C1', results: [{ check: 'own check', result: 'passed' }], weakest: 'w' });
+  assert.equal(same.error, 'request-refused', 'the open_chat item itself still takes its own checks ' + JSON.stringify(same));
   await a.tool('stop_chat', { chat: made.chat });
   await a.done(made.chat);
 });

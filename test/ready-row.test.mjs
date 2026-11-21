@@ -26,7 +26,7 @@ async function attach(t, instance, conversation) {
   return async (name, args = {}) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
 }
 
-test('O196: a sprint worker with a role key and no sprint.md line is queued by ready with its row id, and the verdict lands', { timeout: 180000 }, async (t) => {
+test('O196: a sprint worker with a role key and no sprint.md line is queued by ready with its row id, its report card is pinned in its lead (O224), and the verdict lands', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const ws = instance.workspace;
   await call(instance, '/file-protection', 'POST', { on: false });
@@ -60,6 +60,13 @@ test('O196: a sprint worker with a role key and no sprint.md line is queued by r
   const ready = await W('ready', { ...report, row: 'O7' });
   assert.equal(ready.ready?.item, 'O7', JSON.stringify(ready));
   assert.equal(ready.ready.commit, head);
+  // O224: its report card is pinned in its lead's chat when the turn ends. It has no open_chat task, and P9 pinned a card
+  // only for a worker with one, so no sprint worker's report reached its lead.
+  const lead = (await call(instance, '/chat')).body.conversations?.find((c) => c.id === w2)?.parent ?? s.sprint;
+  let pinned;
+  await until(async () => (pinned = (await call(instance, `/chat/events?after=0&only=${lead}`)).body.events.find((e) => e.type === 'card' && e.data?.id === 'ready-' + w2)));
+  assert.match(pinned.data.text, /### O7/);
+  assert.ok(pinned.data.text.includes(head), pinned.data.text);
   const verdict = await R('verdict', { chat: w2, commit: head, result: 'pass', note: 'ok' });
   assert.equal(verdict.verdict?.result, 'pass', JSON.stringify(verdict));
   assert.deepEqual([verdict.review?.state, verdict.review?.fixes], ['passed', 0], JSON.stringify(verdict));

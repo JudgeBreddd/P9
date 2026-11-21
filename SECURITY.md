@@ -798,7 +798,12 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 - **Ready and verdict.** A worker that was given a task with checks ends it with `ready`: its commit, one result
   per check and its weakest part. A chat's agent marks another chat's ready commit with `verdict` (pass or fix, with a
   note). Both write only P9's own sprint record for that chat, never a file, so they work in ordinary read-only modes too; solo peer-answer turns allow only read tools, and the agent lock refuses both. `ready` needs a parent and a task, and a folder with nothing unsaved; where
-  git can be read the commit and changed files are git's, not the agent's word. `verdict` reaches only a chat the
+  git can be read the commit and changed files are git's, not the agent's word. The task is the open_chat item, or
+  the plan row the worker names (O224: a row other than its open_chat item is its own, with the worker's own checks; a
+  row id may hold inner spaces). Every ready that goes through pins its report card in the parent's chat, whether or
+  not the worker had an open_chat task. A dirty-folder or unknown-commit refusal says when the commit is not in the
+  start folder's repository: ready reads the commit only from that repository, so such work cannot be reported from
+  that chat. `verdict` reaches only a chat the
   caller could message, never its own work, a chat below it or a chat above it in its line, and only at the commit
   that chat marked ready: a newer commit makes the verdict stale. Before a ready goes through it is refused
   (`not-ready`); said only to a chat the reach rule already lets read that chat, so it reveals nothing new.
