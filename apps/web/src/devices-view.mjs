@@ -1,15 +1,16 @@
 // O205 Settings > Remote Connect > Devices: phone enrollments waiting for this window, and the devices signed in. The
 // daemon serves /devices on its owner-only Unix socket only (main.mjs chatRoutes devices*); the phone has no such route.
 import { esc } from './helpers.mjs';
-let shown = '', note = '';
+let shown = '', note = '', seq = 0, timer;
 const at = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const btn = (act, id, label, variant, name) => `<button data-slot="button" data-variant="${variant}" data-size="sm" data-device-${act}="${esc(id)}" data-name="${esc(name)}" aria-label="${label} ${esc(name)}">${label}</button>`;
 const row = (name, sub, buttons) => `<li class="set-row"><span><strong>${esc(name)}</strong><span class="muted sm">${sub}</span></span><span class="spacer"></span>${buttons}</li>`;
 const list = (title, rows) => rows.length ? `<p class="sm"><strong>${title}</strong></p><ul class="remote-list">${rows.join('')}</ul>` : '';
 export async function drawDevices(box, host) {
   if (shown) box.innerHTML = shown; // the last list while the fresh one comes, so a redraw of Settings does not flash
+  const mine = ++seq; clearTimeout(timer);
   const r = await window.p9.chat('devices', {}).catch(() => null);
-  if (!box.isConnected) return;
+  if (!box.isConnected || mine !== seq) return; // a newer draw (Refresh, a press, the timer) owns the box now
   const where = host ? 'P9 on ' + esc(host) : 'this P9';
   if (r?.status === 404) shown = `<p class="muted sm">Phone access is off on ${where}, so no phone can ask.</p>`;
   else if (r?.status !== 200) shown = `<p class="warn sm" role="alert">${where} did not answer, so the devices are not shown. Open Settings again in a moment.</p>`;
@@ -33,4 +34,7 @@ export async function drawDevices(box, host) {
   };
   for (const route of ['deviceApprove', 'deviceRefuse', 'deviceRemove']) box.querySelectorAll(`[data-device-${route.slice(6).toLowerCase()}]`).forEach(b => { b.onclick = () => act(route, b); });
   box.querySelector('[data-device-refresh]').onclick = () => drawDevices(box, host);
+  // A phone that asks while the page is open shows within 5 s; only while the Devices page is on screen.
+  // ponytail: polling, not a pushed event; one small socket request every 5 s while visible.
+  timer = setTimeout(() => { if (box.isConnected && box.offsetParent) drawDevices(box, host); }, 5000);
 }

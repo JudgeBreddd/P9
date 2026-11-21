@@ -28,11 +28,11 @@ test('O205: Settings lists a waiting phone (code, lapse time) and a signed-in on
   const asking = await askEnrollment(server, 'Kitchen tablet');
   const { code } = (await server.desk('/devices')).body.enrollments.find((e) => e.id === asking);
 
-  // The network side: no /devices route on the TCP port, for a signed-in phone or anyone else.
-  for (const session of [phone, undefined]) {
-    assert.equal((await server.remote('/devices', { session })).status, 404);
+  // The network side: no /devices route on the TCP port for a signed-in phone (404), and login first for anyone else (401).
+  for (const [session, status] of [[phone, 404], [undefined, 401]]) {
+    assert.equal((await server.remote('/devices', { session })).status, status);
     for (const route of ['/devices/enrollments/' + asking + '/approve', '/devices/enrollments/' + asking + '/refuse', '/devices/' + phone.device + '/revoke', '/devices/reset'])
-      assert.equal((await server.remote(route, { method: 'POST', session, body: {} })).status, 404, route);
+      assert.equal((await server.remote(route, { method: 'POST', session, body: {} })).status, status, route);
   }
   assert.equal((await server.desk('/devices')).body.enrollments.find((e) => e.id === asking).state, 'pending', 'nothing from the network changed it');
 
@@ -78,4 +78,7 @@ test('O205: Settings lists a waiting phone (code, lapse time) and a signed-in on
   await signed.waitFor({ state: 'detached', timeout: 5000 });
   assert.equal((await server.desk('/devices')).body.devices.find((d) => d.id === phone.device).state, 'revoked');
   await list.getByText('No phones yet').waitFor();
+  // A phone that asks while the page is open shows without Refresh.
+  await askEnrollment(server, 'Laptop browser');
+  await list.locator('li', { hasText: 'Laptop browser' }).waitFor({ timeout: 8000 });
 });
