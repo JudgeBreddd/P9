@@ -28,9 +28,8 @@ function phaseLine(s, esc) {
 // checks and evidence, as sprint.md has them). A record saved before items carried a phase has none: the flat list only.
 // Open stays open across the 5 s redraws: this module keeps which sprints are open and its own click listener, so the
 // startup JS (projects-view.mjs) carries none of it.
-const planOpen = new Set(), byPhase = s => s.phases?.length > 0 && s.items.some(i => 'phase' in i);
+const planOpen = new Set(), byPhase = s => s.phases?.length > 0 && s.items.some(i => 'phase' in i && !(s.owner && i.role === 'owner')); // as statusHtml's plan
 globalThis.document?.addEventListener('click', e => {
-  // A plan of only the owner's lines has no Plan items to nest: the line stays, the press does nothing.
   const b = e.target.closest?.('[data-sv-plan]'), v = b?.closest('.sv'), pv = v?.querySelector('[data-sv-planview]'); if (!pv) return;
   const id = b.dataset.svPlan, on = !planOpen.delete(id) && !!planOpen.add(id);
   b.setAttribute('aria-expanded', on); pv.hidden = !on; v.querySelector('[data-sv-flat]').hidden = on;
@@ -38,7 +37,7 @@ globalThis.document?.addEventListener('click', e => {
 const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.sprint.id) ? '' : ' hidden'}><h3>Plan by phase</h3>
       ${[...s.phases.map((p, k) => [p.title, plan.filter(i => i.phase === k)]), ['Outside every phase', plan.filter(i => i.phase == null)]].filter(([t, is], k) => is.length || k < s.phases.length)
         .map(([t, is]) => `<h4>${esc(t)}</h4>${is.length ? `<ul class="sv-items">${is.map(i => row(i, 'data-sv-pitem')).join('')}</ul>` : '<p class="hint">No items in this phase.</p>'}`).join('')}
-      ${s.phases.some(p => typeof p.text === 'string') ? '<h3>Each phase in full</h3>' : ''}${s.phases.map(p => typeof p.text === 'string' ? `<section class="sv-ptext" data-sv-phasetext><h4>${esc(p.title)}</h4>${p.text ? `<pre>${esc(p.text)}</pre>` : '<p class="hint">Nothing is written under this heading.</p>'}${p.truncated ? '<p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>' : ''}</section>` : '').join('')}</div>`;
+      ${s.phases.some(p => typeof p.text === 'string') ? '<h3>Each phase in full</h3>' : ''}${s.phases.map(p => typeof p.text === 'string' ? `<section class="sv-ptext" data-sv-phasetext><h4>${esc(p.title)}</h4>${p.text ? `<pre>${esc(p.text)}</pre>` : p.truncated ? '' : '<p class="hint">Nothing is written under this heading.</p>'}${p.truncated ? '<p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>' : ''}</section>` : '').join('')}</div>`;
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
 // out() is called once the press is going out.

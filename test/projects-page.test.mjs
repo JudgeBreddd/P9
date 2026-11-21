@@ -1203,8 +1203,11 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await line.click();
   assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['false', false, true], 'a second press did not close it');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-phases ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // Left open while the headings go: the flat list comes back, not an empty page.
+  await line.click();
   await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
   await until(async () => (await page.locator('[data-sv-phase]').count()) === 0, 'the phase line left with the headings', 12000);
+  assert.deepEqual([await pv.count(), await flat.isVisible()], [0, true], 'the plan view left open hid the flat list once the phases went');
   // Scripts are counted once each: one approved at Start, one approved after it, one still waiting is "2 running, 1 waiting".
   const hash = (await call(instance, '/sprint-scripts?sprint=' + run.sprint)).hash;
   const ok = await call(instance, `/sprints/${run.sprint}/approve-scripts`, 'POST', { hash, names: ['later'] });

@@ -73,5 +73,13 @@ test('Sprint View plan view: items nest in their phase with their tick, then eac
   assert.ok(view.includes('<pre>- [x] A1 &lt;b&gt;x&lt;/b&gt;\nCheck: it draws</pre><p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>'));
   assert.equal((view.match(/Cut at 4000/g) || []).length, 1, 'only the cut phase says it');
   assert.ok(view.includes('<h4>Phase two</h4><p class="hint">Nothing is written under this heading.</p>'), 'a heading with nothing under it says so');
+  // A phase the plan-wide cap emptied says it was cut, never that nothing is written under it.
+  const cut = statusHtml({ ...record, done: { merged: 0, ticked: 0, total: 1 }, items: [it('A1', 0, false)],
+    phases: [{ title: 'Phase one', merged: 0, total: 1, text: '', truncated: true }] }, esc);
+  assert.deepEqual([cut.includes('Cut at 4000'), cut.includes('Nothing is written')], [true, false]);
+  // A plan of only the owner's lines has no Plan items to nest: a plain line, no button that opens nothing.
+  const own = statusHtml({ ...record, done: { merged: 0, ticked: 0, total: 0 }, owner: { done: 0, total: 1, items: [{ id: 'O1', text: 'O1: look', done: false }] },
+    items: [{ ...it('O1', 0, false), role: 'owner' }], phases: [{ title: 'Phase one', merged: 0, total: 0, text: '- [ ] O1: look; role owner', truncated: false }] }, esc);
+  assert.deepEqual([own.includes('data-sv-plan'), own.includes('data-sv-planview'), own.includes('data-sv-phase')], [false, false, true]);
   console.log('PASS Sprint View plan view: Phase one A1☑ A2☐, Phase two none, Outside Z1☐; two phase texts, escaped, one cut');
 });
