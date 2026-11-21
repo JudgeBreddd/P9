@@ -13,6 +13,7 @@ import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelc
 import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
 import { planItems, hashOf } from '../apps/server/sprint-files.mjs';
 import { createDelegate } from '../apps/server/delegate.mjs';
+import { remoteOk } from '../apps/server/worker-folders.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -340,8 +341,8 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { fs.ap
 
   // The owner starts B naming the file: the script is approved and runs at sprint-start, in B's folder with B's state.
   const shown = (await B.page()).files.find((f) => f.name === 'hooks.json');
-  // O211: B's Clone from carries a password; the script is told the address without it.
-  assert.equal((await call(instance, `/projects/${B.project}/sprint-settings`, 'POST', { source: 'ssh://git:hunter2@example.com/o/r.git', setup: '' })).status, 200);
+  // O211: B's Clone from carries a password, a query token and a fragment token (the save accepts all three); the script is told the address without it.
+  assert.equal((await call(instance, `/projects/${B.project}/sprint-settings`, 'POST', { source: 'ssh://git:hunter2@example.com/o/r.git?access_token=hunter2#token=hunter2', setup: '' })).status, 200);
   const start = await call(instance, `/sprints/${B.sprint}/start`, 'POST', { hooks: shown.hash });
   assert.equal(start.status, 200, JSON.stringify(start.body));
   assert.deepEqual((await B.page()).started.scripts, [kept]);
@@ -1192,6 +1193,20 @@ test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as 
   assert.equal(await told('ssh://git:hunter2@example.com:22/o/r.git'), 'ssh://example.com:22/o/r.git', 'a password reached the script');
   assert.equal(await told('https://u:tok@github.com/o/r'), 'https://github.com/o/r', 'a token reached the script');
   assert.equal(await told('git@github.com:o/r.git'), 'github.com:o/r.git');
+  // Reviewer on #400: a token can ride in the query or fragment, or hide behind an encoding. Each is an address the
+  // project page saves (remoteOk); none of the secret reaches the script, and an odd form gives null, not a guess.
+  const cases = [['https://example.com/o/r.git?access_token=hunter2', 'https://example.com/o/r.git'],
+    ['ssh://git@example.com/o/r.git#token=hunter2', 'ssh://example.com/o/r.git'],
+    ['https://example.com/o/r.git?a=1#hunter2', 'https://example.com/o/r.git'], ['git@example.com:o/r.git?hunter2', 'example.com:o/r.git'],
+    ['https://example.com/o/r.git?x=%3F#y%23hunter2', 'https://example.com/o/r.git'],
+    ['https://example.com/o/r.git;token=hunter2', null], ['https://example.com/o%2Fhunter2/r.git', null],
+    ['ssh://example.com/hunter2%40x/r.git', null]];
+  for (const [address, want] of cases) {
+    assert.ok(remoteOk(address), 'not an address the project page saves: ' + address);
+    const got = await told(address);
+    assert.equal(got, want, address);
+    if (want === null || !want.includes('hunter2')) assert.ok(!String(got).includes('hunter2'), 'the secret reached the script: ' + address);
+  }
   assert.equal(await told(''), null, 'an unset Clone from is not null');
   console.log('PASS O211: ci-red got project.source equal to Clone from, user and password taken out, null when unset');
 });

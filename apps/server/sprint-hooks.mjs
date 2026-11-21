@@ -160,8 +160,13 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // The data contract, version 1 (SECURITY.md § Sprint scripts, "What a script is told"). Every field is always there;
   // one P9 has nothing for is null or empty, never missing. Nothing here is more than the project page and list_chats
   // show for this sprint: no key, no provider profile's address, no chat text.
-  // https://user:token@host/o/r -> https://host/o/r; git@host:o/r -> host:o/r. Only the authority's user part goes.
-  const bare = (address) => address.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/^[^:/@]+@(?=[^:/]+:)/, '');
+  // https://user:token@host/o/r -> https://host/o/r; git@host:o/r -> host:o/r; a ?query or #fragment goes too (a token
+  // can ride there). What is left must be plain host-and-path characters, or the script gets null: an encoded or odd
+  // form (%40, ;token=, a second @) is never guessed at.
+  const bare = (address) => {
+    const left = address.replace(/[?#].*$/s, '').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/^[^:/@]+@(?=[^:/]+:)/, '');
+    return /^[A-Za-z0-9._~:/-]+$/.test(left) ? left : null;
+  };
   async function state(sprint, point, subject) {
     const family = chat.family(), lead = family.find((c) => c.id === sprint), prep = chat.projects.prepOf(sprint), start = chat.projects.started(sprint);
     const projectId = lead?.project ?? prep?.project ?? null, project = projectId ? await chat.projects.record(projectId) : null;
