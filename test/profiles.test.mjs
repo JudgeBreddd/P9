@@ -302,6 +302,9 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter');
   await pane.locator('.hist', { hasText: 'was removed' }).waitFor({ timeout: 20000 });
   assert.equal(await pane.getByText('Running', { exact: true }).count(), 0, 'a chat that cannot go on is not called Running');
+  // PD-1 (e): stopped, it offers no Resume, which could only fail the same way.
+  await pane.locator('.state[data-s="stopped"]').waitFor({ timeout: 10000 });
+  assert.equal(await pane.locator('[data-resume]').count(), 0, 'a chat whose profile was removed offers Resume');
   await shot('o48-removed');
   assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), []);
   console.log('PASS window: profile in Settings, in the New chat menu, fixed model, key not held, removed profile said');
