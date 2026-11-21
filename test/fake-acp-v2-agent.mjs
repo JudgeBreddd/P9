@@ -37,6 +37,16 @@ async function turn(id, params) {
   if (said.endsWith('mcp')) { chunk('mcp:' + JSON.stringify(mcp)); return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage }); }
   if (said.endsWith('compactfail')) update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'compact-' + Date.now(), name: 'Compact conversation', title: 'Compact conversation', status: 'completed' });
   if (said.endsWith('fail')) return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'error', error: { code: -32000, message: 'Authentication required' } });
+  // O219 "stream": a command whose output streams in three pieces, as codex-acp 2.6.0 sends it; its exit carries none.
+  if (said.endsWith('stream')) {
+    update(sessionId, { sessionUpdate: 'terminal_update', terminalId: 'exec-3', command: 'make', cwd: '/w' });
+    update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'exec-3', kind: 'execute', title: 'make', status: 'in_progress', rawInput: { command: 'make', cwd: '/w' }, content: [{ type: 'terminal', terminalId: 'exec-3' }] });
+    for (const piece of ['one\n', 'two\n', 'three\n']) update(sessionId, { sessionUpdate: 'terminal_output_chunk', terminalId: 'exec-3', data: Buffer.from(piece).toString('base64') });
+    update(sessionId, { sessionUpdate: 'terminal_update', terminalId: 'exec-3', exitStatus: { exitCode: 0, signal: null } });
+    update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'exec-3', status: 'completed' });
+    chunk('streamed');
+    return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage });
+  }
   if (said === 'mode') chunk('mode:' + mode + ' model:' + model);
   else {
     update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'exec-1', kind: 'edit', title: 'Editing files', status: 'in_progress',

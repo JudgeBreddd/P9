@@ -415,7 +415,11 @@ function foldBlocks(now: Folded, events: Json[]) {
         if (index >= 0) { const tool = own(index);
           if (typeof data.status === 'string') tool.status = data.status;
           if (typeof data.title === 'string' && data.title) tool.text = data.title;
-          const more = toolText(data); if (more) tool.detail = ((tool.detail ? tool.detail + '\n' : '') + more).slice(0, DETAIL_CAP);
+          const more = toolText(data), piece = (data._meta as Json | undefined)?.['p9/append'] === true;
+          // O219: a command's streamed output comes as pieces, each joining the text it follows; other content replaces the
+          // text (the ACP rule, as the window reads it), an empty list too. The last 2,000 characters show.
+          if (piece) tool.detail = ((tool.detail ?? '') + more).slice(-DETAIL_CAP);
+          else if (Array.isArray(data.content)) tool.detail = more.slice(-DETAIL_CAP);
           if (data.content) tool.images = toolImages(data.content);
           // phone-2: Claude's plan call arrives empty and its plan comes in this update (ledger 409673-409674).
           if (tool.plan !== undefined) tool.plan = artPlan({ ...data, kind: 'switch_mode' }) ?? tool.plan;

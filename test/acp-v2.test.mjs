@@ -114,10 +114,11 @@ test('the agent\'s sign-in notices stop at the translator', async () => {
   assert.equal(next.params.update.content.text, 'next');
 });
 
-// O121 part 3: codex-acp 2.6.0 streams a command's output to a v2 client as terminal_output_chunk pieces, and its exit
-// (terminal_update with exitStatus) carries no output when the output streamed. P9 shows the pieces joined, as the tool
-// call's text, live: the first piece at once, then at most once a second, and what is held at the exit, the tool call's
-// end or the turn's end. A terminal_update that carries output is the whole text (unstreamed output), as before.
+// O121 part 3, O219: codex-acp 2.6.0 streams a command's output to a v2 client as terminal_output_chunk pieces, and its
+// exit (terminal_update with exitStatus) carries no output when the output streamed. P9 sends each new piece once, as a
+// tool_call_update marked _meta['p9/append'] that the window and phone add to the tool's text: the first piece at once,
+// then at most once a second; a held piece shows a second on, or at the exit, the tool call's end or the turn's end.
+// A terminal_update that carries output is the whole text (unstreamed output): it replaces, unmarked, as before.
 async function v2Pipe() {
   const toAgent = new TransformStream(), fromAgent = new TransformStream();
   const p9 = v1Stream({ readable: fromAgent.readable, writable: toAgent.writable });
@@ -136,72 +137,81 @@ async function v2Pipe() {
     send({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: mark } });
     for (;;) { const m = (await read.read()).value; if (m.params?.update?.content?.text === mark) return; said.push(m); }
   };
-  const texts = (id) => said.filter((m) => m.params?.update?.sessionUpdate === 'tool_call_update' && m.params.update.toolCallId === id)
-    .flatMap((m) => m.params.update.content ?? []).filter((c) => c.type === 'content').map((c) => c.content.text);
-  return { step, said, texts, write, asked };
+  // Each output update for a tool call: [its text, '+' if it is a piece to add, '=' if it replaces].
+  const texts = (id) => said.filter((m) => m.params?.update?.sessionUpdate === 'tool_call_update' && m.params.update.toolCallId === id && m.params.update.content)
+    .map((m) => [m.params.update.content.filter((c) => c.type === 'content').map((c) => c.content.text).join(''), m.params.update._meta?.['p9/append'] === true ? '+' : '=']);
+  const joined = (id) => texts(id).reduce((all, [text, how]) => (how === '+' ? all + text : text), '');
+  return { step, said, texts, joined, write, asked };
 }
 const b64 = (s) => Buffer.from(s).toString('base64');
 const run = (id) => [{ sessionUpdate: 'terminal_update', terminalId: id, command: 'make', cwd: '/w' },
   { sessionUpdate: 'tool_call_update', toolCallId: id, kind: 'execute', title: 'make', status: 'in_progress', rawInput: { command: 'make' }, content: [{ type: 'terminal', terminalId: id }] }];
 const chunk = (id, s) => ({ sessionUpdate: 'terminal_output_chunk', terminalId: id, data: b64(s) });
 const exit = (id) => ({ sessionUpdate: 'terminal_update', terminalId: id, exitStatus: { exitCode: 0, signal: null } });
+const later = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('O121 part 3: a Codex command\'s streamed output shows live and whole: first piece at once, the rest by its exit', async () => {
+test('O219: a Codex command\'s streamed output goes out piece by piece, each piece once: first at once, then at most once a second', async () => {
   const p = await v2Pipe();
   await p.step(...run('t1'), chunk('t1', 'one\n'));
-  assert.deepEqual(p.texts('t1'), ['one\n'], 'the first piece shows at once');
+  assert.deepEqual(p.texts('t1'), [['one\n', '+']], 'the first piece shows at once');
   await p.step(chunk('t1', 'two\n'), chunk('t1', 'three\n'));
-  assert.deepEqual(p.texts('t1'), ['one\n'], 'pieces within a second are held, not one ledger row each');
+  assert.deepEqual(p.texts('t1'), [['one\n', '+']], 'pieces within a second are held, not one ledger row each');
   await p.step(exit('t1'), { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' });
-  assert.deepEqual(p.texts('t1'), ['one\n', 'one\ntwo\nthree\n'], 'the exit shows all of it once');
-  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.deepEqual(p.texts('t1'), [['one\n', '+'], ['two\nthree\n', '+']], 'the exit sends only what was held, never the whole text again');
   await p.step(...run('t2'), chunk('t2', 'a\n'));
-  await new Promise((resolve) => setTimeout(resolve, 1100));
+  await later(1100);
   await p.step(chunk('t2', 'b\n'));
-  assert.deepEqual(p.texts('t2'), ['a\n', 'a\nb\n'], 'a piece a second after the last shown one shows at once');
+  assert.deepEqual(p.texts('t2'), [['a\n', '+'], ['b\n', '+']], 'a piece a second after the last shown one shows at once');
   await p.step(chunk('t2', 'c\n'));
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await later(1200);
   await p.step();
-  assert.deepEqual(p.texts('t2'), ['a\n', 'a\nb\n', 'a\nb\nc\n'], 'a held piece shows a second on, though no other piece comes (a command gone quiet)');
+  assert.deepEqual(p.texts('t2'), [['a\n', '+'], ['b\n', '+'], ['c\n', '+']], 'a held piece shows a second on, though no other piece comes (a command gone quiet)');
   await p.step(exit('t2'));
-  assert.equal(p.texts('t2').length, 3, 'nothing new held: the exit adds no row');
-  console.log('PASS O121 part 3: streamed output live and whole');
+  assert.equal(p.texts('t2').length, 3, 'nothing held: the exit adds no row');
+  console.log('PASS O219: pieces once each, live');
 });
 
-test('O121 part 3: held output shows at the tool call\'s end or the turn\'s end when no exit comes; two commands stay apart', async () => {
+test('O219: held pieces go out at the tool call\'s end or the turn\'s end when no exit comes; two commands stay apart', async () => {
   const p = await v2Pipe();
   await p.step(...run('t1'), ...run('t2'), chunk('t1', 'x1\n'), chunk('t2', 'y1\n'), chunk('t1', 'x2\n'), chunk('t2', 'y2\n'));
   await p.step({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' });
-  assert.deepEqual(p.texts('t1'), ['x1\n', 'x1\nx2\n'], 'the tool call\'s end shows what was held, before its status');
+  assert.deepEqual(p.texts('t1'), [['x1\n', '+'], ['x2\n', '+']], 'the tool call\'s end sends what was held');
   const at = p.said.findIndex((m) => m.params?.update?.status === 'failed');
-  assert.equal(p.said[at - 1]?.params?.update?.content?.[0]?.content?.text, 'x1\nx2\n');
+  assert.equal(p.said[at - 1]?.params?.update?.content?.[0]?.content?.text, 'x2\n', 'before its status');
   await p.write.write({ jsonrpc: '2.0', id: 2, method: 'session/prompt', params: { sessionId: 's', prompt: [] } });
   await p.asked.read();
   await p.step({ sessionUpdate: 'state_update', state: 'running' }, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled' });
-  assert.deepEqual(p.texts('t2'), ['y1\n', 'y1\ny2\n'], 'a cancelled turn\'s idle shows what was held');
+  assert.deepEqual(p.texts('t2'), [['y1\n', '+'], ['y2\n', '+']], 'a cancelled turn\'s idle sends what was held');
   const end = p.said.findIndex((m) => m.id === 2);
   assert.ok(end > p.said.findLastIndex((m) => m.params?.update?.toolCallId === 't2'), 'before the turn\'s end');
   await p.step(chunk('t2', 'late\n'));
-  assert.deepEqual(p.texts('t2'), ['y1\n', 'y1\ny2\n', 'late\n'], 'the idle forgot the old text: a later piece starts anew');
-  console.log('PASS O121 part 3: held output at tool end and turn end; commands apart');
+  assert.deepEqual(p.texts('t2').at(-1), ['late\n', '+'], 'a later piece goes out at once');
+  console.log('PASS O219: held pieces at tool end and turn end; commands apart');
 });
 
-test('O121 part 3: a character split across pieces stays whole; only the last 20,000 characters show (2,000 while it runs); a whole-text update replaces', async () => {
+test('O219: a character split across pieces stays whole; at most 2,000 characters a second are kept; a whole-text update replaces', async () => {
   const p = await v2Pipe();
   const bytes = Buffer.from('é✓\n');
-  await p.step(...run('t1'), { sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(0, 3).toString('base64') },
-    { sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(3).toString('base64') }, exit('t1'));
-  assert.equal(p.texts('t1').at(-1), 'é✓\n');
+  await p.step(...run('t1'), { sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(0, 1).toString('base64') });
+  await later(1100);
+  await p.step({ sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(1, 4).toString('base64') });
+  await later(1100);
+  await p.step({ sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(4).toString('base64') }, exit('t1'));
+  assert.equal(p.joined('t1'), 'é✓\n', 'no piece holds half a character');
+  assert.ok(p.texts('t1').every(([text]) => !text.includes('�')));
   await p.step(...run('t2'), chunk('t2', 'z'.repeat(30000)), chunk('t2', '✓'.repeat(25000)), exit('t2'));
-  assert.equal(p.texts('t2').at(-1), '✓'.repeat(20000));
-  assert.equal(p.texts('t2')[0], 'z'.repeat(2000), 'while it runs, only the last 2,000 characters show');
-  await p.step(...run('t3'), chunk('t3', 'old\n'), { sessionUpdate: 'terminal_update', terminalId: 't3', output: { data: b64('whole\n') }, exitStatus: { exitCode: 1, signal: null } });
-  assert.deepEqual(p.texts('t3'), ['old\n', 'whole\n']);
-  await p.step(...run('t4'), chunk('t4', 'q'.repeat(3000)), exit('t4'));
-  assert.deepEqual(p.texts('t4').map((t) => t.length), [2000, 3000], 'nothing held, but the live 2,000 was cut: the exit shows it whole');
-  await p.step(...run('t5'), chunk('t5', 'r'.repeat(3000)), { sessionUpdate: 'tool_call_update', toolCallId: 't5', status: 'completed' });
-  assert.deepEqual(p.texts('t5').map((t) => t.length), [2000, 3000], 'the same at the tool call\'s end');
+  assert.deepEqual(p.texts('t2'), [['…\n' + 'z'.repeat(2000), '+'], ['…\n' + '✓'.repeat(2000), '+']], 'more than 2,000 characters in a second: the last 2,000, marked as cut');
+  await p.step(...run('t5'), chunk('t5', 'z'.repeat(5000)), chunk('t5', '😀'.repeat(1001) + 'x'), exit('t5'));
+  assert.deepEqual(p.texts('t5').at(-1), ['…\n' + '😀'.repeat(999) + 'x', '+'], 'the cut never leaves half an emoji');
+  await p.step({ sessionUpdate: 'terminal_update', terminalId: 't6', command: 'make', cwd: '/w' }, chunk('t6', 'early\n'));
+  await p.step({ sessionUpdate: 'tool_call_update', toolCallId: 't6', kind: 'execute', title: 'make', status: 'in_progress', content: [{ type: 'terminal', terminalId: 't6' }] });
+  const t6 = p.said.filter((m) => m.params?.update?.toolCallId === 't6');
+  assert.deepEqual([t6[0].params.update.sessionUpdate, p.texts('t6')], ['tool_call', [['early\n', '+']]], 'output before its tool call shows right after it');
+  await p.step(...run('t3'), chunk('t3', 'old\n'), { sessionUpdate: 'terminal_update', terminalId: 't3', output: { data: b64('whole\n') } }, chunk('t3', 'more\n'), exit('t3'));
+  assert.deepEqual(p.texts('t3'), [['old\n', '+'], ['whole\nmore\n', '=']], 'the whole text replaces; a piece after it joins it');
+  await p.step(...run('t4'), { sessionUpdate: 'terminal_update', terminalId: 't4', output: { data: b64('all at once\n') }, exitStatus: { exitCode: 1, signal: null } });
+  assert.deepEqual(p.texts('t4'), [['all at once\n', '=']], 'output that did not stream: one replacing update, as before');
   await p.step(chunk('t9', 'never announced\n'), exit('t9'));
   assert.deepEqual(p.texts('t9'), [], 'output of a terminal no tool call names is not shown, as before');
-  console.log('PASS O121 part 3: split character, 20,000 cap, whole-text replace');
+  console.log('PASS O219: split character, 2,000 a second, whole-text replace');
 });
