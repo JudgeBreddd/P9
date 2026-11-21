@@ -1,6 +1,8 @@
 // Work Queue row (OPEN-ITEMS "The work queue", left part): the Sprint View row of a worker with no item taken said only
-// "No item taken yet"; it now names the next item of its queue, the one ready would report: the first neither passed
-// nor merged. The status (sprint_status and the page) carries it as work.next; null when every item passed or merged.
+// "No item taken yet"; it now names the next item of its queue, the one ready would report:
+// the first not passed, as ready (delegate.mjs) and the card (chat-view itemLine) pick it: an item merged without a pass
+// (mergedNow proves any review commit that landed, fix or queued too) is still next. The status (sprint_status and the
+// page) carries it as work.next; null when every item passed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHooks } from '../apps/server/sprint-hooks.mjs';
@@ -36,13 +38,18 @@ test('Work Queue next item: the Sprint View row names the worker\'s next queued 
   got = await status({ a1: passed, b1: passed, c1: { ...passed, merged: true } });
   assert.deepEqual(w1(got).work, { done: 1, total: 3, next: null });
   assert.equal(item(statusHtml(got, esc)), 'All its items passed review');
-  // A started worker's queue (chat.queue): the same rule on its rows' state and merged.
-  const rows = [{ id: 'a1', text: 'a1: first. Role: w1.', state: 'passed', merged: false }, { id: 'b1', text: 'b1: second. Role: w1.', state: 'fix', merged: false }];
-  got = await status({}, { done: 0, total: 2, items: rows });
-  assert.deepEqual(w1(got).work, { done: 0, total: 2, next: 'b1: second. Role: w1.' });
+  // Merged without a pass (Reviewer, #425 round 1): a fix round's commit landed, mergedNow marked it merged; ready still
+  // reports a1, so the row names a1, not b1.
+  got = await status({ a1: { state: 'fix', commit: 'a'.repeat(40), fixes: 1, merged: true } });
+  assert.deepEqual(w1(got).work, { done: 1, total: 3, next: 'a1: first. Role: w1.' });
+  assert.equal(item(statusHtml(got, esc)), 'Next: a1: first. Role: w1.');
+  // A started worker's queue (chat.queue): the same rule on its rows' state.
+  const rows = [{ id: 'a1', text: 'a1: first. Role: w1.', state: 'passed', merged: false }, { id: 'b1', text: 'b1: second. Role: w1.', state: 'queued', merged: true }, { id: 'c1', text: 'c1: third. Role: w1.', state: 'todo', merged: false }];
+  got = await status({}, { done: 1, total: 3, items: rows });
+  assert.deepEqual(w1(got).work, { done: 1, total: 3, next: 'b1: second. Role: w1.' });
   // A worker on a task: its task's item, as before; a record saved before work.next: "No item taken yet", as before.
   const row = { key: 'w1', chat: c1, title: 'w1', state: 'idle', work: { done: 0, total: 2, next: 'b1: second. Role: w1.' } };
   assert.equal(item(statusHtml({ ...got, workers: [{ ...row, task: { item: 'a1: first. Role: w1.' } }] }, esc)), 'a1: first. Role: w1.');
   assert.equal(item(statusHtml({ ...got, workers: [{ ...row, work: { done: 0, total: 2 } }] }, esc)), 'No item taken yet');
-  console.log('PASS Work Queue next item: plan lines and a started queue both name the first item neither passed nor merged; all passed says so; a task and an old record show as before');
+  console.log('PASS Work Queue next item: plan lines and a started queue both name the first item not passed, merged or not, as ready does; all passed says so; a task and an old record show as before');
 });
