@@ -114,9 +114,15 @@ jobs:
           # The job log gets lines cut at 2,000 characters; tests.log (the artifact) keeps them whole. #115's linux (6) job
           # log stopped at the first P9_SHOT line (a 69 KB picture), so its failing test and summary never showed there.
           systemctl --user is-system-running || true
+          # O208: a file that times the app (shell-bundle's warm usable ms) runs alone after the others, one node --test each.
           if [ -z "$FILES" ]; then FILES=$(node test/shard.mjs "$SHARD" 7); fi
-          echo "shard $SHARD: $FILES"
-          xvfb-run -a node scripts/with-tmp.mjs node --test --test-timeout=600000 --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/file-limit.mjs --test-reporter-destination=stderr $FILES 2>&1 | tee "$RUNNER_TEMP/tests.log" | cut -c1-2000
+          TOGETHER=$(node test/shard.mjs together $FILES); ALONE=$(node test/shard.mjs alone $FILES); rc=0
+          echo "shard $SHARD: $TOGETHER${ALONE:+, then alone: $ALONE}"
+          for FILES in "$TOGETHER" $ALONE; do
+            [ -n "$FILES" ] || continue
+            xvfb-run -a node scripts/with-tmp.mjs node --test --test-timeout=600000 --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/file-limit.mjs --test-reporter-destination=stderr $FILES 2>&1 | tee -a "$RUNNER_TEMP/tests.log" | cut -c1-2000 || rc=$?
+          done
+          exit $rc
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()
