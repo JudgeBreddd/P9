@@ -437,6 +437,7 @@ const connection = acp.connectAgent(stream, {
       await piece('m8', 'short'); // the newest reply, short, again under its own id after a compaction
       return { stopReason: 'end_turn' };
     }
+    if (text === 'late-crash') { await new Promise((resolve) => setTimeout(resolve, 1500)); process.exit(3); } // O224: a turn that fails, not ends
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }

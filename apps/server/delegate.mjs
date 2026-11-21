@@ -1317,6 +1317,12 @@ export function createDelegate({ chat, allowed, usage }) {
     const tokens = Number.isSafeInteger(usage?.inputTokens) && usage.inputTokens >= 0 && Number.isSafeInteger(usage?.outputTokens) && usage.outputTokens >= 0 ? { input: usage.inputTokens, output: usage.outputTokens, cachedRead: count(usage.cachedReadTokens), cachedWrite: count(usage.cachedWriteTokens) } : null;
     pinReport(id, tokens);
   });
+  // O224: a turn that failed after its ready (the agent crashed or errored) has no end: its report is pinned now, with no usage.
+  chat.turnFailed?.((id, turn, solo) => {
+    if (solo || readyTurns.get(id) !== turn) return;
+    readyTurns.delete(id);
+    pinReport(id, null);
+  });
   function pinReport(id, tokens) {
     const info = chat.info(id), state = chat.sprint(id);
     // O224: a worker with no open_chat task (its row or its work queue named the item) has its ready's item: requiring a

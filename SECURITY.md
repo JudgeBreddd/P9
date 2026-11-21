@@ -801,7 +801,7 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   git can be read the commit and changed files are git's, not the agent's word. The task is the open_chat item, or
   the plan row the worker names (O224: a row other than its open_chat item is its own, with the worker's own checks; a
   row id may hold inner spaces). Every ready that goes through pins its report card in the parent's chat, whether or
-  not the worker had an open_chat task. A dirty-folder or unknown-commit refusal says when the commit is not in the
+  not the worker had an open_chat task, at its turn's end, or at once if that turn fails instead (no usage then). A dirty-folder or unknown-commit refusal says when the commit is not in the
   start folder's repository: ready reads the commit only from that repository, so such work cannot be reported from
   that chat. `verdict` reaches only a chat the
   caller could message, never its own work, a chat below it or a chat above it in its line, and only at the commit
