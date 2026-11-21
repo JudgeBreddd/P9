@@ -189,10 +189,10 @@ const pickerKind = p => p.category === 'thought_level' || !p.category && /effort
 let starts = null;
 const defaultModel = a => starts?.[a]?.model || '', defaultEffort = a => starts?.[a]?.effort || '';
 async function loadStarts() {
-  const r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
+  const n = startsSeq, r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
   const keys = a => ({ model: 'p9-model-default:' + a, effort: 'p9-effort-default:' + a });
   const set = Object.fromEntries(Object.keys(r.body).map(a => [a, Object.fromEntries(Object.entries(keys(a)).filter(([k, key]) => !r.body[a][k] && localStorage.getItem(key)).map(([k, key]) => [k, localStorage.getItem(key)]))]).filter(([, f]) => Object.keys(f).length));
-  if (!starts) starts = r.body;
+  if (n === startsSeq) starts = r.body; // O133: every read replaces them (Settings reads at each open), unless a save went out meanwhile: its answer is newer
   if (Object.keys(set).length) { const w = await window.p9.chat('newChatDefaults', { set, onlyEmpty: true }).catch(() => null); if (w?.status !== 200) return; starts = w.body; }
   for (const a of Object.keys(r.body)) Object.values(keys(a)).forEach(k => localStorage.removeItem(k));
 }
@@ -958,7 +958,8 @@ $('#setBtn').onclick = async () => {
     window.p9?.terminal ? status(window.p9.terminal('greeting', {}), 'show') : termGreeting,
     window.p9?.server ? window.p9.server().catch(() => null) : null,
     window.p9?.chat ? window.p9.chat('missionFiles', {}).then(r => r?.status === 200 ? r.body : null, () => null) : missionFiles,
-    window.p9?.updates ? window.p9.updates().catch(() => null) : null]);
+    window.p9?.updates ? window.p9.updates().catch(() => null) : null,
+    loadStarts()]); // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
 $('#setClose').onclick = () => $('#setDlg').close();
