@@ -572,7 +572,7 @@ export function createDelegate({ chat, allowed, usage }) {
       if (caller) {
         const request = { toolCallId: 'p9-mcp-' + randomUUID(), kind: 'execute',
           title: `P9: start the sprint "${(prep?.title ?? lead.title).slice(0, 120)}": ${[roles.lead, ...roles.rest].map(said).join(', ')}. This is your approval of its plan (sha256 ${plan.slice(0, 12)}).`
-            + (file.scripts.length ? ` It also approves ${file.scripts.length === 1 ? 'this script' : `these ${file.scripts.length} scripts`}, which P9 will run as you, outside every agent's mode: ${file.scripts.map(scriptSaid).join('; ')}.` : '') };
+            + (file.scripts.length ? ` It also approves ${file.scripts.length === 1 ? 'this script' : `these ${file.scripts.length} scripts`}, which P9 will run as you, outside every agent's mode, one per line:\n${file.scripts.map(scriptSaid).join('\n')}` : '') };
         if (!await chat.approve(caller, request, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
         if (signal?.aborted) return { error: 'cancelled' };
         // Anything may have changed while the user was asked: checked again before any chat is made.
