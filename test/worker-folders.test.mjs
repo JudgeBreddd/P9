@@ -301,12 +301,13 @@ async function agent(t, instance) {
   return { conversation, tool };
 }
 
-test('Worker folders: open_chat with worktree: true starts the worker in a worktree of a sprint clone, after the owner\'s setup command', { timeout: 120000 }, async (t) => {
+test('Worker folders: open_chat with worktree: true starts the worker in a worktree of a sprint clone; a setup command saved in Settings > Delegation runs nothing (O226)', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const repo = path.join(instance.workspace, 'repo');
   fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); write(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  // O226: an older window still sends a setup command; it is taken, never shown back and never run.
   const delegation = (await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [], setup: 'echo set> setup.txt' })).body;
-  assert.equal(delegation.setup, 'echo set> setup.txt');
+  assert.equal(delegation.setup, undefined, 'Settings > Delegation still holds a setup command');
   assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [], setup: 7 })).status, 400);
   await call(instance, '/file-protection', 'POST', { on: false });
   const a = await agent(t, instance);
@@ -316,7 +317,7 @@ test('Worker folders: open_chat with worktree: true starts the worker in a workt
   assert.match(made.folder, /[\\/]sprints[\\/][0-9a-f-]{36}[\\/]workers[\\/]item-1$/);
   assert.ok(made.folder.includes(a.conversation), 'the sprint is the chat that started the worker');
   assert.equal(g(made.folder, 'branch', '--show-current'), 'sprint/' + a.conversation.slice(0, 8) + '/item-1');
-  assert.equal(fs.readFileSync(path.join(made.folder, 'setup.txt'), 'utf8').trim(), 'set');
+  assert.equal(fs.existsSync(path.join(made.folder, 'setup.txt')), false, 'the setup command saved in Settings > Delegation ran');
   assert.equal(g(repo, 'status', '--porcelain'), '', 'nothing was added to the owner\'s folder');
   let last = '';
   for (let i = 0; i < 20 && !last.startsWith('cwd:'); i += 1) last = (await a.tool('wait_chat', { chat: made.chat })).last;
@@ -332,11 +333,13 @@ test('Worker folders: open_chat with worktree: true starts the worker in a workt
   // Delegation turned off while a slow setup runs: the worker is not started, and its folder is kept.
   const wait = path.join(instance.workspace, 'wait.mjs'), go = path.join(instance.workspace, 'go');
   write(wait, `import fs from 'node:fs'; const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(go)})) clearInterval(t); }, 50);\n`);
-  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [], setup: `node "${wait}"` });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'repo' } })).body.project;
+  assert.equal((await call(instance, '/projects/' + project.id + '/sprint-settings', 'POST', { source: '', setup: `node "${wait}"` })).status, 200);
+  assert.equal((await call(instance, `/chat/${a.conversation}/project`, 'POST', { project: project.id })).status, 200);
   const slow = a.tool('open_chat', { text: 'x', folder: 'repo', worktree: true, key: 'item-3' });
   const folder3 = path.join(path.dirname(made.folder), 'item-3');
   for (let i = 0; i < 100 && !fs.existsSync(folder3); i += 1) await new Promise((r) => setTimeout(r, 100));
-  await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: [], setup: `node "${wait}"` });
+  await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: [] });
   write(go, '');
   const refused = await slow;
   assert.equal(refused.error, 'delegate-off', JSON.stringify(refused));
@@ -507,7 +510,7 @@ test('Worker folders A1 A4: a project\'s sprint source and setup command are set
   assert.equal((await call(instance, '/projects/' + project.id, 'POST', { sprint: { source: 'https://example.com/a.git', setup: 'x' } })).status, 400);
   const a = await agent(t, instance);
   assert.equal((await call(instance, `/chat/${a.conversation}/project`, 'POST', { project: project.id })).status, 200);
-  // The project's own setup command wins over the one in Settings > Delegation.
+  // The project's own setup command runs (one an older window saved in Settings > Delegation never does, O226).
   assert.deepEqual((await set({ source: '', setup: 'echo mine> setup.txt' })).body.project.sprint, { source: '', setup: 'echo mine> setup.txt' });
   const made = await a.tool('open_chat', { text: 'cwd', folder: 'repo', worktree: true, key: 'item-1' });
   assert.equal(made.error, undefined, JSON.stringify(made));

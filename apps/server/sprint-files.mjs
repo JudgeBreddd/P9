@@ -24,6 +24,11 @@ export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
 // set_rules, open_chat rules, sprint_setup_save: the calling chat's agent). ponytail: a deleted sprint's records stay in prefs.
 export const SENT = /^(?:rules\.md|roles\/[^/]+\.(?:rules|instructions)\.md)$/;
 export const writerKey = (sprint, name) => `setup-writer:${sprint}:${name}`;
+// H2 (the setup window): the files an agent can fill and the owner sees on Sprint Setup. Each keeps its writer (writerKey)
+// and the hash the owner has seen (seenKey); one whose text the owner has not seen is marked "Written by ... · not seen".
+export const MARKED = /^(?:sprint\.md|rules\.md|roles\.json|hooks\.json|roles\/[^/]+\.(?:rules|instructions|work)\.md)$/;
+export const seenKey = (sprint, name) => `setup-seen:${sprint}:${name}`;
+export const isPlan = (text) => text === PLAN; // P9's own empty plan: nobody wrote it
 // What a worker is told about its notes file, at its start and again after each compaction.
 export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
 // The work queue (sprint method rule 4: the item list is the chunks assigned to the worker): the

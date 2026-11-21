@@ -22,7 +22,7 @@ import { createMove, movedNote, failedMoveNote } from './move.mjs';
 import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
-import { SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
+import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted } from './ledger.mjs';
 
@@ -764,7 +764,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const keptPref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? 'null'); } catch { return null; } };
   const approved = (sprint, name, raw) => typeof raw === 'string' && typeof keptPref('sprint-start:' + sprint)?.files?.[name] === 'string' && keptPref('sprint-start:' + sprint).files[name] === hashOf(raw);
   const writerOf = (sprint, name, raw) => { const w = keptPref(writerKey(sprint, name)); return w && w.hash === hashOf(raw) && typeof w.by === 'string' ? w.by : 'unknown (changed outside P9\'s Setup tools)'; };
-  const wrote = (sprint, name, text, by) => SENT.test(name) && db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(sprint, name), JSON.stringify({ by, hash: hashOf(text) }));
+  const wrote = (sprint, name, text, by) => MARKED.test(name) && db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(sprint, name), JSON.stringify({ by, hash: hashOf(text) }));
   // A chat's agent as a writer: its provider, or its profile, and model; never its title (a chat can rename itself).
   const agentOf = (id) => { const c = row(id); if (!c) return 'an agent'; const p = profileOf(id), model = live.get(id)?.models?.current ?? p?.model ?? '';
     return ('an agent: ' + (p ? 'profile ' + p.name : c.provider) + (model ? ' ' + model : '')).replace(/[[\]\r\n]+/g, ' ').slice(0, 120); };
@@ -1091,7 +1091,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   async function connect(conversation) {
     if (live.has(conversation.id)) return live.get(conversation.id);
     const profile = profileOf(conversation.id);
-    if (profile?.gone) { emit(conversation.id, 'error', { message: PROFILE_ERRORS['profile-gone'] }); throw Object.assign(new Error('profile-gone'), { status: 409, reason: 'profile-gone' }); }
+    // PD-1 (d): the user event put the page on Running; 'stopped' takes it off, as after a failed start below.
+    if (profile?.gone) { emit(conversation.id, 'error', { message: PROFILE_ERRORS['profile-gone'] }); emit(conversation.id, 'stopped', { result: 'stopped' }); throw Object.assign(new Error('profile-gone'), { status: 409, reason: 'profile-gone' }); }
     // O48: the adapter reads the model name from its own environment only (one outside model per agent process). Not a secret.
     // O39: on a resume the Claude adapter sets the session to the computer's default model (the user's own Claude settings)
     // unless its environment names one. Naming the chat's own model there keeps the resume on it: no switch away and back.
@@ -1267,6 +1268,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const result = await endTree(proc);
       emit(conversation.id, 'error', { message: PROFILE_ERRORS[error?.message] ?? profileError(error, session), stderr: stderr.slice(-1000) });
       settle(conversation.id, proc, result);
+      emit(conversation.id, 'stopped', { result });
       throw Object.assign(new Error('adapter-start-failed'), { status: 502 });
     } finally {
       clearTimeout(timer);
@@ -2009,8 +2011,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     delegation: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'delegation'").get()?.value ?? '{}'); } catch { v = {}; }
       const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : ''), agent = (x) => (x === '' || Object.hasOwn(MODES, x ?? ' ') || /^profile:[\w-]{1,80}$/.test(x ?? '') ? x : '');
       const max = Number.isInteger(v?.max) && v.max >= 1 && v.max <= 20 ? v.max : 5;
-      // setup: the owner's command run in each new worker folder before its worker starts; left out when empty (A4).
-      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max, ...(typeof v?.setup === 'string' && v.setup && v.setup.length <= 2000 && { setup: v.setup }),
+      // O226: no setup here; a setup an older window saved is kept in prefs and never read (worker folders run the project's).
+      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max,
         workers: Array.from({ length: max }, (_, i) => { const x = Array.isArray(v?.workers) ? v.workers[i] : null, a = agent(x?.agent); return { agent: a, model: a ? str(x?.model) : '', effort: a ? str(x?.effort) : '' }; }) }; },
     // O133 (the Settings defaults kept going back to the agent default): Settings > New chats start in,
     // each agent's Default model and Default effort ('' the agent's own), kept here so a chat an agent opens starts on them

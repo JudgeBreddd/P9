@@ -1,6 +1,7 @@
 // The sprint's files (sprint spec D1, D3, D4; SECURITY.md § Sprint files): plan, rules, role files and notes in the
 // sprint's folder, what reaches a worker, and the project page's edit route.
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -497,7 +498,8 @@ test('Sprint files: a save\'s reply lists the file as it wrote it, so a writer l
   const PROJECT = '0123abcd-0000-4000-8000-0000000000aa', home = path.join(dir, 'projects'), sprintFiles = createSprintFiles({ home: path.join(dir, 'sprints') });
   fs.mkdirSync(path.join(home, PROJECT), { recursive: true });
   fs.writeFileSync(path.join(home, PROJECT, 'project.json'), JSON.stringify({ id: PROJECT, name: 'Site', work: { kind: 'p9' } }));
-  const projects = createProjects({ home, sprintFiles, row: (id) => (id === LEAD ? { project: PROJECT } : null) });
+  const db = new DatabaseSync(':memory:'); db.exec('CREATE TABLE prefs (key TEXT PRIMARY KEY, value TEXT)'); // the save keeps its writer (H2)
+  const projects = createProjects({ home, sprintFiles, db, row: (id) => (id === LEAD ? { project: PROJECT } : null) });
   sprintFiles.ensure(LEAD);
   const file = path.join(dir, 'sprints', LEAD, 'sprint.md'), opened = sprintFiles.list(LEAD).find((f) => f.name === 'sprint.md');
   // The lead's agent writes sprint.md just after the page's save renamed its text into place, before the reply's list.

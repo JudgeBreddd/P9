@@ -59,7 +59,7 @@ export function statusHtml(s, esc, opts = {}) {
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
         <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}</span></span>
-        <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? 'No item taken yet' : 'No items in the plan for this role'))}</span>
+        <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? (q.next ? 'Next: ' + q.next : q.next === null ? 'All its items passed review' : 'No item taken yet') : 'No items in the plan for this role'))}</span>
         <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
       <ul class="sv-items">${s.owner.items.map(i => `<li data-sv-item="${esc(i.id)}" data-owner="${i.done ? 'closed' : 'open'}"><span class="sv-text">${esc(i.text)}</span>${i.done ? '<span class="tag">Closed by you</span>' : end ? '<span class="tag">Open at Close</span>' : `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}" data-item="${esc(i.id)}" title="Closes this item. It is yours: no review and no merge is involved, and the plan's box stays as it is.">Close</button>`}</li>`).join('')}</ul></li></ul>` : ''}
@@ -74,7 +74,27 @@ export const mergeHtml = (sp, esc) => sp.closed ? '' : `<label class="set-pick" 
 const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;
   if (t == null) return 'it is missing'; if (!t.trim()) return 'it is empty'; try { const d = JSON.parse(t); return Array.isArray(d?.roles) ? 'a row has no "key"' : 'it has no "roles" list'; } catch (e) { return e.message; } };
 const ROLE = { lead: 'Lead: runs the sprint, merges what passed review', review: 'Reviewer: reviews each piece, gets no worker folder' };
-export function rolesHtml(sp, roles, o, esc) {
+// H2 (the setup window): each Setup file an agent wrote, or one changed outside P9's Setup tools, until the owner has seen
+// that text: "Written by <writer> · not seen" and a Seen press. Its click is handled here, so the page's startup code
+// is unchanged. A file changed since the page showed it is refused (409) and its mark comes back with the new text.
+const shown = new Map();
+let bound = false;
+function marksHtml(sp, o, esc) {
+  shown.set(sp.lead, sp);
+  if (!bound) { bound = true; document.addEventListener('click', e => seenPress(e.target.closest?.('[data-sp-seen]'), o)); }
+  return sp.files.filter(f => f.unseen).map(f => `<p class="hint" data-sp-mark="${esc(f.name)}"><span class="mono">${esc(f.name)}</span>: Written by ${esc(f.unseen)} · not seen <button data-slot="button" data-variant="outline" data-size="sm" data-sp-seen data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" data-hash="${esc(f.hash)}">Seen</button></p>`).join('');
+}
+async function seenPress(b, o) {
+  if (!b || b.disabled) return;
+  const { lead, name, hash } = b.dataset;
+  b.disabled = true;
+  const r = await o.liveChat.call('sprintSeen', { sprint: lead, name, hash }, { quiet: true }).catch(() => null);
+  if (r?.status === 200) { const f = shown.get(lead)?.files.find(x => x.name === name && x.hash === hash); if (f) delete f.unseen; b.closest('[data-sp-mark]')?.remove(); return; }
+  b.disabled = false;
+  b.textContent = r?.status === 409 ? 'Changed since: look again' : 'Not saved: try again';
+}
+export function rolesHtml(sp, roles, o, esc) { return marksHtml(sp, o, esc) + rolesBody(sp, roles, o, esc); }
+function rolesBody(sp, roles, o, esc) {
   // A prep is made with its roles.json, so one gone was deleted: it says so, and the file is listed to make again
   // (FIX1). Any other sprint folder (a chat's notes, made without one) shows no roles.
   if (!sp.prep && !sp.files.some(f => f.name === 'roles.json')) return '';

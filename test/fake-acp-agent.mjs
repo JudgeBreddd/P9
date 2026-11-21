@@ -438,6 +438,14 @@ const connection = acp.connectAgent(stream, {
       return { stopReason: 'end_turn' };
     }
     if (text === 'late-crash') { await new Promise((resolve) => setTimeout(resolve, 1500)); process.exit(3); } // O224: a turn that fails, not ends
+    // DUP-1 (c): the copy comes after the turn has ended, as seen on the server (a turn-end, then the whole reply again).
+    if (text === 'twice late') {
+      const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
+      const long = 'p'.repeat(150), tail = 'q'.repeat(150);
+      await piece('L1', long); await piece('L1', tail);
+      setTimeout(async () => { await piece('L1', long + tail); await piece('L2', long + tail); }, 300);
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }

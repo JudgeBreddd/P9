@@ -670,7 +670,8 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   assert.deepEqual([tool.error, 'contract' in tool, 'script' in tool, 'point' in tool], [undefined, false, false, false], JSON.stringify(tool).slice(0, 400));
   assert.deepEqual(tool.items.map((i) => [i.id, i.role, i.ticked]), planItems(plan(false)).map((i) => [i.id, i.role, i.ticked]));
   assert.deepEqual([tool.done, tool.sprint.id, tool.sprint.title, tool.project.id, tool.scripts], [{ merged: 0, ticked: 1, unproven: 0, total: 3 }, sprint, 'Watched', project, { running: 0, additional: 0, waiting: 0 }]);
-  assert.deepEqual(tool.workers.map((w) => [w.key, w.chat, w.model, w.work]), [['lead', sprint, 'opus', tool.workers[0].work], ['w1', w1.chat, 'haiku', { done: 0, total: 2 }]], JSON.stringify(tool.workers));
+  // #425: next is the first of w1's items not passed; A1 is ticked in the plan but has no pass, so it is still next.
+  assert.deepEqual(tool.workers.map((w) => [w.key, w.chat, w.model, w.work]), [['lead', sprint, 'opus', tool.workers[0].work], ['w1', w1.chat, 'haiku', { done: 0, total: 2, next: 'A1: the first thing; role w1' }]], JSON.stringify(tool.workers));
   assert.ok(tool.sprint.started.at && Number.isInteger(tool.running_ms) && tool.running_ms >= 0 && page.running_ms >= tool.running_ms, JSON.stringify([tool.sprint.started, tool.running_ms, page.running_ms]));
   // O162: PRs an hour is the same answer's merged count over its running time, for the tool and the page's route.
   // The rule, written out here: merged per hour since Start, one decimal; within the first hour, the count merged so far.

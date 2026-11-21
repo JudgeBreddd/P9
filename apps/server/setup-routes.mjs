@@ -212,6 +212,7 @@ export function setupRoutes(outer) {
     const body = await outer.json(c), str = (x) => typeof x === 'string' && x.length <= 200;
     const one = (x) => x && typeof x === 'object' && Object.keys(x).sort().join() === 'agent,effort,model' && str(x.model) && str(x.effort)
       && (['', 'claude', 'codex'].includes(x.agent) || (typeof x.agent === 'string' && /^profile:[\w-]{1,80}$/.test(x.agent)));
+    // O226: setup is still taken from an older window (and never read), so its save is not refused.
     if (!body || typeof body !== 'object' || !['max,start,workers', 'max,setup,start,workers'].includes(Object.keys(body).sort().join()) || (body.setup !== undefined && (typeof body.setup !== 'string' || body.setup.length > 2000)) || !['off', 'ask', 'agent'].includes(body.start)
         || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);
     return c.json(outer.chat.setDelegation(body));
@@ -347,6 +348,8 @@ export function setupRoutes(outer) {
     return outer.reply(c, !body || typeof body !== 'object' || Object.keys(body).join() !== 'on' ? { status: 400, error: 'request-refused' } : outer.chat.projects.setMerge(c.req.param('id'), body.on)); });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
+  // Desktop only (H2): the owner's Seen press on a Setup file an agent wrote. No phone route and no agent tool does it.
+  outer.app.post('/sprints/:id/seen', async (c) => outer.reply(c, outer.chat.projects.seen(c.req.param('id'), await outer.json(c))));
   outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));
   return { signedIn };
 }

@@ -145,6 +145,9 @@ test('Delegate window: workers indented under their chat and folded past three; 
   assert.match(await group.locator('.set-row:has([data-dg-start]) strong').innerText(), /^Who may start workers$/);
   assert.equal(await group.locator('[data-dg-start]').getAttribute('aria-label'), 'Who may start workers');
   assert.match(await group.locator('.set-row:has([data-dg-start]) .muted').innerText(), /A sprint always asks you before it starts, whatever this says\.$/);
+  // O226: Delegation has no worker folder setup box and no folder word; a sprint's setup is its project's.
+  assert.equal(await group.locator('[data-dg-setup], input[type=text]').count(), 0, 'Settings > Delegation draws a setup field');
+  assert.doesNotMatch(await group.innerText(), /folder/i);
   // F5: sprints have their own section, which says where each sprint setting lives.
   const sprints = page.locator('#setSprint');
   await sprints.scrollIntoViewIfNeeded();
@@ -181,7 +184,8 @@ test('Delegate window: workers indented under their chat and folded past three; 
   await group.locator('[data-dg-agent="0"]').selectOption('claude');
   await group.locator('[data-dg-model="0"]').selectOption('opus');
   await until(async () => (await call(instance, '/delegation')).workers[0].model === 'opus', 'Worker 1 back on opus');
-  await page.locator('#setDelegation').scrollIntoViewIfNeeded();
+  // The save's answer redraws #setDelegation (outerHTML) after the daemon already holds it, so a scroll can catch the old group detached: try again.
+  await until(() => page.locator('#setDelegation').scrollIntoViewIfNeeded({ timeout: 1000 }).then(() => true, () => false), 'Delegation scrolled into view');
   await shot(page, 'settings-delegation');
   await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
   await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();

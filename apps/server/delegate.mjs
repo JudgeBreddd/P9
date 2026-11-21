@@ -399,13 +399,14 @@ export function createDelegate({ chat, allowed, usage }) {
     // P9 cannot resolve is refused here, never handed to git (which would run in the daemon's own folder).
     let own = null;
     if (args.worktree) {
-      // A1, A4: the lead's project may name an address to clone from and its own setup command (the owner's, desktop only).
+      // A1, A4: the lead's project may name an address to clone from and its own setup command (the owner's, desktop only);
+      // O226: it is the only setup command, Settings > Delegation has none.
       const set = me.project ? await chat.projects.sprintSet(me.project) : null;
       // The address decides the repository: a folder passed as well would be dropped without a word, so it is refused.
       if (set?.source && args.folder !== undefined) return { error: 'folder-refused', detail: 'This project\'s sprints are cloned from the address its owner set. Leave folder out.' };
       const source = set?.source ? null : folder === undefined ? await chat.startFolder(caller) : await chat.checkedFolder(folder);
       if (!set?.source && !source) return { error: 'folder-refused', detail: 'A worker folder is made from the folder the worker would start in; P9 could not use that folder.' };
-      own = await chat.workers.make(caller, args.key, source, set?.setup || chat.delegation().setup || '', set?.source ?? '');
+      own = await chat.workers.make(caller, args.key, source, set?.setup || '', set?.source ?? '');
       if (own.error) return { ...own, detail: own.detail ?? 'Give the worker a key that is also a git branch name.' };
       await notice(caller, 'worker-folder-made', { key: args.key ?? null, folder: own.folder ?? null, branch: own.branch ?? null });
       const after = still(); // the prepared folder is kept: the next open_chat with this key uses it

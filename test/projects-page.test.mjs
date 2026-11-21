@@ -1171,7 +1171,9 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.ok((await lead.textContent()).includes(`${w.model} · ${w.effort}`), await lead.textContent());
   assert.match(await lead.locator('[data-sv-state]').textContent(), /^(Working|Idle)$/);
   // The lead's own two items (A1, A2) are its ring, and the big ring is drawn at its size (a 15 px page icon rule once shrank it).
-  assert.deepEqual([w.work, await lead.locator('.sv-ring b').textContent(), await page.locator('.sv-ring.big svg').evaluate((el) => el.getBoundingClientRect().width)], [{ done: 0, total: 2 }, '0/2', 76]);
+  assert.deepEqual([w.work, await lead.locator('.sv-ring b').textContent(), await page.locator('.sv-ring.big svg').evaluate((el) => el.getBoundingClientRect().width)], [{ done: 0, total: 2, next: 'A1: draw the page; role lead' }, '0/2', 76]);
+  // Work Queue row: with no item taken, the row names the next one (the first neither passed nor merged).
+  assert.equal(await lead.locator('.sv-item').textContent(), 'Next: A1: draw the page; role lead');
   // The Setup parts are still below: the roles and the files.
   assert.deepEqual([await page.locator('[data-role-row]').count() > 0, await page.locator('[data-pj="spfile"]').count() > 0, (await page.locator('[data-pj="spstart"]').textContent()).trim()], [true, true, 'Start again']);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view ' + (await page.screenshot({ type: 'png' })).toString('base64'));
@@ -1463,4 +1465,28 @@ test('O198 Show more on project instructions stays open through redraws until cl
   assert.equal(await more.textContent(), 'Show 2 more lines', 'closed again after the project\'s Sprint Setup page was shown');
   assert.equal(await rest.isVisible(), false);
   assert.deepEqual(errors, []);
+});
+
+// H2 part B: a Setup file changed outside P9's tools shows "Written by ... · not seen" on the sprint page; the owner's
+// Seen press takes the mark away and P9 keeps it; written again, the mark comes back with no click.
+test('projects: Sprint Setup marks a file written by someone else as not seen until the owner presses Seen', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Marks', work: { kind: 'new', parent: '', name: 'marks' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Marks prep' });
+  await writeFile(path.join(prep.folder, 'rules.md'), 'OUTSIDE ONE\n');
+  const unseen = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === prep.sprint).files.filter((f) => f.unseen).map((f) => f.name);
+  const { page } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click();
+  const mark = page.locator(`[data-sprint="${prep.sprint}"] [data-sp-mark="rules.md"]`);
+  await until(async () => (await mark.textContent().catch(() => '')).includes('rules.md: Written by someone outside P9\'s Setup tools · not seen'), async () => 'no mark: ' + await mark.textContent().catch(() => 'none'), 20000);
+  assert.equal(await page.locator(`[data-sprint="${prep.sprint}"] [data-sp-mark]`).count(), 1, 'a file of New sprint was marked');
+  await mark.locator('[data-sp-seen]').click();
+  await until(async () => (await mark.count()) === 0, 'the Seen press left the mark', 10000);
+  await until(async () => (await unseen()).length === 0, 'P9 did not keep the Seen press');
+  await new Promise((r) => setTimeout(r, 6000)); // past the page's 5 s reread: the mark stays away
+  assert.equal(await mark.count(), 0, 'the mark came back with no change to the file');
+  await writeFile(path.join(prep.folder, 'rules.md'), 'OUTSIDE TWO\n');
+  await until(async () => (await mark.count()) === 1, 'a later write did not mark it again', 20000);
+  console.log('PASS H2 part B page: an outside write marked, the Seen press clears it and P9 keeps that, a later write marks it again');
 });

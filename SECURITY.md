@@ -991,10 +991,10 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   changed against the main line, whether anything is unsaved, and whether a commit is in the main line. It reads; it
   never fetches on its own except when it cleans up (below), and a fetch uses your git sign-in like a push.
 - **The setup command.** One command you type, run in each new worker folder before its worker starts (for example
-  installing packages). A project can have its own (the project page, on the desktop: the same desktop-only route
-  as its sprint source); a lead chat in a project without one, or in no project, gets the one in Settings >
-  Delegation. Only you set either: no agent tool, no file in the repository and no phone request can set or change
-  them, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
+  installing packages). It is the project's (the project page, on the desktop: the same desktop-only route
+  as its sprint source); a lead chat in a project without one, or in no project, gets none, and Settings > Delegation
+  has none (O226; one an older version saved there is never run). Only you set it: no agent tool, no file in the
+  repository and no phone request can set or change it, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
   environment, for at most 15 minutes, as a process tree P9 owns (Windows: a kill-on-close Job Object, which also ends
   what the shell leaves running when it exits; elsewhere a process group). At that limit the whole tree is stopped and
   P9 waits, briefly, for the stop to be confirmed before it answers or starts anything else in that sprint; a stop it
@@ -1166,6 +1166,13 @@ Written before the code (sprint spec D1, D3, D4).
   edit them with their own file tools, under their own mode and your approvals. P9 gives them no write of its own.
 - **Removal.** Clean-up of a sprint's worker folders (§ Worker folders) removes the clone and the worker folders
   only; these files stay. P9 never deletes them. Deleting the lead chat leaves them too.
+- **Who wrote it (H2).** Sprint Setup marks each Setup file (sprint.md, rules.md, roles.json, hooks.json, the role
+  files) "Written by <writer> · not seen" until you have seen that text. The writer is what P9 recorded at its last
+  write through P9's tools: the calling chat's agent, or you. Text P9 did not write reads as "someone outside P9's
+  Setup tools". Seen means your own save, the files New sprint makes, Start's approval of the text, or your Seen press:
+  a desktop-only route (`POST /sprints/:id/seen`, no phone route, no agent tool) that names the text's hash, so a file
+  changed after the page drew it is refused and stays marked. The records are in P9's ledger, not in the folder. The
+  mark is a label, not a lock: an agent's own file tools can still write these files.
 
 ## Start sprint
 
