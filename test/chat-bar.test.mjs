@@ -352,6 +352,108 @@ test('O131 label: (Default) marks the Settings default effort and model when one
   console.log('PASS O131 label: (Default) follows the Settings default, else the agent\'s own');
 });
 
+// O133 (Settings shows Agent's default after a restart): Settings > Chat Focus shows the Default model and effort as the daemon
+// keeps them. Three ways it did not: (1) the window's first read failed (a daemon still starting) and Settings never read them
+// again; (2) a save from elsewhere (another window, an agent's tool) was never read; (3) a kept value the agent's list does not
+// offer was drawn as Agent's default. And the order case the re-read brings: (4) a read answered after a newer save from this
+// window must not put the older value back (a New chat would start on it).
+test('O133 Settings: the Default model and effort show as kept after a failed first read, a save from elsewhere and a value the agent does not list; a late read never puts back an older one', { timeout: 180000 }, async (t) => {
+  const { app, instance, page, errors } = await setup(t, 'o133-settings');
+  await call(instance, '/start-defaults', 'POST', { set: { claude: { model: 'haiku', effort: 'high' } } });
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.reads = 0;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && !Object.keys(args[1] ?? {}).length && !globalThis.reads++
+      ? { status: 503, body: { error: 'daemon-unavailable' } } : h(e, ...args));
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await until(async () => await app.evaluate(() => globalThis.reads) >= 1, 'the first read was made (and failed)');
+  const open = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
+  const close = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
+  const shown = (kind) => page.locator(`[data-default-${kind}="claude"]`).inputValue();
+  await open();
+  await page.locator('[data-default-model="claude"] option[value="haiku"]').waitFor({ state: 'attached', timeout: 15000 });
+  assert.deepEqual([await shown('model'), await shown('effort')], ['haiku', 'high'], '(1) after a failed first read');
+  await close();
+  await call(instance, '/start-defaults', 'POST', { set: { claude: { model: 'gone-model' } } });
+  await open();
+  assert.deepEqual([await shown('model'), await shown('effort')], ['gone-model', 'high'], '(2) a save from elsewhere, (3) a model the agent does not list');
+  await close();
+  // (4) The boot read reaches the daemon first and is answered 5 s late; meanwhile Settings reads and Low is picked and saved.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.slow = 0; globalThis.slowDone = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && !Object.keys(args[1] ?? {}).length && !globalThis.slow++
+      ? Promise.resolve(h(e, ...args)).then((r) => new Promise((res) => setTimeout(() => { globalThis.slowDone = true; res(r); }, 5000))) : h(e, ...args));
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await until(async () => await app.evaluate(() => globalThis.slow) >= 1, 'the boot read was made');
+  await open();
+  await page.selectOption('[data-default-effort="claude"]', 'low');
+  await until(async () => (await call(instance, '/start-defaults')).claude.effort === 'low', 'Low saved');
+  await close();
+  await until(async () => await app.evaluate(() => globalThis.slowDone), 'the late read answered', 10000);
+  const ids = () => page.locator('#navList .row[data-chat]').evaluateAll((rows) => rows.map((r) => r.dataset.chat));
+  const before = await ids();
+  await page.click('#newBtn');
+  let id;
+  await until(async () => (id = (await ids()).find((x) => !before.includes(x))), 'the New chat listed');
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
+  const pane = page.locator('#chats .pane[data-id="' + id + '"]');
+  await pane.locator('.composer textarea').fill('config'); await pane.locator('.composer textarea').press('Enter');
+  const reply = pane.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply.waitFor({ timeout: 20000 });
+  assert.match(await reply.innerText(), /effort=low,/, '(4) a New chat starts on the newer save, not the late read');
+  // (5) FIX1 (Reviewer): no save here. The boot read A reaches the daemon first and is answered 5 s late; meanwhile the default
+  // changes elsewhere and Settings' read B shows it. A landing after B must not put the older value back.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.slow2 = 0; globalThis.slow2Done = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && !Object.keys(args[1] ?? {}).length && !globalThis.slow2++
+      ? Promise.resolve(h(e, ...args)).then((r) => new Promise((res) => setTimeout(() => { globalThis.slow2Done = true; res(r); }, 5000))) : h(e, ...args));
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await until(async () => await app.evaluate(() => globalThis.slow2) >= 1, 'boot read A was made');
+  await call(instance, '/start-defaults', 'POST', { set: { claude: { effort: 'medium' } } });
+  await open();
+  assert.equal(await shown('effort'), 'medium', '(5) read B shows the change made elsewhere');
+  await close();
+  await until(async () => await app.evaluate(() => globalThis.slow2Done), 'read A answered', 10000);
+  const before2 = await ids();
+  await page.click('#newBtn');
+  let id2;
+  await until(async () => (id2 = (await ids()).find((x) => !before2.includes(x))), 'the second New chat listed');
+  await page.locator('#nav .row[data-chat="' + id2 + '"]').click();
+  const pane2 = page.locator('#chats .pane[data-id="' + id2 + '"]');
+  await pane2.locator('.composer textarea').fill('config'); await pane2.locator('.composer textarea').press('Enter');
+  const reply2 = pane2.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply2.waitFor({ timeout: 20000 });
+  assert.match(await reply2.innerText(), /effort=medium,/, '(5) a New chat starts on read B, not the late read A');
+  // (6) FIX1: the other order. High is picked but the save reaches the daemon 3 s late; Settings is opened again meanwhile and its
+  // read (numbered after the save) is served first, with Medium. That read must not stand over the save's answer.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.held = 0; globalThis.heldDone = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && args[1]?.set && !args[1].onlyEmpty && !globalThis.held++
+      ? new Promise((res) => setTimeout(res, 3000)).then(() => h(e, ...args)).then((r) => { globalThis.heldDone = true; return r; }) : h(e, ...args));
+  });
+  await open();
+  await page.selectOption('[data-default-effort="claude"]', 'high');
+  await until(async () => await app.evaluate(() => globalThis.held) >= 1, 'the High save was sent (and held)');
+  await close(); await open();
+  await until(async () => await app.evaluate(() => globalThis.heldDone), 'the High save answered', 10000);
+  await close();
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', '(6) the daemon has High');
+  const before3 = await ids();
+  await page.click('#newBtn');
+  let id3;
+  await until(async () => (id3 = (await ids()).find((x) => !before3.includes(x))), 'the third New chat listed');
+  await page.locator('#nav .row[data-chat="' + id3 + '"]').click();
+  const pane3 = page.locator('#chats .pane[data-id="' + id3 + '"]');
+  await pane3.locator('.composer textarea').fill('config'); await pane3.locator('.composer textarea').press('Enter');
+  const reply3 = pane3.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply3.waitFor({ timeout: 20000 });
+  assert.match(await reply3.innerText(), /effort=high,/, '(6) a New chat starts on the held save, not the read served before it');
+  assert.deepEqual(errors, []);
+  console.log('PASS O133 Settings: Defaults shown as kept; a late read never puts back an older one');
+});
+
 // #222 review (FIX1): a Default save names only its own field and the daemon merges it. Forced: the daemon is paused (SIGSTOP) so the
 // model save is still unanswered when the effort is picked; and a second window, opened before the first one's pick, changes
 // another field. Before the fix each save sent the whole object from the window's last answer and put back the older value.
