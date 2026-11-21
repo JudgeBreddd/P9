@@ -935,7 +935,7 @@ async function listen() {
 // would decline it), is kept here, on this phone, and goes once it can, with `when: 'queue'` so it waits for the turn's
 // end. Each goes once: it keeps one operation ID until the daemon answers (mutate), so a lost reply or a reload re-sends
 // the same message under the same ID and the daemon replays it. ponytail: this phone's storage only, as the desktop's queue.
-type Queued = { qid: string; text: string; at?: number; pick?: string; mode?: string; model?: string; config?: Record<string, string> }; // at: when queued (O125)
+type Queued = { qid: string; text: string; at?: number; pick?: string; spends?: Record<string, string>; mode?: string; model?: string; config?: Record<string, string> }; // at: when queued (O125)
 const queueKey = (id: string) => 'p9-queue:' + id;
 // F4 item 11: read from storage once per chat, then kept here; every change is written through. Another tab's change
 // (the storage event) drops what is kept.
@@ -1061,14 +1061,15 @@ async function drain() {
       const id = String(chat.id);
       if (Date.now() < (retryAt.get(id) ?? 0)) continue;
       for (let next = queued(id)[0]; next && !asking(id); next = queued(id)[0]) {
-        const { qid, pick, ...body } = next;
+        const { qid, pick, spends, ...body } = next;
         const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' });
         // O62: refused because the turn is still ending (a Stop just pressed: the daemon holds nothing for a turn that is
         // stopping). The message stays queued and goes a moment later; it used to come back into the box as "Not sent".
         if (result.status === 409 && result.body.error === 'turn-running') { retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break; }
         // Any other answer is final for this message: it went, or the daemon refused it and says why (the text goes back in its chat's box).
         keepQueue(id, queued(id).filter((item) => item.qid !== qid));
-        if (result.status === 202) sent = true;
+        // O209: taken from the queue, the picks it carried are in effect, so a newer pick of the same value is spent now (as a send taken at once).
+        if (result.status === 202) { sent = true; if (spends) spend(id, new Map(Object.entries(spends))); }
         else { putBack(id, next.text); dropRefused(id, (body as { model?: string }).model, pick); if (id === openId) { note(`Not sent: ${result.body.error ?? result.status}`); render(); } }
       }
     }
@@ -1160,7 +1161,7 @@ async function submitFromBox(event: Event) {
   // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }

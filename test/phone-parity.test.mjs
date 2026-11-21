@@ -999,8 +999,8 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
 // O209: the queue transfer spends the model pick the send carried, by its pid. Opus goes and is held, the user picks Haiku and then
 // Opus again, the held send is answered 'turn-running' and moves to the queue, and the queue's send is refused: the newer Opus
 // stays pending. The same when the first try got outcome-unknown and the retry is the one answered 'turn-running'.
-test('O209: a send moved to the queue keeps a newer pick of the same value, model or effort, held or retried', { timeout: 120000 }, async (t) => {
-  const { page } = await phoneOn(t);
+test('O209: a send moved to the queue keeps a newer pick of the same value, model or effort, held or retried, and spends it once the queued send is taken', { timeout: 120000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
   const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
   const bar = () => page.evaluate(() => { const b = document.querySelector('#modelBtn'); return [b.textContent.trim(), b.getAttribute('aria-label')]; });
   const is = async (want, why) => assert.deepEqual(await bar(), want, why);
@@ -1064,6 +1064,27 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   await page.click('[data-bar="chat"] [data-back]'); await page.click(`#chatList [data-chat="${id}"]`);
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 10000 });
   assert.equal(await page.$eval(effort, (el) => el.value), 'high', 'effort: moving the send to the queue spent the newer High pick');
+  // Taken from the queue: Opus goes and is held, Haiku then Opus are picked, 'turn-running' queues it, and the queue's send goes
+  // through. Opus is in effect, so the newer Opus pick is spent then: when the model is changed elsewhere (here the desk picks Haiku),
+  // coming back to the chat does not bring Opus back as this phone's pending pick.
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 20000 });
+  const heldTaken = new Promise((resolve) => { release = resolve; });
+  calls = 0;
+  await page.route(prompts, async (route) => { if (++calls === 1) { await heldTaken; return busy(route).catch(() => {}); } return route.continue(); });
+  await page.fill('#prompt', ''); await clear(); await pick('opus'); await send(page, 'taken');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'taken', null, { timeout: 5000 });
+  await pick('haiku'); await pick('opus'); release();
+  await page.waitForFunction(() => document.querySelector('#model').dataset.current === 'opus', null, { timeout: 15000 });
+  assert.equal(calls, 2, 'the held send moved to the queue and the queue sent it');
+  await page.unroute(prompts);
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 20000 });
+  assert.equal((await server.desk('/chat/' + id + '/prompt', 'POST', { text: 'model', model: 'haiku', op: crypto.randomUUID() })).status, 202);
+  await replied('model:haiku');
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 20000 });
+  await newChat(page, 'claude');
+  await page.click('[data-bar="chat"] [data-back]'); await page.click(`#chatList [data-chat="${id}"]`);
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#model').dataset.current === 'haiku', id, { timeout: 10000 });
+  await is(['Claude · Haiku', 'Model: Haiku'], 'taken from the queue: the newer Opus pick was not spent and came back as pending');
   console.log('PASS O209: queue transfer keeps a newer same-value pick (model held and retried, effort held); a plain one clears');
 });
 
