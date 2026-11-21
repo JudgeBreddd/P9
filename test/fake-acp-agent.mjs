@@ -623,6 +623,14 @@ const connection = acp.connectAgent(stream, {
       await say('Run this:\n\n```sh\nnpm test\n```');
       return { stopReason: 'end_turn' };
     }
+    // O222: a Codex (ACP v2) edit as acp-v2.mjs stores it: the lines once, in _meta.hunks, and _meta.added; no old text.
+    if (text === 'v2 diff') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-v2', title: 'Edit kept.md', kind: 'edit', status: 'completed', content: [
+        { type: 'diff', path: 'kept.md', newText: '', _meta: { added: false, hunks: [{ old: 3, new: 3, rows: [['ctx', 'two'], ['del', 'old line'], ['add', 'new line']] }] } },
+        { type: 'diff', path: 'fresh.md', newText: '', _meta: { added: true, hunks: [{ old: 0, new: 1, rows: [['add', 'hello']] }] } }] } });
+      await say('v2 edited');
+      return { stopReason: 'end_turn' };
+    }
     if (text.startsWith('tools ') || text === 'tool-open' || text === 'tool-last') {
       const n = text.startsWith('tools ') ? Number(text.slice(6)) : 1, ms = existsSync('slow-tools') ? (existsSync('slower-tools') ? 40000 : 10000) : 3000;
       cancelled.delete(sessionId);
