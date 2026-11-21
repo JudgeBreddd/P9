@@ -54,11 +54,14 @@ test('O219 phone: a streamed command\'s pieces read once, whole, in the tool\'s 
   update({ sessionUpdate: 'tool_call', toolCallId: 'exec-3', title: 'make', kind: 'execute', status: 'in_progress', content: [{ type: 'terminal', terminalId: 'exec-3' }] });
   update(piece('one\n')); update(piece('two\nthree\n'));
   update({ sessionUpdate: 'tool_call_update', toolCallId: 'exec-3', status: 'completed' });
+  update({ sessionUpdate: 'tool_call', toolCallId: 'exec-4', title: 'long', kind: 'execute', status: 'completed' });
+  for (const n of [1, 2, 3]) update({ ...piece(String(n).repeat(1500)), toolCallId: 'exec-4' });
   d.close();
   const { page } = await phone(t, server);
   await openChat(page, server);
   const tool = page.locator('#events article[data-kind=tool]', { hasText: 'make' });
   await tool.waitFor({ timeout: 15000 });
   assert.equal(await tool.locator('pre').textContent(), 'completed\none\ntwo\nthree\n');
+  assert.equal(await page.locator('#events article[data-kind=tool]', { hasText: 'long' }).locator('pre').textContent(), 'completed\n' + '2'.repeat(500) + '3'.repeat(1500), 'a long streamed output shows its last 2,000 characters');
   console.log('PASS O219 phone: detail one/two/three once');
 });

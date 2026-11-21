@@ -15,13 +15,15 @@
 //   permission       title + subject                                -> toolCall
 //   plan_update, notice                                             -> plan, a 'Warning: ' message chunk
 //   command output   terminal_update, base64, id = the tool call's;  -> the tool call's text content (its last 20,000 chars)
-//                    streamed as terminal_output_chunk pieces          (O121 part 3: the pieces joined, at most once a second)
+//                    streamed as terminal_output_chunk pieces          (O219: each new piece once, marked _meta['p9/append'])
 //   the prompt's echo, running/requires_action states, session_info_update with only _meta (Codex's thread status,
 //   about eight a turn), sign-in status: dropped. P9 writes the user's message itself, and the sign-in notices
 //   carry the account's email, which must not reach the ledger or a log.
 
 const DROPPED_UPDATES = new Set(['user_message', 'user_message_chunk']);
 const OUTPUT_CHARS = 20000, OUTPUT_LIVE_CHARS = 2000, OUTPUT_EVERY_MS = 1000;
+// The last n UTF-16 units of a text, never starting with half a surrogate pair.
+const tail = (text, n) => { const t = text.slice(-n); return /^[\uDC00-\uDFFF]/.test(t) ? t.slice(1) : t; };
 const DROPPED_NOTIFICATIONS = new Set(['auth/status_update', '_auth/status_update']);
 
 const options = (list) => Array.isArray(list) ? list.map(({ configId, ...rest }) => (configId === undefined ? rest : { id: configId, ...rest })) : list;
@@ -65,30 +67,34 @@ export function v1Stream(stream) {
   const sent = new Map(); // request id -> what its reply needs: { prompt: sessionId } or { config: true }
   const turns = new Map(); // sessionId -> { id, live }: the held v1 prompt request; live once the agent took it
   const tools = new Set(); // sessionId + toolCallId already announced as a tool_call
-  // O121 part 3: each running command's output, by sessionId + terminalId (the tool call's id): { bytes, at, held,
-  // cut, timer }. codex-acp 2.6.0 streams it as pieces; each shown update writes a ledger row with the whole text, so a
-  // piece shows at once only a second after the last one shown; one held shows a second after that one (timer), or at
-  // the exit, the tool call's end or the turn's end, whichever comes first. While it runs only the last 2,000 characters show (a command printing for an hour writes about 7 MB,
-  // not 70); the last update has up to 20,000. Bytes, not text, so a character split across two pieces stays whole.
-  // Forgotten at the exit and the idle.
+  // O121 part 3, O219: each running command's output not yet shown, by sessionId + terminalId (the tool call's id):
+  // { text, skipped, whole, decoder, at, held, timer }. codex-acp 2.6.0 streams it as pieces; each shown update is a
+  // ledger row, so it holds only the new text, marked _meta['p9/append'] for the window and phone to add to the tool's
+  // text (an hour of printing writes its output once, not the whole text each second). A piece shows at once only a
+  // second after the last one shown; one held shows a second after that one (timer), or at the exit, the tool call's
+  // end or the turn's end, whichever comes first. At most the last 2,000 characters a second are kept ('…' marks the
+  // cut). The decoder keeps a character split across two pieces whole. A terminal_update's output is the whole text
+  // (whole): it shows as a replacing update, unmarked. Forgotten at the exit, the tool call's end and the idle.
   const outputs = new Map();
   let emit = () => {}; // sends a message to P9 between the agent's messages (the held output's timer)
   const forget = (key, o) => { clearTimeout(o.timer); outputs.delete(key); };
-  const shown = (sessionId, terminalId, o, live) => {
-    let b = o.bytes.subarray(-OUTPUT_CHARS * 4), i = 0;
-    while (b.length > i && b.length === OUTPUT_CHARS * 4 && (b[i] & 0xc0) === 0x80) i += 1; // a cut character's tail
-    const text = b.subarray(i).toString('utf8');
+  const pending = (o) => { o.held = o.text !== '' || o.skipped || o.whole !== null; };
+  const shown = (sessionId, terminalId, o) => {
+    const cut = o.skipped ? '…\n' : '', whole = o.whole;
     clearTimeout(o.timer); o.timer = null;
-    o.at = Date.now(); o.held = false; o.cut = live && text.length > OUTPUT_LIVE_CHARS; // the end shows it whole
+    const text = whole === null ? cut + o.text : tail(whole + cut + o.text, OUTPUT_CHARS);
+    o.at = Date.now(); o.held = false; o.text = ''; o.skipped = false; o.whole = null;
     return { jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: terminalId,
-      content: [{ type: 'content', content: { type: 'text', text: text.slice(live ? -OUTPUT_LIVE_CHARS : -OUTPUT_CHARS) } }] } } };
+      content: [{ type: 'content', content: { type: 'text', text } }], ...(whole === null && { _meta: { 'p9/append': true } }) } } };
   };
-  // What is held of a session's commands (one tool call's when id is given), shown now; at the idle, forgotten too.
+  // The end of a command's output: the decoder's last bytes join what is held, and the command is forgotten.
+  const ended = (key, o) => { o.text += o.decoder.decode(); pending(o); forget(key, o); };
+  // What is held of a session's commands (one tool call's when id is given), shown now; at an end, forgotten too.
   const flush = (sessionId, id, end) => [...outputs].flatMap(([key, o]) => {
     const [s, terminalId] = key.split('\n');
     if (s !== sessionId || (id !== undefined && terminalId !== id)) return [];
-    if (end) forget(key, o);
-    return (o.held || o.cut) && tools.has(key) ? [shown(sessionId, terminalId, o)] : [];
+    if (end) ended(key, o);
+    return o.held && tools.has(key) ? [shown(sessionId, terminalId, o)] : [];
   });
 
   function toAgent(message) {
@@ -136,25 +142,30 @@ export function v1Stream(stream) {
       const key = sessionId + '\n' + u.terminalId, data = kind === 'terminal_update' ? u.output?.data : u.data, end = kind === 'terminal_update' && u.exitStatus;
       let o = outputs.get(key);
       if (typeof data === 'string') {
-        if (!o) outputs.set(key, o = { bytes: Buffer.alloc(0), at: 0, held: false });
+        if (!o) outputs.set(key, o = { text: '', skipped: false, whole: null, decoder: new TextDecoder(), at: 0, held: false });
         const piece = Buffer.from(data, 'base64');
-        o.bytes = (kind === 'terminal_update' ? piece : Buffer.concat([o.bytes, piece])).subarray(-OUTPUT_CHARS * 4);
-        o.held = true;
+        if (kind === 'terminal_update') { o.decoder = new TextDecoder(); o.whole = tail(o.decoder.decode(piece, { stream: true }), OUTPUT_CHARS); o.text = ''; o.skipped = false; }
+        else {
+          o.text += o.decoder.decode(piece, { stream: true });
+          if (o.text.length > OUTPUT_LIVE_CHARS) { o.text = tail(o.text, OUTPUT_LIVE_CHARS); o.skipped = true; }
+        }
+        pending(o);
       }
-      if (end && o) forget(key, o);
-      if (!(o?.held || (end && o?.cut)) || !tools.has(key)) return [];
+      if (end && o) ended(key, o);
+      if (!o?.held || !tools.has(key)) return [];
       const wait = OUTPUT_EVERY_MS - (Date.now() - o.at);
-      if (end || wait <= 0) return [shown(sessionId, u.terminalId, o, !end)];
-      o.timer ??= setTimeout(() => { if (outputs.get(key) === o && o.held) emit(shown(sessionId, u.terminalId, o, true)); }, wait);
+      if (end || wait <= 0) return [shown(sessionId, u.terminalId, o)];
+      o.timer ??= setTimeout(() => { if (outputs.get(key) === o && o.held) emit(shown(sessionId, u.terminalId, o)); }, wait);
       o.timer.unref?.();
       return [];
     }
-    let next = u, before = [];
+    let next = u, before = [], after = [];
     if (kind === 'tool_call_update') {
-      if (u.status === 'completed' || u.status === 'failed') before = flush(sessionId, u.toolCallId, true);
-      const key = sessionId + '\n' + u.toolCallId;
+      const key = sessionId + '\n' + u.toolCallId, end = u.status === 'completed' || u.status === 'failed';
       next = tool(u);
-      if (!tools.has(key)) { tools.add(key); next = { title: String(u.name ?? 'Tool'), status: 'pending', ...next, sessionUpdate: 'tool_call' }; }
+      // Output that came before its tool call was announced shows right after the announcement.
+      if (!tools.has(key)) { tools.add(key); next = { title: String(u.name ?? 'Tool'), status: 'pending', ...next, sessionUpdate: 'tool_call' }; after = flush(sessionId, u.toolCallId, end); }
+      else if (end) before = flush(sessionId, u.toolCallId, true);
     } else if (kind === 'tool_call_content_chunk') next = { sessionUpdate: 'tool_call_update', toolCallId: u.toolCallId, content: content([u.content]) };
     else if (kind === 'config_option_update') next = withOptions(u);
     else if (kind === 'plan_update') { if (u.plan?.type !== 'items') return []; next = { sessionUpdate: 'plan', entries: u.plan.items ?? u.plan.entries ?? [] }; }
@@ -162,7 +173,7 @@ export function v1Stream(stream) {
     else if (kind === 'agent_message' || kind === 'agent_thought') {
       return (u.content ?? []).map((block) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: kind + '_chunk', messageId: u.messageId, content: block } } }));
     }
-    return [...before, { jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: next } }];
+    return [...before, { jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: next } }, ...after];
   }
 
   function toClient(message) {

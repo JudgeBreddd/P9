@@ -201,6 +201,12 @@ test('O219: a character split across pieces stays whole; at most 2,000 character
   assert.ok(p.texts('t1').every(([text]) => !text.includes('�')));
   await p.step(...run('t2'), chunk('t2', 'z'.repeat(30000)), chunk('t2', '✓'.repeat(25000)), exit('t2'));
   assert.deepEqual(p.texts('t2'), [['…\n' + 'z'.repeat(2000), '+'], ['…\n' + '✓'.repeat(2000), '+']], 'more than 2,000 characters in a second: the last 2,000, marked as cut');
+  await p.step(...run('t5'), chunk('t5', 'z'.repeat(5000)), chunk('t5', '😀'.repeat(1001) + 'x'), exit('t5'));
+  assert.deepEqual(p.texts('t5').at(-1), ['…\n' + '😀'.repeat(999) + 'x', '+'], 'the cut never leaves half an emoji');
+  await p.step({ sessionUpdate: 'terminal_update', terminalId: 't6', command: 'make', cwd: '/w' }, chunk('t6', 'early\n'));
+  await p.step({ sessionUpdate: 'tool_call_update', toolCallId: 't6', kind: 'execute', title: 'make', status: 'in_progress', content: [{ type: 'terminal', terminalId: 't6' }] });
+  const t6 = p.said.filter((m) => m.params?.update?.toolCallId === 't6');
+  assert.deepEqual([t6[0].params.update.sessionUpdate, p.texts('t6')], ['tool_call', [['early\n', '+']]], 'output before its tool call shows right after it');
   await p.step(...run('t3'), chunk('t3', 'old\n'), { sessionUpdate: 'terminal_update', terminalId: 't3', output: { data: b64('whole\n') } }, chunk('t3', 'more\n'), exit('t3'));
   assert.deepEqual(p.texts('t3'), [['old\n', '+'], ['whole\nmore\n', '=']], 'the whole text replaces; a piece after it joins it');
   await p.step(...run('t4'), { sessionUpdate: 'terminal_update', terminalId: 't4', output: { data: b64('all at once\n') }, exitStatus: { exitCode: 1, signal: null } });
