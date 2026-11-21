@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root, shellReady } from './helpers.mjs';
+import { usedText } from '../apps/web/src/sprint-view.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -1159,6 +1160,7 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.equal(await page.locator('[data-sv-done]').textContent(), `${st.done.merged} of ${st.done.total} items merged`);
   assert.deepEqual([await fact('ticked'), await fact('chats'), await fact('scripts')], [`${st.done.ticked} of ${st.done.total}`, String(st.workers.length), '1']);
   assert.equal(await fact('rate'), String(st.prs_per_hour), 'PRs an hour, from the status answer'); // O162
+  assert.equal(await fact('spent'), usedText(st.spent), 'Used, the sum of the chats\' spent, from the status answer'); // O162 usage
   await writeFile(path.join(run.folder, 'hooks.json'), JSON.stringify({ scripts: [script('base'), script('later'), script('unseen')] }));
   assert.match(await fact('time'), /^(under a minute|\d+ min)$/);
   assert.equal(await page.locator('.sv-ring.big b').textContent(), '0/3');

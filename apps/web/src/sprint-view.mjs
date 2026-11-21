@@ -6,6 +6,9 @@ import { svg, runnerPicks, modes, LOOSE } from './helpers.mjs';
 const R = 16, C = +(2 * Math.PI * R).toFixed(2);
 const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" role="img" aria-label="${label}"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="t" cx="20" cy="20" r="${R}"/>${done && total ? `<circle class="a" cx="20" cy="20" r="${R}" stroke-dasharray="${+(C * Math.min(1, done / total)).toFixed(2)} ${C}"/>` : ''}</svg><b>${done}/${total}</b></span>`;
 // 3 725 000 ms reads "1 h 2 min".
+// O162 (usage): the status answer's spent, the sum of the sprint's chats; compact counts, the cost only when one was reported.
+const k = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+export const usedText = u => u === null ? 'Nothing reported yet' : `${k.format(u.inputTokens)} in · ${k.format(u.outputTokens)} out · ${k.format(u.cachedTokens)} cached${u.costUsd > 0 ? ` · $${u.costUsd.toFixed(2)}` : ''}`;
 export const span = ms => { const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : m ? `${m} min` : 'under a minute'; };
 const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Failed' };
 // What a worker's row says: a review's answer first, then a question to you, then what the chat is doing.
@@ -47,7 +50,9 @@ export function statusHtml(s, esc, opts = {}) {
     ['chats', 'Chats', String(s.workers.length)],
     ['scripts', 'Scripts', s.scripts.waiting ? `${s.scripts.running} running, ${s.scripts.waiting} waiting for you` : String(s.scripts.running)], // running already counts the additional ones
     // O162: a record closed before PRs an hour was counted has no such number, so no row.
-    ...('prs_per_hour' in s ? [['rate', 'PRs an hour', s.prs_per_hour === null ? 'Not started' : String(s.prs_per_hour)]] : [])];
+    ...('prs_per_hour' in s ? [['rate', 'PRs an hour', s.prs_per_hour === null ? 'Not started' : String(s.prs_per_hour)]] : []),
+    // O162: a record closed before the usage total was counted has none, so no row.
+    ...('spent' in s ? [['spent', 'Used', usedText(s.spent)]] : [])];
   return `<section class="sec sv" data-sv="${end ? 'closed' : 'open'}" aria-label="${end ? 'Closed sprint' : 'Sprint View'}: ${esc(s.sprint.title ?? '')}">
     <div class="sv-top">${ring(dn, d.total, `${dn} of ${d.total} items ${doneWord}`, 'big')}
       <div class="sv-say"><b data-sv-done>${d.total ? `${dn} of ${n(d.total, 'item', 'items')} ${doneWord}` : 'The plan has no items yet'}</b>
