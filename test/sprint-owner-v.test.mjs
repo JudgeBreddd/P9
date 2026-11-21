@@ -68,7 +68,7 @@ test('sprint-owner-v: a v line carries Role: owner, is the owner\'s own queue an
   const first = (await call(instance, `/sprints/${sprint}/status`)).body;
   assert.equal(first.error, undefined, JSON.stringify(first));
   const w1 = first.workers.find((w) => w.key === 'w1');
-  assert.deepEqual(w1.work, { done: 0, total: 2 }, 'the worker\'s queue holds its two lines, never the owner\'s');
+  assert.deepEqual(w1.work, { done: 0, total: 2, next: 'a1: the first piece. Role: w1.' }, 'the worker\'s queue holds its two lines, never the owner\'s');
   const listed = (await call(instance, '/chat')).body.conversations.find((c) => c.id === made.chat);
   assert.deepEqual(listed.queue, { done: 0, total: 2, items: [{ id: 'a1', text: 'a1: the first piece. Role: w1.', state: 'todo', fixes: 0, merged: false }, { id: 'a2', text: 'a2: the second piece. Role: w1.', state: 'todo', fixes: 0, merged: false }] }, 'the chat list\'s queue too: the v line appears in no worker queue');
   assert.deepEqual(first.owner, { done: 0, total: 1, items: [{ id: 'O1v', text: 'O1v: the owner\'s own check. Role: w1.', ticked: false, done: false }] }, String(JSON.stringify(first.owner)));

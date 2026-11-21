@@ -418,8 +418,11 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       // with an item not merged (null once all have merged). [] for a plan with no such heading: the page shows no phase line.
       ...phasesView(chat.sprintFiles.read(sprint, 'sprint.md'), s.items),
       // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
+      // next (Work Queue row): the first item not passed, the one ready reports (delegate.mjs ready, chat-view itemLine): a merge
+      // without a pass (mergedNow records any review commit that landed) leaves it next. null when every item passed.
       workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : mine.filter((i) => i.role && i.role === w.key);
-        return { ...w, work: q ? { done: q.done, total: q.total } : own.length ? { done: own.filter((i) => i.review?.merged === true).length, total: own.length } : null }; }),
+        const rows = q ? q.items ?? [] : own.map((i) => ({ text: i.text, state: i.review?.state, merged: i.review?.merged === true })), next = rows.find((r) => r.state !== 'passed')?.text ?? null;
+        return { ...w, work: q ? { done: q.done, total: q.total, next } : own.length ? { done: own.filter((i) => i.review?.merged === true).length, total: own.length, next } : null }; }),
       scripts: { running: st.running.length, additional: st.additional.length, waiting: st.waiting.length } };
   }
   async function status(caller, named) { const { sprint, ...no } = where(caller, named); return no.error ? no : view(sprint); }
