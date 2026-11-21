@@ -1446,7 +1446,7 @@ sprint spec H2 and K1).
   one again. A closed sprint's switch no longer changes.
 - **What it does.** The lead calls `sprint_event` with before-merge right before it merges. With the switch off the
   answer is `merge-is-the-owners` and no before-merge script runs; the lead must not merge and tells you the PR is
-  ready. With it on, the sprint's approved before-merge scripts run, and a blocking one may still refuse.
+  ready. With it on, the sprint's approved before-merge scripts run, and a blocking one may still refuse. The switch is read again before each script starts and once more before the answer: turned off, or the sprint closed, while the scripts run, no further script starts and the answer is not "allowed".
 - **What it cannot do.** It binds only a lead that calls before-merge, as the sprint rules tell it to. P9 does not
   hold the lead's git or GitHub sign-in back: a lead that merges without asking is not stopped by this switch. The
   merge buttons on the card (spec A8) will check it themselves.

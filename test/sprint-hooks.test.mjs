@@ -1230,7 +1230,26 @@ test('Sprint scripts H2: with the owner\'s standing merge off, before-merge answ
   r.merge = true;
   assert.equal((await r.hooks.view(EA)).standing_merge, true);
   assert.deepEqual(await r.hooks.event(EA, { point: 'before-merge', subject: { pr: 12 } }), { point: 'before-merge', scripts: 1, merge: 'allowed' });
-  console.log('PASS H2: switch off refused before-merge by name with no script run (ci-red still ran); on, it was allowed; the status showed each');
+  // FIX1: the owner turns it off, or closes the sprint, while the before-merge script is held: the answer is not "allowed".
+  for (const [flip, want] of [[() => { r.merge = false; }, 'merge-is-the-owners'], [() => { r.closed = true; }, 'sprint-closed']]) {
+    r.merge = true; r.closed = false; const runs = r.ran().filter((l) => l.startsWith('before-merge')).length;
+    r.hold('before-merge');
+    const held = r.hooks.event(EA, { point: 'before-merge', subject: { pr: 14 } });
+    await eventually(() => r.ran().filter((l) => l.startsWith('before-merge')).length > runs, 'the held before-merge script started');
+    flip(); r.free('before-merge');
+    assert.equal((await held).error, want, 'a merge turned off or closed while its script ran was still allowed');
+  }
+  // A second before-merge script waiting behind the held one does not start once the owner has turned the switch off.
+  r.merge = true; r.closed = false; r.scripts.push({ ...r.scripts.find((x) => x.point === 'before-merge'), name: 'second before-merge' });
+  const before = r.ran().filter((l) => l.startsWith('before-merge')).length;
+  r.hold('before-merge');
+  const two = r.hooks.event(EA, { point: 'before-merge', subject: { pr: 15 } });
+  await eventually(() => r.ran().filter((l) => l.startsWith('before-merge')).length === before + 1, 'the first of two before-merge scripts started');
+  r.merge = false; r.free('before-merge');
+  assert.equal((await two).error, 'merge-is-the-owners');
+  await new Promise((go) => setTimeout(go, 1000)); // a script that started writes its line within this
+  assert.equal(r.ran().filter((l) => l.startsWith('before-merge')).length, before + 1, 'the second before-merge script started after the owner turned merge off');
+  console.log('PASS H2: switch off refused before-merge by name with no script run (ci-red still ran); on, it was allowed; the status showed each; turned off or closed while the script was held, it was refused, and a second before-merge script did not start');
 });
 
 test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as project.source, without any user or password, and null when unset', { timeout: 60000 }, async () => {

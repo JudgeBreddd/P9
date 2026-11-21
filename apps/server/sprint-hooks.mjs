@@ -214,6 +214,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // and { error: 'script-refused', ... } comes back. Notices are started and not waited for. null: go on.
   // scripts: only Start passes it (the list being approved by this very press, not yet recorded).
   // onNotice: given each notice's run (a promise), for a caller that must know when they end (event, ordered).
+  // H2: the answer while the owner's standing-merge switch is off.
+  const OWNERS = { error: 'merge-is-the-owners', detail: 'The owner has not turned on standing merge for this sprint: do not merge. Tell the owner the PR is ready to merge.' };
   async function fire(sprint, point, subject, scripts, onNotice) {
     // O202: the sprint's own list (no list given) is checked again right before each start, after the state read and
     // each blocking script waited: a sprint closed, deleted, started again or P9 shutting down meanwhile starts nothing
@@ -227,6 +229,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     let base; try { base = await state(sprint, point, subject); } catch { base = { contract: 1, point, error: 'state-unavailable' }; }
     for (const s of due) {
       const blocking = s.blocking && BLOCKING.includes(point);
+      // H2: the owner's switch turned off meanwhile starts no more before-merge script (SECURITY.md § Standing merge).
+      if (own && point === 'before-merge' && !chat.projects.merge(sprint)) return { ...OWNERS };
       if (!open()) return BLOCKING.includes(point) ? { error: 'sprint-gone', point, detail: 'The sprint was closed, deleted or started again, or P9 began shutting down, before its script started; nothing more ran.' } : null;
       const going = speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, say }), s.notify)
         .then((r) => { record(sprint, s, r); return r; });
@@ -278,7 +282,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     if (!chat.projects.started(caller)) return { error: 'sprint-not-started', detail: 'Nothing runs before Start: Start approves the scripts.' };
     // H2 (SECURITY.md § Standing merge): with the owner's standing-merge switch off, merge is the owner's; the scripts do
     // not run for a merge the lead may not make. It binds only a lead that reports before it merges.
-    if (point === 'before-merge' && !chat.projects.merge(caller)) return { error: 'merge-is-the-owners', detail: 'The owner has not turned on standing merge for this sprint: do not merge. Tell the owner the PR is ready to merge.' };
+    if (point === 'before-merge' && !chat.projects.merge(caller)) return { ...OWNERS };
     const key = caller + '\n' + point;
     if (busy.has(key)) return { error: 'point-busy', detail: `The ${point} scripts of your last call are still running; call again when they end.` };
     busy.add(key);
@@ -287,6 +291,10 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     try { refused = await fire(caller, point, { ...subject, by: 'lead' }, undefined, (p) => going.push(p)); }
     finally { Promise.allSettled(going).then(() => busy.delete(key)); }
     if (refused) return refused;
+    // H2: the owner may turn the switch off, or close the sprint, while the before-merge scripts run: read both again
+    // after the awaits, so "allowed" is only said for a merge still allowed now.
+    if (point === 'before-merge' && chat.projects.closed(caller)) return { error: 'sprint-closed' };
+    if (point === 'before-merge' && !chat.projects.merge(caller)) return { ...OWNERS };
     return { point, scripts: due, ...(point === 'before-merge' && { merge: 'allowed' }) };
   }
 
