@@ -147,7 +147,7 @@ export function installProjects(o, api) {
         <label class="spset"><span>Clone from</span><input data-slot="input" class="mono" id="pjSpSource" maxlength="2000" spellcheck="false" autocomplete="off" placeholder="https://… or git@host:owner/repo.git" value="${esc(p.sprint.source)}"></label>
         <p class="hint">Empty: each sprint is cloned from the folder its workers would start in${mine ? '' : ' (this project\'s work folder)'}, and that folder is only read. With an address here, P9 clones from the address instead and does not read your folder at all. Signing in is your own git sign-in.</p>
         <label class="spset"><span>Setup command</span><input data-slot="input" class="mono" id="pjSpSetup" maxlength="2000" spellcheck="false" autocomplete="off" placeholder="for example: pnpm install" value="${esc(p.sprint.setup)}"></label>
-        <p class="hint">Runs in each new worker folder before its worker starts. Empty: the one in Settings &gt; Delegation is used. Only you set these, here on the desktop; no agent can.</p></section>` : ''}
+        <p class="hint">Runs in each new worker folder before its worker starts. Empty: nothing runs. Only you set these, here on the desktop; no agent can.</p></section>` : ''}
       ${window.p9 && p.sprint || !sprintRows ? '' : `<section class="sec" aria-label="Sprints"><div class="sh2"><h2>Sprints</h2></div>${sprintRows}</section>`}
     </div>`;
   }

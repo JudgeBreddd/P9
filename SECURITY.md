@@ -986,10 +986,10 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   changed against the main line, whether anything is unsaved, and whether a commit is in the main line. It reads; it
   never fetches on its own except when it cleans up (below), and a fetch uses your git sign-in like a push.
 - **The setup command.** One command you type, run in each new worker folder before its worker starts (for example
-  installing packages). A project can have its own (the project page, on the desktop: the same desktop-only route
-  as its sprint source); a lead chat in a project without one, or in no project, gets the one in Settings >
-  Delegation. Only you set either: no agent tool, no file in the repository and no phone request can set or change
-  them, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
+  installing packages). It is the project's (the project page, on the desktop: the same desktop-only route
+  as its sprint source); a lead chat in a project without one, or in no project, gets none, and Settings > Delegation
+  has none (O226; one an older version saved there is never run). Only you set it: no agent tool, no file in the
+  repository and no phone request can set or change it, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
   environment, for at most 15 minutes, as a process tree P9 owns (Windows: a kill-on-close Job Object, which also ends
   what the shell leaves running when it exits; elsewhere a process group). At that limit the whole tree is stopped and
   P9 waits, briefly, for the stop to be confirmed before it answers or starts anything else in that sprint; a stop it

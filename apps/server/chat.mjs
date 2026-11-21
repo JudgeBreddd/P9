@@ -2006,8 +2006,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     delegation: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'delegation'").get()?.value ?? '{}'); } catch { v = {}; }
       const str = (x) => (typeof x === 'string' && x.length <= 200 ? x : ''), agent = (x) => (x === '' || Object.hasOwn(MODES, x ?? ' ') || /^profile:[\w-]{1,80}$/.test(x ?? '') ? x : '');
       const max = Number.isInteger(v?.max) && v.max >= 1 && v.max <= 20 ? v.max : 5;
-      // setup: the owner's command run in each new worker folder before its worker starts; left out when empty (A4).
-      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max, ...(typeof v?.setup === 'string' && v.setup && v.setup.length <= 2000 && { setup: v.setup }),
+      // O226: no setup here; a setup an older window saved is kept in prefs and never read (worker folders run the project's).
+      return { start: ['off', 'ask', 'agent'].includes(v?.start) ? v.start : 'ask', max,
         workers: Array.from({ length: max }, (_, i) => { const x = Array.isArray(v?.workers) ? v.workers[i] : null, a = agent(x?.agent); return { agent: a, model: a ? str(x?.model) : '', effort: a ? str(x?.effort) : '' }; }) }; },
     // O133 (the Settings defaults kept going back to the agent default): Settings > New chats start in,
     // each agent's Default model and Default effort ('' the agent's own), kept here so a chat an agent opens starts on them
