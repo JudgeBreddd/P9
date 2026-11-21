@@ -206,7 +206,7 @@ export function setupRoutes(outer) {
     outer.ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('terminal-greeting', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.show ? 'on' : 'off');
     return c.json({ show: outer.greeting() });
   });
-  // Desktop only, Settings > Delegation: who starts a sprint, how many workers a chat may run, and what each one runs on.
+  // Desktop only, Settings > Delegation: who may start workers, how many workers a chat may run, and what each one runs on.
   outer.app.get('/delegation', (c) => c.json(outer.chat.delegation()));
   outer.app.post('/delegation', async (c) => {
     const body = await outer.json(c), str = (x) => typeof x === 'string' && x.length <= 200;

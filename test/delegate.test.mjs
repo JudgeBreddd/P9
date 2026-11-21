@@ -958,7 +958,7 @@ test('Delegate: Settings > Delegation: Ask me first asks before a chat\'s first 
   const answer = (request, optionId) => call(instance, `/chat/${a.conversation}/answer`, 'POST', { request, answer: { optionId } });
   let pending = a.tool('open_chat', { text: 'config', title: 'First' });
   let asked = await approval(a.cursor);
-  assert.match(asked.hit.data.toolCall.title, /^This starts a sprint \(Settings > Delegation: Ask me first\)\. P9 Delegate: start a Claude worker "First" in mode /);
+  assert.match(asked.hit.data.toolCall.title, /^This chat's first worker \(Settings > Delegation: Ask me first\)\. P9 Delegate: start a Claude worker "First" in mode /);
   await answer(asked.hit.data.request, 'reject');
   assert.equal((await pending).error, 'not-allowed');
   assert.equal((await rows(instance)).length, 1, 'a rejected sprint start made a chat');
