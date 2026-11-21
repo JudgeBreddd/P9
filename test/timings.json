@@ -117,6 +117,7 @@
   "settings-pages.test.mjs": 34,
   "settings-wizard.test.mjs": 167,
   "setup-wizard.test.mjs": 50,
+  "shard.test.mjs": 1,
   "shell-regressions.test.mjs": 22,
   "shell-resized.test.mjs": 36,
   "side-panel.test.mjs": 34,
