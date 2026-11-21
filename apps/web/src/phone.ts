@@ -328,7 +328,7 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; pinned?: boolean };
+type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: string; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
@@ -396,7 +396,8 @@ function foldBlocks(now: Folded, events: Json[]) {
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
     // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
     if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
-    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)) });
+    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)), who: whoSent(data) });
+    else if (kind === 'note') add('user', data.text, { who: whoSent({ ...data, info: true }) }); // another chat's note, waiting for this chat's next message
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
@@ -443,9 +444,16 @@ function foldBlocks(now: Folded, events: Json[]) {
 }
 // P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
 const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
+// O73: a message another chat's agent sent names that chat (its title when it sent, else now, else "a deleted chat"; P9's
+// own notes say P9), as the desktop window does; the user's own messages have no heading.
+function whoSent(data: Json) {
+  if (data.from === undefined && !data.ask && !data.info) return undefined;
+  const title = data.fromTitle || (data.from === 'p9' ? 'P9' : state.conversations.find((item) => item.id === data.from)?.title), name = String(title || (typeof data.from === 'string' ? 'a deleted chat' : 'another chat'));
+  return data.ask ? 'Question from ' + name + ' · answered read-only' : data.info ? 'Note from ' + name + ' · information only' : 'Message from ' + name;
+}
 function blockHtml(block: Block) {
   const kind = block.kind;
-  if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
+  if (kind === 'user') return `<article data-kind="user" class="msg user"${block.who ? ' data-from' : ''}>${block.who ? `<div class="who">${escape(block.who)}</div>` : ''}${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
   if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
@@ -538,7 +546,7 @@ function digest() {
 function fold(chat: Fold, event: Json) {
   {
     const kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
-    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; chat.mine = true; }
+    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; chat.mine = !data.from; } // O73: another chat's message is not the reader's own
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
       if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; chat.mine = false; }
