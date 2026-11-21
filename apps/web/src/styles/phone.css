@@ -213,6 +213,8 @@ section[data-view=chat]>:not(.bar){margin-left:0;margin-right:0}
 .scrollwrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
 body.inchat nav{display:none}
 .sec{margin:16px 16px 4px;font-size:13px;font-weight:600;color:var(--dim)}
+.sec-go{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:4px;min-height:32px}.sec-go::after{content:'›';font-size:15px} /* O210: opens the project's sprints */
+.sprint-row{display:flex;align-items:center;gap:10px;min-height:52px;border-bottom:1px solid rgba(255,255,255,.08)}.sprint-row .t{flex:1;display:flex;flex-direction:column;min-width:0}.sprint-row small{color:var(--dim)}.sheet-h{margin:4px 0;font-size:13px;color:var(--dim)}
 #chatList .row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:8px 16px;border:0;border-radius:0;background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.08)) right bottom/calc(100% - 16px) 1px no-repeat;color:var(--text);font-weight:400;text-align:left}
 #chatList .row .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--dim)}
 #chatList .row .dot.claude{background:#d97757}#chatList .row .dot.codex{background:#5b9cff}
@@ -246,6 +248,7 @@ body.inchat nav{display:none}
 #events .msg.user{padding:10px 14px;border-radius:16px;background:var(--raised);white-space:pre-wrap;overflow-wrap:anywhere}
 #events .msg.user[data-from]{background:none;border:1px dashed var(--line)}#events .msg .who{font-size:12px;color:var(--dim);white-space:normal;margin-bottom:4px}
 #events .msg.ask{padding:10px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow-wrap:anywhere}
+#events .msg.ask>div:first-child{white-space:pre-line} /* O210: start_sprint's question, one line per script */
 #events .msg.ask.open{border-color:var(--amber)}
 #events .msg.ask .actions{margin-top:8px}
 #events .msg.ask .ask-plan{max-height:50vh;overflow:auto;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.04)}

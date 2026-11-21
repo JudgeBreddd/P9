@@ -147,3 +147,113 @@ test('phone: folder browsing and outside chat folders require unrestricted mode'
   assert.equal((await server.desk('/file-protection', 'POST', { on: true })).status, 200);
   assert.equal((await create()).status, 400, 'file protection refuses outside chat folder');
 });
+
+// O210 (plan A): a project's heading opens its sprints (GET /projects/:id on the phone's listener), drawn with no chats too.
+// A sprint not closed has one button that types the ask into a chat of the project: its newest chat that is no sprint's,
+// else a new one in the project. The text is added once to what the chat already has typed. Start and Close stay
+// desktop presses; the agent asks the user here. A multi-line approval (start_sprint's scripts) shows its lines.
+test('O210: the phone shows a project\'s sprints, and Ask to start / close types the ask into a chat of the project', { timeout: 180000 }, async (t) => {
+  const server = await remoteDaemon(t, { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] });
+  const project = async (name) => { const r = await call(server, '/projects', { name, work: { kind: 'p9' } }); assert.equal(r.status, 201, JSON.stringify(r)); return r.project.id; };
+  const site = await project('Site'), empty = await project('Empty');
+  const own = (await call(server, '/chat', { provider: 'claude', project: site })).conversation;
+  const prep = async (id, title) => { const r = await call(server, '/projects/' + id + '/sprints', { title }); assert.equal(r.status, 201, JSON.stringify(r)); return r.sprint; };
+  const s1 = await prep(empty, 'S1'), s2 = await prep(site, 'S2');
+
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const device = await passkeyDevice(browser, server, 'phone-sprints');
+  const session = await enrollDevice(server, device);
+  const { page, context } = device;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  await context.addInitScript(() => { Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }); if (navigator.serviceWorker) navigator.serviceWorker.register = async () => undefined; });
+  await page.goto(server.origin + '/phone/');
+  await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
+  await page.reload();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await until(async () => JSON.stringify(await groups(page)) === JSON.stringify([['Site', [own]], ['Empty', []]]), 'a project with no chat is listed too: ' + JSON.stringify(await groups(page)));
+  const rows = () => page.evaluate(() => [...document.querySelectorAll('#sheet[open] .sprint-row')].map((r) => [r.querySelector('b').textContent, r.querySelector('small').textContent, r.querySelector('button')?.textContent ?? null]));
+  const prompt = () => page.locator('#prompt').inputValue();
+  const shown = (id) => page.waitForFunction((id) => location.hash === '#chat=' + id && document.querySelector('#conversation').value === id, id, { timeout: 10000 });
+
+  // A project with no chat: its prepared sprint, and the ask goes to a new chat made in that project.
+  await page.click(`#chatList [data-project="${empty}"]`);
+  await until(async () => (await rows()).length === 1, 'Empty\'s sprint row: ' + await page.evaluate(() => document.querySelector('#sheetBody')?.innerHTML.slice(0, 300)));
+  assert.deepEqual(await rows(), [['S1', 'Prepared, not started', 'Ask to start']]);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-sprints ' + (await page.screenshot()).toString('base64'));
+  await page.click('#sheet[open] [data-sprint-ask="start"]');
+  await until(async () => (await call(server, '/chat')).conversations.some((c) => c.project === empty), 'a chat made in Empty');
+  const made = (await call(server, '/chat')).conversations.find((c) => c.project === empty).id;
+  await shown(made);
+  assert.equal(await prompt(), `Start the sprint "S1" (sprint ${s1}) with start_sprint.`);
+
+  // A project with its own chat: the ask is added once to that chat's typed text, never sent by the tap.
+  await page.click('[data-bar="chat"] [data-back]'); await page.click(`#chatList [data-chat="${own}"]`); await shown(own);
+  await page.fill('#prompt', 'first this'); await page.click('[data-bar="chat"] [data-back]');
+  for (let i = 0; i < 2; i++) {
+    await page.click(`#chatList [data-project="${site}"]`);
+    await until(async () => (await rows()).length === 1, 'Site\'s sprint row');
+    await page.click('#sheet[open] [data-sprint-ask="start"]');
+    await shown(own);
+    if (i === 0) await page.click('[data-bar="chat"] [data-back]');
+  }
+  assert.equal(await prompt(), `first this\nStart the sprint "S2" (sprint ${s2}) with start_sprint.`);
+  assert.equal((await call(server, '/chat/events?after=0&only=' + own)).events.filter((e) => e.type === 'user').length, 0, 'the tap sent something');
+  assert.equal((await call(server, '/chat')).conversations.length, 2, 'a chat was made though the project has one');
+
+  // Every state, as GET /projects/:id gives it: a started sprint asks to close (paused too), a closed one asks nothing.
+  // The started sprint's lead is the project's chat here, so the ask goes to a new chat: a lead (or a worker) never asks.
+  const at = Date.now();
+  const real = await call(server, '/projects/' + site);
+  await page.route('**/projects/' + site, async (route) => { const body = structuredClone(real);
+    body.project.sprints = [real.project.sprints[0], { lead: own, title: 'Run', files: [], prep: false, started: at }, { lead: 'p1', title: 'Held', files: [], prep: false, started: at, paused: true },
+      { lead: 'c1', title: 'Done', files: [], prep: false, started: at, closed: { at, by: 'owner' } }];
+    return route.fulfill({ json: body }); });
+  await page.click('[data-bar="chat"] [data-back]');
+  await page.click(`#chatList [data-project="${site}"]`);
+  await until(async () => (await rows()).length === 4, 'four sprint rows');
+  const time = new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  assert.deepEqual(await rows(), [['S2', 'Prepared, not started', 'Ask to start'], ['Run', 'Started ' + time, 'Ask to close'], ['Held', 'Paused · Started ' + time, 'Ask to close'], ['Done', 'Closed ' + time, null]]);
+  await page.click('#sheet[open] [data-lead="' + own + '"]');
+  await until(async () => (await call(server, '/chat')).conversations.filter((c) => c.project === site).length === 2, 'a new chat in Site');
+  const asker = (await call(server, '/chat')).conversations.find((c) => c.project === site && c.id !== own).id;
+  await shown(asker);
+  assert.equal(await prompt(), `Close the sprint "Run" (sprint ${own}) with close_sprint.`);
+  await page.unroute('**/projects/' + site);
+
+  // A question of several lines (start_sprint's, one script per line) is drawn line by line.
+  assert.equal((await call(server, '/chat/' + asker + '/prompt', { text: 'perm-json ' + JSON.stringify({ title: 'Start it. Scripts, one per line:\na (after-close): node a.mjs\nb (after-close): node b.mjs' }) })).status, 202);
+  await page.waitForSelector('#events .msg.ask.open', { timeout: 15000 });
+  assert.equal(await page.locator('#events .msg.ask.open > div').first().innerText(), 'Start it. Scripts, one per line:\na (after-close): node a.mjs\nb (after-close): node b.mjs');
+
+  // O210 fix1 (Reviewer on #402): a reply for a sheet no longer open is dropped. Empty's GET is held; the sheet is closed
+  // and Site's opened and drawn; Empty's reply then arrives and must not replace Site's rows, or Ask would go to Empty.
+  let release; const held = new Promise((r) => { release = r; });
+  const hold = async (route) => { await held; return route.fulfill({ json: await call(server, '/projects/' + empty) }); };
+  const arrived = () => page.waitForResponse((r) => r.url().endsWith('/projects/' + empty));
+  const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 200)))); // ponytail: the dropped reply's parse and draw are a few microtasks after its response
+  const closeSheet = () => page.evaluate(() => document.querySelector('#sheet').close());
+  await page.route('**/projects/' + empty, hold);
+  await page.click('[data-bar="chat"] [data-back]');
+  await page.click(`#chatList [data-project="${empty}"]`);
+  await closeSheet();
+  await page.click(`#chatList [data-project="${site}"]`);
+  await until(async () => (await rows()).length === 1, 'Site\'s row while Empty\'s reply is held');
+  let late = arrived(); release(); await late; await settle();
+  assert.deepEqual([await page.locator('#sheetTitle').textContent(), await rows()], ['Site', [['S2', 'Prepared, not started', 'Ask to start']]], 'a late reply for Empty replaced Site\'s sheet');
+  await page.click('#sheet[open] [data-sprint-ask="start"]');
+  await shown(asker); // Site's newest chat that is no sprint's (Empty's would be `made`)
+  // The same with a failing reply, while another sheet is open: that sheet stays as it is.
+  release = null; const held2 = new Promise((r) => { release = r; });
+  await page.unroute('**/projects/' + empty, hold);
+  const hold2 = async (route) => { await held2; return route.fulfill({ status: 500, json: { error: 'held' } }); };
+  await page.route('**/projects/' + empty, hold2);
+  await page.click('[data-bar="chat"] [data-back]');
+  await page.click(`#chatList [data-project="${empty}"]`);
+  await closeSheet();
+  await page.evaluate(() => dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Other', html: '<p id="otherSheet">another picker</p>' } })));
+  late = arrived(); release(); await late; await settle();
+  assert.deepEqual(await page.evaluate(() => [document.querySelector('#sheetTitle').textContent, document.querySelector('#sheetBody').innerHTML]), ['Other', '<p id="otherSheet">another picker</p>'], 'a late failure for Empty replaced another sheet');
+  await page.unroute('**/projects/' + empty, hold2);
+});

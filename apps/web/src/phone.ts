@@ -1,7 +1,7 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
 import { limitLine, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf } from './helpers.mjs';
-import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
+import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
@@ -84,9 +84,11 @@ one('main').addEventListener('scroll', (event) => { const box = event.target as 
 const sheet = one<HTMLDialogElement>('#sheet');
 let artSending: string | null = null, artEntries: string[][] = []; // item 19 (the artifact functions at the end of this file)
 // K10: the Mode sheet borrows #more; a sheet opened over it would wipe them with its HTML, so they go home first.
-function openSheet(title: string, html: string) { const more = one('#more'); if (!one('#modeHome').contains(more)) one('#modeHome').append(more); one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
+// O210 fix1: every open and close of the sheet is a new generation; a late reply for an older one (openProject) is dropped.
+let sheetGen = 0;
+function openSheet(title: string, html: string) { sheetGen++; const more = one('#more'); if (!one('#modeHome').contains(more)) one('#modeHome').append(more); one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
 sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
-sheet.addEventListener('close', () => sheet.classList.remove('full')); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
+sheet.addEventListener('close', () => { sheetGen++; sheet.classList.remove('full'); }); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
 addEventListener('p9-sheet', (event) => { const { title, html, full } = (event as CustomEvent).detail; sheet.classList.toggle('full', full === true); openSheet(String(title), String(html)); }); // ponytail: the one door into the sheet for code outside this file and for its test; callers pass trusted HTML
 // The app is a column the size of the visible viewport: when a keyboard opens, visualViewport shrinks (iOS Safari leaves
 // the layout viewport alone and offsets the visual one), the column follows it, and the composer rides the keyboard. The
@@ -591,7 +593,8 @@ function renderList() {
     const second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : escape(plain(info.last) || (info.last.trim() ? 'Code' : '')); // a reply that opens with a code fence
     return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"${stopped ? ' data-stopped' : ''}${unread ? ' data-unread' : ''}><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${stopped ? '<span class="tag">Stopped</span>' : ''}${second}</small></span>${unread ? '<i class="new" role="img" aria-label="Not read yet"></i>' : ''}<time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
-  const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
+  const section = (label: string, items: Json[], project?: string) => project ? `<h2 class="sec"><button type="button" class="sec-go" data-project="${escape(project)}">${label}</button></h2>${items.map(row).join('')}`
+    : items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
   const html = phoneSections(state.conversations, (item: Json) => isOpen(item) || !!item.sent, section) // N1 point 12: by project (phone-projects.mjs)
     || '<div class="empty">No chats yet. Tap + to start one.</div>';
   if (seeded) keepRead();
@@ -826,7 +829,26 @@ one<HTMLElement>('#chips').onclick = (event) => {
   if (target.closest('[data-chip-close]')) { try { localStorage.setItem('p9-pins-closed:' + openId, pinSig); } catch {} render(); return; }
   if (target.closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML);
 };
-one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
+one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat],[data-project]'); if (row?.dataset.chat) openChat(row.dataset.chat); else if (row?.dataset.project) void openProject(row.dataset.project); };
+// O210 (plan A): a project's heading opens its sprints, read from GET /projects/:id on the phone's own listener. Each
+// sprint not closed has one button that opens a chat of the project with the ask typed in; sending it is the ask, and the
+// agent's start_sprint or close_sprint asks the user here. No sprint press on the phone (SECURITY.md stays as it is).
+let projectOpen: { id: string; sprints: Json[] } | null = null;
+async function openProject(id: string) {
+  projectOpen = null;
+  openSheet(projectName(id) || 'Project', '<p class="empty">Loading…</p>');
+  const gen = sheetGen;
+  let sprints: Json[];
+  try { sprints = (((await request('/projects/' + encodeURIComponent(id))).project as Json)?.sprints ?? []) as Json[]; }
+  catch { if (gen === sheetGen) one('#sheetBody').innerHTML = '<p class="empty">This project could not be read.</p>'; return; }
+  if (gen !== sheetGen) return; // the sheet was closed or opened for something else meanwhile
+  projectOpen = { id, sprints };
+  const said = (s: Json) => s.closed ? 'Closed ' + clock((s.closed as Json).at) : s.prep || !s.started ? 'Prepared, not started' : (s.paused ? 'Paused · ' : '') + 'Started ' + clock(s.started);
+  one('#sheetBody').innerHTML = sprints.length ? '<h3 class="sheet-h">Sprints</h3>' + sprints.map((s) => { const ask = sprintAsk(s);
+    return `<div class="sprint-row" data-sprint="${escape(s.lead)}"><span class="t"><b>${escape(s.title)}</b><small>${escape(said(s))}</small></span>${ask ? `<button type="button" class="quiet" data-sprint-ask="${ask}" data-lead="${escape(s.lead)}">Ask to ${ask}</button>` : ''}</div>`; }).join('')
+    + '<p class="muted">Start and Close are pressed on the desktop. Here the button types the ask into a chat of this project; send it, and the agent asks you to allow it in that chat.</p>'
+    : '<p class="empty">No sprints in this project. A sprint is prepared on the desktop\'s project page, or by an agent with new_sprint.</p>';
+}
 // L3, P3: a turn that runs can be stopped from the top bar: a labelled Stop beside its working spinner (the composer's send button turns into Stop
 // only when the box is empty and nothing is queued). The route is the composer's and the desktop's: POST /chat/:id/cancel.
 async function stopChat(id: string) {
@@ -861,14 +883,30 @@ one('#sheetBody').addEventListener('click', async (event) => {
   if (make) {
     if (!navigator.onLine) return;
     sheet.close();
-    const result = await mutate('/chat', { provider: agent, ...(make.dataset.profile && { profile: make.dataset.profile, model: make.dataset.profileModel }) });
-    if (result.status !== 201) return;
-    // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
-    const last = localStorage.getItem('p9-mode:' + agent);
-    if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
-    await loadChat(); openChat(String(result.body.conversation));
+    const made = await madeChat(agent, make.dataset.profile ? { profile: make.dataset.profile, model: make.dataset.profileModel } : {});
+    if (made) openChat(made);
+  }
+  const ask = target.closest<HTMLElement>('[data-sprint-ask]'), open = projectOpen;
+  if (ask && open) {
+    const sprint = open.sprints.find((s) => s.lead === ask.dataset.lead)!, text = askText(sprint, ask.dataset.sprintAsk);
+    if (!navigator.onLine) return;
+    sheet.close();
+    const chat = askingChat(state.conversations, open.id, open.sprints) ?? await madeChat('claude', { project: open.id });
+    if (!chat) return;
+    editDraft(chat, (now) => now.includes(text) ? now : (now ? now + '\n' : '') + text);
+    openChat(chat);
   }
 });
+// A chat made here (New chat, or a sprint ask in a project with no chat of its own): its id once the list has it, else null.
+async function madeChat(agent: string, extra: Json) {
+  const result = await mutate('/chat', { provider: agent, ...extra });
+  if (result.status !== 201) return null;
+  // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
+  const last = localStorage.getItem('p9-mode:' + agent);
+  if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
+  await loadChat();
+  return String(result.body.conversation);
+}
 // Mode and Model for the picked chat (the phone could change neither; threat model row 15). An open
 // chat starts at "as set" and sends nothing until picked, so a Plan picked on the desktop stays; the label shows the mode
 // the daemon last set (its 'mode' event). A chat made here starts in this phone's last pick for its agent. P6 (row 25):
