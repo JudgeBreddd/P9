@@ -238,6 +238,7 @@ export function installProjects(o, api) {
   // edited, and the instructions box, are left alone while they have the focus.
   function renderPage() {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
+    if (on && !chats.hidden) o.keepPlace(); // O212 review: record a scroll made since the last paint before the chats hide
     const shown = chats.hidden && !on; page.hidden = !on; chats.hidden = on;
     if (shown) queueMicrotask(() => o.renderChats()); // O212: every way back paints the chats at once (archiving the shown project did not), so a pane hidden meanwhile is placed before the user can scroll it
     if (!on || v.kind !== 'project' || v.id !== instrOpen || spPage) instrOpen = ''; // O198: another page (a chat, another project, Archived, a sprint's page) closes it

@@ -690,6 +690,12 @@ const keepIn = (s, v) => {
 };
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
   return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
+// Records where each pane's reader is (outer.view). Run before every paint, and by keepPlace() before the chats hide (O212).
+const save = (root, panes) => panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'), k = root.id + ':' + p.dataset.id, was = outer.view[k], pinned = h.scrollHeight - h.scrollTop - h.clientHeight < 24;
+  if (!h.getClientRects().length || was?.hid) { if (was && h.getClientRects().length) delete was.hid; return; }
+  outer.view[k] = { top: h.scrollTop, pinned, up: !pinned && (!was || was.up || h.scrollTop < (was.at ?? was.top)), selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
+// O212 review: a scroll alone paints nothing, so the chats about to hide record where the reader is now; hidden, they cannot.
+const keepPlace = () => { const r = document.getElementById('chats'); if (r) save(r, [...r.querySelectorAll(':scope > .pane')]); };
 function paint(root, ss, only) {
   const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
   const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
@@ -703,9 +709,7 @@ function paint(root, ss, only) {
   // O212: a pane under display:none (the Projects and Archived pages hide #chats) has no box: it reads 0 high, so it looked
   // pinned, and place() could not scroll it. Its record stays as it was before it hid (hid), and the first paint after it
   // shows again places it from that record, not from what the hidden paints left on screen.
-  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'), k = root.id + ':' + p.dataset.id, was = outer.view[k], pinned = h.scrollHeight - h.scrollTop - h.clientHeight < 24;
-    if (!h.getClientRects().length || was?.hid) { if (was && h.getClientRects().length) delete was.hid; return; }
-    outer.view[k] = { top: h.scrollTop, pinned, up: !pinned && (!was || was.up || h.scrollTop < (was.at ?? was.top)), selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
+  save(root, panes);
   panes.forEach(p => keepIn(outer.S.sessions.find(x => x.id === p.dataset.id), outer.view[root.id + ':' + p.dataset.id]));
   panes.forEach(p => p.querySelectorAll('details[data-ev]').forEach(d => { const w = DRAWN.get(d); if (w?.[0] && d.open !== w[1]) w[0].open = d.open; }));
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
@@ -1125,5 +1129,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
+  return { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace };
 }

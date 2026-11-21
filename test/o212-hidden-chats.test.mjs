@@ -35,8 +35,9 @@ test('O212: a chat read scrolled up keeps its place through the Archived page, w
     window.__o212 = ev; window.__sprint.set(id, { events: ev });
   }, id);
   await page.waitForFunction(() => [...document.querySelectorAll('#chats .hist .col > *')].some(c => c.textContent.includes('reply 131.')), null, { timeout: 5000 });
-  await pane.locator('.hist').evaluate(h => { h.style.scrollBehavior = 'auto'; const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 131.'));
+  const read = () => pane.locator('.hist').evaluate(h => { h.style.scrollBehavior = 'auto'; const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 131.'));
     h.scrollTo({ top: h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - 100, behavior: 'instant' }); });
+  await read();
   const offset = () => pane.locator('.hist').evaluate(h => { const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 131.'));
     return el && h.clientHeight ? Math.round(el.getBoundingClientRect().top - h.getBoundingClientRect().top) : null; });
   const push = n => page.evaluate(([id, n]) => { for (let i = 0; i < n; i++) window.__o212.push({ t: 'tool', title: 'Glob ' + i, status: 'completed', output: 'hit' }); window.__sprint.set(id, { events: window.__o212 }); }, [id, n]);
@@ -63,4 +64,15 @@ test('O212: a chat read scrolled up keeps its place through the Archived page, w
   await archived(); await push(3); await back();
   const gap = await pane.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight);
   assert.ok(gap < 24, `a reader at the bottom is still at the bottom: ${gap} px short`);
+  // 5. Review #406: a reader scrolls up and opens Archived with NO paint in between, so the last record says the bottom;
+  // steps arrive while hidden. Coming back must restore where they scrolled to, not the record from before the scroll.
+  await read(); assert.ok(Math.abs(await offset() - 100) <= 1, 'scrolled up to 100 px, not painted since');
+  await archived(); await push(3); await back();
+  o = await offset();
+  assert.ok(o !== null && Math.abs(o - 100) <= 1, `scrolled up just before hiding, then steps while hidden: ${o} px, was 100`);
+  // 6. The same with no step while hidden.
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' })); await push(1);
+  await read(); await archived(); await back();
+  o = await offset();
+  assert.ok(o !== null && Math.abs(o - 100) <= 1, `scrolled up just before hiding, no steps: ${o} px, was 100`);
 });
