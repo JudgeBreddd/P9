@@ -967,7 +967,18 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
   await is(opusPending, 'queue: the newer Opus pick was cleared by the old refusal');
   await page.unroute(prompts);
-  console.log('PASS O206: newer same-model pick kept after an old refusal (box and queue); plain refusal clears');
+  // A send kept in storage from before picks had a pid comes back after a reload; refused for good, its pick still clears.
+  const id = await page.evaluate(() => document.querySelector('#conversation').value);
+  await page.fill('#prompt', '');
+  await page.evaluate((id) => localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: 'old', sent: { text: 'kept' }, picks: [['model', { base: '', value: 'opus' }]] } })), id);
+  await page.reload();
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#modelBtn')?.textContent.includes('Default'), id, { timeout: 15000 });
+  await is(opusPending, 'a kept send: its pick shows as pending after the reload');
+  await page.route(prompts, refuse);
+  await send(page, 'kept'); await noted('Not sent: model-refused');
+  await is(running, 'a kept send without a pid: its refused pick still shows as pending');
+  await page.unroute(prompts);
+  console.log('PASS O206: newer same-model pick kept after an old refusal (box and queue); plain and kept-send refusals clear');
 });
 
 // O59: the chat header names the model the chat's Model sheet shows. A Claude chat next to a Codex chat on another

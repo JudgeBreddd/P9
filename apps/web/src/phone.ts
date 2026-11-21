@@ -1203,8 +1203,10 @@ function spend(id: string, picked: Map<string, string>) {
   if (!own.size) chosen.delete(id);
 }
 try {
-  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; picks: [string, { base: string; value: string }][] }>)) {
-    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent }); if (kept.picks?.length) chosen.set(id, new Map(kept.picks));
+  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
+    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent });
+    // O206: a send kept before picks had a pid gets one here, so its refusal still clears the pick it carried.
+    if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
   }
 } catch {}
 const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
