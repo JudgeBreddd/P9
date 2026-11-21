@@ -702,3 +702,36 @@ test('Sprint O207 FIX1: the question names a role whose first message never arri
   assert.equal(retry.got.error, undefined, JSON.stringify(retry.got));
   assert.deepEqual(retry.got.chats.map((c) => [c.key, c.sent ?? false, c.model, c.effort]).at(-1), ['review', true, 'haiku', 'low']);
 });
+
+// O213: the same for the lead. A first start_sprint whose lead chat is made but whose agent cannot start (signed out)
+// leaves a lead whose first message never arrived; the agent's retry sends it on its row, so the question and the
+// answer name the lead on its row, not "kept as it runs" with its last config or unknown.
+test('Sprint O213: the retry question names a lead whose first message never arrived on its row, not as kept', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Lead retry', work: { kind: 'new', parent: '', name: 'lead-retry' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance, project);
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 3, workers: [] });
+  const made = await a.tool('new_sprint', { title: 'Retry lead' });
+  fs.writeFileSync(path.join(made.folder, 'roles.json'), JSON.stringify({ roles: [{ key: 'lead', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  fs.writeFileSync(path.join(made.folder, 'roles/lead.work.md'), 'config');
+  let after = a.cursor;
+  const start = async () => {
+    const pending = a.tool('start_sprint', { sprint: made.sprint });
+    const q = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', after);
+    after = q.cursor;
+    await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: q.hit.data.request, answer: { optionId: 'allow' } });
+    return { title: q.hit.data.toolCall.title, got: await pending };
+  };
+  fs.writeFileSync(path.join(instance.workspace, 'signed-out'), '');
+  const stuck = await start();
+  fs.rmSync(path.join(instance.workspace, 'signed-out'));
+  assert.equal(stuck.got.role, 'lead', JSON.stringify(stuck.got));
+  assert.ok((await rows(instance)).some((r) => r.id === made.sprint), 'the lead\'s chat was made before its agent failed to start');
+  const retry = await start();
+  assert.match(retry.title, /: lead \(claude haiku low\)\. This is your approval/, 'the question named a lead sent on its row as kept: ' + retry.title);
+  assert.equal(retry.got.error, undefined, JSON.stringify(retry.got));
+  assert.deepEqual(retry.got.chats.map((c) => [c.key, c.model, c.effort, c.existing]), [['lead', 'haiku', 'low', true]]);
+  assert.match(await config(instance, made.sprint), /haiku/, 'the retried lead did not run on its row');
+  console.log('PASS O213: a lead whose first message never arrived is named and sent on its row on the retry, not as kept');
+});
