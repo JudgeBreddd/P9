@@ -622,7 +622,7 @@ test('Delegate notes: a note reaches a wider working chat and a worker\'s parent
   assert.deepEqual(await kid.tool('send_chat', { chat: a.conversation, text: 'the branch is pushed', when: 'note' }), { chat: a.conversation, sent: 'as a note: into its running turn' });
   await said(a.conversation, 'got:the branch is pushed');
   const steered = (await of(a.conversation, 'user')).at(-1).data;
-  assert.deepEqual([steered.text, steered.from, steered.info, steered.steered], ['the branch is pushed', kid.conversation, true, true]);
+  assert.deepEqual([steered.text, steered.from, steered.fromTitle, steered.info, steered.steered], ['the branch is pushed', kid.conversation, 'Kid', true, true]); // O73: its title too
   // Its turn over, a note starts none: it is in the chat's history and waits for the next message.
   await call(instance, `/chat/${a.conversation}/cancel`, 'POST', {});
   await quiet(a.conversation);
@@ -1872,4 +1872,32 @@ test('O125 point 3: send_chat steer reaches a working chat at its next tool step
   const later = all.findIndex((e) => e.type === 'user' && e.data.text?.endsWith('later'));
   assert.equal(all.slice(0, later).filter((e) => e.type === 'turn-end').length, 1, 'the queued message did not wait for the turn to end');
   console.log('PASS O125 point 3: ' + JSON.stringify({ steer: sent.sent, order: { done, steered, answered, end }, plain: refused.reason }));
+});
+
+// O73: the window and phone draw a message another chat's agent sent under that chat's title, not "You". The event carries
+// the sender's id and its title at send time, so the history still names a sender that is renamed or deleted later.
+test('O73: a message and a note another chat sent carry its id and title in the event; P9 and the user carry none', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance, { title: 'Lead "one"' });
+  const made = await a.tool('open_chat', { text: 'mcp', title: 'Kid' }), kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'second' });
+  await a.done(made.chat);
+  const of = async (id, type) => (await events(instance, id)).filter((e) => e.type === type).map((e) => e.data);
+  const sent = (await of(made.chat, 'user')).find((d) => d.text === 'second');
+  assert.deepEqual([sent.from, sent.fromTitle], [a.conversation, 'Lead "one"'], JSON.stringify(sent));
+  // A note to an idle chat waits; its note event names the sender too.
+  for (let i = 0; i < 100 && (await rows(instance)).find((c) => c.id === a.conversation).state === 'turn'; i += 1) await pause(100);
+  await kid.tool('send_chat', { chat: a.conversation, text: 'pushed', when: 'note' });
+  const note = (await of(a.conversation, 'note')).find((d) => d.text === 'pushed');
+  assert.deepEqual([note?.from, note?.fromTitle], [kid.conversation, 'Kid'], JSON.stringify(note));
+  // P9's own notices and the user's own messages carry no title.
+  for (const d of [...await of(a.conversation, 'user'), ...await of(a.conversation, 'note')]) {
+    if (d.from === 'p9' || d.from === undefined) assert.equal(d.fromTitle, undefined, JSON.stringify(d));
+  }
+  assert.ok((await of(a.conversation, 'user')).some((d) => d.text === 'mcp' && d.from === undefined));
+  // A rename later leaves the event's title as it was sent.
+  assert.equal((await call(instance, `/chat/${a.conversation}/rename`, 'POST', { title: 'Renamed' })).status, 200);
+  assert.equal((await of(made.chat, 'user')).find((d) => d.text === 'second').fromTitle, 'Lead "one"');
 });

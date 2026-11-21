@@ -102,6 +102,10 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   await call(instance, `/chat/${id.w1}/prompt`, 'POST', { text: 'owner-typed' });
   await until(instance, (e) => e.conversation === id.w1 && e.data?.content?.text?.includes('owner-typed'), mark);
 
+  // O73 FIX1: the lead is renamed after it sent them; Resume still names it by the title it sent them under.
+  const leadTitle = (await rows(instance)).find((c) => c.id === sprint).title;
+  assert.equal((await call(instance, `/chat/${sprint}/rename`, 'POST', { title: 'Lead renamed' })).status, 200);
+
   // A restart keeps the pause and what it holds; nothing starts.
   instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
   instance = await restart(t, instance, 'state-2');
@@ -115,7 +119,8 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.deepEqual([got.status, got.body], [200, { paused: false, sent: 2 }]);
   await until(instance, (e) => e.conversation === id.w1 && e.data?.content?.text?.includes('pause-two'), mark);
   const sent = await turns(id.w1, 'pause-', mark);
-  assert.deepEqual(sent.map((e) => [e.data.text.includes('pause-one') ? 'one' : 'two', e.data.from]), [['one', sprint], ['two', sprint]]);
+  assert.deepEqual(sent.map((e) => [e.data.text.includes('pause-one') ? 'one' : 'two', e.data.from, e.data.fromTitle]), [['one', sprint, leadTitle], ['two', sprint, leadTitle]]);
+  assert.notEqual(leadTitle, 'Lead renamed');
   await until(instance, (e) => told(e, '[p9] The user resumed'), mark);
   assert.deepEqual(await notices('[p9] The user resumed'), ['[p9] The user resumed this sprint. 2 kept messages sent in order.']);
   assert.equal((await rows(instance)).find((c) => c.id === id.w1).paused, undefined);

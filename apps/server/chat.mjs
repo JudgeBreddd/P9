@@ -344,7 +344,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // Peer help (SECURITY.md § Delegate, "Asking a chat beside you"): a message that is another chat's question, kept
   // beside the body like its sender. end(outcome) is a promise's resolve, so the first outcome is the only one.
   const solos = new WeakMap();
-  const sender = (body) => (senders.has(body) ? { from: senders.get(body) } : {});
+  // O73: and the sending chat's title, taken once when prompt() first sees the message (titles) and carried with it through
+  // a turn's queue, a pause, a parked note and a restart, so the window and phone name it (not "You") even after the chat
+  // is renamed or deleted; none ('p9', or a chat gone already) draws as P9 or "a deleted chat" there. Server-side only, like
+  // senders: no client can set it.
+  const titles = new WeakMap();
+  const titleOf = (from) => (ID.test(from ?? '') ? row(from)?.title ?? null : null);
+  const sender = (body) => {
+    if (!senders.has(body)) return {};
+    const title = titles.get(body);
+    return { from: senders.get(body), ...(typeof title === 'string' && title && { fromTitle: title }) };
+  };
   // A reply sent a second time (seen on the server 2026-11-09 to 11, 9 times in 3 days, Claude chats only): after a
   // compaction, or after a message that joined work the agent had begun by itself, the adapter sends a whole reply
   // again in one piece, under its own message id or a new one. P9 had streamed it already, so it showed twice. A piece
@@ -390,7 +400,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       parked.set(id, (Array.isArray(kept) ? kept : []).filter((n) => typeof n?.text === 'string').map((n) => {
         const body = { text: n.text };
         notes.set(body, noteCount += 1);
-        if (typeof n.from === 'string') senders.set(body, n.from);
+        if (typeof n.from === 'string') { senders.set(body, n.from); titles.set(body, 'fromTitle' in n ? n.fromTitle : titleOf(n.from)); }
         if (n.resent === true) resent.add(body); // its one resend is spent, restart or not
         return body;
       }));
@@ -399,7 +409,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const keepWaiting = (id) => {
     const list = parked.get(id) ?? [];
-    if (list.length) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('parked:' + id, JSON.stringify(list.map((n) => ({ text: n.text, ...sender(n), ...(resent.has(n) && { resent: true }) }))));
+    if (list.length) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('parked:' + id, JSON.stringify(list.map((n) => ({ text: n.text, ...sender(n), ...(senders.has(n) && { fromTitle: titles.get(n) ?? null }), ...(resent.has(n) && { resent: true }) }))));
     else db.prepare('DELETE FROM prefs WHERE key = ?').run('parked:' + id);
   };
   const park = (id, body, quiet) => {
@@ -541,6 +551,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         const { repeat, ...kept } = item.body, body = { ...kept, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
         if (repeat) repeats.add(body);
         if (item.mixed) mixed.set(body, item.mixed);
+        if ('fromTitle' in item) titles.set(body, item.fromTitle); // O73 FIX1: the title it was sent under, not the sender's now
         origins.set(body, { lead, id: item.id }); // a busy chat holds it: hold() takes this entry over (O109 FIX1)
         // was: the ID it waited under before a restart, so its 'user' event clears it from the window.
         const result = await api.prompt(item.chat, body, item.was?.length ? item.was : undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
@@ -1340,7 +1351,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       db.exec('BEGIN');
       try {
         if (origin) setResuming(origin.lead, resumingOf(origin.lead).filter((i) => i.id !== origin.id));
-        setResuming(id, [...resumingOf(id).filter((i) => !old || i.queued !== old.id), { id: item.id, chat: id, from: senders.get(body) ?? null, mixed: mixed.get(body) ?? null, queued: item.id, ...(prior.length && { prior }),
+        setResuming(id, [...resumingOf(id).filter((i) => !old || i.queued !== old.id), { id: item.id, chat: id, from: senders.get(body) ?? null, fromTitle: titles.get(body) ?? null, mixed: mixed.get(body) ?? null, queued: item.id, ...(prior.length && { prior }),
           body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }), ...(repeats.has(body) && { repeat: true }) } }]);
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -1420,6 +1431,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Joined from several senders: no one sender for the whole prompt, its lines are in the text.
     const from = [...new Set(send.map((item) => senders.get(item.body)))], body = { ...send.at(-1).body, ...(mode !== undefined && { mode }), ...(model !== undefined && { model }), ...(Object.keys(config).length && { config }), text, images };
     if (from.length > 1) mixed.set(body, from);
+    else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body))).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
@@ -1563,7 +1575,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // solo.end gets the reply. session.back is the mode the chat returns to: the next ordinary prompt sets it before
     // anything is sent, so no restore step exists that a prompt could race.
     async prompt(id, body, held, from, solo) {
-      if (from && body && typeof body === 'object') senders.set(body, from);
+      if (from && body && typeof body === 'object') { senders.set(body, from); if (!titles.has(body)) titles.set(body, titleOf(from)); }
       if (solo && body && typeof body === 'object') solos.set(body, solo);
       await recovered;
       const release = lifecycle.begin();
@@ -1588,7 +1600,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         release();
         if (solo || bare) return refused(409, 'sprint-paused');
         if (pausing.length >= 100) return refused(409, 'sprint-paused-full'); // SECURITY.md § Pause sprint
-        const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, mixed: mixed.get(body) ?? null,
+        const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, fromTitle: titles.get(body) ?? null, mixed: mixed.get(body) ?? null,
           body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }), ...(repeats.has(body) && { repeat: true }) } };
         // O109 FIX2 (Reviewer): a message that may be a repeat keeps saying so through the pause (repeat: true, as hold() does).
         // Kept in the same write that takes it off Resume's list (deliver's entry, or what a turn's end drained): a crash after

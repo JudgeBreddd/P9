@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
 import { restart } from './helpers.mjs';
-import { start, call, until, events, agent, pause } from './delegate-helpers.mjs';
+import { start, call, until, events, agent, pause, connect } from './delegate-helpers.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 test('O109: a message held for a turn\'s end survives a daemon restart and is delivered exactly once, under its own sender', { timeout: 240000 }, async (t) => {
   let instance = await start(t);
@@ -269,4 +270,72 @@ test('O109 FIX1: a full-limit message that may be a repeat is sent whole with th
   assert.equal(users.at(-1).data.text, text, 'the shown text is not the user\'s'); assert.equal(users.at(-1).data.repeat, true, 'the last user event does not say repeat: ' + trail);
   assert.equal((await events(instance, chat)).filter((e) => e.type === 'unheld').length, 0, 'it was dropped: ' + trail);
   console.log('PASS O109 FIX1 full limit: once, labelled, ' + text.length + ' chars');
+});
+
+// O73 FIX1 (Reviewer): a message from another chat's agent names that chat by the title it had when it sent the message, not
+// by its title when P9 got round to sending it: through a turn's queue, a restart's resend, a parked note kept over a
+// restart, and a sender deleted before its queued message went.
+test('O73 FIX1: a waiting message keeps the title its sender had when it sent it, through a rename, a restart, a parked note and a delete', { timeout: 300000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  let a = await agent(t, instance, { title: 'First' });
+  const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'gating');
+  const go = () => path.join(instance.workspace, 'go');
+  const rename = async (title) => assert.equal((await call(instance, `/chat/${a.conversation}/rename`, 'POST', { title })).status, 200);
+  const sentAs = async (text) => {
+    for (let i = 0; i < 300; i += 1) {
+      const e = (await events(instance, made.chat)).find((x) => x.type === 'user' && String(x.data?.text).includes(text));
+      if (e) return e.data;
+      await pause(100);
+    }
+    assert.fail(`never sent: ${text}: ` + JSON.stringify((await events(instance, made.chat)).filter((e) => ['held', 'unheld', 'user'].includes(e.type)).map((e) => [e.type, e.data?.why, String(e.data?.text).slice(-30)])));
+  };
+  const gate = async () => {
+    const mark = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+    await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'gate' });
+    await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'gating', mark);
+  };
+  const ended = async () => { for (let i = 0; i < 200 && (await call(instance, '/chat')).body.conversations.find((c) => c.id === made.chat).state === 'turn'; i += 1) await pause(100); fs.rmSync(go(), { force: true }); };
+  const again = async (name) => {
+    instance.child.kill('SIGTERM'); await once(instance.child, 'exit'); instance = await restart(t, instance, name);
+    const fresh = (await call(instance, '/chat/events?after=0')).body.cursor;
+    // P9's own restart line may be running a turn on the sender: the 'mcp' message is sent once that turn is over.
+    let asked;
+    for (let i = 0; i < 100 && (asked = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' })).status === 409; i += 1) await pause(100);
+    assert.ok([200, 202].includes(asked.status), JSON.stringify([asked.status, asked.body]));
+    a = await connect(t, instance, a.conversation, fresh);
+  };
+
+  // A turn's queue: sent under First, the sender renamed before the turn ends.
+  assert.ok((await a.tool('send_chat', { chat: made.chat, text: 'queued one', when: 'queue' })).held);
+  await rename('Second');
+  fs.writeFileSync(go(), '');
+  assert.equal((await sentAs('queued one')).fromTitle, 'First');
+  await ended();
+
+  // A restart's resend: sent under Second, renamed, then P9 restarts mid-turn and sends it again.
+  await gate();
+  assert.ok((await a.tool('send_chat', { chat: made.chat, text: 'queued two', when: 'queue' })).held);
+  await rename('Third');
+  await again('state-2');
+  assert.equal((await sentAs('queued two')).fromTitle, 'Second');
+  await ended();
+
+  // A parked note kept over a restart: sent under Third, renamed; after the restart a second note rewrites the kept list.
+  assert.match((await a.tool('send_chat', { chat: made.chat, text: 'note one', when: 'note' })).sent, /with its next message/);
+  await rename('Fourth');
+  await again('state-3');
+  assert.match((await a.tool('send_chat', { chat: made.chat, text: 'note two', when: 'note' })).sent, /with its next message/);
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 });
+  let parked;
+  try { parked = JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('parked:' + made.chat).value); } finally { db.close(); }
+  assert.deepEqual(parked.map((n) => [n.text, n.fromTitle]), [['note one', 'Third'], ['note two', 'Fourth']]);
+
+  // A delete: sent under Fourth, then the sender is deleted before the turn ends.
+  await gate();
+  assert.ok((await a.tool('send_chat', { chat: made.chat, text: 'queued three', when: 'queue' })).held);
+  assert.equal((await call(instance, `/chat/${a.conversation}/delete`, 'POST', {})).status, 200);
+  fs.writeFileSync(go(), '');
+  assert.equal((await sentAs('queued three')).fromTitle, 'Fourth');
 });
