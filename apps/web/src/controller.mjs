@@ -59,7 +59,7 @@ export function mountShell({ askAdmin } = {}) {
     get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
     get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get loadProjects() { return panel.loadProjects; },
     get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
-    get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get renderMission() { return renderMission; },
+    get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get keepPlace() { return keepPlace; }, get renderMission() { return renderMission; },
     get renderModal() { return renderModal; }, get renderSideChat() { return renderSideChat; }, get renderTabs() { return renderTabs; },
     get renderTree() { return renderTree; }, get restartP9() { return restartP9; }, get reviewSort() { return reviewSort; },
     get sampleView() { return sampleView; }, get saveBtn() { return saveBtn; }, get saveWhy() { return saveWhy; },
@@ -82,7 +82,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
+  const { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);

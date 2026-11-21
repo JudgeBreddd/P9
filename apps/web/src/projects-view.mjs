@@ -49,7 +49,8 @@ export function installProjects(o, api) {
       + (file === null ? '<p class="hint" data-sp-scripts="unread" role="alert">hooks.json is not a scripts list: Start will refuse it and say why.</p>'
         : !same && file.length ? `<div class="hint" data-sp-scripts="pending">${sp.started ? 'hooks.json has changed since. Not run until you press Start again, which approves' : 'Start sprint approves'} ${file.length === 1 ? 'this script' : 'these scripts'}. P9 will run ${file.length === 1 ? 'it' : 'them'} as you, outside every agent's mode:${list(file)}</div>`
         : !same && ok.length ? '<p class="hint" data-sp-scripts="pending">hooks.json has no scripts now. The approved ones above still run until you press Start again.</p>' : ''); };
-  const startBtn = sp => (!sp.prep && !sp.started) || sp.closed ? '' : `<button data-slot="button" data-variant="${sp.prep ? 'default' : 'ghost'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : 'Makes what an earlier press did not; every chat already made is kept.'}">${starting.has(sp.lead) ? 'Starting…' : sp.prep ? 'Start sprint' : 'Start again'}</button>`;
+  // O207: a chat running outside Start has the button too: the press keeps that chat as the lead and adopts it.
+  const startBtn = sp => sp.closed ? '' : `<button data-slot="button" data-variant="${sp.started ? 'ghost' : 'default'}" data-size="sm" data-pj="spstart" data-lead="${esc(sp.lead)}" data-hooks="${esc(sp.files.find(f => f.name === 'hooks.json')?.hash ?? '')}"${starting.has(sp.lead) ? ' disabled' : ''} title="${sp.prep ? 'Makes the lead\'s chat and every chat under it, each on its row. Your press is the approval of the plan.' : sp.started ? 'Makes what an earlier press did not; every chat already made is kept.' : 'Makes it a sprint: keeps this chat as the lead, as it is, with nothing sent to it again, and makes each chat in roles.json under it that it does not have. Your press is the approval of the plan.'}">${starting.has(sp.lead) ? 'Starting…' : sp.started ? 'Start again' : 'Start sprint'}</button>`;
   // S13 (SECURITY.md § Pause sprint): Pause or Resume on a started sprint's row. ponytail: here until the Sprint View
   // (Window's row) takes them.
   const pauseBtn = sp => sp.prep || sp.closed ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="${sp.paused ? 'spresume' : 'sppause'}" data-lead="${esc(sp.lead)}" title="${sp.paused ? 'Sends every message kept while it was paused, in order.' : 'Its workers start no new turn; what agents and P9 send them is kept until Resume. Turns already running finish.'}">${sp.paused ? 'Resume sprint' : 'Pause sprint'}</button>`;
@@ -238,7 +239,9 @@ export function installProjects(o, api) {
   // edited, and the instructions box, are left alone while they have the focus.
   function renderPage() {
     const v = o.S.focus === 'chat' && o.S.view, on = v?.kind === 'project' ? !!cur && cur.id === v.id : v?.kind === 'archived';
-    page.hidden = !on; chats.hidden = on;
+    if (on && !chats.hidden) o.keepPlace(); // O212 review: record a scroll made since the last paint before the chats hide
+    const shown = chats.hidden && !on; page.hidden = !on; chats.hidden = on;
+    if (shown) queueMicrotask(() => o.renderChats()); // O212: every way back paints the chats at once (archiving the shown project did not), so a pane hidden meanwhile is placed before the user can scroll it
     if (!on || v.kind !== 'project' || v.id !== instrOpen || spPage) instrOpen = ''; // O198: another page (a chat, another project, Archived, a sprint's page) closes it
     if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
     if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;

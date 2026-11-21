@@ -1176,18 +1176,27 @@ test('Sprint scripts O202: every point is fired; sprint_event runs a reported po
   const no = await r.hooks.event(EA, { point: 'before-merge', subject: { pr: 13 } });
   assert.deepEqual([no.error, no.script, no.point, no.exit], ['script-refused', 'at before-merge', 'before-merge', 4], JSON.stringify(no));
   assert.match(no.detail, /refused this: exit 4: no: before-merge$/);
+  r.hold('ci-red'); // O216: held after it started, as a slow runner leaves it: its log line comes only once it ends
   assert.deepEqual(await r.hooks.event(EA, { point: 'ci-red', subject: { run: '987654' } }), { point: 'ci-red', scripts: 1 });
   assert.deepEqual(await r.hooks.event(EA, { point: 'gate-passed', subject: { gate: 'gate 3' } }), { point: 'gate-passed', scripts: 1 });
   await eventually(() => r.ran().includes('ci-red {"run":"987654","by":"lead"}') && r.ran().includes('gate-passed {"gate":"gate 3","by":"lead"}'), 'the notices ran with their subject');
-  assert.ok(r.logs.some((l) => / \| ci-red \| at ci-red \| exit 0 \| /.test(l)), 'the run is a line in hooks.log');
+  r.free('ci-red');
+  await eventually(() => r.logs.some((l) => / \| ci-red \| at ci-red \| exit 0 \| /.test(l)), 'the run is a line in hooks.log'); // written as it ends
   console.log('PASS O202: FIRED is every point; before-merge allowed then refused by name (exit 4); ci-red and gate-passed ran with their subject and were logged');
 });
 
 test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as project.source, without any user or password, and null when unset', { timeout: 60000 }, async () => {
   const r = pointRig(), told = async (source) => {
     r.source = source; fs.rmSync(path.join(r.dir, 'project-ci-red.json'), { force: true });
+    // O216: the script writes its state, then is held before it exits (the gap a slow runner leaves on its own).
+    r.hold('ci-red');
+    const ended = () => r.logs.filter((l) => l.includes(' | ci-red | ')).length, before = ended();
     assert.deepEqual(await r.hooks.event(EA, { point: 'ci-red', subject: { run: '123456' } }), { point: 'ci-red', scripts: 1 });
     const whole = await eventually(() => fs.existsSync(path.join(r.dir, 'project-ci-red.json')) && fs.readFileSync(path.join(r.dir, 'project-ci-red.json'), 'utf8'), 'ci-red did not run');
+    r.free('ci-red');
+    // Then the next call waits for this run's end (its sprint log line, written before the point is free again). A retry
+    // on point-busy instead would pass a real second run of one call.
+    await eventually(() => ended() > before, 'ci-red did not end');
     assert.ok(!whole.includes('hunter2'), 'hunter2 is in the script\'s state for ' + JSON.stringify(source));
     return JSON.parse(whole).project.source;
   };
