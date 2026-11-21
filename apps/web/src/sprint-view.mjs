@@ -67,6 +67,8 @@ export function statusHtml(s, esc, opts = {}) {
   </section>`;
 }
 
+// H2 (SECURITY.md § Standing merge): the owner's switch, on Sprint Setup; only this page sets it, no agent tool does.
+export const mergeHtml = (sp, esc) => sp.closed ? '' : `<label class="set-pick" data-sp-merge title="On: the lead may merge a PR that passed review, once the sprint's before-merge scripts allow it. Off: the lead is told merge is yours and asks you. A new sprint starts with it off; a sprint made before this switch existed keeps merge on. It binds a lead that reports before it merges (sprint_event), as the sprint rules tell it to; it cannot stop git itself."><input type="checkbox" data-pj="spmerge" data-lead="${esc(sp.lead)}"${sp.merge ? ' checked' : ''}> Standing merge: the lead may merge</label>`;
 // H1-H3: Sprint Setup's Roles rows, for projects-view.mjs (moved here so they are not parsed at startup:
 // test/shell-bundle.test.mjs). roles: the parsed roles.json list, null when it does not read.
 const rolesWhy = sp => { const t = sp.files.find(f => f.name === 'roles.json')?.text;

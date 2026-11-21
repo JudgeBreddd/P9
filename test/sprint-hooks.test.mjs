@@ -456,7 +456,7 @@ test('Sprint scripts S18 held: run_sprint_script checks the cancel, the agent lo
     const chat = { lock: () => ({ on: lock }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
       sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false,
       sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
-      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts }), closed: () => null, prepOf: () => null, record: async () => null } };
+      projects: { merge: () => true, started: () => ({ at: 1, by: 'owner', plan: null, scripts }), closed: () => null, prepOf: () => null, record: async () => null } };
     const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
     const going = hooks.run(id, { name: 'mark' }, ac.signal);
     await at; // the user said yes, every first check passed, and the run now waits for the state
@@ -483,7 +483,7 @@ test('Sprint scripts held: the owner\'s Run now checks for a Close again right b
     const chat = { lock: () => ({ on: false }), info: (c) => (c === id ? { title: 'S', provider: 'fake' } : null), family: () => [{ id }], list: () => [{ id }],
       sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false,
       sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => dir, log: () => {} },
-      projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts: [script] }), closed: () => closed, prepOf: () => null, record: async () => null } };
+      projects: { merge: () => true, started: () => ({ at: 1, by: 'owner', plan: null, scripts: [script] }), closed: () => closed, prepOf: () => null, record: async () => null } };
     const hooks = createHooks({ chat, usage: () => { reached(); return new Promise((r) => { release = r; }); }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
     const going = hooks.owner.run(id, 'mark');
     await at; // every first check passed and the run now waits for the state
@@ -510,7 +510,7 @@ test('Sprint scripts S20 one read: the owner\'s Approve approves the rows of the
     const chat = { lock: () => ({ on: false }), info: () => ({ title: 'S', provider: 'fake' }), family: () => [{ id }], list: () => [{ id }],
       sprint: () => ({}), gauge: () => null, scriptLibrary: () => [], allowScripts: () => false,
       sprintFiles: { exists: (c) => c === id, read: (c, name) => (name === 'hooks.json' ? texts[Math.min(n++, texts.length - 1)] : null), log: () => {} },
-      projects: { started: () => record, closed: () => null, prepOf: () => null, recordStart: (c, next) => { record = next; } } };
+      projects: { merge: () => true, started: () => record, closed: () => null, prepOf: () => null, recordStart: (c, next) => { record = next; } } };
     return { owner: createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true }).owner, extra: () => record.extra ?? [] };
   };
   const shown = made([A, B]), lib = shown.owner.library(id);
@@ -999,7 +999,7 @@ process.exit(fs.existsSync(path.join(${JSON.stringify(dir)}, 'fail')) ? 1 : 0);\
     sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => r.allow, paused: (c) => r.paused.has(c),
     socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
     sprintFiles: { exists: () => true, read: (c, f) => (f === 'hooks.json' ? r.files[c] ?? null : null), folderOf: () => dir, log: (c, line) => r.logs.push(c + ' ' + line) },
-    projects: { started: () => r.start, closed: (c) => (r.closed.has(c) ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
+    projects: { merge: () => true, started: () => r.start, closed: (c) => (r.closed.has(c) ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
   // usage is read inside each run's state: r.gate (a promise) holds every run there, before its spawn.
   r.make = (bootAt = 0) => createHooks({ chat, usage: () => { r.asked += 1; return r.gate; }, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, minute: M, bootAt, ticking: false });
   r.ran = () => (fs.existsSync(ranFile) ? fs.readFileSync(ranFile, 'utf8').split('\n').filter(Boolean).map((l) => l.split(' ')) : []);
@@ -1193,7 +1193,7 @@ if (fs.existsSync(path.join(d, 'refuse-' + j.point))) { console.log('no: ' + j.p
     sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
     socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
     sprintFiles: { exists: (c) => c === EA, read: () => null, folderOf: () => dir, log: (c, line) => r.logs.push(line) },
-    projects: { started: () => (r.started ? { at: r.startAt, by: 'owner', plan: null, scripts: r.scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null, sprintSet: async () => ({ source: r.source, setup: '' }) } };
+    projects: { merge: () => r.merge ?? true, started: () => (r.started ? { at: r.startAt, by: 'owner', plan: null, scripts: r.scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null, sprintSet: async () => ({ source: r.source, setup: '' }) } };
   r.chat = chat; // usage is read inside the state every run gets, so stateHold holds a run between its rows and its start
   r.hooks = createHooks({ chat, usage: async () => r.stateHold, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, ticking: false });
   r.ran = () => (fs.existsSync(ranFile) ? fs.readFileSync(ranFile, 'utf8').split('\n').filter(Boolean) : []);
@@ -1217,6 +1217,39 @@ test('Sprint scripts O202: every point is fired; sprint_event runs a reported po
   r.free('ci-red');
   await eventually(() => r.logs.some((l) => / \| ci-red \| at ci-red \| exit 0 \| /.test(l)), 'the run is a line in hooks.log'); // written as it ends
   console.log('PASS O202: FIRED is every point; before-merge allowed then refused by name (exit 4); ci-red and gate-passed ran with their subject and were logged');
+});
+
+test('Sprint scripts H2: with the owner\'s standing merge off, before-merge answers merge-is-the-owners and runs no script; the status says so', { timeout: 60000 }, async () => {
+  const r = pointRig(); r.merge = false;
+  const no = await r.hooks.event(EA, { point: 'before-merge', subject: { pr: 12 } });
+  assert.equal(no.error, 'merge-is-the-owners', JSON.stringify(no)); assert.match(no.detail, /do not merge\. Tell the owner the PR is ready to merge\.$/);
+  assert.deepEqual(await r.hooks.event(EA, { point: 'ci-red', subject: { run: '987654' } }), { point: 'ci-red', scripts: 1 }, 'the switch held back a point other than before-merge');
+  await eventually(() => r.ran().includes('end ci-red'), 'ci-red ran');
+  assert.deepEqual(r.ran(), ['ci-red {"run":"987654","by":"lead"}', 'end ci-red'], 'a before-merge script ran with merge the owner\'s');
+  assert.equal((await r.hooks.view(EA)).standing_merge, false);
+  r.merge = true;
+  assert.equal((await r.hooks.view(EA)).standing_merge, true);
+  assert.deepEqual(await r.hooks.event(EA, { point: 'before-merge', subject: { pr: 12 } }), { point: 'before-merge', scripts: 1, merge: 'allowed' });
+  // FIX1: the owner turns it off, or closes the sprint, while the before-merge script is held: the answer is not "allowed".
+  for (const [flip, want] of [[() => { r.merge = false; }, 'merge-is-the-owners'], [() => { r.closed = true; }, 'sprint-closed']]) {
+    r.merge = true; r.closed = false; const runs = r.ran().filter((l) => l.startsWith('before-merge')).length;
+    r.hold('before-merge');
+    const held = r.hooks.event(EA, { point: 'before-merge', subject: { pr: 14 } });
+    await eventually(() => r.ran().filter((l) => l.startsWith('before-merge')).length > runs, 'the held before-merge script started');
+    flip(); r.free('before-merge');
+    assert.equal((await held).error, want, 'a merge turned off or closed while its script ran was still allowed');
+  }
+  // A second before-merge script waiting behind the held one does not start once the owner has turned the switch off.
+  r.merge = true; r.closed = false; r.scripts.push({ ...r.scripts.find((x) => x.point === 'before-merge'), name: 'second before-merge' });
+  const before = r.ran().filter((l) => l.startsWith('before-merge')).length;
+  r.hold('before-merge');
+  const two = r.hooks.event(EA, { point: 'before-merge', subject: { pr: 15 } });
+  await eventually(() => r.ran().filter((l) => l.startsWith('before-merge')).length === before + 1, 'the first of two before-merge scripts started');
+  r.merge = false; r.free('before-merge');
+  assert.equal((await two).error, 'merge-is-the-owners');
+  await new Promise((go) => setTimeout(go, 1000)); // a script that started writes its line within this
+  assert.equal(r.ran().filter((l) => l.startsWith('before-merge')).length, before + 1, 'the second before-merge script started after the owner turned merge off');
+  console.log('PASS H2: switch off refused before-merge by name with no script run (ci-red still ran); on, it was allowed; the status showed each; turned off or closed while the script was held, it was refused, and a second before-merge script did not start');
 });
 
 test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as project.source, without any user or password, and null when unset', { timeout: 60000 }, async () => {
@@ -1334,6 +1367,18 @@ if (fs.existsSync(path.join(here, 'refuse-' + j.point))) { console.log('no merge
   const row = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
   assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash })).status, 200);
   const L = await attach(t, instance, sprint);
+  // H2 (SECURITY.md § Standing merge): a sprint made now starts with merge the owner's; only the owner's route turns it on.
+  const off = await L.tool('sprint_event', { point: 'before-merge', subject: { pr: 11 } });
+  assert.equal(off.error, 'merge-is-the-owners', JSON.stringify(off)); assert.deepEqual(seen(), [], 'a before-merge script ran with merge the owner\'s');
+  assert.equal((await call(instance, `/sprints/${sprint}/status`)).body.standing_merge, false);
+  assert.equal((await L.tool('sprint_status')).standing_merge, false); assert.equal((await L.tool('sprint_setup')).standing_merge, false);
+  assert.equal((await row()).merge, false);
+  for (const [body, status] of [[{ on: 'true' }, 400], [{ on: true, by: 'lead' }, 400], [{}, 400], [[true], 400]]) assert.equal((await call(instance, `/sprints/${sprint}/merge`, 'POST', body)).status, status, JSON.stringify(body));
+  assert.equal((await call(instance, '/sprints/11111111-1111-4111-8111-111111111111/merge', 'POST', { on: true })).status, 404);
+  assert.equal((await row()).merge, false, 'a refused press changed the switch');
+  const on = await call(instance, `/sprints/${sprint}/merge`, 'POST', { on: true });
+  assert.deepEqual([on.status, on.body], [200, { merge: true }]);
+  assert.equal((await call(instance, `/sprints/${sprint}/status`)).body.standing_merge, true); assert.equal((await L.tool('sprint_setup')).standing_merge, true);
   assert.deepEqual(await L.tool('sprint_event', { point: 'before-merge', subject: { pr: 12, commit: 'abc1234' } }), { point: 'before-merge', scripts: 1, merge: 'allowed' });
   assert.deepEqual(seen().at(-1), { point: 'before-merge', subject: { pr: 12, commit: 'abc1234', by: 'lead' }, blocking: true });
   fs.writeFileSync(path.join(ws, 'refuse-before-merge'), '');
@@ -1352,7 +1397,7 @@ if (fs.existsSync(path.join(here, 'refuse-' + j.point))) { console.log('no merge
   await eventually(() => seen().some((x) => x.point === 'pause' && x.subject.by === 'lead'), 'the lead\'s pause_sprint ran the pause script');
   assert.equal(count('resume'), 1);
   assert.match(fs.readFileSync(path.join(s.folder, 'hooks.log'), 'utf8'), / \| pause \| at pause \| exit 0 \| /);
-  console.log('PASS O202 live: sprint_event before-merge allowed, then refused by name; ci-red ran; owner Pause (twice, one run), Resume, and the lead\'s pause_sprint each ran their script');
+  console.log('PASS O202 live: H2 new sprint refused before-merge (merge-is-the-owners, no script) until the owner\'s route turned standing merge on; sprint_event before-merge allowed, then refused by name; ci-red ran; owner Pause (twice, one run), Resume, and the lead\'s pause_sprint each ran their script');
 });
 
 test('Sprint scripts O202: a run whose state read is held while the sprint is closed, deleted, started again or P9 shuts down starts nothing', { timeout: 60000 }, async () => {

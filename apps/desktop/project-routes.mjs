@@ -35,6 +35,8 @@ export const projectRoutes = (uuid) => {
     // SECURITY.md § Pause sprint: the owner's Pause and Resume on the sprint row.
     pauseSprint: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/pause', {}],
     resumeSprint: ({ sprint, ...rest }) => uuid(sprint) && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/resume', {}],
+    // SECURITY.md § Standing merge: the owner's switch on Sprint Setup.
+    standingMerge: ({ sprint, on, ...rest }) => uuid(sprint) && typeof on === 'boolean' && !Object.keys(rest).length && ['POST', '/sprints/' + sprint + '/merge', { on }],
     sprintSettings: ({ id, source, setup, ...rest }) => uuid(id) && typeof source === 'string' && typeof setup === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/sprint-settings', { source, setup }],
     removeProjectFile: ({ id, name, ...rest }) => uuid(id) && typeof name === 'string' && !Object.keys(rest).length && ['POST', '/projects/' + id + '/files/remove', { name }],
     startedIn: ({ folder, ...rest }) => typeof folder === 'string' && folder.length <= 4096 && !Object.keys(rest).length && ['GET', '/chat/started-in?' + new URLSearchParams({ folder })],

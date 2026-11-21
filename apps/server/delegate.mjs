@@ -128,14 +128,14 @@ export const DELEGATE_TOOLS = (input) => {
     input({ sprint: { type: 'string', description: 'The id new_sprint returned.' } }, ['sprint'])],
     ['sprint_status', 'Read where a sprint stands, as the user\'s Sprint View page shows it: the plan\'s items (ticked, and each one\'s review), phases (each "## Phase" heading of the plan with its items merged and total; phase_now the first not all merged; [] with no such heading), done (items merged into the main line as P9\'s own record shows, items ticked in the plan, items that cannot be proven merged because P9 holds no clone or copy of the repo, and the total), running_ms since Start, each chat of the sprint '
       + '(its role key, agent, model, effort, state, context, spent (as list_chats has it), its task, ready and verdict, and work: its own items merged of its total), the verdicts, usage (the plan\'s totals and limits, with limits.claude.models holding each per-model week the plan reports, such as Fable\'s), how many scripts stand (running: every script that runs; additional: those of running approved after Start, already counted in it; waiting: not run yet), and the last lines of hooks.log. '
-      + 'A sprint not yet started answers with started null; a closed one answers with its record (as it stood at Close) and closed { at, by }. This tool changes nothing.',
+      + 'standing_merge: the user\'s switch (true: you may merge what passed review, after before-merge allows it; false: merge is the user\'s). A sprint not yet started answers with started null; a closed one answers with its record (as it stood at Close) and closed { at, by }. This tool changes nothing.',
     input({ sprint: sprintArg })],
     ['close_sprint', 'Close a started sprint on the user\'s word, as the Close sprint button on the user\'s Sprint View does: P9 asks the user first, in every mode. It runs the before-close scripts (a blocking one that fails refuses the close), '
       + 'stops every chat of the sprint (the chats under the lead, then the lead; the chat that calls this is left to end its own turn), keeps the record (sprint_status as it stood), turns the sprint\'s scripts off and runs the after-close scripts. '
       + 'Nothing is deleted: the sprint\'s files, its worker folders and its chats stay. A closed sprint is not started again.',
     input({ sprint: sprintArg })],
     ['sprint_setup', 'Read a sprint\'s Setup, every field the user\'s Sprint Setup page shows: its files (sprint.md the plan, rules.md, roles.json, roles/<key>.instructions.md, .rules.md and .work.md), each with its text and hash; '
-      + 'missing (Setup files not made yet: save one with hash ""); roles (roles.json\'s rows: key, provider, model, effort, mode its permissions, owns what it owns) or roles_error (why roles.json does not parse); and started. This tool changes nothing.',
+      + 'missing (Setup files not made yet: save one with hash ""); roles (roles.json\'s rows: key, provider, model, effort, mode its permissions, owns what it owns) or roles_error (why roles.json does not parse); started; and standing_merge (the user\'s switch on that page, which only the user sets: false, merge is the user\'s). This tool changes nothing.',
     input({ sprint: sprintArg })],
     ['sprint_setup_save', 'Change one Setup field, as the user\'s page saves it: a whole file (name and text), one role row (role: its key and the fields to set; a new key adds a worker; "" for mode or owns removes it; '
       + 'a new provider clears model and effort unless you set them), or remove_role (a worker\'s key; lead and review stay). hash: the file\'s hash from sprint_setup (roles.json\'s for role and remove_role), "" for a file not made yet. '
@@ -165,7 +165,7 @@ export const DELEGATE_TOOLS = (input) => {
     input({})],
     ['resume_sprint', 'Resume your paused sprint: every message kept while it was paused goes out in the order it was sent. Returns how many.', input({})],
     ['sprint_event', 'Run your sprint\'s scripts at a point P9 cannot see happen (you are its lead): before-merge right before you merge a PR (its blocking scripts may refuse: then do not merge; '
-      + 'the answer is merge: "allowed" or error script-refused with the script\'s last line), ci-red when a CI run went red, gate-passed when a gate passed. Only the scripts approved at Start (or allowed after it) run, '
+      + 'the answer is merge: "allowed", error merge-is-the-owners while the user\'s standing-merge switch is off (new sprints start with it off; then the merge is the user\'s, and no script runs), or error script-refused with the script\'s last line), ci-red when a CI run went red, gate-passed when a gate passed. Only the scripts approved at Start (or allowed after it) run, '
       + 'each given the sprint\'s state with subject (the fields you pass, by: "lead"). Refused before Start, after Close, while the agent lock is on, and while that point\'s scripts from your last call still run (point-busy).',
     input({ point: { type: 'string', enum: SCRIPT_REPORTED },
       subject: { type: 'object', additionalProperties: false, description: 'What happened, each field optional.', properties: { pr: { type: 'integer', minimum: 1 }, run: { type: 'string', description: 'The CI run id, digits.' },
@@ -1152,7 +1152,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const { sprint, ...no } = hooks.where(caller, args.sprint); if (no.error) return no;
     const files = setupFiles(sprint), roles = rowsIn(files.find((f) => f.name === 'roles.json')?.text ?? null);
     const want = ['sprint.md', 'rules.md', 'roles.json', ...(roles.parsed?.roles ?? []).filter((r) => ROLE_KEY(r.key)).flatMap((r) => ['instructions', 'rules', 'work'].map((k) => `roles/${r.key}.${k}.md`))];
-    return { sprint, started: !!chat.projects.started(sprint), files, missing: want.filter((n) => !files.some((f) => f.name === n)),
+    return { sprint, started: !!chat.projects.started(sprint), standing_merge: chat.projects.merge(sprint), files, missing: want.filter((n) => !files.some((f) => f.name === n)),
       roles: roles.parsed?.roles ?? null, ...(roles.error && { roles_error: roles.error }), row_fields: ROW_KEYS };
   }
   function sprintSetupSave(caller, args) {

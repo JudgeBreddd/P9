@@ -1433,6 +1433,24 @@ migration spec S13).
   to message (O197).
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
+## Standing merge
+
+Whether a sprint's lead may merge a PR that passed review, or the merge is yours. Written before the code (0.1.9,
+sprint spec H2 and K1).
+
+- **Who sets it.** Only you: the "Standing merge" switch on the sprint's Sprint Setup (a desktop-only route; the phone
+  has none). No agent tool sets it, and it is kept in P9's ledger, never in a sprint file an agent can edit.
+  `sprint_status` and `sprint_setup` show it to the lead as `standing_merge`.
+- **Where it starts.** A sprint made from this version on starts with it off. Every sprint that exists the first time
+  this version runs keeps merge on, as it had it before: P9 records each of them once at that start, then never adds
+  one again. A closed sprint's switch no longer changes.
+- **What it does.** The lead calls `sprint_event` with before-merge right before it merges. With the switch off the
+  answer is `merge-is-the-owners` and no before-merge script runs; the lead must not merge and tells you the PR is
+  ready. With it on, the sprint's approved before-merge scripts run, and a blocking one may still refuse. The switch is read again before each script starts and once more before the answer: turned off, or the sprint closed, while the scripts run, no further script starts and the answer is not "allowed".
+- **What it cannot do.** It binds only a lead that calls before-merge, as the sprint rules tell it to. P9 does not
+  hold the lead's git or GitHub sign-in back: a lead that merges without asking is not stopped by this switch. The
+  merge buttons on the card (spec A8) will check it themselves.
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's

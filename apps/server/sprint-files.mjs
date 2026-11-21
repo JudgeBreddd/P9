@@ -182,6 +182,8 @@ export function createSprintFiles({ home }) {
       }
       return names.map((name) => ({ name, text: read(lead, name) })).filter((f) => f.text !== null).map((f) => ({ ...f, hash: hashOf(f.text) }));
     },
+    // H2: every sprint folder there is now (standing merge, projects.mjs: the ones made before the switch keep merge).
+    all: () => { try { return readdirSync(home).filter((n) => ID.test(n)); } catch { return []; } },
     exists: (lead) => { const folder = folderOf(lead); try { return !!folder && lstatSync(folder).isDirectory(); } catch { return false; } },
   };
 }
