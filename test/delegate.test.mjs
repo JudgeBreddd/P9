@@ -1348,6 +1348,35 @@ test('Delegate ready emits one parent report after the worker turn ends', { time
   assert.equal((await events(instance, a.conversation)).filter((e) => e.type === 'note' && e.data.text?.includes('Ready report pinned for B4.')).length, 1, 'a peer answer must not send a second ready note');
 });
 
+// O224: a worker whose turn fails after its ready (its agent crashed) has no turn end, which is where the report was
+// pinned: the report is pinned at the failure instead, with no usage.
+test('Delegate O224: ready followed by a failed turn still pins one parent report', { timeout: 120000 }, async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Crash', work: { kind: 'new', parent: '', name: 'crash' } })).body.project.id;
+  const a = await agent(t, instance, { project });
+  const made = await a.tool('open_chat', { text: 'first', item: 'B9', done_means: 'reported', checks: ['check'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  execFileSync('git', ['init', '-q', '-b', 'main', made.folder]);
+  fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n!.gitignore\n');
+  execFileSync('git', ['-C', made.folder, 'add', '.']);
+  execFileSync('git', ['-C', made.folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', made.folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  await a.tool('send_chat', { chat: made.chat, text: 'late-crash' });
+  const result = await kid.tool('ready', { commit: head, results: [{ check: 'check', result: 'passed' }], weakest: 'crashed' });
+  assert.ok(result.ready, JSON.stringify(result));
+  const reports = async () => (await events(instance, a.conversation)).filter((e) => e.type === 'card' && e.data.id === 'ready-' + made.chat).map((e) => e.data.text);
+  for (let i = 0; i < 100 && !(await reports()).length; i += 1) await pause(100);
+  const cards = await reports();
+  assert.equal(cards.length, 1, 'the failed turn pins the report once');
+  assert.ok(cards[0].includes(head), cards[0]);
+  assert.match(cards[0], /Tokens used: Not reported/);
+});
+
 // O176: a worker whose turn P9 never prompted (Claude Code works on after a compaction or a plugin's prompt) can still
 // call ready. Its run has no end P9 waits on and reports no usage, so its report is pinned at once.
 test('Delegate O176: ready is accepted from a run the worker started itself, with no prompt open, and its report is pinned', { timeout: 120000 }, async (t) => {
@@ -1474,10 +1503,20 @@ test('Delegate O147: ready records the sent commit, refuses one git does not kno
     assert.equal(got.error, 'unknown-commit', commit + ': ' + JSON.stringify(got));
   }
   fs.writeFileSync(path.join(made.folder, '.gitignore'), '*\n'); // unsaved change to a tracked file
-  assert.equal((await send(head)).error, 'dirty-folder', 'a commit that is HEAD keeps the dirty check');
-  assert.equal((await send('0123abcd')).error, 'dirty-folder', 'the older refusal comes first: an unknown commit from a dirty folder reads dirty-folder');
+  const dirtyHead = await send(head), dirtyOther = await send('0123abcd');
+  assert.equal(dirtyHead.error, 'dirty-folder', 'a commit that is HEAD keeps the dirty check');
+  assert.equal(dirtyOther.error, 'dirty-folder', 'the older refusal comes first: an unknown commit from a dirty folder reads dirty-folder');
+  // O224: the refusal says which, so a worker whose commit is in another repository can see it and tell its lead.
+  assert.match(dirtyHead.detail ?? '', /unsaved changes and the commit is what it has checked out/, JSON.stringify(dirtyHead));
+  assert.match(dirtyOther.detail ?? '', /its repository has no commit by that id.*tell your lead/, JSON.stringify(dirtyOther));
   const other = await send(work);
   assert.equal(other.ready?.commit, work, 'a commit other than HEAD is a fixed tree: unsaved work in the folder is not in it ' + JSON.stringify(other));
+  // O224: the open_chat item (C1) is the worker's first item only: a later row it names is its task with its own checks,
+  // and a row id may hold a space ("Work Queue"). Before, the first item's checks refused every later row.
+  const later = await kid.tool('ready', { commit: work, row: 'Work Queue', results: [{ check: 'own check', result: 'passed' }], weakest: 'w' });
+  assert.equal(later.ready?.item, 'Work Queue', JSON.stringify(later));
+  const same = await kid.tool('ready', { commit: work, row: 'C1', results: [{ check: 'own check', result: 'passed' }], weakest: 'w' });
+  assert.equal(same.error, 'request-refused', 'the open_chat item itself still takes its own checks ' + JSON.stringify(same));
   await a.tool('stop_chat', { chat: made.chat });
   await a.done(made.chat);
 });

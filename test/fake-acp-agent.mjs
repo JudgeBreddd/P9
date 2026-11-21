@@ -437,6 +437,7 @@ const connection = acp.connectAgent(stream, {
       await piece('m8', 'short'); // the newest reply, short, again under its own id after a compaction
       return { stopReason: 'end_turn' };
     }
+    if (text === 'late-crash') { await new Promise((resolve) => setTimeout(resolve, 1500)); process.exit(3); } // O224: a turn that fails, not ends
     // DUP-1 (c): the copy comes after the turn has ended, as seen on the server (a turn-end, then the whole reply again).
     if (text === 'twice late') {
       const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });

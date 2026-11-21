@@ -421,6 +421,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return { status: 202, noted: true };
   };
   const turnEndedHooks = new Set();
+  const turnFailedHooks = new Set(); // O224: a prompted turn that failed (its agent gone or an error), which ran no turnEnded
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
   const askedHooks = new Set(); // O84: called when a chat starts waiting on an approval or question (delegate.mjs: the parent's note)
   // A7 list_chats: a chat's model and context use, from its newest config and usage_update events. Read from the ledger
@@ -1791,6 +1792,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A decline is a cancel the user chose, so it ends the same way; any other failure still shows its error.
           if (session.planDeclined === turn && /\[ede_diagnostic\][^]*stop_reason=tool_use/.test(String(error?.message))) return done({ stopReason: 'cancelled' });
           untake(id, turn); // O214: a failed turn is not a message that arrived
+          if (session.turn === turn) for (const hook of turnFailedHooks) { try { hook(id, turn, Boolean(solo)); } catch {} }
           if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
@@ -1908,6 +1910,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
+    turnFailed: (hook) => { turnFailedHooks.add(hook); },
     acts: (id) => acts.get(id) ?? 0,
     activeTaskTurn: (id) => { const session = live.get(id); return session && !session.solo && session.turn || null; },
     // O176: the run ready may report from. A prompted turn's own ID; with no prompt open (Claude Code works on after a

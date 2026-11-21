@@ -752,10 +752,13 @@ export function createDelegate({ chat, allowed, usage }) {
     const next = !mine.task && chat.queue?.(caller)?.items.find((i) => i.state !== 'passed');
     // O193 FIX (F3): the item is the review record's key, so the plan row the worker names wins over its task's item
     // (tonight's task items were stale or missing, so every row of a worker collided on one record).
-    const row = args.row === undefined || args.row === null ? null : typeof args.row === 'string' && /^[A-Za-z0-9][\w.-]{0,39}$/.test(args.row.trim()) ? args.row.trim() : false;
+    // O224: a row id may hold inner spaces ("Work Queue"): this sprint's rows are named so, and each was refused.
+    const row = args.row === undefined || args.row === null ? null : typeof args.row === 'string' && /^[A-Za-z0-9][\w. -]{0,39}$/.test(args.row.trim()) ? args.row.trim() : false;
     // O196: a worker with a role key whose key has no line in sprint.md (its rows live in the lead's own list) has no
     // task from either source; the row it names is its task, with its own checks.
-    const task = mine.task ?? (next && { item: next.id, checks: null }) ?? (info?.key && row && { item: row, checks: null });
+    // O224: an open_chat task is the worker's first item only: a row it names other than that item is the task, with the
+    // worker's own checks (the first item's fixed checks refused every later row of that worker).
+    const task = (mine.task && row && row !== mine.task.item ? { item: row, checks: null } : mine.task) ?? (next && { item: next.id, checks: null }) ?? (info?.key && row && { item: row, checks: null });
     if (!info?.parent) return { error: 'no-task', missing: 'parent', detail: 'This chat has no lead: ready is for a worker another chat started.' };
     if (!task) return { error: 'no-task', missing: 'task', detail: info.key ? 'No task: no open_chat task and no sprint.md line for your role key ' + JSON.stringify(info.key) + '. Name the plan row with row.' : 'No task: this chat was opened with no task and has no role key.' };
     // O176: from any turn of its own: a prompted one, or the run the agent works on with no prompt open (after a
@@ -773,7 +776,7 @@ export function createDelegate({ chat, allowed, usage }) {
         : task.checks.some((check) => args.results.filter((r) => r?.check === check).length !== 1) ? 'results[].check: each must be one of your task\'s checks word for word, once' + expected
           : args.results.some((r) => !(typeof r.result === 'string' && text(r.result.trim(), 4000))) ? 'results[].result: 1 to 4,000 characters, not blank'
             : !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) ? 'weakest: 1 to 4,000 characters, not blank' : null;
-    if (fault || row === false) return { error: 'request-refused', detail: 'Refused at ' + (fault ?? 'row: the plan row id, 1 to 40 letters, digits, dot, dash or underscore') + '.' };
+    if (fault || row === false) return { error: 'request-refused', detail: 'Refused at ' + (fault ?? 'row: the plan row id, 1 to 40 letters, digits, space, dot, dash or underscore') + '.' };
     const item = row ?? task.item;
     const folder = await chat.startFolder(caller);
     if (!stillCurrent()) return { error: 'no-active-turn' };
@@ -793,8 +796,12 @@ export function createDelegate({ chat, allowed, usage }) {
       // Unsaved changes only matter when the commit is what is checked out: then they would be work the commit leaves out.
       // A named commit other than HEAD is a fixed tree; the folder's own unsaved work is not in it either way. The older
       // refusal comes first, so an unknown commit sent from a dirty folder still reads dirty-folder.
-      if (facts.dirty && (!facts.commit || facts.commit === facts.head)) return { error: 'dirty-folder' };
-      if (!facts.commit) return { error: 'unknown-commit', detail: 'The start folder\'s repository has no commit by that id. Send the full commit id of the pushed work.' };
+      // O224: the refusal says which: a worker that only read "dirty-folder" could not see that its commit was in another
+      // repository than its start folder's, so every ready of it was refused with nothing it could change.
+      if (facts.dirty && (!facts.commit || facts.commit === facts.head)) return { error: 'dirty-folder', detail: facts.commit
+        ? 'Your start folder has unsaved changes and the commit is what it has checked out: commit or put them aside, then call ready again.'
+        : 'Your start folder has unsaved changes, and its repository has no commit by that id: ready reads the commit from your start folder\'s repository. Work committed in another repository cannot be reported from this chat: tell your lead.' };
+      if (!facts.commit) return { error: 'unknown-commit', detail: 'The start folder\'s repository has no commit by that id. Send the full commit id of the pushed work; work committed in another repository cannot be reported from this chat: tell your lead.' };
       if (!Array.isArray(facts.changed)) return { error: 'git-unavailable' };
     } else {
       let changed;
@@ -1311,13 +1318,22 @@ export function createDelegate({ chat, allowed, usage }) {
     const tokens = Number.isSafeInteger(usage?.inputTokens) && usage.inputTokens >= 0 && Number.isSafeInteger(usage?.outputTokens) && usage.outputTokens >= 0 ? { input: usage.inputTokens, output: usage.outputTokens, cachedRead: count(usage.cachedReadTokens), cachedWrite: count(usage.cachedWriteTokens) } : null;
     pinReport(id, tokens);
   });
+  // O224: a turn that failed after its ready (the agent crashed or errored) has no end: its report is pinned now, with no usage.
+  chat.turnFailed?.((id, turn, solo) => {
+    if (solo || readyTurns.get(id) !== turn) return;
+    readyTurns.delete(id);
+    pinReport(id, null);
+  });
   function pinReport(id, tokens) {
     const info = chat.info(id), state = chat.sprint(id);
-    if (!info?.parent || !state.task || !state.ready) return;
-    const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(state.task, state.ready, tokens) });
+    // O224: a worker with no open_chat task (its row or its work queue named the item) has its ready's item: requiring a
+    // task here pinned no card for any of them, so no worker report reached a lead.
+    if (!info?.parent || !state.ready) return;
+    const task = state.task ?? { item: state.ready.item };
+    const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(task, state.ready, tokens) });
     if (data.error) return;
     chat.pin(info.parent, data);
-    notify(info.parent, 'ready', '[p9] Ready report pinned for ' + state.task.item + '.', id + ':ready');
+    notify(info.parent, 'ready', '[p9] Ready report pinned for ' + (state.ready.item ?? task.item) + '.', id + ':ready');
   }
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
