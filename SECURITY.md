@@ -1161,6 +1161,13 @@ Written before the code (sprint spec D1, D3, D4).
   edit them with their own file tools, under their own mode and your approvals. P9 gives them no write of its own.
 - **Removal.** Clean-up of a sprint's worker folders (§ Worker folders) removes the clone and the worker folders
   only; these files stay. P9 never deletes them. Deleting the lead chat leaves them too.
+- **Who wrote it (H2).** Sprint Setup marks each Setup file (sprint.md, rules.md, roles.json, hooks.json, the role
+  files) "Written by <writer> · not seen" until you have seen that text. The writer is what P9 recorded at its last
+  write through P9's tools: the calling chat's agent, or you. Text P9 did not write reads as "someone outside P9's
+  Setup tools". Seen means your own save, the files New sprint makes, Start's approval of the text, or your Seen press:
+  a desktop-only route (`POST /sprints/:id/seen`, no phone route, no agent tool) that names the text's hash, so a file
+  changed after the page drew it is refused and stays marked. The records are in P9's ledger, not in the folder. The
+  mark is a label, not a lock: an agent's own file tools can still write these files.
 
 ## Start sprint
 

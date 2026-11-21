@@ -347,6 +347,8 @@ export function setupRoutes(outer) {
     return outer.reply(c, !body || typeof body !== 'object' || Object.keys(body).join() !== 'on' ? { status: 400, error: 'request-refused' } : outer.chat.projects.setMerge(c.req.param('id'), body.on)); });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
+  // Desktop only (H2): the owner's Seen press on a Setup file an agent wrote. No phone route and no agent tool does it.
+  outer.app.post('/sprints/:id/seen', async (c) => outer.reply(c, outer.chat.projects.seen(c.req.param('id'), await outer.json(c))));
   outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));
   return { signedIn };
 }

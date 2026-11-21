@@ -9,7 +9,7 @@ import { link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink } from 
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createDirectory, lockedName } from '../../packages/files/index.mjs';
-import { SENT, hashOf, writerKey } from './sprint-files.mjs';
+import { MARKED, hashOf, isPlan, seenKey, writerKey } from './sprint-files.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_NAME = 120, MAX_ABOUT = 4000, MAX_INSTRUCTIONS = 32000, MAX_FILE = 4 * 1024 * 1024, MAX_FILES = 200;
@@ -97,6 +97,16 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
   const put = (key, value) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
   if (db && sprintFiles && pref('merge-kept') === null) { for (const id of sprintFiles.all()) if (pref('merge:' + id) === null) put('merge:' + id, true); put('merge-kept', true); }
   const merge = (sprint) => ID.test(sprint ?? '') && pref('merge:' + sprint) === true;
+  // H2: who wrote a Setup file the owner has not seen in this text: the writer P9 recorded (an agent through P9's tools),
+  // or, for text P9 did not record, someone outside its Setup tools. Seen: the owner's own save, a Seen press, Start's
+  // approval of that text, or New sprint's own files. An empty file and P9's empty plan are not marked.
+  const unseen = (sprint, f) => {
+    if (!MARKED.test(f.name) || !f.text.trim() || isPlan(f.text) || pref(seenKey(sprint, f.name)) === f.hash || started(sprint)?.files?.[f.name] === f.hash) return null;
+    const w = pref(writerKey(sprint, f.name));
+    return w?.hash !== f.hash || typeof w.by !== 'string' ? 'someone outside P9\'s Setup tools' : w.by === 'the user' ? null : w.by;
+  };
+  const listed = (sprint) => sprintFiles.list(sprint).map((f) => { const by = unseen(sprint, f); return by ? { ...f, unseen: by } : f; });
+  const saw = (sprint, name, hash) => put(seenKey(sprint, name), hash);
   const preps = (project) => db.prepare("SELECT key, value FROM prefs WHERE key LIKE 'prep:%'").all()
     .map((r) => { try { return { id: r.key.slice(5), ...JSON.parse(r.value) }; } catch { return null; } }).filter((p) => p?.project === project);
   // A gone or refused work folder is reported, never thrown. AGENTS.md and CLAUDE.md are seen in the listing only.
@@ -109,7 +119,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     // A prep (Start sprint) is listed before its lead chat exists: prep true, its title the one it was made with.
     const sprints = full && sprintFiles ? [...db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id),
       ...preps(value.id).filter((p) => !row(p.id))]
-      .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: sprintFiles.list(c.id), prep: !row(c.id),
+      .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: listed(c.id), prep: !row(c.id),
         ...(started(c.id) && { started: started(c.id) }), ...(pref('paused:' + c.id) && { paused: true }), merge: merge(c.id), ...(closed(c.id) && { closed: { at: closed(c.id).at, by: closed(c.id).by } }) })) : [];
     // Two projects may use one work folder (N1 spec, 2026-11-08): the others using it, for the dialog to name.
     const where = value.work.kind === 'p9' ? null : path.resolve(workspace, value.work.folder);
@@ -260,14 +270,14 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if (!only(body, ['lead', 'name', 'text', 'hash']) || typeof body.lead !== 'string' || !ID.test(body.lead) || typeof body.text !== 'string' || typeof body.hash !== 'string') return refused(400, 'request-refused');
       if ((row(body.lead)?.project ?? prepOf(body.lead)?.project) !== id || !sprintFiles?.exists(body.lead)) return refused(404, 'unknown-sprint');
       const saved = sprintFiles.write(body.lead, body.name, body.text, body.hash);
-      if (saved === 'changed') return { status: 409, error: 'sprint-file-changed', files: sprintFiles.list(body.lead) };
+      if (saved === 'changed') return { status: 409, error: 'sprint-file-changed', files: listed(body.lead) };
       if (saved === 'no-links') return refused(507, 'sprint-file-no-links');
       if (!saved) return refused(400, 'request-refused');
-      // O171 (framing): this text's writer is the user (kept for the files whose text reaches chats).
-      if (SENT.test(body.name)) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(body.lead, body.name), JSON.stringify({ by: 'the user', hash: hashOf(body.text) }));
+      // O171 (framing), H2: this text's writer is the user (kept for the files whose text reaches chats, and Setup's marks).
+      if (MARKED.test(body.name)) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(body.lead, body.name), JSON.stringify({ by: 'the user', hash: hashOf(body.text) }));
       // The saved file as written, not as read back: a writer landing between the rename and the list would otherwise
       // become the page's base, and its next save would replace that writer's text unasked (O93).
-      return { status: 200, files: sprintFiles.list(body.lead).map((f) => (f.name === body.name ? { ...f, text: body.text, hash: hashOf(body.text) } : f)) };
+      return { status: 200, files: listed(body.lead).map((f) => (f.name === body.name ? { name: f.name, text: body.text, hash: hashOf(body.text) } : f)) };
     },
     // Start sprint's prep: a sprint folder before its chats exist. Its id is the one the lead's chat gets at Start; the
     // project it belongs to is kept by P9 (prefs), never read from a file an agent can edit.
@@ -279,7 +289,18 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('prep:' + sprint, JSON.stringify({ project: id, title: body.title.trim() }));
       const role = (key) => ({ key, provider: '', model: '', effort: '' });
       sprintFiles.prep(sprint, { roles: [role('lead'), role('review')] });
-      return { status: 201, sprint, folder: sprintFiles.folderOf(sprint), files: sprintFiles.list(sprint) };
+      for (const f of sprintFiles.list(sprint)) saw(sprint, f.name, f.hash); // H2: the owner's New sprint wrote these
+      return { status: 201, sprint, folder: sprintFiles.folderOf(sprint), files: listed(sprint) };
+    },
+    // H2, desktop only: the owner's Seen press on a marked Setup file. hash: the text the page showed; a file changed
+    // since is not marked seen (409, with the files as they are now), so a later agent write is never cleared unseen.
+    seen(sprint, body) {
+      if (!ID.test(sprint ?? '') || !sprintFiles?.exists(sprint) || !(row(sprint) || prepOf(sprint))) return refused(404, 'unknown-sprint');
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join() !== 'hash,name' || typeof body.name !== 'string' || !MARKED.test(body.name) || typeof body.hash !== 'string') return refused(400, 'request-refused');
+      const text = sprintFiles.read(sprint, body.name);
+      if (text === null || hashOf(text) !== body.hash) return { status: 409, error: 'sprint-file-changed', files: listed(sprint) };
+      saw(sprint, body.name, body.hash);
+      return { status: 200, files: listed(sprint) };
     },
     prepOf,
     started,
