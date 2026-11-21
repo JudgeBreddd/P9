@@ -487,6 +487,9 @@ test('projects: the project page lists a sprint\'s files and edits one', { timeo
   const row = page.locator('[data-pj="spfile"]', { hasText: 'sprint.md' });
   await row.waitFor({ timeout: 10000 });
   assert.equal(await page.locator('[data-pj="spfile"]').count(), 5); // sprint.md, rules.md, the role file, the notes file, and hooks.json (listed before it is made)
+  // O207: a chat running outside Start has Start sprint too, which adopts it as the lead (the press, sprint-start.test.mjs).
+  const adopt = page.locator('[data-pj="spstart"]');
+  assert.deepEqual([(await adopt.textContent()).trim(), /keeps this chat as the lead/.test(await adopt.getAttribute('title'))], ['Start sprint', true]);
   await row.click();
   const box = page.locator('[data-sp-box]');
   await box.waitFor({ timeout: 5000 });
