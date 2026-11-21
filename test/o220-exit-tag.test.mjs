@@ -61,6 +61,12 @@ test('O220 phone: a failed command shows "exit 2", a killed one "SIGTERM"; exit 
     update({ sessionUpdate: 'tool_call_update', toolCallId: 'exec-' + i, _meta: { 'p9/exit': exit } });
     update({ sessionUpdate: 'tool_call_update', toolCallId: 'exec-' + i, status: title === 'okcmd' ? 'completed' : 'failed' }); // a later update keeps the tag
   }
+  // O220: three tool calls in a row fold into one row; one that failed makes the row show it failed, its tag inside.
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Now three. ' } });
+  for (const [id, exit] of [['g1', null], ['g2', { exitCode: 1, signal: null }], ['g3', null]]) {
+    update({ sessionUpdate: 'tool_call', toolCallId: id, title: 'grouped-' + id, kind: 'execute', status: 'completed' });
+    if (exit) update({ sessionUpdate: 'tool_call_update', toolCallId: id, _meta: { 'p9/exit': exit } });
+  }
   d.close();
   const { page } = await phone(t, server);
   await openChat(page, server);
@@ -70,5 +76,8 @@ test('O220 phone: a failed command shows "exit 2", a killed one "SIGTERM"; exit 
   assert.deepEqual(await tag('sleeper').allTextContents(), ['SIGTERM']);
   for (const title of ['okcmd', 'fraction', 'texty', 'longsig', 'notobj']) assert.equal(await tag(title).count(), 0, title + ': no tag');
   assert.equal(await page.locator('#events b').count(), 0, 'nothing the agent sent became markup');
+  const group = page.locator('#events article[data-kind=group]', { hasText: 'grouped-g2' });
+  assert.equal(await group.getAttribute('data-status'), 'failed', 'a folded row with a failed command shows it failed');
+  assert.deepEqual(await group.locator('summary .exit').allTextContents(), ['exit 1'], 'its tag is on the command inside');
   console.log('PASS O220 phone: exit 2, SIGTERM; none for exit 0 or junk');
 });
