@@ -501,7 +501,7 @@ function itemsOf(blocks: Block[]) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
     if (j - i >= 2) {
       const run = blocks.slice(i, j + 1);
-      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, '', () => JSON.stringify(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
+      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, '', () => JSON.stringify(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'failed' || block.exit) ? 'failed' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
       i = j;
     } else {
       const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion() + (whoSent(block.who) ?? '');
