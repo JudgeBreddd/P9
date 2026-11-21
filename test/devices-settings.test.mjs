@@ -46,9 +46,15 @@ test('O205: Settings lists a waiting phone (code, lapse time) and a signed-in on
   for (const [action, payload] of [['deviceApprove', { id: '../reset' }], ['deviceRemove', { id: phone.device, all: true }], ['devices', { id: asking }]])
     assert.equal((await page.evaluate(([a, p]) => window.p9.chat(a, p), [action, payload])).status, 400, action);
 
+  // The list's chunk fails to load the first time: a visible failure with Try again, which then loads it.
+  const chunk = /devices-view[^/]*\.js/; let blocked = true;
+  await page.route(chunk, (route) => (blocked ? route.abort() : route.continue()));
   await page.locator('#setBtn').click();
   await page.locator('#setDlg[open]').waitFor();
   await page.locator('[data-set-page="Remote Connect"]').click();
+  await page.locator('#setDevices').getByText('The device list did not load.').waitFor({ timeout: 10000 });
+  blocked = false;
+  await page.locator('#setDevices [data-devices-retry]').click();
   const list = page.locator('#setDevices'), waiting = list.locator('li', { hasText: 'Kitchen tablet' }), signed = list.locator('li', { hasText: 'Pixel' });
   await waiting.waitFor({ timeout: 10000 });
   const words = await waiting.textContent();
@@ -81,4 +87,22 @@ test('O205: Settings lists a waiting phone (code, lapse time) and a signed-in on
   // A phone that asks while the page is open shows without Refresh.
   await askEnrollment(server, 'Laptop browser');
   await list.locator('li', { hasText: 'Laptop browser' }).waitFor({ timeout: 8000 });
+  // Away on another page for over 5 s, then back: the refresh goes on (a request made meanwhile shows).
+  await page.locator('[data-set-page="General"]').click();
+  await page.waitForTimeout(6000);
+  await askEnrollment(server, 'Desk phone');
+  await page.locator('[data-set-page="Remote Connect"]').click();
+  await list.locator('li', { hasText: 'Desk phone' }).waitFor({ timeout: 8000 });
+  // Settings closed for over 5 s and opened again (it opens on the same page): the same.
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await page.waitForTimeout(6000);
+  await page.locator('#setBtn').click(); await page.locator('#setDlg[open]').waitFor();
+  await list.locator('li', { hasText: 'Desk phone' }).waitFor({ timeout: 8000 });
+  await server.desk('/devices/enrollments/' + (await server.desk('/devices')).body.enrollments.find((e) => e.name === 'Laptop browser').id + '/refuse', 'POST');
+  await askEnrollment(server, 'Car tablet');
+  await list.locator('li', { hasText: 'Car tablet' }).waitFor({ timeout: 8000 });
+  // One loop: about one draw per 5 s on screen (two loops would be about twice that).
+  const draws = () => list.locator('#setDevicesList').getAttribute('data-draws').then(Number);
+  const before = await draws(); await page.waitForTimeout(11000); const made = (await draws()) - before;
+  assert.ok(made >= 2 && made <= 3, 'draws in 11 s: ' + made);
 });

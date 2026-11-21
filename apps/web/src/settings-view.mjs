@@ -383,7 +383,11 @@ function renderSettings() {
     + (window.p9?.xferPlan && outer.settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to remote (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(outer.XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${outer.settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
     + maintenanceGroup(outer.updates);
   settingsPages();
-  if (outer.$('#setDevicesList')) import('./devices-view.mjs').then(m => m.drawDevices(outer.$('#setDevicesList'), outer.serverInfo?.host)).catch(() => {});
+  const devices = outer.$('#setDevicesList'), loadDevices = () => import('./devices-view.mjs').then(m => m.drawDevices(devices, outer.serverInfo?.host)).catch(() => {
+    devices.innerHTML = '<div class="set-row"><span class="warn sm" role="alert">The device list did not load.</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-devices-retry>Try again</button></div>';
+    devices.querySelector('[data-devices-retry]').onclick = () => { devices.innerHTML = '<p class="muted sm">Loading…</p>'; loadDevices(); };
+  });
+  if (devices) loadDevices();
   const zoom = z => saveSettings({ ...outer.settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if (outer.$('#zIn')) { outer.$('#zIn').onclick = () => zoom(outer.settings.zoom + 0.1); outer.$('#zOut').onclick = () => zoom(outer.settings.zoom - 0.1); outer.$('#zReset').onclick = () => zoom(1); }
   outer.$('#setName').value = outer.settings.name || '';

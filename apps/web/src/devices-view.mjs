@@ -8,7 +8,7 @@ const row = (name, sub, buttons) => `<li class="set-row"><span><strong>${esc(nam
 const list = (title, rows) => rows.length ? `<p class="sm"><strong>${title}</strong></p><ul class="remote-list">${rows.join('')}</ul>` : '';
 export async function drawDevices(box, host) {
   if (shown) box.innerHTML = shown; // the last list while the fresh one comes, so a redraw of Settings does not flash
-  const mine = ++seq; clearTimeout(timer);
+  const mine = ++seq; clearTimeout(timer); box.dataset.draws = String(seq); // draws: the test counts them to see one loop
   const r = await window.p9.chat('devices', {}).catch(() => null);
   if (!box.isConnected || mine !== seq) return; // a newer draw (Refresh, a press, the timer) owns the box now
   const where = host ? 'P9 on ' + esc(host) : 'this P9';
@@ -34,7 +34,10 @@ export async function drawDevices(box, host) {
   };
   for (const route of ['deviceApprove', 'deviceRefuse', 'deviceRemove']) box.querySelectorAll(`[data-device-${route.slice(6).toLowerCase()}]`).forEach(b => { b.onclick = () => act(route, b); });
   box.querySelector('[data-device-refresh]').onclick = () => drawDevices(box, host);
-  // A phone that asks while the page is open shows within 5 s; only while the Devices page is on screen.
+  // A phone that asks while the page is open shows within 5 s. One loop: each draw cancels the last timer. It keeps ticking
+  // while Settings holds this box and asks the daemon only while the list is on screen, so back on the page (or Settings
+  // opened again on it) it refreshes within 5 s; a new Settings draw replaces the box and this loop ends.
   // ponytail: polling, not a pushed event; one small socket request every 5 s while visible.
-  timer = setTimeout(() => { if (box.isConnected && box.offsetParent) drawDevices(box, host); }, 5000);
+  const tick = () => { if (!box.isConnected) return; if (box.offsetParent) drawDevices(box, host); else timer = setTimeout(tick, 5000); };
+  timer = setTimeout(tick, 5000);
 }
