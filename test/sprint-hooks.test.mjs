@@ -1147,7 +1147,7 @@ test('Sprint scripts every live: the daemon\'s own timer runs the row, each run 
 function pointRig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-points-')), prog = path.join(dir, 'point.mjs'), ranFile = path.join(dir, 'ran.txt');
   fs.writeFileSync(prog, `import fs from 'node:fs'; import path from 'node:path'; const j = JSON.parse(fs.readFileSync(0, 'utf8')), d = ${JSON.stringify(dir)};
-fs.writeFileSync(path.join(d, 'project-' + j.point + '.json'), JSON.stringify(j.project));
+fs.writeFileSync(path.join(d, 'project-' + j.point + '.json'), JSON.stringify(j));
 fs.appendFileSync(path.join(d, 'ran.txt'), j.point + ' ' + JSON.stringify(j.subject) + '\\n');
 while (fs.existsSync(path.join(d, 'hold-' + j.point))) await new Promise((r) => setTimeout(r, 20));
 fs.appendFileSync(path.join(d, 'ran.txt'), 'end ' + j.point + '\\n');
@@ -1187,7 +1187,9 @@ test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as 
   const r = pointRig(), told = async (source) => {
     r.source = source; fs.rmSync(path.join(r.dir, 'project-ci-red.json'), { force: true });
     assert.deepEqual(await r.hooks.event(EA, { point: 'ci-red', subject: { run: '123456' } }), { point: 'ci-red', scripts: 1 });
-    return (await eventually(() => fs.existsSync(path.join(r.dir, 'project-ci-red.json')) && JSON.parse(fs.readFileSync(path.join(r.dir, 'project-ci-red.json'), 'utf8')), 'ci-red did not run')).source;
+    const whole = await eventually(() => fs.existsSync(path.join(r.dir, 'project-ci-red.json')) && fs.readFileSync(path.join(r.dir, 'project-ci-red.json'), 'utf8'), 'ci-red did not run');
+    assert.ok(!whole.includes('hunter2'), 'hunter2 is in the script\'s state for ' + JSON.stringify(source));
+    return JSON.parse(whole).project.source;
   };
   assert.equal(await told('https://github.com/o/r.git'), 'https://github.com/o/r.git', 'ci-red was not told the Clone from');
   assert.equal(await told('ssh://git:hunter2@example.com:22/o/r.git'), 'ssh://example.com:22/o/r.git', 'a password reached the script');
@@ -1200,12 +1202,18 @@ test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as 
     ['https://example.com/o/r.git?a=1#hunter2', 'https://example.com/o/r.git'], ['git@example.com:o/r.git?hunter2', 'example.com:o/r.git'],
     ['https://example.com/o/r.git?x=%3F#y%23hunter2', 'https://example.com/o/r.git'],
     ['https://example.com/o/r.git;token=hunter2', null], ['https://example.com/o%2Fhunter2/r.git', null],
-    ['ssh://example.com/hunter2%40x/r.git', null]];
+    ['ssh://example.com/hunter2%40x/r.git', null], ['https://example.com/o/r.git%3Faccess_token=hunter2', null],
+    ['https://example.com/o/r.git%23token=hunter2', null], ['HTTPS://example.com/o/r.git?access_token=hunter2', 'HTTPS://example.com/o/r.git'],
+    ['SSH://git:hunter2@example.com/o/r.git', 'SSH://example.com/o/r.git']];
   for (const [address, want] of cases) {
     assert.ok(remoteOk(address), 'not an address the project page saves: ' + address);
+    assert.equal(await told(address), want, address);
+  }
+  // Forms the save refuses (it trims and checks), as if a record was written another way: still never passed raw.
+  for (const address of ['https://example.com/o/r.git?access_token=hunter2 ', 'https://exa%40hunter2.com/o/r.git', 'https://example.com/o/r.git\thunter2', 'https://hunter2@example.com/o/r.git#x']) {
+    assert.equal(remoteOk(address), false, 'the save accepts ' + JSON.stringify(address));
     const got = await told(address);
-    assert.equal(got, want, address);
-    if (want === null || !want.includes('hunter2')) assert.ok(!String(got).includes('hunter2'), 'the secret reached the script: ' + address);
+    assert.ok(got === null || got === 'https://example.com/o/r.git', JSON.stringify(address) + ' gave ' + got);
   }
   assert.equal(await told(''), null, 'an unset Clone from is not null');
   console.log('PASS O211: ci-red got project.source equal to Clone from, user and password taken out, null when unset');
