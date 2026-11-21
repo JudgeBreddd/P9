@@ -284,6 +284,7 @@ section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-w
 #events [data-kind=tool] summary .t,#events [data-kind=group]>details>summary .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px "JetBrains Mono",ui-monospace,monospace;color:var(--text)}
 #events [data-kind=group]>details>summary .t{font-family:inherit;color:var(--dim)}
 #events pre{margin:0 0 8px;padding:8px;border-radius:8px;background:rgba(255,255,255,.04);color:var(--dim);font:12px/1.4 "JetBrains Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+#events summary .exit{flex:none;font:12px "JetBrains Mono",ui-monospace,monospace;color:var(--red)} /* O220 */
 #events .st{flex:none;display:inline-grid;place-items:center;width:14px;height:14px;font-size:12px;line-height:1}
 #events [data-status=completed]>details>summary .st::before,#events [data-status=done]>details>summary .st::before{content:"✓";color:var(--cyan)}
 #events [data-status=failed]>details>summary .st::before{content:"✕";color:var(--red)}

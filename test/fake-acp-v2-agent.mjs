@@ -47,6 +47,18 @@ async function turn(id, params) {
     chunk('streamed');
     return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage });
   }
+  // O220 "exitcode": three commands, as codex-acp 2.6.0 ends them: one fails (exit 2), one is killed (SIGTERM), one works.
+  if (said.endsWith('exitcode')) {
+    for (const [id, title, exitStatus] of [['exec-8', 'build', { exitCode: 2, signal: null }], ['exec-9', 'sleeper', { exitCode: null, signal: 'SIGTERM' }], ['exec-10', 'okcmd', { exitCode: 0, signal: null }]]) {
+      update(sessionId, { sessionUpdate: 'terminal_update', terminalId: id, command: title, cwd: '/w' });
+      update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: id, kind: 'execute', title, status: 'in_progress', rawInput: { command: title, cwd: '/w' }, content: [{ type: 'terminal', terminalId: id }] });
+      update(sessionId, { sessionUpdate: 'terminal_output_chunk', terminalId: id, data: Buffer.from(title + ' said\n').toString('base64') });
+      update(sessionId, { sessionUpdate: 'terminal_update', terminalId: id, exitStatus });
+      update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: id, status: exitStatus.exitCode === 0 ? 'completed' : 'failed' });
+      chunk('after ' + title + '. ');
+    }
+    return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage });
+  }
   if (said === 'mode') chunk('mode:' + mode + ' model:' + model);
   else {
     update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'exec-1', kind: 'edit', title: 'Editing files', status: 'in_progress',

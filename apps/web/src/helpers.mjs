@@ -93,6 +93,9 @@ export function chatFailed(action, body, ms) {
 }
 // How long ago, as the queue strips and the sprint card show it (desktop and phone).
 export const ageOf = (at, now = Date.now()) => { const m = Math.max(0, Math.floor((now - at) / 60000)); return m < 1 ? '<1 min' : m < 60 ? m + ' min' : m < 1440 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + m % 60 + ' min' : '') : Math.floor(m / 1440) + ' d'; };
+// O220: a command's failed or killed exit (_meta['p9/exit'] {exitCode, signal}, apps/server/acp-v2.mjs) as the tag on its
+// tool: the signal's name, else "exit N"; '' for exit 0 and for anything not a whole number or a short signal name.
+export const exitTag = x => typeof x?.signal === 'string' && /^[A-Za-z0-9_+-]{1,32}$/.test(x.signal) ? x.signal : Number.isSafeInteger(x?.exitCode) && x.exitCode !== 0 ? 'exit ' + x.exitCode : '';
 export const agentWarning = text => /^Warning: ([^]*\S)\n\n$/.exec(String(text ?? ''))?.[1] ?? null;
 const WARNINGS = [[/falling back from websockets to https/i, 'Connection dropped · Codex retried', 'The connection to OpenAI dropped mid-reply. Codex retried another way and the reply came through. Nothing to do; if it shows on every message, OpenAI is having trouble.']];
 export const warnHtml = (raw, attrs = '') => {
