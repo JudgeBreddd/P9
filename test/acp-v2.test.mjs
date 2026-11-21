@@ -215,3 +215,37 @@ test('O219: a character split across pieces stays whole; at most 2,000 character
   assert.deepEqual(p.texts('t9'), [], 'output of a terminal no tool call names is not shown, as before');
   console.log('PASS O219: split character, 2,000 a second, whole-text replace');
 });
+
+// O220: codex-acp 2.6.0 ends a command with terminal_update {exitStatus: {exitCode, signal}}. A failed (non-zero) or killed
+// (signal) command's exit goes on as a tool_call_update carrying only _meta['p9/exit'] {exitCode, signal}, after the
+// output it flushes; one that worked (0) adds nothing. An exit before its tool call is announced waits for the
+// announcement; the turn's idle forgets it. What the agent sent is passed on only as a whole number and a short string.
+test('O220: a failed or killed Codex command\'s exit goes on as p9/exit; exit 0 adds nothing; an early exit waits for its tool call', async () => {
+  const p = await v2Pipe();
+  const exits = (id) => p.said.filter((m) => m.params?.update?.toolCallId === id && m.params.update._meta?.['p9/exit']).map((m) => m.params.update);
+  const end = (id, exitStatus) => ({ sessionUpdate: 'terminal_update', terminalId: id, exitStatus });
+  await p.step(...run('t1'), chunk('t1', 'boom\n'), end('t1', { exitCode: 2, signal: null }), { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' });
+  assert.deepEqual(exits('t1').map((u) => [u._meta['p9/exit'], u.content, u.status]), [[{ exitCode: 2, signal: null }, undefined, undefined]], 'exit 2: one update, no content, no status');
+  const at = p.said.findIndex((m) => m.params?.update?._meta?.['p9/exit']);
+  assert.equal(p.said[at - 1]?.params?.update?.content?.[0]?.content?.text, 'boom\n', 'after the output it flushed');
+  await p.step(...run('t2'), end('t2', { exitCode: null, signal: 'SIGTERM' }));
+  assert.deepEqual(exits('t2').map((u) => u._meta['p9/exit']), [{ exitCode: null, signal: 'SIGTERM' }], 'a killed command with no output');
+  await p.step(...run('t3'), chunk('t3', 'fine\n'), end('t3', { exitCode: 0, signal: null }));
+  assert.deepEqual(exits('t3'), [], 'exit 0 adds nothing');
+  await p.step(...run('t4'), end('t4', { exitCode: '2; rm', signal: { toString: 1 } }), ...run('t5'), end('t5', { exitCode: 1.5, signal: 'X'.repeat(500) }));
+  assert.deepEqual(exits('t4'), [], 'no whole number and no string: nothing');
+  assert.deepEqual(exits('t5').map((u) => u._meta['p9/exit']), [{ exitCode: null, signal: 'X'.repeat(32) }], 'a long signal is cut to 32 characters; a fraction is no code');
+  // Exit before the tool call is announced: it follows the announcement (and the output held with it).
+  await p.step({ sessionUpdate: 'terminal_update', terminalId: 't6', command: 'make', cwd: '/w' }, chunk('t6', 'early\n'), end('t6', { exitCode: 127, signal: null }));
+  assert.deepEqual(exits('t6'), [], 'not yet: no tool call to put it on');
+  await p.step(run('t6')[1]);
+  const ann = p.said.findIndex((m) => m.params?.update?.toolCallId === 't6' && m.params.update.sessionUpdate === 'tool_call');
+  assert.deepEqual(p.said.slice(ann + 1).filter((m) => m.params?.update?.toolCallId === 't6').map((m) => m.params.update._meta), [{ 'p9/append': true }, { 'p9/exit': { exitCode: 127, signal: null } }], 'the announcement, its output, then its exit');
+  // An exit whose tool call is never announced before the idle is forgotten.
+  await p.step({ sessionUpdate: 'terminal_update', terminalId: 't7', command: 'make', cwd: '/w' }, end('t7', { exitCode: 3, signal: null }));
+  await p.write.write({ jsonrpc: '2.0', id: 2, method: 'session/prompt', params: { sessionId: 's', prompt: [] } });
+  await p.asked.read();
+  await p.step({ sessionUpdate: 'state_update', state: 'running' }, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' }, run('t7')[1]);
+  assert.deepEqual(exits('t7'), [], 'forgotten at the idle');
+  console.log('PASS O220: p9/exit for exit 2, SIGTERM, early exit; none for 0, junk or after the idle');
+});
