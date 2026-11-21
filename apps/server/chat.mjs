@@ -617,6 +617,27 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const sending = new Set();
   const startSent = (id) => { sending.delete(id); db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id); };
   const startLost = (id) => sending.delete(id);
+  // O214: an ACP v2 agent took a message into its thread (acp-v2.mjs's promptTaken): what was in it arrived, so the start block
+  // it carried is used up then (fix 1: not at the turn's end, which a restart skips). Kept from that answer to the turn's end
+  // as {turn, start, kept}: a failed turn did not arrive, so its own start block goes back unless a newer one was written
+  // since. Fix 2: a turn taken while an earlier one's arrival is still kept (that turn cut by a restart) owns the record
+  // with kept set; if it fails, its block goes back and the earlier arrival stays.
+  const taken = (id) => Boolean(db.prepare('SELECT 1 FROM prefs WHERE key = ?').get('taken:' + id));
+  const atomic = (fn) => (...args) => { db.exec('BEGIN'); try { fn(...args); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; } };
+  const record = (id, value) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('taken:' + id, JSON.stringify(value));
+  const take = atomic((id, turn) => {
+    const start = sending.has(id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + id)?.value ?? '' : '';
+    const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value;
+    record(id, { turn, start, kept: Boolean(was) && JSON.parse(was).turn !== turn });
+    if (start) db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id);
+  });
+  const untake = atomic((id, turn) => {
+    const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value, v = was && JSON.parse(was);
+    if (!v || (turn !== undefined && v.turn !== turn)) return;
+    if (turn !== undefined && v.start) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, v.start);
+    if (turn !== undefined && v.kept) record(id, { turn: null, start: '', kept: true });
+    else db.prepare('DELETE FROM prefs WHERE key = ?').run('taken:' + id);
+  });
   // A worker's notes file, found from its stored parent and key (a worker without a key: its chat ID), never from a request.
   const notesOf = (id) => { const c = row(id); return c?.parent && ID.test(c.parent) ? { lead: c.parent, name: `notes/${c.key ?? id}.md` } : null; };
   // A compaction the agent reports (sprint spec D4): a worker is told its notes path again, with its next message from
@@ -1129,6 +1150,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       },
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       asyncTask: ({ update }) => marked(session, conversation.id, update),
+      // O214: an ACP v2 agent took this turn's message (v1 has no such answer): it reached the agent even if P9 stops
+      // before the turn ends. A failed turn undoes it (the prompt's failure handler).
+      promptTaken: () => { if (live.get(conversation.id) === session && session.turn) take(conversation.id, session.turn); },
       // O190: a result from a run Claude Code started itself (OWN_RUNS) is stored as a 'usage' event, which the ledger adds
       // to the chat's tokens. Only with no prompted turn open: during one, a result from these origins that names the
       // pending prompt (user_message_uuids) is in that turn's usage (stored at turn-end), and the raw message does not say
@@ -1443,7 +1467,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id); // O48, A7, daemon-5
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id); // O48, A7, daemon-5, O214
       gauges.delete(id); parked.delete(id);
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1726,7 +1750,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (rules?.started) sending.add(id);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
       // the reply's model_usage, compactions included) when the reply has it.
-      const done = (result) => { ended = result; if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
+      const done = (result) => { ended = result; untake(id); if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
       // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
       new Promise((resolve) => resolve(session.agent.prompt({ sessionId: session.sessionId, prompt }))).then(
         done,
@@ -1737,6 +1761,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // this diagnostic instead of ending it as cancelled (seen twice on adapter 0.106.0, not reproduced outside P9).
           // A decline is a cancel the user chose, so it ends the same way; any other failure still shows its error.
           if (session.planDeclined === turn && /\[ede_diagnostic\][^]*stop_reason=tool_use/.test(String(error?.message))) return done({ stopReason: 'cancelled' });
+          untake(id, turn); // O214: a failed turn is not a message that arrived
           if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
@@ -1986,9 +2011,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     sprintFiles,
     // The window's Notes button: this worker's notes file as it is now, read by the same rules as the project page.
     workerNotes: (id) => { const at = notesOf(id), text = at && sprintFiles.read(at.lead, at.name); return text === null || text === undefined ? { status: 404, error: 'no-notes' } : { status: 200, name: at.name, text }; },
-    // Start sprint: a chat's first message reached its agent (a turn ended, or one is running now). The user event alone
+    // Start sprint: a chat's first message reached its agent (a turn ended, or one is running now, or O214 an ACP v2
+    // agent took it into its thread before P9 stopped). The user event alone
     // says nothing: prompt writes it before the agent is started and configured.
-    delivered: (id) => Boolean(live.get(id)?.turn) || Boolean(db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'turn-end' LIMIT 1").get(id)),
+    delivered: (id) => Boolean(live.get(id)?.turn) || taken(id) || Boolean(db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'turn-end' LIMIT 1").get(id)),
     instructionsOf,
     wrote,
     agentOf,
