@@ -1289,7 +1289,7 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
   caller is now) are all read again, before anything is recorded or made. A notice never
   delays or refuses anything; its result is only logged.
 - **What a script is told.** The JSON on its input holds what the project page and `list_chats` already show for this
-  sprint: its id, title and folder, the approval record, the project's id and name, the role rows, the plan's items
+  sprint: its id, title and folder, the approval record, the project's id and name and its Clone from address (null when unset) with any user name, password, query and fragment taken out (null if what is left is not plain host-and-path characters), the role rows, the plan's items
   with P9's review record, each chat of the sprint (key, title, agent, model, effort, mode, state, context use,
   what it has spent (token counts and reported cost, as `list_chats` shows them), folder, its ready and verdict records), plan usage and limits as the usage page shows them, and the last 20 lines
   of the script log. No key, no provider profile's address, no chat text.
