@@ -13,7 +13,7 @@
 //   tool calls       only tool_call_update; the first one creates   -> the first one per id becomes tool_call
 //   diffs            a git patch                                    -> path/oldText/newText and its hunks, one per file
 //   permission       title + subject                                -> toolCall
-//   plan_update, notice                                             -> plan, a 'Warning: ' message chunk
+//   plan_update, notice                                             -> plan, the warning line's message chunk (O221)
 //   command output   terminal_update, base64, id = the tool call's;  -> the tool call's text content (its last 20,000 chars)
 //                    streamed as terminal_output_chunk pieces          (O219: each new piece once, marked _meta['p9/append'])
 //   the prompt's echo, running/requires_action states, session_info_update with only _meta (Codex's thread status,
@@ -169,7 +169,13 @@ export function v1Stream(stream) {
     } else if (kind === 'tool_call_content_chunk') next = { sessionUpdate: 'tool_call_update', toolCallId: u.toolCallId, content: content([u.content]) };
     else if (kind === 'config_option_update') next = withOptions(u);
     else if (kind === 'plan_update') { if (u.plan?.type !== 'items') return []; next = { sessionUpdate: 'plan', entries: u.plan.items ?? u.plan.entries ?? [] }; }
-    else if (kind === 'notice') next = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: (u.severity === 'error' ? 'Error: ' : 'Warning: ') + u.title + (u.description ? '\n' + u.description : '') } };
+    else if (kind === 'notice') {
+      // O221: exactly the shape the window and phone draw as the warning line and the chat list leaves out of the
+      // preview (agentWarning, helpers.mjs); any other shape read as words of the reply. A blank notice is dropped.
+      const text = [u.title, u.description].map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean).join('\n');
+      if (!text) return [];
+      next = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Warning: ' + (u.severity === 'error' ? 'Error: ' : '') + text + '\n\n' } };
+    }
     else if (kind === 'agent_message' || kind === 'agent_thought') {
       return (u.content ?? []).map((block) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: kind + '_chunk', messageId: u.messageId, content: block } } }));
     }
