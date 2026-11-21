@@ -1451,3 +1451,27 @@ test('O198 Show more on project instructions stays open through redraws until cl
   assert.equal(await rest.isVisible(), false);
   assert.deepEqual(errors, []);
 });
+
+// H2 part B: a Setup file changed outside P9's tools shows "Written by ... · not seen" on the sprint page; the owner's
+// Seen press takes the mark away and P9 keeps it; written again, the mark comes back with no click.
+test('projects: Sprint Setup marks a file written by someone else as not seen until the owner presses Seen', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Marks', work: { kind: 'new', parent: '', name: 'marks' } })).project;
+  const prep = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Marks prep' });
+  await writeFile(path.join(prep.folder, 'rules.md'), 'OUTSIDE ONE\n');
+  const unseen = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === prep.sprint).files.filter((f) => f.unseen).map((f) => f.name);
+  const { page } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${prep.sprint}"]`).click();
+  const mark = page.locator(`[data-sprint="${prep.sprint}"] [data-sp-mark="rules.md"]`);
+  await until(async () => (await mark.textContent().catch(() => '')).includes('rules.md: Written by someone outside P9\'s Setup tools · not seen'), async () => 'no mark: ' + await mark.textContent().catch(() => 'none'), 20000);
+  assert.equal(await page.locator(`[data-sprint="${prep.sprint}"] [data-sp-mark]`).count(), 1, 'a file of New sprint was marked');
+  await mark.locator('[data-sp-seen]').click();
+  await until(async () => (await mark.count()) === 0, 'the Seen press left the mark', 10000);
+  await until(async () => (await unseen()).length === 0, 'P9 did not keep the Seen press');
+  await new Promise((r) => setTimeout(r, 6000)); // past the page's 5 s reread: the mark stays away
+  assert.equal(await mark.count(), 0, 'the mark came back with no change to the file');
+  await writeFile(path.join(prep.folder, 'rules.md'), 'OUTSIDE TWO\n');
+  await until(async () => (await mark.count()) === 1, 'a later write did not mark it again', 20000);
+  console.log('PASS H2 part B page: an outside write marked, the Seen press clears it and P9 keeps that, a later write marks it again');
+});

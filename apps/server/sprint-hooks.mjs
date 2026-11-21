@@ -427,7 +427,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     return { library: next.scripts };
   }
   // hooks.json through the guarded save: a file changed since it was read here is not replaced.
-  function fileWrite(sprint, change) {
+  // by: who wrote it, kept for Sprint Setup's "Written by" mark (H2): the calling chat's agent, or the user (owner routes).
+  function fileWrite(sprint, change, by) {
     const text = chat.sprintFiles.read(sprint, 'hooks.json'), file = parse(text);
     if (file.error) return { error: 'scripts-refused', detail: file.error + ' Fix hooks.json first.' };
     const rows = change(file.scripts);
@@ -437,6 +438,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     const body = JSON.stringify({ scripts: next.scripts }, null, 2) + '\n';
     let saved; try { saved = chat.sprintFiles.write(sprint, 'hooks.json', body, text === null ? '' : hashOf(text)); } catch { saved = false; }
     if (saved !== true) return saved === 'changed' ? { error: 'sprint-file-changed', detail: 'hooks.json changed meanwhile. Read sprint_scripts and try again.' } : { error: 'not-saved' };
+    chat.wrote(sprint, 'hooks.json', body, by);
     return { sprint, file: { scripts: next.scripts, hash: hashOf(body) }, pending: JSON.stringify(next.scripts) !== JSON.stringify(approved(sprint)),
       note: 'In hooks.json. Before Start, Start approves it. In a started sprint it waits (sprint_scripts: additional.waiting; request_sprint_scripts asks the user) unless the user allows additional scripts.' };
   }
@@ -447,13 +449,13 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     const no = locked(caller); if (no) return no;
     if (args.library === true) return args.sprint === undefined ? libraryWrite((rows) => upsert(rows, rowOf(args))) : { error: 'request-refused', detail: 'library or sprint, not both.' };
     const at = where(caller, args.sprint);
-    return at.error ? at : fileWrite(at.sprint, (rows) => upsert(rows, rowOf(args)));
+    return at.error ? at : fileWrite(at.sprint, (rows) => upsert(rows, rowOf(args)), chat.agentOf(caller));
   }
   function remove(caller, args) {
     const no = locked(caller); if (no) return no;
     if (args.library === true) return args.sprint === undefined ? libraryWrite((rows) => without(rows, args.name)) : { error: 'request-refused', detail: 'library or sprint, not both.' };
     const at = where(caller, args.sprint);
-    return at.error ? at : fileWrite(at.sprint, (rows) => without(rows, args.name));
+    return at.error ? at : fileWrite(at.sprint, (rows) => without(rows, args.name), chat.agentOf(caller));
   }
   // sprint_script_add: a copy of one library script into the sprint's hooks.json (a script of that name there is replaced).
   function add(caller, args) {
@@ -461,7 +463,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     const at = where(caller, args.sprint), row = library().find((r) => r.name === args.name);
     if (at.error) return at;
     if (!row) return { error: 'unknown-script', name: args.name, detail: 'No script of that name in the library (sprint_scripts lists it).' };
-    return fileWrite(at.sprint, (rows) => upsert(rows, row));
+    return fileWrite(at.sprint, (rows) => upsert(rows, row), chat.agentOf(caller));
   }
 
   // Which script may be run on request: one the owner approved at Start, by name, and that copy. The one place that
@@ -551,11 +553,11 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       const rows = standing(sprint, text).waiting.filter((r) => !names || names.includes(r.name));
       return rows.length ? approveRows(sprint, rows) : { sprint, approved: [] };
     },
-    save: (row, sprint) => (sprint === undefined ? libraryWrite((rows) => upsert(rows, row)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => upsert(rows, row))),
-    remove: (name, sprint) => (sprint === undefined ? libraryWrite((rows) => without(rows, name)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => without(rows, name))),
+    save: (row, sprint) => (sprint === undefined ? libraryWrite((rows) => upsert(rows, row)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => upsert(rows, row), 'the user')),
+    remove: (name, sprint) => (sprint === undefined ? libraryWrite((rows) => without(rows, name)) : !known(sprint) ? { error: 'unknown-sprint' } : fileWrite(sprint, (rows) => without(rows, name), 'the user')),
     add(name, sprint) {
       const row = library().find((r) => r.name === name);
-      return !known(sprint) ? { error: 'unknown-sprint' } : !row ? { error: 'unknown-script', name } : fileWrite(sprint, (rows) => upsert(rows, row));
+      return !known(sprint) ? { error: 'unknown-sprint' } : !row ? { error: 'unknown-script', name } : fileWrite(sprint, (rows) => upsert(rows, row), 'the user');
     },
     run(sprint, name) {
       if (!known(sprint)) return { error: 'unknown-sprint' };
