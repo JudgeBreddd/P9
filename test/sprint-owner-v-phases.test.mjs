@@ -22,7 +22,7 @@ test('sprint-owner-v phases: owner lines in two phases leave each phase its own 
     projects: { merge: () => true, started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => null, prepOf: () => null, record: async () => null } };
   const hooks = createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
   const got = await hooks.status(id, id);
-  assert.deepEqual(got.phases, [{ title: 'Phase 1', merged: 1, total: 1 }, { title: 'Phase 2', merged: 0, total: 2 }], 'phases: ' + JSON.stringify(got.phases));
+  assert.deepEqual(got.phases.map(({ text, truncated, ...p }) => p), [{ title: 'Phase 1', merged: 1, total: 1 }, { title: 'Phase 2', merged: 0, total: 2 }], 'phases: ' + JSON.stringify(got.phases));
   assert.equal(got.phase_now, 1);
   assert.deepEqual(got.done.total, 3);
   assert.deepEqual([got.owner.total, got.owner.items.map((i) => i.id)], [2, ['P1v', 'P2v']]);

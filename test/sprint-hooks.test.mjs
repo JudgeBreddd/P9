@@ -59,7 +59,7 @@ test('Sprint scripts: hooks.json is refused by row and field; a run gets its inp
   assert.equal(said(one), 'check (before-start, blocking): node check.mjs');
   assert.equal(clean('a |\u0007 b\n' + 'c'.repeat(400)).length, 300); assert.equal(clean(' a |\u0007  b\tc '), 'a b c');
   assert.ok(BLOCKING.every((p) => POINTS.includes(p)) && FIRED.every((p) => POINTS.includes(p)) && POINTS.length === 13);
-  assert.deepEqual(planItems('# P\n\n- [ ] A1: x. Role w1\n- [x] A2: y\nnot an item\n'), [{ id: 'A1', text: 'A1: x. Role w1', role: 'w1', ticked: false }, { id: 'A2', text: 'A2: y', role: null, ticked: true }]);
+  assert.deepEqual(planItems('# P\n\n- [ ] A1: x. Role w1\n- [x] A2: y\nnot an item\n'), [{ id: 'A1', text: 'A1: x. Role w1', role: 'w1', ticked: false, phase: null }, { id: 'A2', text: 'A2: y', role: null, ticked: true, phase: null }]);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-hooks-'));
   fs.writeFileSync(path.join(dir, 'echo.mjs'), 'let s = ""; process.stdin.on("data", (d) => { s += d; }).on("end", () => { console.log("first"); console.log("got " + JSON.parse(s).n + " |\\u0007 in " + process.cwd() + " key=" + (process.env.P9_TEST_SECRET ?? "none")); process.exit(JSON.parse(s).n); });');
@@ -207,7 +207,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.equal(bs.cwd, fs.realpathSync(s.folder), 'a script runs in the sprint folder');
   assert.deepEqual(bs.project, { id: project, name: 'Fresh', source: null }, 'O211: a project with no Clone from gives source null');
   assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null, owns: null }]);
-  assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, review: null }]);
+  assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, phase: null, review: null }]);
   assert.deepEqual([bs.workers, bs.verdicts], [[], []]);
   assert.equal(bs.log.length, 4, 'the earlier refusal and the three held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
   assert.ok(!JSON.stringify(bs).includes(instance.credentials.token ?? '\u0000no-token'), 'the state carries the daemon\'s token');
@@ -970,8 +970,11 @@ test('Sprint Setup tools: every field read with its hash, a file and a role row 
   const status = async () => (await call(instance, `/sprints/${sprint}/status`)).body;
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] Z0: above any phase\n\n## Phase 1: install\n- [x] A1: one; role w1\n- [ ] A2: two\n\n### Phase 2 — ship\n- [ ] B1: three\n');
   let st = await status();
-  assert.deepEqual([st.phases, st.phase_now], [[{ title: 'Phase 1: install', merged: 0, total: 2 }, { title: 'Phase 2 — ship', merged: 0, total: 1 }], 0], JSON.stringify([st.phases, st.phase_now]));
-  assert.deepEqual((await L.tool('sprint_status')).phases, st.phases, 'the tool gives the same phases');
+  assert.deepEqual([st.phases, st.phase_now], [[{ title: 'Phase 1: install', merged: 0, total: 2, text: '- [x] A1: one; role w1\n- [ ] A2: two', truncated: false },
+    { title: 'Phase 2 — ship', merged: 0, total: 1, text: '- [ ] B1: three', truncated: false }], 0], JSON.stringify([st.phases, st.phase_now]));
+  assert.deepEqual(st.items.map((i) => i.phase), [null, 0, 0, 1], 'each item names its phase');
+  // The page's plan view gets each phase's text; the tool leaves it out (an agent reads the plan itself).
+  assert.deepEqual((await L.tool('sprint_status')).phases, st.phases.map(({ text, truncated, ...p }) => p), 'the tool gives the same phases, without their text');
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: one\n');
   st = await status();
   assert.deepEqual([st.phases, st.phase_now], [[], null]);
