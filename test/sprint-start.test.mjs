@@ -336,6 +336,12 @@ test('Sprint roles: a worker the lead opens for a role starts on its roles.json 
   // Its own values named are what the row starts: allowed.
   const same = await L.tool('open_chat', { text: 'config', key: 'window', model: 'haiku', effort: 'low' });
   assert.match(await config(instance, same.chat), /^config:model=haiku,effort=low,/);
+  // I3: the lead moves a role's worker only to what a roles.json row (not the lead's own) starts; Delegation's rows say nothing.
+  const up = await L.tool('send_chat', { chat: same.chat, text: 'config', model: 'opus', effort: 'high' });
+  assert.deepEqual([up.error, up.role, up.field], ['role-refused', 'window', 'model'], JSON.stringify(up));
+  write('roles.json', JSON.stringify({ roles: [lead, { key: 'phone', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'window', provider: 'claude', model: 'haiku', effort: 'low' }, { key: 'review', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  assert.equal((await L.tool('send_chat', { chat: same.chat, text: 'config', model: 'opus', effort: 'high' })).error, undefined);
+  assert.match((await L.tool('wait_chat', { chat: same.chat })).last, /^config:model=opus,effort=high,/, 'a role\'s worker did not move to another row\'s model');
   // FIX1 (#225): a role on a provider profile is named as its row writes it, profile:<id>; another profile, or another
   // agent, is refused by field and makes nothing.
   const post = async (name) => (await call(instance, '/profiles', 'POST', { name, baseUrl: 'https://models.example.test/api/', models: ['glm-5.3'], key: 'sk-profile-test-0f3a9c71d2e84b56' })).body.profile.id;

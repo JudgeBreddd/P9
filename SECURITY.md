@@ -735,6 +735,11 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   agent's own checks unless you set a wider default or the call names one. The mode the Unrestricted
   switch itself gives new chats in the window is not that saved default. Restricted, nothing
   changes: the worker takes the parent's mode.
+- **A worker's model and effort (I3).** `send_chat` with `model` or `effort` moves a worker to them from that
+  message's turn on, only for the chat that started it, only while it is idle or stopped (a running turn keeps its own),
+  never with a note, and only to a value some row starts on its agent, checked as `open_chat` checks it: a roles.json row
+  other than the lead's in a sprint, else a Settings > Delegation row. Anything else is refused by field, never swapped;
+  a provider profile chat refuses any model.
 - **Notes (`send_chat` with `when: note`).** A note passes information on and asks for nothing: a
   result, a branch that is ready, something found. It is the one message that is not held to the
   sender's mode, and the one that reaches a worker's parent when the two share no project. What

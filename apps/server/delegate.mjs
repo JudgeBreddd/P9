@@ -87,7 +87,9 @@ export const DELEGATE_TOOLS = (input) => {
       + 'key (not with a note) gives a worker you started, reused for another role, that role\'s key first, so this message carries roles/<key>.rules.md; a worker in its own worktree keeps its key.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue', 'note'] },
       replaces: { type: 'string', description: 'The held ID of your own earlier message still waiting for the turn to end (returned as held): this one replaces it, and it is marked replaced, not sent.' },
-      key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' } }, ['chat', 'text'])],
+      key: { type: 'string', description: 'The role this worker now does: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' },
+      model: { type: 'string', description: 'A worker you started runs on this model from this message on: one a Settings > Delegation row (in a sprint, a roles.json row) starts. Not while it works, not with a note, not for a profile chat.' },
+      effort: { type: 'string', description: 'The same for its effort.' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again. '
       + 'Not waiting, a worker\'s turn end reaches you from P9 as a note, which starts no turn (unless Settings > Notices makes it a message); one still stopped 10 minutes later starts your turn once, and a failed turn at once. '
@@ -961,11 +963,47 @@ export function createDelegate({ chat, allowed, usage }) {
     return schedules ? schedules.save(caller, args, target) : NO_SCHEDULES;
   }
 
+  // I3 (SECURITY.md § Delegate): send_chat's model and effort, for a worker the caller started, from its next turn. Allowed
+  // is what open_chat allows, never swapped for a near one: a value some row starts on the worker's agent, its sprint's
+  // roles.json rows (not the lead's) where open_chat reads them, else Settings > Delegation's, any row (the worker keeps its own).
+  function repick(caller, target, args) {
+    if (target.parent !== caller) return { error: 'request-refused', detail: 'Only the chat that started a worker can change its model or effort.' };
+    if (stateOf(target) === 'working') return { error: 'turn-running', detail: 'A running turn keeps its model and effort. wait_chat, then send them: they apply from its next turn.' };
+    if (args.model !== undefined && target.profile) return { error: 'request-refused', field: 'model', detail: 'A provider profile chat keeps the model it started on; leave model out.' };
+    const effortId = target.effort?.id ?? chat.lists()[target.provider]?.pickers?.find((o) => o.category === 'thought_level')?.id;
+    if (args.effort !== undefined && !effortId) return { error: 'effort-unknown', detail: 'That agent\'s effort list is not known yet; leave effort out.' };
+    const roles = chat.sprintFiles.exists(caller) ? chat.sprintFiles.read(caller, 'roles.json') : undefined;
+    const sprint = sprintLead(caller) || chat.projects.prepOf(caller) || (roles !== undefined && roles !== null);
+    let rows;
+    if (sprint) {
+      let parsed; try { parsed = JSON.parse(roles ?? 'null'); } catch { parsed = null; }
+      const profiles = chat.profiles.list().profiles;
+      rows = (Array.isArray(parsed?.roles) ? parsed.roles : []).filter((r) => r && typeof r === 'object' && r.key !== 'lead').map((r) => roleOf(r, profiles)).filter((r) => !r.error)
+        .map((r) => ({ provider: r.provider, profile: r.profile, model: r.model, effort: r.effortId ? r.effort : undefined }));
+    } else {
+      const me = chat.info(caller);
+      rows = chat.delegation().workers.map((row) => { const w = pick(row, me, {}, undefined); return { ...seen(w), profile: w.profile?.profile ?? null }; });
+    }
+    let fit = rows.filter((r) => r.provider === target.provider && r.profile === (target.profile?.id ?? null));
+    for (const k of ['model', 'effort']) {
+      if (args[k] === undefined) continue;
+      const next = fit.filter((r) => r[k] === args[k]);
+      if (!next.length) {
+        const allowed = [...new Set(fit.map((r) => r[k]).filter(Boolean))].join(', ') || 'none';
+        return { error: sprint ? 'role-refused' : 'delegation-refused', ...(sprint && { role: target.key ?? null }), field: k,
+          detail: `${k} "${args[k]}" is not one the user allows for this worker: no ${sprint ? 'roles.json row (but the lead\'s)' : 'Settings > Delegation row'} starts it${k === 'effort' && args.model !== undefined ? ` with model "${args.model}"` : ''}. Allowed ${k}: ${allowed}.` };
+      }
+      fit = next;
+    }
+    return { ...(args.model !== undefined && { model: args.model }), ...(args.effort !== undefined && { config: { [effortId]: args.effort } }) };
+  }
   async function sendChat(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (!text(args.text, 100_000) || (args.when !== undefined && !['auto', 'steer', 'queue', 'note'].includes(args.when))) return { error: 'request-refused' };
     if (args.key !== undefined && (typeof args.key !== 'string' || !KEY.test(args.key) || ID.test(args.key) || args.when === 'note'))
       return { error: 'request-refused', detail: 'key: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID, and only with a message that asks for work, never a note.' };
+    if (['model', 'effort'].some((k) => args[k] !== undefined && (!text(args[k], 200) || args.when === 'note')))
+      return { error: 'request-refused', detail: 'model and effort: 1 to 200 characters, and only with a message that asks for work, never a note.' };
     // A note asks for nothing and starts nothing, so it has no mode and is not held to the sender's: it reaches what
     // send_chat reaches, and a worker's parent always (SECURITY.md § Delegate, "Notes").
     if (args.when === 'note') {
@@ -984,6 +1022,9 @@ export function createDelegate({ chat, allowed, usage }) {
     if (stateOf(target) === 'working' && !(tierOf(target.provider, target.mode) <= picked.ceiling)) {
       return { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' };
     }
+    // I3: a new model or effort, checked before anything changes; the message carries it, so its turn starts on it.
+    const re = args.model !== undefined || args.effort !== undefined ? repick(caller, target, args) : null;
+    if (re?.error) return re;
     // O82: the new key is set before the message, so rulesFor reads the new role's rules file for it. The worker is told
     // where its notes now live and where the old ones are; nothing is moved.
     let told = '';
@@ -999,7 +1040,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // idle or waiting on an answer still holds its place and is never refused here.
     const place = target.parent && ['stopped', 'moved'].includes(target.state) ? take(target.parent, args.chat) : null;
     if (place?.error) { if (told) chat.rekey(args.chat, target.key ?? null); return place; }
-    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller).finally(() => place?.release());
+    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...re, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller).finally(() => place?.release());
     // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
     if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };

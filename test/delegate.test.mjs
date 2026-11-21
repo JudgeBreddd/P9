@@ -558,6 +558,52 @@ test('Delegate: chats in one project read and message each other but stop only t
   console.log('PASS Delegate scope: project chats read and sent, stop and answer kept to the starter, a chat outside saw nothing');
 });
 
+test('I3: send_chat moves a worker its caller started to another model or effort from its next turn, only to what a Settings > Delegation row starts; never mid-turn, never from another chat, never with a note', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), b = await agent(t, instance, { project });
+  // Row 1 is left on the parent's (default, medium), row 2 starts opus on high.
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: five(ROW, { agent: 'claude', model: 'opus', effort: 'high' }) })).status, 200);
+  const made = await a.tool('open_chat', { text: 'config', title: 'Kid' });
+  assert.match((await a.done(made.chat)).last, /^config:model=default,effort=medium,/);
+  const sent = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user').length;
+  const before = await sent();
+  const no = async (args, error, field) => { const r = await a.tool('send_chat', { chat: made.chat, text: 'config', ...args }); assert.deepEqual([r.error, r.field], [error, field], JSON.stringify(r)); return r; };
+  // Refused by field, in words the agent can act on; nothing reaches the worker.
+  assert.match((await no({ model: 'haiku' }, 'delegation-refused', 'model')).detail, /^model "haiku" is not one the user allows for this worker: no Settings > Delegation row starts it\. Allowed model: default, opus\.$/);
+  assert.match((await no({ effort: 'low' }, 'delegation-refused', 'effort')).detail, /Allowed effort: medium, high\.$/);
+  assert.match((await no({ model: 'opus', effort: 'medium' }, 'delegation-refused', 'effort')).detail, /starts it with model "opus"\. Allowed effort: high\.$/);
+  assert.match((await no({ model: 'opus', when: 'note' }, 'request-refused')).detail, /never a note/);
+  assert.match((await no({ model: '' }, 'request-refused')).detail, /1 to 200 characters/);
+  // Another chat of the project reaches the worker, but only its starter changes what it runs on.
+  const other = await b.tool('send_chat', { chat: made.chat, text: 'config', model: 'opus' });
+  assert.deepEqual([other.error, other.detail], ['request-refused', 'Only the chat that started a worker can change its model or effort.'], JSON.stringify(other));
+  // A refused model changes nothing else the same message asked for: the worker keeps its key.
+  await no({ key: 'builder', model: 'haiku' }, 'delegation-refused', 'model');
+  assert.equal((await rows(instance)).find((r) => r.id === made.chat).key ?? null, null, 'a refused message re-keyed the worker');
+  assert.equal(await sent(), before, 'a refused change sent the message');
+  // What a row starts: the message's own turn runs on it, and the next turns stay on it.
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'config', model: 'opus', effort: 'high' })).sent, 'started a turn');
+  assert.match((await a.done(made.chat)).last, /^config:model=opus,effort=high,/, 'the new model and effort did not reach the next turn');
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'config' })).sent, 'started a turn');
+  assert.match((await a.done(made.chat)).last, /^config:model=opus,effort=high,/, 'the worker went back to its row');
+  // A running turn keeps its model: refused, and the turn is not changed.
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'working');
+  const busy = await no({ model: 'default', effort: 'medium', when: 'queue' }, 'turn-running');
+  assert.match(busy.detail, /wait_chat, then send them/);
+  await call(instance, `/chat/${made.chat}/cancel`, 'POST', {});
+  assert.equal((await a.done(made.chat)).state, 'idle');
+  // A stopped worker starts again on what the message names.
+  await call(instance, `/chat/${made.chat}/stop`, 'POST', {});
+  assert.equal((await a.tool('wait_chat', { chat: made.chat })).state, 'stopped');
+  const back = await a.tool('send_chat', { chat: made.chat, text: 'config', model: 'default', effort: 'medium' });
+  assert.equal(back.sent, 'started a turn', JSON.stringify(back));
+  assert.match((await a.done(made.chat)).last, /^config:model=default,effort=medium,/, 'a stopped worker did not start on the new model');
+  console.log('PASS I3 send_chat model and effort: refused by field, by another chat, mid-turn and with a note; applied from the next turn, kept after; a stopped worker restarts on it');
+});
+
 test('Delegate: a provider-profile chat\'s worker stays on that profile and its parent\'s model; another model is refused unless a Settings row allows it', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
@@ -580,6 +626,10 @@ test('Delegate: a provider-profile chat\'s worker stays on that profile and its 
   assert.equal(await started({ model: 'kimi-k3:cloud' }), 'delegation-refused', 'a model no Settings row allows was started');
   assert.equal(typeof await started({ model: 'opus' }), 'string', 'a model the profile does not list was started');
   assert.equal((await rows(instance)).length, 3);
+  // I3: a profile chat keeps the model it started on: send_chat refuses another one by field.
+  const kid = (await rows(instance)).find((r) => r.parent === a.conversation).id;
+  const moved = await a.tool('send_chat', { chat: kid, text: 'hello', model: 'kimi-k3:cloud' });
+  assert.deepEqual([moved.error, moved.field], ['request-refused', 'model'], JSON.stringify(moved));
   // list_providers: what an agent may name as provider. Of a profile its id, name and models, never its address or key.
   const listed = await a.tool('list_providers');
   assert.deepEqual(listed.providers.map((p) => p.provider), ['claude', 'codex', 'profile:' + profile.id], JSON.stringify(listed));
