@@ -689,8 +689,9 @@ const keepIn = (s, v) => {
   if (!s || !v) return;
   if (!v.up) { if (s.grown !== undefined) { s.tail = s.grown || undefined; delete s.grown; } return; }
   const list = v.anchor?.ev && s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), i = list ? list.indexOf(v.anchor.ev) : -1;
+  if (i < 0) return; // no anchor (scrolled up inside a card with no step in view, review #404): nothing to keep in
   const want = Math.min(list.length - i, GROW_MAX); // no further: past it the reader falls back to the pixel restore
-  if (i >= 0 && want > (s.tail || TAIL)) { s.grown ??= s.tail || 0; s.tail = want; }
+  if (want > (s.tail || TAIL)) { s.grown ??= s.tail || 0; s.tail = want; }
 };
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
   return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was

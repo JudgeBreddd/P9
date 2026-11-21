@@ -190,3 +190,35 @@ test('O127 two panes: a chat read scrolled up in Chat Focus keeps its block whil
   await push(1);
   assert.equal(await pane.locator('.hist .col > [data-at]').count(), 2200, 'a step after Show earlier, read from its top, keeps the 2,200 the user asked for');
 });
+
+test('O127 review: a reader scrolled up inside a tall pending approval, with no step in view, still gets the next step', { timeout: 120000 }, async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-o127c-'));
+  const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
+  t.after(() => app.close());
+  const page = await app.firstWindow({ timeout: 15000 });
+  const errors = []; page.on('pageerror', e => { errors.push(e.message); console.log('PAGEERROR ' + e.message); });
+  await shellReady(page, { timeout: 15000 });
+  await page.evaluate(() => window.__setup({ writable: false }));
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const id = 's-claude-2';
+  await page.evaluate(id => document.querySelector('#navList .row[data-chat="' + id + '"]')?.click(), id);
+  const pane = page.locator(`#chats .pane[data-id="${id}"]`);
+  await pane.locator('.hist').waitFor({ timeout: 5000 });
+  // The approval card has no data-at: scrolled up inside it, no step block is in view, so the paint has no anchor.
+  await page.evaluate(id => {
+    const ev = [];
+    for (let i = 0; i < 260; i++) ev.push(i % 2 ? { t: 'agent', text: `reply ${i}.` } : { t: 'user', text: `msg ${i}.` });
+    ev.push({ t: 'approval', title: 'Edit a long file', diff: Array.from({ length: 90 }, (_, k) => ['add', 'line ' + k]), options: [['allow_once', 'Allow once'], ['reject', 'Deny']] });
+    window.__o127c = ev; window.__sprint.set(id, { events: ev, pending: 'approval' });
+  }, id);
+  await pane.locator('.pending[aria-label="Approval"]').waitFor({ timeout: 5000 });
+  const h = pane.locator('.hist');
+  await h.evaluate(h => h.scrollTo({ top: h.scrollHeight - h.clientHeight - 100, behavior: 'instant' }));
+  const seen = await h.evaluate(h => { const top = h.getBoundingClientRect().top, bottom = h.getBoundingClientRect().bottom;
+    return [...h.querySelectorAll(':scope > .col > [data-at]')].filter(c => c.getBoundingClientRect().bottom > top && c.getBoundingClientRect().top < bottom).length; });
+  assert.equal(seen, 0, 'no step block is in view (the card fills the pane), else this test proves nothing');
+  await page.evaluate(id => { window.__o127c.splice(260, 0, { t: 'tool', title: 'Glob after', status: 'completed', output: 'hit' }); window.__sprint.set(id, { events: window.__o127c }); }, id);
+  await pane.locator('.hist .col > [data-at]', { hasText: 'Glob after' }).waitFor({ state: 'attached', timeout: 5000 });
+  assert.deepEqual(errors, [], 'the paint threw');
+});
