@@ -1147,10 +1147,10 @@ fs.appendFileSync(path.join(d, 'ran.txt'), 'end ' + j.point + '\\n');
 if (fs.existsSync(path.join(d, 'refuse-' + j.point))) { console.log('no: ' + j.point); process.exit(4); }\n`);
   const cmd = `${process.execPath} ${prog}`;
   const scripts = ['before-merge', 'ci-red', 'gate-passed', 'pause', 'resume'].map((point) => ({ name: 'at ' + point, command: cmd, point, blocking: point === 'before-merge' }));
-  const r = { dir, lock: false, closed: false, started: true, logs: [] };
+  const r = { dir, lock: false, closed: false, closing: false, started: true, logs: [] };
   const chat = { lock: () => ({ on: r.lock }), info: (c) => (c === EA ? { title: 'S', provider: 'fake' } : c === EB ? { title: 'W', provider: 'fake', parent: EA } : null), family: () => [{ id: EA }], list: () => [],
     sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
-    socketPath: '/nowhere', note: async () => ({}), closing: () => false,
+    socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
     sprintFiles: { exists: (c) => c === EA, read: () => null, folderOf: () => dir, log: (c, line) => r.logs.push(line) },
     projects: { started: () => (r.started ? { at: 0, by: 'owner', plan: null, scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
   r.hooks = createHooks({ chat, usage: async () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, ticking: false });
@@ -1204,7 +1204,7 @@ test('Sprint scripts O202: a second call of a point while its last scripts run i
   console.log('PASS O202: run 2 refused while run 1 was held, gate-passed not held by it, run 3 taken after run 1 ended');
 });
 
-test('Sprint scripts O202: pause and resume run in the order pressed, each after the last one\'s scripts ended; one still waiting at Close is dropped', { timeout: 60000 }, async () => {
+test('Sprint scripts O202: pause and resume run in the order pressed, each after the last one\'s scripts ended; one still waiting at Close or at shutdown runs nothing', { timeout: 60000 }, async () => {
   const r = pointRig();
   r.hold('pause');
   const p = r.hooks.ordered(EA, 'pause', { by: 'owner' }), q = r.hooks.ordered(EA, 'resume', { by: 'owner', sent: 0 });
@@ -1218,7 +1218,12 @@ test('Sprint scripts O202: pause and resume run in the order pressed, each after
   await eventually(() => r.ran().length === 5, 'the second pause started');
   r.closed = true; r.free('pause'); await p2; await q2;
   assert.deepEqual(r.ran().slice(4), ['pause {"by":"lead"}', 'end pause'], 'a resume still waiting at Close ran');
-  console.log('PASS O202: resume waited for the held pause script; after Close the waiting resume was dropped');
+  r.closed = false; r.hold('pause');
+  const p3 = r.hooks.ordered(EA, 'pause', { by: 'owner' }), q3 = r.hooks.ordered(EA, 'resume', { by: 'owner', sent: 2 });
+  await eventually(() => r.ran().length === 7, 'the third pause started');
+  r.closing = true; r.free('pause'); await p3; await q3;
+  assert.deepEqual(r.ran().slice(6), ['pause {"by":"owner"}', 'end pause'], 'a resume still waiting while P9 shuts down ran');
+  console.log('PASS O202: resume waited for the held pause script; after Close and at shutdown the waiting resume ran nothing');
 });
 
 test('Sprint scripts O202 live: the lead\'s sprint_event and pause_sprint, and the owner\'s Pause and Resume, run the approved scripts of those points', { timeout: 300000 }, async (t) => {

@@ -226,12 +226,13 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
 
   // O202, pause and resume: run one after the other per sprint, each once the last one's scripts have all ended, so a quick
   // Pause then Resume cannot have the resume script (heavy-services resume) finish before the pause script (pause) and
-  // leave the services paused in a running sprint. A run still waiting when the sprint is closed is dropped: a pause
-  // script after Close would undo what after-close put back. Each run is a notice; nothing waits for it.
+  // leave the services paused in a running sprint. A run still waiting when the sprint is closed runs nothing (standing()
+  // lists no scripts for a closed sprint): a pause script after Close would undo what after-close put back. One still
+  // waiting while P9 shuts down is dropped. Each run is a notice; nothing waits for it.
   const chains = new Map();
   function ordered(sprint, point, subject) {
     const next = (chains.get(sprint) ?? Promise.resolve()).then(async () => {
-      if (chat.projects.closed(sprint) || off()) return;
+      if (off()) return;
       const going = [];
       await fire(sprint, point, subject, undefined, (p) => going.push(p));
       await Promise.allSettled(going);
