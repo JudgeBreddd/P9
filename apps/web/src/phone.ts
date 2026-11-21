@@ -1120,10 +1120,11 @@ async function submitFromBox(event: Event) {
   // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
   // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
   const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's
-  const sentPick = chosen.get(id)?.get('model')?.pid; // O206: which model pick this send carries
   const draft = JSON.stringify([text, images.map((image) => image.data.length + ':' + image.data.slice(-64)), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
   if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
   const again = inFlight.has(id);
+  // O206: which model pick this send carries. A retry is the first try again, so it carries the first try's pick, not a newer one of the same model.
+  const sentPick = again ? inFlight.get(id)!.pick : chosen.get(id)?.get('model')?.pid;
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
   // fit this phone's storage): they stay attached and the box says why.
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
@@ -1145,7 +1146,7 @@ async function submitFromBox(event: Event) {
   // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
   const sent = { ...first, ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
-  inFlight.set(id, { draft, sent: first }); keepInFlight();
+  inFlight.set(id, { draft, sent: first, ...(sentPick && { pick: sentPick }) }); keepInFlight();
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
@@ -1180,7 +1181,7 @@ function dropRefused(id: string, value: string | undefined, pid: string | undefi
 const SEND_DEADLINE = 30000;
 // O62: per chat, the send that got no answer, kept in this phone's storage with the settings chosen for it: after a reload
 // the same text sent again is that same send (its first body and operation ID), so it does not arrive twice.
-const inFlight = new Map<string, { draft: string; sent: Json }>();
+const inFlight = new Map<string, { draft: string; sent: Json; pick?: string }>(); // pick: the pid of the model pick the first try carried (O206)
 function keepInFlight() {
   try {
     if (inFlight.size) localStorage.setItem('p9-inflight', JSON.stringify(Object.fromEntries([...inFlight].map(([id, kept]) => [id, { ...kept, picks: [...chosen.get(id) ?? []] }]))));
@@ -1203,10 +1204,11 @@ function spend(id: string, picked: Map<string, string>) {
   if (!own.size) chosen.delete(id);
 }
 try {
-  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
-    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent });
-    // O206: a send kept before picks had a pid gets one here, so its refusal still clears the pick it carried.
+  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; pick?: string; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
+    // O206: a send kept before picks had a pid gets one here, and that one is the pick it carried, so its refusal still clears it.
     if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
+    const pick = kept.pick ?? chosen.get(id)?.get('model')?.pid;
+    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent, ...(pick && { pick }) });
   }
 } catch {}
 const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());

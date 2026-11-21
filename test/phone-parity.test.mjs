@@ -955,6 +955,20 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await is(running, 'plain refusal: its pick still shows as pending');
   await page.unroute(prompts);
   await page.fill('#prompt', '');
+  // A retry: the first try (Opus) gets outcome-unknown, Haiku then Opus are picked, the same text is sent again (the same send),
+  // and the daemon's final answer to it is a refusal. That refusal is the first try's: the newer Opus pick stays pending.
+  let calls = 0;
+  await page.route(prompts, (route) => ++calls === 1 ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'outcome-unknown' }) }) : refuse(route));
+  await page.evaluate(() => { document.querySelector('#composerNote').textContent = ''; });
+  await pick('opus'); await send(page, 'retried'); await noted('Not sent yet');
+  await pick('haiku'); await pick('opus');
+  await page.evaluate(() => { document.querySelector('#composerNote').textContent = ''; });
+  await send(page, 'retried'); await noted('Not sent: model-refused');
+  assert.equal(calls, 2, 'the retry went once more');
+  await is(opusPending, 'retry: the replayed refusal of the first try cleared the newer Opus pick');
+  await page.unroute(prompts);
+  await pick('default'); await is(running);
+  await page.fill('#prompt', '');
   // Through the queue: 'turn-running' queues the Opus send; once the drain's send is held, Haiku and Opus are picked, then it is refused.
   held = new Promise((resolve) => { release = resolve; });
   let tries = 0;
@@ -967,15 +981,17 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
   await is(opusPending, 'queue: the newer Opus pick was cleared by the old refusal');
   await page.unroute(prompts);
-  // A send kept in storage from before picks had a pid comes back after a reload; refused for good, its pick still clears.
+  // A send kept in storage from before picks had a pid comes back after a reload; the same text sent again is that send (its draft
+  // matches), and refused for good, its pick still clears.
   const id = await page.evaluate(() => document.querySelector('#conversation').value);
   await page.fill('#prompt', '');
-  await page.evaluate((id) => localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: 'old', sent: { text: 'kept' }, picks: [['model', { base: '', value: 'opus' }]] } })), id);
+  await page.evaluate((id) => localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: JSON.stringify(['kept', [], JSON.stringify([['model', 'opus']])]), sent: { text: 'kept, first try', model: 'opus' }, picks: [['model', { base: '', value: 'opus' }]] } })), id);
   await page.reload();
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#modelBtn')?.textContent.includes('Default'), id, { timeout: 15000 });
   await is(opusPending, 'a kept send: its pick shows as pending after the reload');
-  await page.route(prompts, refuse);
+  let went; await page.route(prompts, (route) => { went = route.request().postDataJSON(); return refuse(route); });
   await send(page, 'kept'); await noted('Not sent: model-refused');
+  assert.equal(went?.text, 'kept, first try', 'the kept send went again as itself (its first body), not rebuilt from the box');
   await is(running, 'a kept send without a pid: its refused pick still shows as pending');
   await page.unroute(prompts);
   console.log('PASS O206: newer same-model pick kept after an old refusal (box and queue); plain and kept-send refusals clear');
