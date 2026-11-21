@@ -12,7 +12,7 @@ import { WORKER } from './worker-folders.mjs';
 import { decide } from './carry.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
-import { BLOCKING, EVERY_MAX as SCRIPT_EVERY_MAX, EVERY_MIN as SCRIPT_EVERY_MIN, POINTS, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
+import { BLOCKING, EVERY_MAX as SCRIPT_EVERY_MAX, EVERY_MIN as SCRIPT_EVERY_MIN, POINTS, REPORTED as SCRIPT_REPORTED, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -48,6 +48,7 @@ export const DELEGATE_TOOLS = (input) => {
     sprint_script_save: 'Do not write a script the user did not ask for.', sprint_script_remove: 'Do not remove a script you did not add unless the user asked.',
     sprint_script_add: 'Do not take adding a script as approving it.', run_sprint_script: 'Do not run a script to get around a refusal.', request_sprint_scripts: 'Do not ask again for scripts the user refused.',
     pause_sprint: 'Do not pause to stop a turn already running; it finishes.',
+    sprint_event: 'Do not report a merge, a red run or a gate that is not happening; do not merge after a refusal.',
     schedule_prompt: 'Do not schedule work the user did not ask for.', remove_schedule: 'Do not remove a schedule another chat relies on without saying so.',
     list_schedules: 'Do not poll it to wait for a run; a scheduled prompt arrives as a message.',
     resume_sprint: 'Do not resume a sprint the user paused unless the user asked you to.',
@@ -163,6 +164,12 @@ export const DELEGATE_TOOLS = (input) => {
       + 'a note still arrives, ask_chat to one of them is refused, a turn already running finishes, and you can open no new worker. What the user types into a worker still goes through. Survives a P9 restart.',
     input({})],
     ['resume_sprint', 'Resume your paused sprint: every message kept while it was paused goes out in the order it was sent. Returns how many.', input({})],
+    ['sprint_event', 'Run your sprint\'s scripts at a point P9 cannot see happen (you are its lead): before-merge right before you merge a PR (its blocking scripts may refuse: then do not merge; '
+      + 'the answer is merge: "allowed" or error script-refused with the script\'s last line), ci-red when a CI run went red, gate-passed when a gate passed. Only the scripts approved at Start (or allowed after it) run, '
+      + 'each given the sprint\'s state with subject (the fields you pass, by: "lead"). Refused before Start, after Close, while the agent lock is on, and while that point\'s scripts from your last call still run (point-busy).',
+    input({ point: { type: 'string', enum: SCRIPT_REPORTED },
+      subject: { type: 'object', additionalProperties: false, description: 'What happened, each field optional.', properties: { pr: { type: 'integer', minimum: 1 }, run: { type: 'string', description: 'The CI run id, digits.' },
+        commit: { type: 'string', description: '7 to 40 hex.' }, branch: { type: 'string', maxLength: 200 }, item: { type: 'string', maxLength: 60, description: 'The plan item, e.g. O12.' }, gate: { type: 'string', maxLength: 60 } } } }, ['point'])],
   ].map(([name, description, schema]) => [name, description + (notFor[name] ? ' ' + notFor[name] : ''), schema]);
 };
 
@@ -473,6 +480,7 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
     if (!chat.pause(lead)) return { paused: true, already: true };
+    hooks.ordered(lead, 'pause', { by: owner ? 'owner' : 'lead' }); // O202: the pause scripts, after any resume ones still running
     if (owner) notify(lead, 'sprint', '[p9] The user paused this sprint. Your workers start no new turn; what you, the reviewer or P9 send them is kept and sent when the user resumes it. Turns already running finish.', 'sprint');
     return { paused: true };
   }
@@ -494,7 +502,9 @@ export function createDelegate({ chat, allowed, usage }) {
   async function resumeSprint(lead, owner) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
-    const sent = await chat.resume(lead, narrow);
+    // O202: the resume scripts are queued the moment the pause is cleared, before the kept messages are sent (which waits),
+    // so a Pause pressed while they go is queued after this Resume, not before it.
+    const sent = await chat.resume(lead, narrow, (n) => hooks.ordered(lead, 'resume', { by: owner ? 'owner' : 'lead', sent: n }));
     if (sent === null) return { paused: false, already: true };
     if (owner) notify(lead, 'sprint', `[p9] The user resumed this sprint. ${sent} kept message${sent === 1 ? '' : 's'} sent in order.`, 'sprint');
     return { paused: false, sent };
@@ -1443,6 +1453,7 @@ export function createDelegate({ chat, allowed, usage }) {
     ownerScripts: hooks.owner,
     pause_sprint: (args, caller) => pauseSprint(caller, false),
     resume_sprint: (args, caller) => resumeSprint(caller, false),
+    sprint_event: (args, caller) => hooks.event(caller, args),
     // Not tools: the project page's Pause and Resume, the owner's press.
     ownerPause: (sprint) => pauseSprint(sprint, true),
     ownerResume: (sprint) => resumeSprint(sprint, true),

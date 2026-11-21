@@ -12,6 +12,7 @@ import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
 import { planItems, hashOf } from '../apps/server/sprint-files.mjs';
+import { createDelegate } from '../apps/server/delegate.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -1133,4 +1134,179 @@ test('Sprint scripts every live: the daemon\'s own timer runs the row, each run 
   assert.equal(out().length, held, 'a paused sprint\'s every row ran');
   assert.equal((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).status, 200);
   await eventually(() => out().length > held, 'Resume did not start the row again');
+});
+
+// O202: the five points that were accepted and never run. A rig like everyRig: one sprint (EA), started at 0, with one
+// approved row at each point. Each run appends "<point> <subject as JSON>" to ran.txt; hold-<point> holds the run until
+// removed, refuse-<point> makes it exit 4 with "no: <point>".
+function pointRig() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-points-')), prog = path.join(dir, 'point.mjs'), ranFile = path.join(dir, 'ran.txt');
+  fs.writeFileSync(prog, `import fs from 'node:fs'; import path from 'node:path'; const j = JSON.parse(fs.readFileSync(0, 'utf8')), d = ${JSON.stringify(dir)};
+fs.appendFileSync(path.join(d, 'ran.txt'), j.point + ' ' + JSON.stringify(j.subject) + '\\n');
+while (fs.existsSync(path.join(d, 'hold-' + j.point))) await new Promise((r) => setTimeout(r, 20));
+fs.appendFileSync(path.join(d, 'ran.txt'), 'end ' + j.point + '\\n');
+if (fs.existsSync(path.join(d, 'refuse-' + j.point))) { console.log('no: ' + j.point); process.exit(4); }\n`);
+  const cmd = `${process.execPath} ${prog}`;
+  const scripts = ['before-merge', 'ci-red', 'gate-passed', 'pause', 'resume'].map((point) => ({ name: 'at ' + point, command: cmd, point, blocking: point === 'before-merge' }));
+  const r = { dir, lock: false, closed: false, closing: false, gone: false, startAt: 0, stateHold: null, started: true, scripts, logs: [] };
+  const chat = { lock: () => ({ on: r.lock }), info: (c) => (c === EA ? { title: 'S', provider: 'fake' } : c === EB ? { title: 'W', provider: 'fake', parent: EA } : null), family: () => (r.gone ? [] : [{ id: EA }]), list: () => [],
+    sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
+    socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
+    sprintFiles: { exists: (c) => c === EA, read: () => null, folderOf: () => dir, log: (c, line) => r.logs.push(line) },
+    projects: { started: () => (r.started ? { at: r.startAt, by: 'owner', plan: null, scripts: r.scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
+  r.chat = chat; // usage is read inside the state every run gets, so stateHold holds a run between its rows and its start
+  r.hooks = createHooks({ chat, usage: async () => r.stateHold, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, ticking: false });
+  r.ran = () => (fs.existsSync(ranFile) ? fs.readFileSync(ranFile, 'utf8').split('\n').filter(Boolean) : []);
+  r.hold = (point) => fs.writeFileSync(path.join(dir, 'hold-' + point), ''); r.free = (point) => fs.rmSync(path.join(dir, 'hold-' + point));
+  return r;
+}
+
+test('Sprint scripts O202: every point is fired; sprint_event runs a reported point\'s scripts with its subject, and before-merge refuses by name', { timeout: 60000 }, async () => {
+  assert.deepEqual(FIRED, POINTS, 'a point is still accepted and never run');
+  const r = pointRig();
+  assert.deepEqual(await r.hooks.event(EA, { point: 'before-merge', subject: { pr: 12, commit: 'abc1234', item: 'B4', branch: 'p/x' } }), { point: 'before-merge', scripts: 1, merge: 'allowed' });
+  assert.equal(r.ran()[0], 'before-merge {"pr":12,"commit":"abc1234","item":"B4","branch":"p/x","by":"lead"}');
+  fs.writeFileSync(path.join(r.dir, 'refuse-before-merge'), '');
+  const no = await r.hooks.event(EA, { point: 'before-merge', subject: { pr: 13 } });
+  assert.deepEqual([no.error, no.script, no.point, no.exit], ['script-refused', 'at before-merge', 'before-merge', 4], JSON.stringify(no));
+  assert.match(no.detail, /refused this: exit 4: no: before-merge$/);
+  assert.deepEqual(await r.hooks.event(EA, { point: 'ci-red', subject: { run: '987654' } }), { point: 'ci-red', scripts: 1 });
+  assert.deepEqual(await r.hooks.event(EA, { point: 'gate-passed', subject: { gate: 'gate 3' } }), { point: 'gate-passed', scripts: 1 });
+  await eventually(() => r.ran().includes('ci-red {"run":"987654","by":"lead"}') && r.ran().includes('gate-passed {"gate":"gate 3","by":"lead"}'), 'the notices ran with their subject');
+  assert.ok(r.logs.some((l) => / \| ci-red \| at ci-red \| exit 0 \| /.test(l)), 'the run is a line in hooks.log');
+  console.log('PASS O202: FIRED is every point; before-merge allowed then refused by name (exit 4); ci-red and gate-passed ran with their subject and were logged');
+});
+
+test('Sprint scripts O202: sprint_event is refused for a wrong point or subject, a caller not the lead, the lock, before Start and after Close', { timeout: 60000 }, async () => {
+  const r = pointRig(), ev = (args, caller = EA) => r.hooks.event(caller, args).then((x) => x.error);
+  for (const point of ['pause', 'resume', 'before-start', 'every', undefined]) assert.equal(await ev({ point }), 'request-refused', String(point));
+  for (const subject of [{ pr: '12' }, { pr: 0 }, { pr: 1.5 }, { run: 'abc' }, { run: 12 }, { commit: 'XYZ1234' }, { commit: 'abc' }, { branch: 'a\nb' }, { branch: '' }, { item: 'a b' }, { gate: 'x'.repeat(61) }, { evil: 1 }, [], 'x', null])
+    assert.equal(await ev({ point: 'ci-red', subject }), 'request-refused', JSON.stringify(subject));
+  assert.equal(await ev({ point: 'ci-red' }, EB), 'not-a-sprint-lead', 'a worker reported a point');
+  assert.equal(await ev({ point: 'ci-red' }, 'nobody'), 'not-a-sprint-lead');
+  r.lock = true; assert.equal(await ev({ point: 'ci-red' }), 'agent-lock-on'); r.lock = false;
+  r.started = false; assert.equal(await ev({ point: 'ci-red' }), 'sprint-not-started'); r.started = true;
+  r.closed = true; assert.equal(await ev({ point: 'before-merge' }), 'sprint-closed');
+  assert.deepEqual(r.ran(), [], 'a refused call ran a script');
+  console.log('PASS O202: 5 wrong points, 15 wrong subjects, a worker, a stranger, the lock, before Start and after Close all refused; nothing ran');
+});
+
+test('Sprint scripts O202: a second call of a point while its last scripts run is refused (point-busy), and taken once they end', { timeout: 60000 }, async () => {
+  const r = pointRig();
+  r.hold('ci-red');
+  assert.equal((await r.hooks.event(EA, { point: 'ci-red', subject: { run: '1' } })).point, 'ci-red');
+  await eventually(() => r.ran().length === 1, 'the held run started');
+  assert.equal((await r.hooks.event(EA, { point: 'ci-red', subject: { run: '2' } })).error, 'point-busy');
+  assert.equal((await r.hooks.event(EA, { point: 'gate-passed' })).point, 'gate-passed', 'a busy point held another');
+  r.free('ci-red');
+  await eventually(() => r.ran().includes('end ci-red'), 'the held run ended');
+  await eventually(async () => (await r.hooks.event(EA, { point: 'ci-red', subject: { run: '3' } })).point === 'ci-red', 'the point was taken again');
+  await eventually(() => r.ran().includes('ci-red {"run":"3","by":"lead"}'), 'run 3 ran (a notice: not waited for)');
+  assert.deepEqual(r.ran().filter((l) => l.startsWith('ci-red')), ['ci-red {"run":"1","by":"lead"}', 'ci-red {"run":"3","by":"lead"}']);
+  console.log('PASS O202: run 2 refused while run 1 was held, gate-passed not held by it, run 3 taken after run 1 ended');
+});
+
+test('Sprint scripts O202: pause and resume run in the order pressed, each after the last one\'s scripts ended; one still waiting at Close or at shutdown runs nothing', { timeout: 60000 }, async () => {
+  const r = pointRig();
+  r.hold('pause');
+  const p = r.hooks.ordered(EA, 'pause', { by: 'owner' }), q = r.hooks.ordered(EA, 'resume', { by: 'owner', sent: 0 });
+  await eventually(() => r.ran().length === 1, 'the pause run started');
+  await new Promise((done) => setTimeout(done, 300));
+  assert.deepEqual(r.ran(), ['pause {"by":"owner"}'], 'resume ran while the pause script was still running');
+  r.free('pause'); await p; await q;
+  assert.deepEqual(r.ran(), ['pause {"by":"owner"}', 'end pause', 'resume {"by":"owner","sent":0}', 'end resume']);
+  r.hold('pause');
+  const p2 = r.hooks.ordered(EA, 'pause', { by: 'lead' }), q2 = r.hooks.ordered(EA, 'resume', { by: 'lead', sent: 1 });
+  await eventually(() => r.ran().length === 5, 'the second pause started');
+  r.closed = true; r.free('pause'); await p2; await q2;
+  assert.deepEqual(r.ran().slice(4), ['pause {"by":"lead"}', 'end pause'], 'a resume still waiting at Close ran');
+  r.closed = false; r.hold('pause');
+  const p3 = r.hooks.ordered(EA, 'pause', { by: 'owner' }), q3 = r.hooks.ordered(EA, 'resume', { by: 'owner', sent: 2 });
+  await eventually(() => r.ran().length === 7, 'the third pause started');
+  r.closing = true; r.free('pause'); await p3; await q3;
+  assert.deepEqual(r.ran().slice(6), ['pause {"by":"owner"}', 'end pause'], 'a resume still waiting while P9 shuts down ran');
+  console.log('PASS O202: resume waited for the held pause script; after Close and at shutdown the waiting resume ran nothing');
+});
+
+test('Sprint scripts O202 live: the lead\'s sprint_event and pause_sprint, and the owner\'s Pause and Resume, run the approved scripts of those points', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, prog = path.join(ws, 'pt.mjs'), outFile = path.join(ws, 'pt.jsonl');
+  fs.writeFileSync(prog, `import fs from 'node:fs'; import path from 'node:path'; const j = JSON.parse(fs.readFileSync(0, 'utf8')), here = import.meta.dirname;
+fs.appendFileSync(path.join(here, 'pt.jsonl'), JSON.stringify({ point: j.point, subject: j.subject, blocking: j.blocking }) + '\\n');
+if (fs.existsSync(path.join(here, 'refuse-' + j.point))) { console.log('no merge: ' + j.point); process.exit(4); }\n`);
+  const cmd = `${process.execPath} ${prog}`, seen = () => (fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'mcp' });
+  const outside = await attach(t, instance, first);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Points', work: { kind: 'new', parent: '', name: 'points' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Points' })).body, sprint = s.sprint;
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: one; role w1\n');
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  fs.writeFileSync(path.join(s.folder, 'hooks.json'), JSON.stringify({ scripts: ['before-merge', 'ci-red', 'gate-passed', 'pause', 'resume']
+    .map((point) => ({ name: 'at ' + point, command: cmd, point, blocking: point === 'before-merge' })) }));
+  assert.equal((await outside.tool('sprint_event', { point: 'ci-red' })).error, 'not-a-sprint-lead');
+  const row = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
+  assert.equal((await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash })).status, 200);
+  const L = await attach(t, instance, sprint);
+  assert.deepEqual(await L.tool('sprint_event', { point: 'before-merge', subject: { pr: 12, commit: 'abc1234' } }), { point: 'before-merge', scripts: 1, merge: 'allowed' });
+  assert.deepEqual(seen().at(-1), { point: 'before-merge', subject: { pr: 12, commit: 'abc1234', by: 'lead' }, blocking: true });
+  fs.writeFileSync(path.join(ws, 'refuse-before-merge'), '');
+  const no = await L.tool('sprint_event', { point: 'before-merge', subject: { pr: 13 } });
+  assert.equal(no.error, 'script-refused', JSON.stringify(no)); assert.match(no.detail, /"at before-merge" \(before-merge\) refused this: exit 4: no merge: before-merge$/);
+  assert.deepEqual(await L.tool('sprint_event', { point: 'ci-red', subject: { run: '987654' } }), { point: 'ci-red', scripts: 1 });
+  await eventually(() => seen().some((x) => x.point === 'ci-red' && x.subject.run === '987654'), 'ci-red ran');
+  const count = (point) => seen().filter((x) => x.point === point).length;
+  assert.equal((await call(instance, `/sprints/${sprint}/pause`, 'POST', {})).status, 200);
+  await eventually(() => seen().some((x) => x.point === 'pause' && x.subject.by === 'owner'), 'the owner\'s Pause ran the pause script');
+  assert.equal((await call(instance, `/sprints/${sprint}/pause`, 'POST', {})).status, 200);
+  assert.equal((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).status, 200);
+  await eventually(() => seen().some((x) => x.point === 'resume' && x.subject.by === 'owner'), 'the owner\'s Resume ran the resume script');
+  assert.equal(count('pause'), 1, 'a press on a sprint already paused ran the pause script again');
+  assert.deepEqual(await L.tool('pause_sprint'), { paused: true });
+  await eventually(() => seen().some((x) => x.point === 'pause' && x.subject.by === 'lead'), 'the lead\'s pause_sprint ran the pause script');
+  assert.equal(count('resume'), 1);
+  assert.match(fs.readFileSync(path.join(s.folder, 'hooks.log'), 'utf8'), / \| pause \| at pause \| exit 0 \| /);
+  console.log('PASS O202 live: sprint_event before-merge allowed, then refused by name; ci-red ran; owner Pause (twice, one run), Resume, and the lead\'s pause_sprint each ran their script');
+});
+
+test('Sprint scripts O202: a run whose state read is held while the sprint is closed, deleted, started again or P9 shuts down starts nothing', { timeout: 60000 }, async () => {
+  const r = pointRig(), wait = (ms) => new Promise((done) => setTimeout(done, ms));
+  const cases = [['closed', (v) => { r.closed = v; }], ['deleted', (v) => { r.gone = v; }], ['started again', (v) => { r.startAt = v ? 5 : 0; }], ['shutdown', (v) => { r.closing = v; }]];
+  for (const [what, set] of cases) {
+    let release; r.stateHold = new Promise((done) => { release = done; });
+    const p = r.hooks.ordered(EA, 'pause', { by: 'owner' }), e = r.hooks.event(EA, { point: 'ci-red' }), m = r.hooks.event(EA, { point: 'before-merge' });
+    await wait(100); set(true); release(null); r.stateHold = null;
+    await p; await e;
+    assert.equal((await m).error, 'sprint-gone', what + ': before-merge was not refused');
+    await wait(300);
+    assert.deepEqual(r.ran(), [], what + ': a script started after the state read');
+    set(false); await wait(50);
+  }
+  // Between two blocking scripts: the sprint closed while the first runs, the second does not start.
+  r.scripts = [...r.scripts, { ...r.scripts[0], name: 'at before-merge 2' }];
+  r.hold('before-merge');
+  const m = r.hooks.event(EA, { point: 'before-merge' });
+  await eventually(() => r.ran().length === 1, 'the first before-merge script started');
+  r.closed = true; r.free('before-merge');
+  assert.equal((await m).error, 'sprint-gone');
+  assert.deepEqual(r.ran(), ['before-merge {"by":"lead"}', 'end before-merge'], 'the second blocking script started after Close');
+  console.log('PASS O202: closed, deleted, started again and shutdown during the state read started nothing; before-merge refused; the second blocking script after Close did not start');
+});
+
+test('Sprint scripts O202: a Pause pressed while a Resume still sends its kept messages runs its script after the resume script', { timeout: 60000 }, async () => {
+  const r = pointRig();
+  let paused = true, release;
+  const held = new Promise((done) => { release = done; });
+  // createDelegate registers listeners on the real chat when it is made (settled, restarted); here they do nothing.
+  const chat = { ...r.chat, settled: () => {}, restarted: () => new Promise(() => {}), paused: () => paused, pause: () => { if (paused) return false; paused = true; return true; },
+    resume: async (lead, narrow, resumed) => { if (!paused) return null; paused = false; resumed?.(2); await held; return 2; } };
+  const tools = createDelegate({ chat, usage: async () => null });
+  const q = tools.resume_sprint({}, EA);
+  await new Promise((done) => setTimeout(done, 50));
+  assert.deepEqual(await tools.pause_sprint({}, EA), { paused: true });
+  release(); assert.deepEqual(await q, { paused: false, sent: 2 });
+  await eventually(() => r.ran().length === 4, 'both scripts ran');
+  assert.deepEqual(r.ran(), ['resume {"by":"lead","sent":2}', 'end resume', 'pause {"by":"lead"}', 'end pause'], 'the scripts ran out of the order of the presses');
+  console.log('PASS O202: Resume (delivery held) then Pause ran resume, then pause');
 });
