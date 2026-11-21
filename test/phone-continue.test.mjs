@@ -343,3 +343,39 @@ test('Code colours on the phone: a ts, python, json and shell reply coloured in 
   await page.waitForTimeout(300);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-code-colours-azure ' + (await page.screenshot()).toString('base64'));
 });
+
+// O180: a card pinned while the reader is at the bottom unhides the chip row above the chat; the last line of the reply stays in view.
+test('O180: the last reply line stays in view when the pinned chip row appears', { timeout: 150000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  const send = async (text) => { await page.fill('#prompt', text); await page.click('#composer button'); };
+  await send('mcp');
+  let entry;
+  await until(async () => (entry = (await server.desk('/chat/events?after=0&only=' + id)).body.events.find((e) => e.data?.content?.text?.startsWith('mcp:'))), 'mcp entry');
+  const [mcp] = JSON.parse(entry.data.content.text.slice(4));
+  const client = new Client({ name: 'p9-test', version: '1' });
+  await client.connect(new StdioClientTransport({ command: mcp.command, args: mcp.args, env: Object.fromEntries(mcp.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => client.close());
+  await send(Array.from({ length: 60 }, (_, i) => 'line ' + (i + 1) + ' of a message taller than the phone').join('\n')); // a chat that scrolls
+  await send('many steps');
+  await page.waitForFunction(() => /All steps done\./.test(document.querySelector('#events')?.lastElementChild?.textContent ?? ''), null, { timeout: 30000 });
+  assert.ok(await page.locator('#chips').isHidden(), 'no chip row before the card');
+  // The reader is at the bottom: the reply's last line is inside the scroller.
+  const gap = () => page.evaluate(() => {
+    const body = document.querySelector('#chatBody'), last = document.querySelector('#events').lastElementChild;
+    return { below: Math.round(last.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom), fromEnd: Math.round(body.scrollHeight - body.scrollTop - body.clientHeight) };
+  });
+  await until(async () => (await gap()).fromEnd <= 1, 'at the bottom before the card');
+  assert.ok(await page.evaluate(() => { const body = document.querySelector('#chatBody'); return body.scrollHeight > body.clientHeight + 200; }), 'the chat is taller than its scroller');
+  await client.callTool({ name: 'pin_card', arguments: { id: 'report', kind: 'markdown', text: 'Worker report: PR #180' } });
+  await page.waitForFunction(() => /1 pinned/.test(document.querySelector('#chips')?.textContent ?? ''), null, { timeout: 15000 });
+  await page.waitForTimeout(300); // every observer and frame after the chip row shows has run
+  const after = await gap();
+  assert.ok(after.below <= 1 && after.fromEnd <= 1, 'the last reply line is in view after the chip row shows: ' + JSON.stringify(after));
+  // And when the chip row closes again, the reader stays at the bottom.
+  await page.click('#chips [data-chip-close]');
+  await page.waitForSelector('#chips', { state: 'hidden', timeout: 5000 });
+  await page.waitForTimeout(300);
+  const closed = await gap();
+  assert.ok(closed.below <= 1 && closed.fromEnd <= 1, 'still at the bottom after the chip row hides: ' + JSON.stringify(closed));
+});
