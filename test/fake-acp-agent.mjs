@@ -366,6 +366,7 @@ const connection = acp.connectAgent(stream, {
       if (squeeze[1]) for (const status of ['in_progress', 'completed']) await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'compaction_update', compactionId: id, status } });
       else { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: id, title: 'Compact conversation', kind: 'think', status: 'in_progress' } });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed' } }); }
+      if (text.endsWith('fail')) throw acp.RequestError.authRequired(); // O215 "squeezefail": the turn fails after it compacts
     }
     // O190 "compact-usage": a /compact turn as claude-agent-acp 0.106.0 answers it (seen live): the reply's usage is all 0,
     // its _meta.quota.model_usage holds what the compaction spent, here on two models.
