@@ -159,6 +159,12 @@ test('O121 part 3: a Codex command\'s streamed output shows live and whole: firs
   await new Promise((resolve) => setTimeout(resolve, 1100));
   await p.step(chunk('t2', 'b\n'));
   assert.deepEqual(p.texts('t2'), ['a\n', 'a\nb\n'], 'a piece a second after the last shown one shows at once');
+  await p.step(chunk('t2', 'c\n'));
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await p.step();
+  assert.deepEqual(p.texts('t2'), ['a\n', 'a\nb\n', 'a\nb\nc\n'], 'a held piece shows a second on, though no other piece comes (a command gone quiet)');
+  await p.step(exit('t2'));
+  assert.equal(p.texts('t2').length, 3, 'nothing new held: the exit adds no row');
   console.log('PASS O121 part 3: streamed output live and whole');
 });
 
@@ -191,6 +197,10 @@ test('O121 part 3: a character split across pieces stays whole; only the last 20
   assert.equal(p.texts('t2')[0], 'z'.repeat(2000), 'while it runs, only the last 2,000 characters show');
   await p.step(...run('t3'), chunk('t3', 'old\n'), { sessionUpdate: 'terminal_update', terminalId: 't3', output: { data: b64('whole\n') }, exitStatus: { exitCode: 1, signal: null } });
   assert.deepEqual(p.texts('t3'), ['old\n', 'whole\n']);
+  await p.step(...run('t4'), chunk('t4', 'q'.repeat(3000)), exit('t4'));
+  assert.deepEqual(p.texts('t4').map((t) => t.length), [2000, 3000], 'nothing held, but the live 2,000 was cut: the exit shows it whole');
+  await p.step(...run('t5'), chunk('t5', 'r'.repeat(3000)), { sessionUpdate: 'tool_call_update', toolCallId: 't5', status: 'completed' });
+  assert.deepEqual(p.texts('t5').map((t) => t.length), [2000, 3000], 'the same at the tool call\'s end');
   await p.step(chunk('t9', 'never announced\n'), exit('t9'));
   assert.deepEqual(p.texts('t9'), [], 'output of a terminal no tool call names is not shown, as before');
   console.log('PASS O121 part 3: split character, 20,000 cap, whole-text replace');

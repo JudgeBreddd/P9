@@ -65,26 +65,30 @@ export function v1Stream(stream) {
   const sent = new Map(); // request id -> what its reply needs: { prompt: sessionId } or { config: true }
   const turns = new Map(); // sessionId -> { id, live }: the held v1 prompt request; live once the agent took it
   const tools = new Set(); // sessionId + toolCallId already announced as a tool_call
-  // O121 part 3: each running command's output, by sessionId + terminalId (the tool call's id): { bytes, at, held }.
-  // codex-acp 2.6.0 streams it as pieces; each shown update writes a ledger row with the whole text, so a piece shows
-  // at once only a second after the last one shown, and what is held shows at the exit, the tool call's end or the
-  // turn's end. While it runs only the last 2,000 characters show (a command printing for an hour writes about 7 MB,
+  // O121 part 3: each running command's output, by sessionId + terminalId (the tool call's id): { bytes, at, held,
+  // cut, timer }. codex-acp 2.6.0 streams it as pieces; each shown update writes a ledger row with the whole text, so a
+  // piece shows at once only a second after the last one shown; one held shows a second after that one (timer), or at
+  // the exit, the tool call's end or the turn's end, whichever comes first. While it runs only the last 2,000 characters show (a command printing for an hour writes about 7 MB,
   // not 70); the last update has up to 20,000. Bytes, not text, so a character split across two pieces stays whole.
   // Forgotten at the exit and the idle.
   const outputs = new Map();
+  let emit = () => {}; // sends a message to P9 between the agent's messages (the held output's timer)
+  const forget = (key, o) => { clearTimeout(o.timer); outputs.delete(key); };
   const shown = (sessionId, terminalId, o, live) => {
     let b = o.bytes.subarray(-OUTPUT_CHARS * 4), i = 0;
     while (b.length > i && b.length === OUTPUT_CHARS * 4 && (b[i] & 0xc0) === 0x80) i += 1; // a cut character's tail
-    o.at = Date.now(); o.held = false;
+    const text = b.subarray(i).toString('utf8');
+    clearTimeout(o.timer); o.timer = null;
+    o.at = Date.now(); o.held = false; o.cut = live && text.length > OUTPUT_LIVE_CHARS; // the end shows it whole
     return { jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: terminalId,
-      content: [{ type: 'content', content: { type: 'text', text: b.subarray(i).toString('utf8').slice(live ? -OUTPUT_LIVE_CHARS : -OUTPUT_CHARS) } }] } } };
+      content: [{ type: 'content', content: { type: 'text', text: text.slice(live ? -OUTPUT_LIVE_CHARS : -OUTPUT_CHARS) } }] } } };
   };
   // What is held of a session's commands (one tool call's when id is given), shown now; at the idle, forgotten too.
-  const flush = (sessionId, id, forget) => [...outputs].flatMap(([key, o]) => {
+  const flush = (sessionId, id, end) => [...outputs].flatMap(([key, o]) => {
     const [s, terminalId] = key.split('\n');
     if (s !== sessionId || (id !== undefined && terminalId !== id)) return [];
-    if (forget) outputs.delete(key);
-    return o.held && tools.has(key) ? [shown(sessionId, terminalId, o)] : [];
+    if (end) forget(key, o);
+    return (o.held || o.cut) && tools.has(key) ? [shown(sessionId, terminalId, o)] : [];
   });
 
   function toAgent(message) {
@@ -137,9 +141,13 @@ export function v1Stream(stream) {
         o.bytes = (kind === 'terminal_update' ? piece : Buffer.concat([o.bytes, piece])).subarray(-OUTPUT_CHARS * 4);
         o.held = true;
       }
-      if (end) outputs.delete(key);
-      if (!o?.held || !tools.has(key) || (!end && Date.now() - o.at < OUTPUT_EVERY_MS)) return [];
-      return [shown(sessionId, u.terminalId, o, !end)];
+      if (end && o) forget(key, o);
+      if (!(o?.held || (end && o?.cut)) || !tools.has(key)) return [];
+      const wait = OUTPUT_EVERY_MS - (Date.now() - o.at);
+      if (end || wait <= 0) return [shown(sessionId, u.terminalId, o, !end)];
+      o.timer ??= setTimeout(() => { if (outputs.get(key) === o && o.held) emit(shown(sessionId, u.terminalId, o, true)); }, wait);
+      o.timer.unref?.();
+      return [];
     }
     let next = u, before = [];
     if (kind === 'tool_call_update') {
@@ -198,7 +206,11 @@ export function v1Stream(stream) {
   }
 
   const out = new TransformStream({ transform: (message, controller) => controller.enqueue(toAgent(message)) });
-  const back = new TransformStream({ transform: (message, controller) => { for (const m of toClient(message)) controller.enqueue(m); } });
+  const back = new TransformStream({
+    start: (controller) => { emit = (m) => { try { controller.enqueue(m); } catch { /* the stream has closed */ } }; },
+    transform: (message, controller) => { for (const m of toClient(message)) controller.enqueue(m); },
+    flush: () => { for (const [key, o] of outputs) forget(key, o); },
+  });
   out.readable.pipeTo(stream.writable).catch(() => {});
   stream.readable.pipeTo(back.writable).catch(() => {});
   return { readable: back.readable, writable: out.writable, version: () => (v2 ? 2 : 1) };
