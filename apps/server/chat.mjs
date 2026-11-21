@@ -617,11 +617,23 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const sending = new Set();
   const startSent = (id) => { sending.delete(id); db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id); };
   const startLost = (id) => sending.delete(id);
-  // O214: an ACP v2 agent took a message into its thread (acp-v2.mjs's promptTaken): what was in it, the start block too, arrived.
-  // Held from that answer to the turn's end only: an ended turn is its own record, and a failed one did not arrive. The
-  // value is the turn that set it: a later turn that fails (after a restart) does not clear an earlier one's arrival.
+  // O214: an ACP v2 agent took a message into its thread (acp-v2.mjs's promptTaken): what was in it arrived, so the start block
+  // it carried is used up then (fix 1: not at the turn's end, which a restart skips). Kept from that answer to the turn's end
+  // as {turn, start}: a failed turn did not arrive, so its own start block goes back unless a newer one was written since.
   const taken = (id) => Boolean(db.prepare('SELECT 1 FROM prefs WHERE key = ?').get('taken:' + id));
-  const untake = (id, turn) => db.prepare('DELETE FROM prefs WHERE key = ?' + (turn ? ' AND value = ?' : '')).run('taken:' + id, ...(turn ? [turn] : []));
+  const atomic = (fn) => (...args) => { db.exec('BEGIN'); try { fn(...args); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; } };
+  const take = atomic((id, turn) => {
+    const start = sending.has(id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + id)?.value ?? '' : '';
+    db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('taken:' + id, JSON.stringify({ turn, start }));
+    if (start) db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id);
+  });
+  const untake = atomic((id, turn) => {
+    const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value;
+    if (!was || (turn !== undefined && JSON.parse(was).turn !== turn)) return;
+    db.prepare('DELETE FROM prefs WHERE key = ?').run('taken:' + id);
+    const { start } = JSON.parse(was);
+    if (turn !== undefined && start) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, start);
+  });
   // A worker's notes file, found from its stored parent and key (a worker without a key: its chat ID), never from a request.
   const notesOf = (id) => { const c = row(id); return c?.parent && ID.test(c.parent) ? { lead: c.parent, name: `notes/${c.key ?? id}.md` } : null; };
   // A compaction the agent reports (sprint spec D4): a worker is told its notes path again, with its next message from
@@ -742,7 +754,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const yes = ok.map(([name, r, t]) => `${name}, written by ${writerOf(lead, name, r)}:\n${quoted(t)}`).join('\n\n');
     // O171: the start block also rides with a message P9 itself sends: a lead started from the Setup page has no parent,
     // and its first message is P9's. The sprint rules stay with the parent's messages only.
-    const start = (mine || by('p9')) && !sending.has(conversation.id) && !taken(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
+    const start = (mine || by('p9')) && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
     const all = (yes ? `[P9: sprint rules the user approved when they started this sprint. They hold for all your work here.\n${yes}]\n\n` : '')
       + (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
     return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
@@ -1135,8 +1147,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       asyncTask: ({ update }) => marked(session, conversation.id, update),
       // O214: an ACP v2 agent took this turn's message (v1 has no such answer): it reached the agent even if P9 stops
-      // before the turn ends. A failed turn clears it (the prompt's failure handler).
-      promptTaken: () => { if (live.get(conversation.id) === session && session.turn) db.prepare("INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").run('taken:' + conversation.id, session.turn); },
+      // before the turn ends. A failed turn undoes it (the prompt's failure handler).
+      promptTaken: () => { if (live.get(conversation.id) === session && session.turn) take(conversation.id, session.turn); },
       // O190: a result from a run Claude Code started itself (OWN_RUNS) is stored as a 'usage' event, which the ledger adds
       // to the chat's tokens. Only with no prompted turn open: during one, a result from these origins that names the
       // pending prompt (user_message_uuids) is in that turn's usage (stored at turn-end), and the raw message does not say

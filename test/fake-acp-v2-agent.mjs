@@ -32,7 +32,7 @@ async function turn(id, params) {
     await new Promise((resolve) => cancels.set(sessionId, resolve));
     return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled', _meta: { quota: { token_count: null } } });
   }
-  if (said.endsWith('echo') || said.includes('[p9] P9 restarted')) { chunk('said:' + said); return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage }); }
+  if (said.endsWith('echo') || said.includes('[p9] ')) { chunk('said:' + said); return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage }); }
   if (said.endsWith('fail')) return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'error', error: { code: -32000, message: 'Authentication required' } });
   if (said === 'mode') chunk('mode:' + mode + ' model:' + model);
   else {

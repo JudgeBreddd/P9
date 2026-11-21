@@ -47,7 +47,7 @@ async function crash(t, instance, id) {
   return restart(t, instance, 'state-2');
 }
 
-test('O214 v2 (Codex): P9 restarts during the first turns; the next Start sends neither role its work again, and P9\'s restart line to the lead does not carry its start block again', { timeout: 240000 }, async (t) => {
+test('O214 v2 (Codex): P9 restarts during the first turns; the next Start sends neither role its work again, and neither P9\'s restart line to the lead nor its next message carries its start block again', { timeout: 240000 }, async (t) => {
   const { instance, s } = await sprint(t, 'test/fake-acp-v2-agent.mjs', 'codex', ['lead', 'review'], 'slow');
   const first = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
   assert.equal(first.status, 200, JSON.stringify(first.body));
@@ -61,7 +61,13 @@ test('O214 v2 (Codex): P9 restarts during the first turns; the next Start sends 
   assert.equal(again.status, 200, JSON.stringify(again.body));
   assert.deepEqual([await work(second, s.sprint), await work(second, w1)], [1, 1], 'a role was sent its first message again: ' + JSON.stringify(again.body.chats));
   assert.deepEqual(again.body.chats.map((c) => [c.key, c.sent ?? false]), [['lead', false], ['review', false]]);
-  console.log('PASS O214 v2: after a restart mid-first-turn, Start sent no role its work again; the restart line had no start block');
+  // Fix 1: the restart line's turn ends; P9's next line to the lead does not carry the original start block either.
+  await until(second, s.sprint, (e) => e.type === 'turn-end');
+  // P9's next line to the lead: the worker's turn fails, and P9 tells the lead at once (a P9 line carries a start block not yet sent).
+  await call(second, `/chat/${w1}/prompt`, 'POST', { text: 'fail' });
+  const next = await until(second, s.sprint, (e) => said(e) && e.data.content.text.includes('failed; read_chat'));
+  assert.doesNotMatch(next.data.content.text, /you lead this sprint/, 'the next message after the restart carried the lead\'s start block again');
+  console.log('PASS O214 v2: after a restart mid-first-turn, Start sent no role its work again; the restart line and the next message had no start block');
 });
 
 test('O214 v2 (Codex): after that restart, a next turn that fails (signed out) does not undo the first message\'s arrival', { timeout: 180000 }, async (t) => {
@@ -87,6 +93,16 @@ test('O214 v2 (Codex): a first turn that fails after the agent took it (signed o
   // Its start block too: the turn that failed did not deliver it.
   assert.match((await until(instance, s.sprint, said)).data.content.text, /you lead this sprint/, 'the resend lost the lead\'s start block');
   console.log('PASS O214 v2: a first turn that failed after the agent took it was sent again, start block included');
+});
+
+test('O214 v2 (Codex): the start block of a first turn that failed after the agent took it goes back: P9\'s next line to the lead carries it', { timeout: 180000 }, async (t) => {
+  const { instance, s } = await sprint(t, 'test/fake-acp-v2-agent.mjs', 'codex', ['lead', 'review'], 'fail');
+  assert.equal((await call(instance, `/sprints/${s.sprint}/start`, 'POST', {})).status, 200);
+  await until(instance, s.sprint, (e) => e.type === 'error');
+  // The worker's turn fails too, and P9 tells the lead at once: a P9 line carries a start block not yet delivered.
+  const line = await until(instance, s.sprint, (e) => said(e) && e.data.content.text.includes('failed; read_chat'));
+  assert.match(line.data.content.text, /you lead this sprint/, 'the failed turn\'s start block did not go back');
+  console.log('PASS O214 v2: a failed first turn\'s start block went back and rode with P9\'s next line');
 });
 
 test('O214 v1 (Claude): unchanged, a first turn P9 restarted during is sent again on the next Start', { timeout: 180000 }, async (t) => {
