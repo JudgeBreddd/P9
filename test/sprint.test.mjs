@@ -154,10 +154,15 @@ test('Phone Sprint window: rings by state, the scripts ask first, Open tmux atta
   const words = ['testing', 'in line', 'needs you', 'building', 'idle', 'done'];
   await writeStatus(server, { sprint: 'Feed sprint', updatedAt: new Date().toISOString(), cutoff: new Date(Date.now() + 86400000).toISOString(), overall: 55,
     chunks: words.map((activity, n) => ({ id: 'c' + (n + 1), title: 'Chunk ' + activity, state: activity === 'done' ? 'merged' : activity === 'in line' ? 'waiting' : 'running', percent: n * 20, activity, ...(activity === 'idle' ? {} : { steps: n + '/5' }) })) });
+  // O217: a slow Mission read (held 1 s here) leaves the old tile up; its window opens on the old status, then the redraw takes it away until the new
+  // status draws it again; the words are read once the new status is on the page, not from whatever window is up.
+  const slow = async (route) => { await wait(1000); await route.continue(); };
+  await page.route('**/mission', slow);
   await page.click('[data-nav="mission"]');
   await page.locator('#sprint [data-open="sprint"]').click();
-  await dialog.waitFor({ timeout: 5000 });
+  await dialog.locator('.spr [data-activity="done"]').waitFor({ timeout: 10000 });
   assert.deepEqual(await dialog.locator('.spr [data-activity]').allTextContents(), words);
+  await page.unroute('**/mission', slow);
   assert.match(await dialog.locator('[data-sprint-times]').innerText(), /^Updated \d{1,2}:\d{2}.* · cutoff \d{1,2}:\d{2}.* tomorrow$/);
   await shot(page, 'phone-sprint-feed');
   await dialog.evaluate((d) => d.close());
