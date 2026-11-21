@@ -20,6 +20,23 @@
 //   the prompt's echo, running/requires_action states, session_info_update with only _meta (Codex's thread status,
 //   about eight a turn), sign-in status: dropped. P9 writes the user's message itself, and the sign-in notices
 //   carry the account's email, which must not reach the ledger or a log.
+//
+// Why each v1 shape is kept (O121 part 4c): the readers that need it, outside this file (file:line on 0.1.9).
+//   tool_call            the first update of a tool. 8 files: chat.mjs 262 671 1175 (where a run starts, a
+//                        compaction, tool steps), ledger.mjs 251 (block starts), memory.mjs 120 182 270 (SQL on
+//                        $.sessionUpdate), telemetry.mjs 100, delegate.mjs 1043 1052, move.mjs 120 123,
+//                        web chat-view.mjs 1007 1017, phone.ts 412 562
+//   agent_message_chunk  the reply text. 7 files: chat.mjs 259-286 (SQL: the reply, minus the Warning: lines) 370,
+//                        ledger.mjs 250, memory.mjs 108 109 120 (SQL: $.content.text, $.messageId) 174,
+//                        telemetry.mjs 99, delegate.mjs 1042, web chat-view.mjs 1013, phone.ts 405 561
+//   stopReason reply     the turn's end. chat.mjs 1780 writes it into the ledger's turn-end event, read by 5 files:
+//                        chat.mjs 1804-1812, ledger.mjs 149 (SQL), telemetry.mjs 108, web chat-view.mjs 1043, phone.ts 445
+//   plan                 the plan strip: web chat-view.mjs 1023, phone.ts 411
+//   agentCapabilities    chat.mjs 1214 (session.capabilities), read at 1280 (session close) and
+//                        1334 1382 1752 (image prompts)
+// Why the readers do not read the v2 kinds themselves (part 4d, deferred): the ledger's old rows are v1, so every
+// reader above would read both shapes forever, or every old row would be migrated. Either is large, touches the
+// SQL in chat.mjs, ledger.mjs and memory.mjs, and changes nothing the user sees; this one file keeps v2 in one place.
 
 const DROPPED_UPDATES = new Set(['user_message', 'user_message_chunk']);
 const OUTPUT_CHARS = 20000, OUTPUT_LIVE_CHARS = 2000, OUTPUT_EVERY_MS = 1000;
