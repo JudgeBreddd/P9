@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
-import { strip, chip, turnKey, lineDiff, keptItems } from './composer.mjs';
+import { strip, chip, turnKey, keptItems, diffRows } from './composer.mjs';
 import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
@@ -153,7 +153,7 @@ function renderChatFiles() {
 function openChange(s, it) {
   const edits = s.events.filter(e => e.t === 'tool' && e.status === 'completed' && e.files?.some(f => f.path === it.path)).map(e => e.files.find(f => f.path === it.path).diff);
   const src = edits.map((rows, i) => (edits.length > 1 ? `@@ Edit ${i + 1} of ${edits.length} @@\n` : '')
-    + (rows?.length ? rows.map(([k, l]) => (k === 'add' ? '+ ' : k === 'del' ? '- ' : '  ') + l).join('\n') : 'No diff was recorded for this edit.')).join('\n\n');
+    + (rows?.length ? rows.map(([k, l]) => (k === 'file' || k === 'hunk' ? '' : k === 'add' ? '+ ' : k === 'del' ? '- ' : '  ') + l).join('\n') : 'No diff was recorded for this edit.')).join('\n\n');
   openArtifact({ kind: 'diff', lang: 'diff', mode: 'panel', title: wsPath(it.path, s.folder) ?? fwd(it.path), src, sid: s.id, list: true });
 }
 // From renderChats, in Chat Focus: the open list follows its chat (another chat shown hides it, still remembered), and a
@@ -303,7 +303,7 @@ function event(e, s) {
   }
   return '';
 }
-const diff = rows => `<div class="diff">${rows.map(([k, l]) => `<div class="${esc(k)}">${k === 'add' ? '+' : k === 'del' ? '−' : ' '} ${esc(l)}</div>`).join('')}</div>`;
+const diff = rows => `<div class="diff">${rows.map(([k, l]) => `<div class="${esc(k)}">${k === 'file' || k === 'hunk' ? '' : (k === 'add' ? '+' : k === 'del' ? '−' : ' ') + ' '}${esc(l)}</div>`).join('')}</div>`;
 // A7 Delegate: a worker's open approval or question is drawn in the chat that started it too (and in that chat's own
 // parent), under the worker's title. It is the worker's own request, never a copy: answering here answers it there.
 const kin = (id, seen = new Set()) => outer.S.sessions.filter(k => k.parent === id && k.id !== id && !seen.has(k.id)).flatMap(k => (seen.add(k.id), [k, ...kin(k.id, seen)]));
@@ -872,8 +872,7 @@ function reply(s, text) {
 }
 const dataNote = () => { outer.$('#dataNote').textContent = [outer.live.on && !outer.serverInfo?.slim && 'Mission Control live', outer.liveChat.on && 'Chat live', !outer.liveChat.on && (outer.sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), outer.sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
-const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
-const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
+const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
   const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
@@ -903,7 +902,7 @@ const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true
 const editFiles = (d, tool) => {
   if (tool.kind !== 'edit') return tool.files;
   const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
-  const rows = p => { const r = diffs.filter(c => c.path === p).flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
+  const rows = p => { const r = diffRows(diffs.filter(c => c.path === p), 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
   const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
   const created = p => { const c = diffs.find(c => c.path === p); return c ? c.oldText == null || c.oldText === '' : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
   return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), diff: rows(p) })) : tool.files;
