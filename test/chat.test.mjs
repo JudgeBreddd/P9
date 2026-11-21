@@ -846,6 +846,7 @@ test('Stop during a slow adapter start ends it; the waiting prompt gets 409 and 
   assert.equal(prompted.body.error, 'stopping');
   const events = (await json(call(instance, '/chat/events?after=0'))).body.events.filter((event) => event.conversation === id).map((event) => event.type);
   assert.ok(!events.includes('connected'), events.join(','));
+  assert.equal(events.filter((type) => type === 'stopped').length, 1, 'PD-1 (d): Stop owns a start it stopped; one stopped event: ' + events.join(','));
   await unlink(path.join(instance.workspace, 'slow-init'));
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' })).status, 202);
   await until(instance, said(id, 'echo:hello'));
@@ -989,6 +990,8 @@ test('an adapter that never answers the handshake fails its start and cannot hol
   assert.equal((await prompt).status, 502);
   assert.equal((await stop).status, 200);
   assert.ok(Date.now() - began < 55_000, 'start held the barrier past its limit');
+  const mine = (await json(call(instance, '/chat/events?after=0'))).body.events.filter((event) => event.conversation === id).map((event) => event.type);
+  assert.deepEqual(mine.slice(mine.lastIndexOf('error') + 1), ['stopped'], 'PD-1 (d): a start that timed out says the chat stopped: ' + mine.join(','));
   console.log('PASS hung adapter handshake: start refused 502 after the limit, Stop All finished');
 });
 
