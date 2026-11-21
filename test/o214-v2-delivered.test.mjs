@@ -142,6 +142,55 @@ test('O214 v2 (Codex): fix 2: a worker whose first message arrived before a rest
   console.log('PASS O214 v2 fix 2: the earlier arrival held, and a later failed turn\'s new start block went back');
 });
 
+for (const instructions of ['', 'You review docs only.']) test(`O215 v2 (Codex): a worker whose first turn compacts after the agent took it is told its notes path again with the lead's next message (${instructions ? 'with' : 'no'} instructions file)`, { timeout: 180000 }, async (t) => {
+  const { instance, s } = await sprint(t, 'test/fake-acp-v2-agent.mjs', 'codex', ['lead', 'review'], 'compactecho');
+  if (instructions) fs.writeFileSync(path.join(s.folder, 'roles/review.instructions.md'), instructions);
+  const first = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const w1 = first.body.chats.find((c) => c.key === 'review').chat;
+  // The first turn carries the start block (the agent takes it, then compacts) and ends.
+  assert.match((await until(instance, w1, said)).data.content.text, /your notes file is/);
+  await until(instance, w1, (e) => e.type === 'turn-end');
+  await call(instance, `/chat/${s.sprint}/prompt`, 'POST', { text: 'mcp' });
+  const hit = await until(instance, s.sprint, (e) => e.type === 'update' && String(e.data?.content?.text).startsWith('mcp:'));
+  const entry = JSON.parse(hit.data.content.text.slice(4)).find((m) => m.command);
+  const client = new Client({ name: 'p9-test', version: '1' });
+  await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => client.close());
+  const tool = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  // The lead's next message: the compaction came after the agent read the block, so the line rides again (O214: the
+  // turn's end deleted the line the compaction wrote).
+  assert.equal((await tool('send_chat', { chat: w1, text: 'echo' })).error, undefined);
+  const next = await until(instance, w1, (e) => said(e) && e.data.content.text.endsWith('echo') && !e.data.content.text.endsWith('compactecho'));
+  assert.match(next.data.content.text, /your notes file is/, 'the notes line the compaction asked for was lost');
+  assert.doesNotMatch(next.data.content.text, /You review docs only|you lead this sprint/, 'more than the notes line came again');
+  console.log('PASS O215 v2: a compaction in the taken first turn tells the notes path again with the next message');
+});
+
+test('O215 v2 (Codex): a worker\'s first turn that compacts and then fails after the agent took it gets its whole start block back, not just the notes line', { timeout: 180000 }, async (t) => {
+  const { instance, s } = await sprint(t, 'test/fake-acp-v2-agent.mjs', 'codex', ['lead', 'review'], 'compactfail');
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'echo');
+  fs.writeFileSync(path.join(s.folder, 'roles/review.instructions.md'), 'You review docs only.');
+  const first = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const w1 = first.body.chats.find((c) => c.key === 'review').chat;
+  await errored(instance, w1, 1);
+  await until(instance, s.sprint, (e) => e.type === 'turn-end');
+  await call(instance, `/chat/${s.sprint}/prompt`, 'POST', { text: 'mcp' });
+  const hit = await until(instance, s.sprint, (e) => e.type === 'update' && String(e.data?.content?.text).startsWith('mcp:'));
+  const entry = JSON.parse(hit.data.content.text.slice(4)).find((m) => m.command);
+  const client = new Client({ name: 'p9-test', version: '1' });
+  await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => client.close());
+  const tool = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  // The failed turn did not arrive: its block goes back whole (O214: the compaction's notes line, written first, kept it out).
+  assert.equal((await tool('send_chat', { chat: w1, text: 'echo' })).error, undefined);
+  const next = await until(instance, w1, (e) => said(e) && e.data.content.text.endsWith('echo'));
+  assert.match(next.data.content.text, /You review docs only\./, 'the failed turn\'s instructions were lost');
+  assert.match(next.data.content.text, /your notes file is/);
+  console.log('PASS O215 v2: a compacted, failed first turn gave back its whole start block');
+});
+
 test('O214 v1 (Claude): unchanged, a first turn P9 restarted during is sent again on the next Start', { timeout: 180000 }, async (t) => {
   const { instance, s } = await sprint(t, 'test/fake-acp-agent.mjs', 'claude', ['lead'], 'slow');
   assert.equal((await call(instance, `/sprints/${s.sprint}/start`, 'POST', {})).status, 200);

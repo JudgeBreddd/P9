@@ -279,6 +279,47 @@ test('Sprint files: after a compaction the worker is told its notes path again, 
   console.log('PASS Sprint files: notes path again after a compaction, notes read through the chat');
 });
 
+test('Sprint files: O215 a compaction inside the turn that carries the start block tells the notes path again with the next message', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const told = (entry) => /\[P9: your notes file is [^\n]*notes[\\/]w1\.md\. /.test(entry);
+  // The first message carries the start block, and its own turn compacts: the agent may have lost the line it just read,
+  // so the next message from the lead tells it again (main: the turn's end deleted the line the compaction asked for).
+  const w = await a.tool('open_chat', { text: 'squeeze', title: 'One', key: 'w1' });
+  await a.done(w.chat);
+  assert.equal(log().length, 1); assert.ok(told(log()[0]), log()[0]);
+  const send = async (text) => { await a.tool('send_chat', { chat: w.chat, text }); await a.done(w.chat); };
+  await send('after');
+  assert.equal(log().length, 2); assert.ok(told(log()[1]), 'told again after the compaction: ' + log()[1]);
+  await send('again');
+  assert.equal(log().length, 3); assert.ok(!told(log()[2]), 'told once for one compaction');
+  console.log('PASS Sprint files O215: compaction in the start turn tells the notes path again, once');
+});
+
+test('Sprint files: O215 a start turn that compacts and then fails keeps its start block, notes line once, for the next message', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const times = (entry) => entry.split('[P9: your notes file is ').length - 1;
+  // The failed turn did not deliver its block: the next message carries it whole, the notes line once (the line the
+  // compaction asked for is in it already).
+  const w = await a.tool('open_chat', { text: 'squeezefail', title: 'One', key: 'w1' });
+  await a.done(w.chat);
+  const send = async (text) => { await a.tool('send_chat', { chat: w.chat, text }); await a.done(w.chat); };
+  await send('after');
+  assert.equal(times(log().at(-1)), 1, 'the next message: ' + log().at(-1));
+  await send('again');
+  assert.equal(times(log().at(-1)), 0, 'told again with no new compaction: ' + log().at(-1));
+  console.log('PASS Sprint files O215: a start turn that compacted and failed kept its block, notes line once');
+});
+
 test('Sprint files: a chat with no parent is not told a notes path', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });

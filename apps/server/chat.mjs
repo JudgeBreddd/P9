@@ -614,9 +614,29 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // messages sent meanwhile leave it out, and a failure (startLost) frees it for the next one. A failed start, a failed
   // prompt or a daemon restart before confirmation keeps it. ponytail: a restart while a turn that already read it is
   // still running sends it once more with the next message (said twice beats never).
-  const sending = new Set();
-  const startSent = (id) => { sending.delete(id); db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id); };
-  const startLost = (id) => sending.delete(id);
+  // O215: sending keeps the block's text as it went out (null once an ACP v2 agent took it), and its confirmation deletes only that text: a block written while
+  // it was on its way (startNote: a new start; a compaction's notes line after an ACP v2 agent took the block) is still to
+  // be sent. A compaction while the block itself still waits (retell: chat -> its notes line) leaves the line once the block
+  // is confirmed; a failure keeps the block, which has the line.
+  const sending = new Map(), retell = new Map();
+  const startSent = (id) => {
+    const sent = sending.get(id), line = retell.get(id);
+    sending.delete(id); retell.delete(id);
+    if (sent) db.prepare('DELETE FROM prefs WHERE key = ? AND value = ?').run('start:' + id, sent);
+    if (line) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, line);
+  };
+  const startLost = (id) => {
+    const sent = sending.get(id), line = retell.get(id);
+    sending.delete(id); retell.delete(id);
+    if (line && sent) restore(id, sent);
+  };
+  // A block that did not arrive goes back. A compaction's lone notes line written meanwhile joins it (unless the block has
+  // it already); any other block written meanwhile is a newer start (startNote) and stays.
+  const restore = (id, block) => {
+    const now = db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + id)?.value, line = lineOf(id);
+    const value = now === undefined ? block : now === line ? (block.includes(line) ? block : block + line) : null;
+    if (value !== null) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, value);
+  };
   // O214: an ACP v2 agent took a message into its thread (acp-v2.mjs's promptTaken): what was in it arrived, so the start block
   // it carried is used up then (fix 1: not at the turn's end, which a restart skips). Kept from that answer to the turn's end
   // as {turn, start, kept}: a failed turn did not arrive, so its own start block goes back unless a newer one was written
@@ -626,20 +646,23 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const atomic = (fn) => (...args) => { db.exec('BEGIN'); try { fn(...args); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; } };
   const record = (id, value) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('taken:' + id, JSON.stringify(value));
   const take = atomic((id, turn) => {
-    const start = sending.has(id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + id)?.value ?? '' : '';
+    const start = sending.get(id) ?? '';
     const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value;
     record(id, { turn, start, kept: Boolean(was) && JSON.parse(was).turn !== turn });
-    if (start) db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id);
+    // O215: only the text it took; and the turn's end deletes nothing more (null), so a compaction's notes line written
+    // after this, the same text when the block was only that line, stays.
+    if (start) { db.prepare('DELETE FROM prefs WHERE key = ? AND value = ?').run('start:' + id, start); sending.set(id, null); }
   });
   const untake = atomic((id, turn) => {
     const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value, v = was && JSON.parse(was);
     if (!v || (turn !== undefined && v.turn !== turn)) return;
-    if (turn !== undefined && v.start) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, v.start);
+    if (turn !== undefined && v.start) restore(id, v.start); // O215: a compaction's notes line meanwhile joins it
     if (turn !== undefined && v.kept) record(id, { turn: null, start: '', kept: true });
     else db.prepare('DELETE FROM prefs WHERE key = ?').run('taken:' + id);
   });
   // A worker's notes file, found from its stored parent and key (a worker without a key: its chat ID), never from a request.
   const notesOf = (id) => { const c = row(id); return c?.parent && ID.test(c.parent) ? { lead: c.parent, name: `notes/${c.key ?? id}.md` } : null; };
+  const lineOf = (id) => { const at = notesOf(id), file = at && sprintFiles.fileOf(at.lead, at.name); return file ? notesLine(file) : null; };
   // A compaction the agent reports (sprint spec D4): a worker is told its notes path again, with its next message from
   // its lead, once per compaction. P9 does not ask for compaction_update, so the Claude and Codex adapters send a
   // "Compact conversation" tool call instead; both are read. A start block still unsent already has the line.
@@ -651,8 +674,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (seen.has(key)) return;
     seen.add(key);
     if (!session.turn) compacting(session, id);
-    const at = notesOf(id), file = at && sprintFiles.fileOf(at.lead, at.name);
-    if (file) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, notesLine(file));
+    const line = lineOf(id);
+    if (!line) return;
+    // O215: the block still on its way was read before this compaction: the line follows once it is confirmed.
+    const now = db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + id)?.value;
+    if (sending.has(id) && now === sending.get(id)) retell.set(id, line);
+    else db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, line);
   };
   // O139 (a compaction is labelled, not hidden): Claude Code compacts just after a prompted turn ends
   // (p50 0.5 s in P9's own history) and then works on with no prompt open. Until that unprompted run ends the chat
@@ -761,7 +788,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const start = (mine || by('p9')) && !sending.has(conversation.id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + conversation.id)?.value ?? '' : '';
     const all = (yes ? `[P9: sprint rules the user approved when they started this sprint. They hold for all your work here.\n${yes}]\n\n` : '')
       + (text ? `[P9: sprint rules from the chat that started you. They hold for all your work here.\n${text}]\n\n` : '') + start;
-    return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start) } : null;
+    return all ? { hash: createHash('sha256').update(all).digest('hex').slice(0, 12), text: all, started: Boolean(start), start } : null;
   };
   // A message another chat's agent sent (send_chat, open_chat) says so to the agent that gets it, as its own leading block:
   // without it the text reads as the user's (a helper chat took a peer's questions for the user's).
@@ -1311,7 +1338,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
     const rules = rulesFor(row(id), body);
-    if (rules?.started) sending.add(id);
+    if (rules?.started) sending.set(id, rules.start);
     const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held?.length && { held }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }), ...(repeats.has(body) && { repeat: true }) });
     const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(body.text, images)],
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
@@ -1747,7 +1774,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // With notes in front, the message itself says who sent it too (O109): the user's is not left to read as the last note's.
       const shared = told.length > 0 && !mixed.has(body);
       const prompt = bare ? [...again(body), ...blocks(body.text, [])] : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
-      if (rules?.started) sending.add(id);
+      if (rules?.started) sending.set(id, rules.start);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
       // the reply's model_usage, compactions included) when the reply has it.
       const done = (result) => { ended = result; untake(id); if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
