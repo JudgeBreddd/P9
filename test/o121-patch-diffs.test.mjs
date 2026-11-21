@@ -55,5 +55,10 @@ test('O121 part 2: the chat shows a v2 edit per file and per hunk; a v1 diff sho
   const odd = [{ type: 'diff', path: '/w/a.md', _meta: { hunks: [{ old: 1, new: 1, rows: [null, 7, { k: 'add' }, ['add'], ['bad', 'x'], ['add', 5], ['<b>', 'x'], ['del', 'gone']] }, { old: 'x', new: {}, rows: [['ctx', 'kept']] }] } }];
   assert.deepEqual(diffRows(odd, 200), [['hunk', '@@ -1 +1 @@'], ['del', 'gone'], ['hunk', '@@ -0 +0 @@'], ['ctx', 'kept']]);
   assert.deepEqual(diffRows([{ type: 'diff', path: '/w/a.md', _meta: { hunks: [null, { old: 2, new: 2 }, { old: 3, new: 3, rows: [['add', 'x']] }] } }], 200), [['hunk', '@@ -3 +3 @@'], ['add', 'x']], 'a malformed hunk is skipped, never throws');
+  // Fix 2: a header or path that JSON can hold but that throws when coerced ({toString:null}), or a line number that is
+  // not a whole number from 0 up, shows as 0 (path: empty) instead of breaking the chat's render.
+  const bad = { toString: null };
+  assert.deepEqual(diffRows([{ type: 'diff', path: '/w/a.md', _meta: { hunks: [{ old: bad, new: bad, rows: [['add', 'x']] }, { old: -2, new: 1.5, rows: [] }, { old: '7', new: Infinity, rows: [] }] } }], 200), [['hunk', '@@ -0 +0 @@'], ['add', 'x'], ['hunk', '@@ -0 +0 @@'], ['hunk', '@@ -0 +0 @@']], 'a header that throws when coerced shows 0');
+  assert.deepEqual(diffRows([{ type: 'diff', path: bad, _meta: { hunks: [{ old: 1, new: 1, rows: [] }] } }, { type: 'diff', path: '/w/b.md', _meta: { hunks: [] } }], 200), [['file', ''], ['hunk', '@@ -1 +1 @@'], ['file', '/w/b.md']], 'a path that throws when coerced shows empty');
   console.log('PASS O121 part 2: per file and per hunk for v2, v1 rows unchanged');
 });
