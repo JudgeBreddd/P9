@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -694,6 +695,39 @@ test('Sprint status: the sprint_status tool and the desktop\'s status route give
   ({ tool, page } = await both());
   assert.deepEqual([tool.scripts, page.scripts], [{ running: 2, additional: 1, waiting: 1 }, { running: 2, additional: 1, waiting: 1 }]);
   console.log('PASS Sprint status: scripts 2 running (1 of them additional), 1 waiting; before Start the route gave the plan and no clock; after it the tool and the route agreed, with the plan\'s three items, 1 then 2 ticked, the lead and w1 with w1\'s 0 of 2, the time since Start, and unknown-sprint for a sprint that is not there');
+});
+
+// O134 sprint_status: a stopped worker's model comes from its newest config event (chat.gauge, the same read as list_chats).
+// A helper's config written before O130 (one model, no pickers, in a chat that lists more) is skipped there, so the
+// worker shows its own model. Planted after the worker stops and before anything has read its gauge.
+test('O134 sprint_status: a stopped worker shows its own model, not a stored helper config', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  fs.mkdirSync(path.join(instance.workspace, 'repo'));
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation; // P9 reads claude's model list
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  const project = (await call(instance, '/projects', 'POST', { name: 'Echo', work: { kind: 'new', parent: '', name: 'echo' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Helped' })).body, sprint = s.sprint;
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: one thing; role w1\n');
+  const roles = [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }];
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: roles.slice(0, 1) }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', {}); assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
+  const L = await attach(t, instance, sprint);
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles }));
+  const w1 = await L.tool('open_chat', { text: 'config', key: 'w1' }); assert.ok(w1.chat && !w1.error, JSON.stringify(w1));
+  await replied(instance, w1.chat, 'config:');
+  const own = (await events(instance, w1.chat)).filter((e) => e.type === 'config').at(-1)?.data;
+  assert.ok(own?.model?.options?.length > 1 && own.model.current === 'haiku', 'the worker\'s own config: ' + JSON.stringify(own));
+  assert.equal((await call(instance, `/chat/${w1.chat}/stop`, 'POST', {})).status < 300, true);
+  await eventually(async () => (await rows(instance)).find((c) => c.id === w1.chat)?.state !== 'running', 'the worker never stopped');
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(w1.chat, 'config', JSON.stringify({ model: { current: 'opus', options: [{ value: 'opus', name: 'Opus' }] }, pickers: [] }), Date.now());
+  db.close();
+  const worker = (await L.tool('sprint_status')).workers.find((w) => w.chat === w1.chat);
+  assert.equal(worker?.model, 'haiku', 'sprint_status showed a helper\'s model: ' + JSON.stringify(worker));
+  console.log(`PASS O134 sprint_status: the stopped worker shows ${worker.model}; the planted helper Opus config was skipped`);
 });
 
 // Close sprint: one action for the button's route and the agent's tool. before-close may refuse it; every chat of the
