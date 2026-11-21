@@ -50,6 +50,10 @@ test('O121 part 2: the chat shows a v2 edit per file and per hunk; a v1 diff sho
   assert.deepEqual(diffRows(v1, 200), [['ctx', 'one'], ['del', 'two'], ['add', 'three'], ['add', 'hi']]);
   assert.deepEqual(diffRows(v1, 200), [...lineDiff(['one', 'two'], ['one', 'three']), ...lineDiff([], ['hi'])]);
   assert.deepEqual(diffRows(undefined, 200), []);
+  // Fix 1: _meta takes any agent's extensions, so a row that is not ['ctx'|'add'|'del', text] is dropped before the
+  // renderer destructures it (null, a number, an object, a bad tag, a non-string text); good rows and hunks stay.
+  const odd = [{ type: 'diff', path: '/w/a.md', _meta: { hunks: [{ old: 1, new: 1, rows: [null, 7, { k: 'add' }, ['add'], ['bad', 'x'], ['add', 5], ['<b>', 'x'], ['del', 'gone']] }, { old: 'x', new: {}, rows: [['ctx', 'kept']] }] } }];
+  assert.deepEqual(diffRows(odd, 200), [['hunk', '@@ -1 +1 @@'], ['del', 'gone'], ['hunk', '@@ -0 +0 @@'], ['ctx', 'kept']]);
   assert.deepEqual(diffRows([{ type: 'diff', path: '/w/a.md', _meta: { hunks: [null, { old: 2, new: 2 }, { old: 3, new: 3, rows: [['add', 'x']] }] } }], 200), [['hunk', '@@ -3 +3 @@'], ['add', 'x']], 'a malformed hunk is skipped, never throws');
   console.log('PASS O121 part 2: per file and per hunk for v2, v1 rows unchanged');
 });
