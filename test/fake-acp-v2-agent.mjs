@@ -1,7 +1,7 @@
 // Test-only agent that speaks ACP v2 (0.1.9 O52), as raw JSON-RPC lines: every message shape here is copied from
 // recorded traffic of codex-acp 2.6.0 and claude-agent-acp 0.106.0, so apps/server/acp-v2.mjs is tested against what
 // the real agents send and not against its own idea of v2. The prompt text picks the behaviour: "slow" works until
-// cancelled, "fail" ends the turn with an error, a prompt ending in "echo", or P9's restart line, replies with all of it ("said:" and the text), anything else runs an edit that asks first, a command, a plan and a
+// cancelled, "fail" ends the turn with an error ("compactfail" compacts first), "mcp" replies with its MCP servers, a prompt ending in "echo", or P9's restart line, replies with all of it ("said:" and the text), anything else runs an edit that asks first, a command, a plan and a
 // notice. A set_config_option without v2's `type`, or a session whose MCP server has none, is refused. Files in the working directory: v1-only answers
 // initialize with protocol 1 (and then speaks v1), refuse-v2 answers a v2 initialize with an error.
 import { createInterface } from 'node:readline';
@@ -11,7 +11,7 @@ const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', 
 const update = (sessionId, body) => send({ method: 'session/update', params: { sessionId, update: body } });
 const text = (prompt) => prompt.map((block) => block.text ?? '').join('');
 const usage = { totalTokens: 120, inputTokens: 100, cachedReadTokens: 0, cachedWriteTokens: 0, outputTokens: 20, thoughtTokens: 0 };
-let v2 = false, mode = 'agent', model = 'default', next = 0, sessionId = 'fake-v2-' + process.pid + '-' + Date.now();
+let mcp = [], v2 = false, mode = 'agent', model = 'default', next = 0, sessionId = 'fake-v2-' + process.pid + '-' + Date.now();
 const asked = new Map(), cancels = new Map();
 const ask = (method, params) => new Promise((resolve) => { asked.set('a' + (next += 1), resolve); send({ id: 'a' + next, method, params }); });
 const key = () => (v2 ? 'configId' : 'id');
@@ -33,6 +33,8 @@ async function turn(id, params) {
     return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled', _meta: { quota: { token_count: null } } });
   }
   if (said.endsWith('echo') || said.includes('[p9] ')) { chunk('said:' + said); return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage }); }
+  if (said.endsWith('mcp')) { chunk('mcp:' + JSON.stringify(mcp)); return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage }); }
+  if (said.endsWith('compactfail')) update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'compact-' + Date.now(), name: 'Compact conversation', title: 'Compact conversation', status: 'completed' });
   if (said.endsWith('fail')) return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'error', error: { code: -32000, message: 'Authentication required' } });
   if (said === 'mode') chunk('mode:' + mode + ' model:' + model);
   else {
@@ -72,6 +74,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     case 'session/new': case 'session/resume':
       if (v2 && !(params.mcpServers ?? []).every((server) => server.type)) return fail(-32602, 'Invalid params: mcpServers type'); // as codex-acp 2.6.0
       if (method === 'session/resume') sessionId = params.sessionId;
+      mcp = params.mcpServers ?? [];
       send({ id, result: { ...(method === 'session/new' && { sessionId }), configOptions: configOptions() } });
       if (!v2) return;
       // The account's email: must never reach P9's ledger.

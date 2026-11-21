@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
+import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
+import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
@@ -22,6 +24,8 @@ async function until(instance, id, match) {
   throw new Error('no such event on ' + id + ': ' + (await events(instance, id)).map((e) => e.type).join(' '));
 }
 const work = (instance, id) => events(instance, id).then((all) => all.filter((e) => e.type === 'user' && !String(e.data?.text).startsWith('[p9] P9 restarted')).length);
+const errors = (instance, id) => events(instance, id).then((all) => all.filter((e) => e.type === 'error').length);
+async function errored(instance, id, n) { for (let i = 0; i < 150 && await errors(instance, id) < n; i += 1) await pause(200); assert.equal(await errors(instance, id), n, 'errors on ' + id); }
 const said = (e) => e.type === 'update' && String(e.data?.content?.text).startsWith('said:');
 // A sprint on one agent: its roles, each role's work, and the chat P9 reads the agent's model list from.
 async function sprint(t, agent, provider, roles, text) {
@@ -103,6 +107,39 @@ test('O214 v2 (Codex): the start block of a first turn that failed after the age
   const line = await until(instance, s.sprint, (e) => said(e) && e.data.content.text.includes('failed; read_chat'));
   assert.match(line.data.content.text, /you lead this sprint/, 'the failed turn\'s start block did not go back');
   console.log('PASS O214 v2: a failed first turn\'s start block went back and rode with P9\'s next line');
+});
+
+test('O214 v2 (Codex): fix 2: a worker whose first message arrived before a restart keeps that arrival; a later turn that carried a new start block (its notes line, after a compaction) and failed gets that block back', { timeout: 240000 }, async (t) => {
+  const { instance, s } = await sprint(t, 'test/fake-acp-v2-agent.mjs', 'codex', ['lead', 'review'], 'slow');
+  const first = await call(instance, `/sprints/${s.sprint}/start`, 'POST', {});
+  const w1 = first.body.chats.find((c) => c.key === 'review').chat;
+  await until(instance, w1, (e) => e.type === 'user');
+  const second = await crash(t, instance, s.sprint);
+  await until(second, s.sprint, said);
+  // A worker turn that compacts and fails: the notes line waits as a new start block for its lead's next message.
+  await call(second, `/chat/${w1}/prompt`, 'POST', { text: 'compactfail' });
+  await errored(second, w1, 1);
+  // The lead, over its MCP tools, sends the worker a message: it carries that block, and its turn fails too.
+  await call(second, `/chat/${s.sprint}/prompt`, 'POST', { text: 'mcp' });
+  const hit = await until(second, s.sprint, (e) => e.type === 'update' && String(e.data?.content?.text).startsWith('mcp:'));
+  const entry = JSON.parse(hit.data.content.text.slice(4)).find((m) => m.command);
+  const client = new Client({ name: 'p9-test', version: '1' });
+  await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => client.close());
+  const tool = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  const sent = await tool('send_chat', { chat: w1, text: 'fail' });
+  assert.equal(sent.error, undefined, JSON.stringify(sent));
+  await errored(second, w1, 2);
+  // The first message's arrival (before the restart) still counts: Start sends the worker nothing again.
+  const before = await work(second, w1);
+  const again = await call(second, `/sprints/${s.sprint}/start`, 'POST', {});
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.equal(await work(second, w1), before, 'Start sent the worker its first message again');
+  // The failed turn's block went back: the lead's next message carries the notes line.
+  assert.equal((await tool('send_chat', { chat: w1, text: 'echo' })).error, undefined);
+  const back = await until(second, w1, (e) => said(e) && e.data.content.text.endsWith('echo'));
+  assert.match(back.data.content.text, /your notes file is/, 'the failed turn\'s new start block was lost');
+  console.log('PASS O214 v2 fix 2: the earlier arrival held, and a later failed turn\'s new start block went back');
 });
 
 test('O214 v1 (Claude): unchanged, a first turn P9 restarted during is sent again on the next Start', { timeout: 180000 }, async (t) => {

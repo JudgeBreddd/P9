@@ -619,20 +619,24 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const startLost = (id) => sending.delete(id);
   // O214: an ACP v2 agent took a message into its thread (acp-v2.mjs's promptTaken): what was in it arrived, so the start block
   // it carried is used up then (fix 1: not at the turn's end, which a restart skips). Kept from that answer to the turn's end
-  // as {turn, start}: a failed turn did not arrive, so its own start block goes back unless a newer one was written since.
+  // as {turn, start, kept}: a failed turn did not arrive, so its own start block goes back unless a newer one was written
+  // since. Fix 2: a turn taken while an earlier one's arrival is still kept (that turn cut by a restart) owns the record
+  // with kept set; if it fails, its block goes back and the earlier arrival stays.
   const taken = (id) => Boolean(db.prepare('SELECT 1 FROM prefs WHERE key = ?').get('taken:' + id));
   const atomic = (fn) => (...args) => { db.exec('BEGIN'); try { fn(...args); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; } };
+  const record = (id, value) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('taken:' + id, JSON.stringify(value));
   const take = atomic((id, turn) => {
     const start = sending.has(id) ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('start:' + id)?.value ?? '' : '';
-    db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('taken:' + id, JSON.stringify({ turn, start }));
+    const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value;
+    record(id, { turn, start, kept: Boolean(was) && JSON.parse(was).turn !== turn });
     if (start) db.prepare('DELETE FROM prefs WHERE key = ?').run('start:' + id);
   });
   const untake = atomic((id, turn) => {
-    const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value;
-    if (!was || (turn !== undefined && JSON.parse(was).turn !== turn)) return;
-    db.prepare('DELETE FROM prefs WHERE key = ?').run('taken:' + id);
-    const { start } = JSON.parse(was);
-    if (turn !== undefined && start) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, start);
+    const was = db.prepare('SELECT value FROM prefs WHERE key = ?').get('taken:' + id)?.value, v = was && JSON.parse(was);
+    if (!v || (turn !== undefined && v.turn !== turn)) return;
+    if (turn !== undefined && v.start) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run('start:' + id, v.start);
+    if (turn !== undefined && v.kept) record(id, { turn: null, start: '', kept: true });
+    else db.prepare('DELETE FROM prefs WHERE key = ?').run('taken:' + id);
   });
   // A worker's notes file, found from its stored parent and key (a worker without a key: its chat ID), never from a request.
   const notesOf = (id) => { const c = row(id); return c?.parent && ID.test(c.parent) ? { lead: c.parent, name: `notes/${c.key ?? id}.md` } : null; };
