@@ -898,6 +898,17 @@ test('O204 review: a refused send clears its pick, a newer pick stays pending, a
   await page.reload();
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#modelBtn')?.textContent.includes('Default'), id, { timeout: 15000 });
   await is(running, 'after a reload');
+  // The phone's own queue: a send answered 'turn-running' waits there, and its later send is refused for good: no pick pending.
+  let tries = 0;
+  const queueThenRefuse = (route) => (tries++ ? refuse(route) : route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }));
+  await send(page, 'tools 1'); await page.locator('[data-bar="chat"] .run').waitFor({ timeout: 10000 });
+  await page.route(prompts, queueThenRefuse);
+  await pick('opus'); await send(page, 'queued one'); await noted('Not sent: model-refused');
+  assert.equal(tries, 2, 'the queued send went once more and was refused');
+  await is(running, 'a queued send refused for good: its pick still shows as pending');
+  await page.unroute(prompts);
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 20000 });
+  await page.fill('#prompt', '');
   // The list stops offering the running model (the agent's next report): the bar names it by its id, nothing pending.
   await writeFile(path.join(server.workspace, 'models.json'), JSON.stringify([{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }]));
   await page.click('#modePill');
