@@ -1,4 +1,5 @@
-# Runs P9's tests on GitHub's machines: every push to a branch other than main that changes more than docs, or by hand
+# Runs P9's tests on GitHub's machines: every push that changes more than docs (O230: main too, so each merge gets its
+# own result and two PRs that pass alone but break main together show within minutes), or by hand
 # from Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
 # The repo is public, so the runs cost nothing. 0.1.8 F1: the Linux tests run as 7 shards at once (test/shard.mjs) and the
 # Windows-only tests in their own job here, so a push answers in under 10 minutes; the installers build on tags only
@@ -9,7 +10,6 @@ name: Tests
 
 on:
   push:
-    branches-ignore: [main]
     # A push of only Markdown runs nothing, except the files tests read (README's editor pin, the licence notices).
     paths:
       - '**'
@@ -44,9 +44,11 @@ permissions:
 
 # A new push to the same branch cancels the run it replaces. A bare run has its own group (on a push inputs.bare is
 # empty, so the group is the same as before), so it never cancels a test run on the same branch, nor one it.
+# O230: on main every run has a group of its own and cancels nothing, so each merge finishes with its own result. Not
+# cancel-in-progress false alone: a group holds one waiting run, so a third quick merge would cancel the second's.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ inputs.bare && '-bare' || '' }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}${{ inputs.bare && '-bare' || '' }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   linux:
