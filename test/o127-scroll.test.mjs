@@ -124,3 +124,101 @@ test('O127: a scrolled-up desktop chat does not move while tool calls arrive, fi
   await page.evaluate(id2 => { for (let i = 0; i < 250; i++) window.__o127b.push({ t: 'tool', title: 'Late ' + i, status: 'completed', output: 'hit' }); window.__sprint.set(id2, { events: window.__o127b }); }, id2);
   assert.equal(await pane2.locator('.hist .col > [data-at]').count(), 200, 'a fresh pane whose content grew below the reader still draws 200 steps');
 });
+
+// O127 two panes (#390's weakest part): the same chat drawn twice shares one drawn window (s.tail). Here Chat Focus holds it
+// scrolled up while Dev Focus shows it beside the editor at the bottom. Steps arriving while the user is in Dev Focus must not
+// take the Chat Focus reader's block out of the window, and the pane at the bottom keeps drawing 200 steps.
+test('O127 two panes: a chat read scrolled up in Chat Focus keeps its block while the same chat follows the bottom beside the editor', { timeout: 120000 }, async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-o127b-'));
+  const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
+  t.after(() => app.close());
+  const page = await app.firstWindow({ timeout: 15000 });
+  page.on('pageerror', e => console.log('PAGEERROR ' + e.message));
+  await shellReady(page, { timeout: 15000 });
+  await page.evaluate(() => window.__setup({ writable: false }));
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const id = 's-claude-2';
+  await page.evaluate(id => document.querySelector('#navList .row[data-chat="' + id + '"]')?.click(), id);
+  const pane = page.locator(`#chats .pane[data-id="${id}"]`);
+  await pane.locator('.hist').waitFor({ timeout: 5000 });
+  await page.evaluate(id => {
+    const ev = [];
+    for (let i = 0; i < 260; i++) ev.push(i % 2 ? { t: 'agent', text: `reply ${i}.\n\nA second paragraph for ${i}.` } : { t: 'user', text: `msg ${i}.` });
+    window.__o127 = ev; window.__sprint.set(id, { events: ev });
+  }, id);
+  await page.waitForFunction(() => [...document.querySelectorAll('#chats .hist .col > *')].some(c => c.textContent.includes('reply 131.')), null, { timeout: 5000 });
+  await pane.locator('.hist').evaluate(h => { h.style.scrollBehavior = 'auto'; const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 131.'));
+    h.scrollTop += el.getBoundingClientRect().top - h.getBoundingClientRect().top - 100; });
+  const offset = () => pane.locator('.hist').evaluate(h => { const el = [...h.querySelectorAll(':scope > .col > *')].find(c => c.textContent.includes('reply 131.'));
+    return el ? Math.round(el.getBoundingClientRect().top - h.getBoundingClientRect().top) : null; });
+  assert.equal(await offset(), 100, 'the reader starts at 100 px');
+  // A small step first, so the Chat Focus pane has been painted once since the reader scrolled up (it records reading up).
+  const push = n => page.evaluate(([id, n]) => { for (let i = 0; i < n; i++) window.__o127.push({ t: 'tool', title: 'Glob ' + i, status: 'completed', output: 'hit' }); window.__sprint.set(id, { events: window.__o127 }); }, [id, n]);
+  await push(1);
+  assert.ok(Math.abs(await offset() - 100) <= 1, 'one new step keeps the reader');
+  await page.click('#rDev');
+  if (!(await page.locator('#sideChats').isVisible())) await page.click('#sideToggle');
+  await page.locator('#sidePick').waitFor({ state: 'attached' });
+  if (await page.locator('#sidePick').isVisible()) await page.selectOption('#sidePick', id);
+  const side = page.locator(`#sideChats .pane[data-id="${id}"]`);
+  await side.locator('.hist').waitFor({ timeout: 5000 });
+  await side.locator('.hist').evaluate(h => h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }));
+  // More new steps than the drawn window, while the user is in Dev Focus, in two batches (each paints both panes).
+  await push(150); await push(150);
+  const sideGap = await side.locator('.hist').evaluate(h => h.scrollHeight - h.scrollTop - h.clientHeight);
+  assert.ok(sideGap < 24, `the pane beside the editor follows the bottom: ${sideGap} px short`);
+  assert.equal(await side.locator('.hist .col > [data-at]').count(), 200, 'the pane at the bottom draws 200 steps');
+  assert.ok(await pane.locator('.hist .col > [data-at]').count() > 200, 'the Chat Focus pane grew its window to keep the reader (else this test proves nothing)');
+  await page.click('#rChat');
+  const o = await offset();
+  assert.ok(o !== null && Math.abs(o - 100) <= 1, `back in Chat Focus the reader's block is where it was: ${o} px, was 100`);
+  // And one more step after coming back: still held.
+  await push(1);
+  const o2 = await offset();
+  assert.ok(o2 !== null && Math.abs(o2 - 100) <= 1, `a step after coming back keeps the reader: ${o2} px, was 100`);
+  // The grown window has a ceiling: 10 windows (2,000 steps). A reader that far up gets the old pixel restore instead of
+  // every step drawn on each batch. Show earlier past the ceiling still adds 200: the user asked for it.
+  await push(2500);
+  assert.equal(await pane.locator('.hist .col > [data-at]').count(), 2000, 'the grown window stops at 2,000 steps');
+  await pane.locator('[data-earlier]').click();
+  await page.waitForFunction(id => document.querySelectorAll(`#chats .pane[data-id="${id}"] .hist .col > [data-at]`).length === 2200, id, { timeout: 5000 });
+  // Read from the very top of those 2,200: the reader's block is now more than 2,000 steps from the end, and a step must not
+  // cut the window back to the ceiling (that would drop the block the reader is on).
+  await pane.locator('.hist').evaluate(h => h.scrollTo({ top: 0, behavior: 'instant' }));
+  assert.equal(await pane.locator('.hist').evaluate(h => h.scrollTop), 0, 'the reader is at the top of the 2,200');
+  await push(1);
+  assert.equal(await pane.locator('.hist .col > [data-at]').count(), 2200, 'a step after Show earlier, read from its top, keeps the 2,200 the user asked for');
+});
+
+test('O127 review: a reader scrolled up inside a tall pending approval, with no step in view, still gets the next step', { timeout: 120000 }, async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-o127c-'));
+  const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
+  t.after(() => app.close());
+  const page = await app.firstWindow({ timeout: 15000 });
+  const errors = []; page.on('pageerror', e => { errors.push(e.message); console.log('PAGEERROR ' + e.message); });
+  await shellReady(page, { timeout: 15000 });
+  await page.evaluate(() => window.__setup({ writable: false }));
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const id = 's-claude-2';
+  await page.evaluate(id => document.querySelector('#navList .row[data-chat="' + id + '"]')?.click(), id);
+  const pane = page.locator(`#chats .pane[data-id="${id}"]`);
+  await pane.locator('.hist').waitFor({ timeout: 5000 });
+  // The approval card has no data-at: scrolled up inside it, no step block is in view, so the paint has no anchor.
+  await page.evaluate(id => {
+    const ev = [];
+    for (let i = 0; i < 260; i++) ev.push(i % 2 ? { t: 'agent', text: `reply ${i}.` } : { t: 'user', text: `msg ${i}.` });
+    ev.push({ t: 'approval', title: 'Edit a long file', diff: Array.from({ length: 90 }, (_, k) => ['add', 'line ' + k]), options: [['allow_once', 'Allow once'], ['reject', 'Deny']] });
+    window.__o127c = ev; window.__sprint.set(id, { events: ev, pending: 'approval' });
+  }, id);
+  await pane.locator('.pending[aria-label="Approval"]').waitFor({ timeout: 5000 });
+  const h = pane.locator('.hist');
+  await h.evaluate(h => h.scrollTo({ top: h.scrollHeight - h.clientHeight - 100, behavior: 'instant' }));
+  const seen = await h.evaluate(h => { const top = h.getBoundingClientRect().top, bottom = h.getBoundingClientRect().bottom;
+    return [...h.querySelectorAll(':scope > .col > [data-at]')].filter(c => c.getBoundingClientRect().bottom > top && c.getBoundingClientRect().top < bottom).length; });
+  assert.equal(seen, 0, 'no step block is in view (the card fills the pane), else this test proves nothing');
+  await page.evaluate(id => { window.__o127c.splice(260, 0, { t: 'tool', title: 'Glob after', status: 'completed', output: 'hit' }); window.__sprint.set(id, { events: window.__o127c }); }, id);
+  await pane.locator('.hist .col > [data-at]', { hasText: 'Glob after' }).waitFor({ state: 'attached', timeout: 5000 });
+  assert.deepEqual(errors, [], 'the paint threw');
+});
