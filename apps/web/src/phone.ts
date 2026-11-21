@@ -624,7 +624,10 @@ function chatBar(id: string, run: string) {
   const agent = item?.provider === 'codex' ? 'Codex' : 'Claude', picked = model.selectedOptions[0]?.textContent || '', current = model.dataset.current ?? '';
   // O204 (O133's rule, as the desktop): the bar names the model the chat runs (its last config); a pick not taken yet is pending,
   // kept in view beside it (the running name is the part that shortens on a narrow bar).
-  const name = [...model.options].find((option) => option.value === current)?.textContent || picked, pending = current && model.value !== current ? picked || model.value : '';
+  // Review 1: a running model the list lacks is named by its own id, never by the option the select fell back to; and only a pick the
+  // user made is pending there (the browser selects the first option when none matches).
+  const listed = [...model.options].find((option) => option.value === current)?.textContent, name = listed || current;
+  const pending = model.value && model.value !== current && (listed || chosen.get(id)?.get('model')?.value === model.value) ? picked || model.value : '';
   const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="${escape('Model: ' + (name || agent) + (pending ? ', ' + pending + ' pending' : ''))}"><span class="now">${escape(agent + (name ? ' · ' + name : ''))}</span>${pending ? ` <span class="pick-q">→ ${escape(pending)}</span>` : ''} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
   barSig = html; const next = document.createElement('template'); next.innerHTML = html;
@@ -1066,7 +1069,7 @@ async function drain() {
         // Any other answer is final for this message: it went, or the daemon refused it and says why (the text goes back in its chat's box).
         keepQueue(id, queued(id).filter((item) => item.qid !== qid));
         if (result.status === 202) sent = true;
-        else { putBack(id, next.text); if (id === openId) note(`Not sent: ${result.body.error ?? result.status}`); }
+        else { putBack(id, next.text); dropRefused(id, (body as { model?: string }).model); if (id === openId) { note(`Not sent: ${result.body.error ?? result.status}`); render(); } }
       }
     }
   } catch { /* a lost request keeps its message and its ID; the next drain sends it again */ }
@@ -1156,7 +1159,16 @@ async function submitFromBox(event: Event) {
     if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
     else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...body }]); spend(id, picked); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
-  else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
+  else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model); render(); }
+}
+// O204 review 1: a send refused for good took no model, so its pick is not pending any more and the select goes back to the running
+// model. A newer pick made while it was on its way is the user's next choice: it stays, pending.
+function dropRefused(id: string, value: string | undefined) {
+  if (!value) return;
+  const own = chosen.get(id), model = one<HTMLSelectElement>('#model');
+  if (own?.get('model')?.value === value) { own.delete('model'); if (!own.size) chosen.delete(id); }
+  if (id === openId && !chosen.get(id)?.has('model') && model.value === value) model.value = model.dataset.current ?? '';
+  barSig = '';
 }
 // Round 1 review: two taps while the first send is still in flight both read the same box and sent the message twice (also
 // through the queue fallback above). One submit at a time; a second tap does nothing until the first has settled.

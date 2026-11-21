@@ -864,6 +864,55 @@ test('O204: a model picked mid-turn on the phone shows as pending; the bar keeps
   await shot(page, 'o204-taken');
 });
 
+// O204 review 1: a send refused for good leaves no pick pending (a newer pick made while it was on its way stays pending); an unsent
+// pick does not outlive a reload; a running model the list no longer offers is named by its id, never by the option the select fell back to.
+test('O204 review: a refused send clears its pick, a newer pick stays pending, a reload drops an unsent pick, a running model missing from the list is named by its id', { timeout: 120000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
+  const bar = () => page.evaluate(() => { const b = document.querySelector('#modelBtn'); return [b.textContent.trim(), b.getAttribute('aria-label')]; });
+  const is = async (want, why) => assert.deepEqual(await bar(), want, why);
+  const pick = async (value) => { await page.click('#modelBtn'); await page.click(`#sheet[open] [data-model="${value}"]`); await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 }); };
+  const noted = (want) => page.waitForFunction((w) => document.querySelector('#composerNote').textContent.includes(w), want, { timeout: 10000 });
+  const running = ['Claude · Default (recommended)', 'Model: Default (recommended)'];
+  const id = await newChat(page, 'claude');
+  await send(page, 'model'); await replied('model:default');
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 15000 });
+  // A forced refusal: the pick that went with it is not pending, and the next send carries no model.
+  const prompts = (url) => url.pathname.endsWith('/prompt'); // one matcher: unroute takes the same function
+  const refuse = (route) => route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'model-refused' }) });
+  await page.route(prompts, refuse);
+  await pick('haiku'); await send(page, 'refused one'); await noted('Not sent: model-refused');
+  await is(running, 'refused: the rejected pick still shows as pending');
+  assert.equal(await page.evaluate(() => document.querySelector('#model').value), 'default', 'refused: the select still holds the rejected pick');
+  await page.unroute(prompts);
+  // A newer pick made while a send is on its way stays pending when that send is refused.
+  let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  await page.route(prompts, async (route) => { await held; await refuse(route).catch(() => {}); });
+  await pick('opus'); await send(page, 'refused two');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'refused two', null, { timeout: 5000 });
+  await pick('haiku'); release(); await noted('Not sent: model-refused');
+  await is(['Claude · Default (recommended) → Haiku', 'Model: Default (recommended), Haiku pending'], 'a newer pick made during a refused send');
+  await page.unroute(prompts);
+  // A reload: an unsent pick is not kept, so the bar names the running model with nothing pending.
+  await page.fill('#prompt', '');
+  await page.reload();
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#modelBtn')?.textContent.includes('Default'), id, { timeout: 15000 });
+  await is(running, 'after a reload');
+  // The list stops offering the running model (the agent's next report): the bar names it by its id, nothing pending.
+  await writeFile(path.join(server.workspace, 'models.json'), JSON.stringify([{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }]));
+  await page.click('#modePill');
+  await page.waitForSelector('#sheet[open] #pickers select[data-config="effort"]', { timeout: 10000 });
+  await page.selectOption('#pickers select[data-config="effort"]', 'high');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 });
+  await send(page, 'config'); await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim().startsWith('config:model=default,effort=high')), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelector('#model').dataset.current === 'default' && ![...document.querySelector('#model').options].some((o) => o.value === 'default'), null, { timeout: 10000 });
+  await is(['Claude · default', 'Model: default'], 'the running model missing from the list');
+  // A pick made there is pending against that id.
+  await pick('haiku'); await is(['Claude · default → Haiku', 'Model: default, Haiku pending'], 'a pick with the running model missing from the list');
+  console.log('PASS O204 review: refused pick cleared; newer pick kept; reload drops an unsent pick; missing running model named by its id');
+});
+
 // O59: the chat header names the model the chat's Model sheet shows. A Claude chat next to a Codex chat on another
 // model (as a chat that started a child chat on another agent): back on the Claude chat, no header it draws names the
 // other chat's model. Every header text is recorded as it is drawn, so a wrong first draw fails even if a later one fixes it.
