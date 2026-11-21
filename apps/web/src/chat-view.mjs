@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
-import { strip, chip, turnKey, keptItems, diffRows } from './composer.mjs';
+import { strip, chip, turnKey, keptItems, diffRows, diffCreated } from './composer.mjs';
 import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
@@ -909,7 +909,7 @@ const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true
   d.showModal();
 });
 // Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
-// and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff with no old text, else a Write.
+// and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff that made its file (diffCreated), else a Write.
 // ponytail: a Write over a file that was already there, with no diff, reads as created.
 // Each file keeps its own line diff for the Changes tab (an update with no content keeps the one it had).
 // ponytail: up to 2,000 rows a file, against the chat's 200.
@@ -918,7 +918,7 @@ const editFiles = (d, tool) => {
   const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
   const rows = p => { const r = diffRows(diffs.filter(c => c.path === p), 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
   const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
-  const created = p => { const c = diffs.find(c => c.path === p); return c ? c.oldText == null || c.oldText === '' : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
+  const created = p => { const c = diffs.find(c => c.path === p); return c ? diffCreated(c) : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
   return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), diff: rows(p) })) : tool.files;
 };
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);

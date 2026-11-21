@@ -55,6 +55,9 @@ export const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').
 // A hunk's start line is a whole number from 0 up, else 0; never coerced (an object whose toString is null throws).
 const line = v => (Number.isInteger(v) && v >= 0 ? v : 0);
 const okRow = r => Array.isArray(r) && (r[0] === 'ctx' || r[0] === 'add' || r[0] === 'del') && typeof r[1] === 'string';
+// O222: whether a diff made its file. A v2 diff (hunks, no oldText: acp-v2.mjs diffs) says so in _meta.added; a v1 diff,
+// or a v2 one stored before O222 (it still has oldText), is a created file when it has no old text.
+export const diffCreated = c => (Array.isArray(c?._meta?.hunks) && c.oldText === undefined ? c._meta.added === true : c?.oldText == null || c.oldText === '');
 export const diffRows = (content, max) => {
   const list = (content || []).filter(c => c?.type === 'diff'), many = list.some(c => c._meta?.hunks) && new Set(list.map(c => c.path)).size > 1;
   return list.flatMap(c => [...(many ? [['file', typeof c.path === 'string' ? c.path : '']] : []), ...(Array.isArray(c._meta?.hunks)

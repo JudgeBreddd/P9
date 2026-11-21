@@ -11,7 +11,7 @@
 //                    ends with a state_update 'idle'                   its stopReason and usage
 //   MCP servers      each names its transport type                  -> 'stdio' added where v1 leaves it off
 //   tool calls       only tool_call_update; the first one creates   -> the first one per id becomes tool_call
-//   diffs            a git patch                                    -> path/oldText/newText and its hunks, one per file
+//   diffs            a git patch                                    -> one diff per file: its hunks and whether it is new (O222: no text copy)
 //   permission       title + subject                                -> toolCall
 //   plan_update, notice                                             -> plan, the warning line's message chunk (O221)
 //   command output   terminal_update, base64, id = the tool call's;  -> the tool call's text content (its last 20,000 chars)
@@ -30,9 +30,10 @@ const DROPPED_NOTIFICATIONS = new Set(['auth/status_update', '_auth/status_updat
 const options = (list) => Array.isArray(list) ? list.map(({ configId, ...rest }) => (configId === undefined ? rest : { id: configId, ...rest })) : list;
 const withOptions = (value) => (value && Array.isArray(value.configOptions) ? { ...value, configOptions: options(value.configOptions) } : value);
 
-// One v1 diff per file in a git patch. v1 diffs hold text, not hunks: old is the patch's context and removed lines,
-// new its context and added lines, which is what the v1 adapters sent for an edit (the changed part, not the file).
-// O121 part 2: each file also keeps its hunks in _meta.hunks (the SDK drops a diff's other unknown fields; { old, new, rows }: start lines and ['ctx'|'add'|'del', text] rows), so the
+// One v1 diff per file in a git patch. O222: its lines are kept once, in _meta.hunks, and _meta.added says the file is new
+// (the window's created mark, composer.mjs diffCreated). newText is '' only because the SDK's v1 diff schema requires a
+// string; no oldText. Before O222 a diff also carried old/new text, so every line was stored twice.
+// O121 part 2: each file keeps its hunks in _meta.hunks (the SDK drops a diff's other unknown fields; { old, new, rows }: start lines and ['ctx'|'add'|'del', text] rows), so the
 // chat shows each hunk with its line numbers. A hunk's lines are counted from its @@ header, so a removed line that reads
 // "-- x" or an added "++ x" is content, never a ---/+++ file line.
 export function diffs(item) {
@@ -56,8 +57,7 @@ export function diffs(item) {
     else if (line.startsWith('+++ ')) { if (line.slice(4) !== '/dev/null') file.path = line.slice(4); }
     else if (line.startsWith('rename to ')) file.path = line.slice(10);
   }
-  const side = (f, drop) => f.hunks.flatMap((h) => h.rows.filter((r) => r[0] !== drop).map((r) => r[1])).join('\n');
-  return out.filter((f) => f.path).map((f) => ({ type: 'diff', path: f.path, oldText: f.added ? null : side(f, 'add'), newText: side(f, 'del'), _meta: { hunks: f.hunks } }));
+  return out.filter((f) => f.path).map((f) => ({ type: 'diff', path: f.path, newText: '', _meta: { added: f.added, hunks: f.hunks } }));
 }
 const content = (list) => Array.isArray(list) ? list.flatMap((item) => (item?.type === 'diff' && item.patch ? diffs(item) : [item])) : list;
 const tool = (call) => (call && Array.isArray(call.content) ? { ...call, content: content(call.content) } : call);
