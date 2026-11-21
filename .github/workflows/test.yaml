@@ -73,7 +73,7 @@ jobs:
       - name: Test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends tmux xvfb xauth iproute2 libgtk-3-0t64
+          sudo apt-get install -y --no-install-recommends tmux xvfb xauth x11-utils iproute2 libgtk-3-0t64
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o /tmp/gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS/gitleaks_${GITLEAKS}_linux_x64.tar.gz"
           echo "$GITLEAKS_SHA256  /tmp/gl.tgz" | sha256sum -c -
           sudo tar -xzf /tmp/gl.tgz -C /usr/local/bin gitleaks
