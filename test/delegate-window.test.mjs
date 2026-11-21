@@ -144,7 +144,8 @@ test('Delegate window: workers indented under their chat and folded past three; 
   assert.match(await group.locator('[data-dg-what]').innerText(), /^Delegate is for everyday work\..*There is no plan, no fixed roles and no review step unless the agent sets one up\.$/s);
   assert.match(await group.locator('.set-row:has([data-dg-start]) strong').innerText(), /^Who may start workers$/);
   assert.equal(await group.locator('[data-dg-start]').getAttribute('aria-label'), 'Who may start workers');
-  assert.match(await group.locator('.set-row:has([data-dg-start]) .muted').innerText(), /A sprint always asks you before it starts, whatever this says\.$/);
+  // O225: Delegation has no hold over Sprints, so Who may start workers says nothing of a sprint.
+  assert.equal(await group.locator('.set-row:has([data-dg-start]) .muted').innerText(), 'Off: agents cannot start workers. Ask me first: P9 asks you in the chat before a chat\'s first worker. Agent decides: no question beyond the mode\'s own.');
   // O226: Delegation has no worker folder setup box and no folder word; a sprint's setup is its project's.
   assert.equal(await group.locator('[data-dg-setup], input[type=text]').count(), 0, 'Settings > Delegation draws a setup field');
   assert.doesNotMatch(await group.innerText(), /folder/i);

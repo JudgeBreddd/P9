@@ -365,12 +365,12 @@ export function createDelegate({ chat, allowed, usage }) {
     const title = args.title ?? args.text.trim().split('\n')[0].slice(0, 60);
     const ask = 'P9 Delegate: start a ' + (named !== undefined ? (named ? 'profile' : provider === 'claude' ? 'Claude' : 'Codex') : profile ? (rowProfile && mine ? rowProfile.name : me.profile.name) : provider === 'claude' ? 'Claude' : 'Codex') + ' worker "' + title + '" in mode ' + picked.mode
       + (args.folder ? ', folder ' + args.folder : '') + '. Its task: ' + args.text.slice(0, 600) + (args.text.length > 600 ? '…' : '');
-    // Ask me first (the default): the first worker of a chat the user started is a sprint's start, so the user is asked
+    // Ask me first (the default): the user is asked before the first worker of a chat the user started (O225: not a sprint's start),
     // in every mode, Unrestricted too. Later ones, and Agent decides, follow the same check as every acting P9 tool.
     const starts = set.start === 'ask' && depth === 0 && !family.some((c) => c.parent === caller);
     const shut = () => shutFor(caller);
     if (shut()) return shut();
-    const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This starts a sprint (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
+    const request = { toolCallId: 'p9-mcp-' + randomUUID(), title: (starts ? 'This chat\'s first worker (Settings > Delegation: Ask me first). ' : '') + ask, kind: 'execute' };
     if (!approved && !await (starts ? chat.approve(caller, request, signal) : allowed(caller, request, signal))) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     // Checked again after the user was asked, and again after a worker folder's clone and setup (which can take
     // minutes): the agent lock, Delegation off, a lower limit, this chat's own mode, a cancelled call.
