@@ -1278,6 +1278,21 @@ test('Settings > Notices (O197 gaps): a failed or hung first read says so and of
   await page.click('#setNotices [data-notice-retry]'); await usable();
   console.log('PASS O197 gap a: thrown');
   await close(); await page.reload(); await page.locator('#rChat').waitFor();
+  // O197 gap c: a failed read, Settings closed and opened again, reads again: no failure line and no Try again press.
+  await reads(['refuse']); await open();
+  await failed('refused read before a reopen');
+  await close(); await open(); await usable();
+  assert.equal(await page.locator('#setNotices [data-notice-failed], #setNotices [data-notice-retry]').count(), 0, 'a reopened Settings kept the old failure');
+  console.log('PASS O197 gap c: reopen reads again');
+  // A read that fails after Settings closed (here: no answer within 10 s) does not leave the next open saying it failed.
+  await close(); await page.reload(); await page.locator('#rChat').waitFor();
+  await reads(['hang']); await open(); await close();
+  await page.waitForTimeout(11000);
+  await open(); await usable();
+  assert.equal(await page.locator('#setNotices [data-notice-failed], #setNotices [data-notice-retry]').count(), 0, 'a read that failed while Settings was closed showed at the next open');
+  await app.evaluate(() => { globalThis.readHolds.forEach((r) => r()); globalThis.readHolds = []; });
+  console.log('PASS O197 gap c: failed while closed');
+  await close(); await page.reload(); await page.locator('#rChat').waitFor();
   // A read that never answers says it failed after a while; Try again works; the late answer of the first read changes nothing.
   await reads(['hang']); await open();
   await failed('hung read');

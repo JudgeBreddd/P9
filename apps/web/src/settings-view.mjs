@@ -247,6 +247,7 @@ const NOTICE_ROWS = [['ready', 'Ready report', 'A worker marked its task ready.'
 // still saving is shown over that map until its own answer, so another answer never undoes it. A pick is cleared by its own
 // write number, not its value: Message, Note, Message on one row must not let the first answer stand for the third.
 let notices = null, noticesFailed = false, noticesNote = '', noticesWant = {}, noticesSeq = 0, noticesSaves = Promise.resolve();
+document.getElementById('setDlg')?.addEventListener('close', () => { noticesFailed = false; }); // O197: reopen reads again
 function noticesGroup() {
   if (!window.p9?.chat || !outer.liveChat?.on) return '';
   const off = notices ? '' : ' disabled', shown = { ...notices, ...Object.fromEntries(Object.entries(noticesWant).map(([k, [v]]) => [k, v])) };
@@ -263,7 +264,7 @@ function bindNotices() {
   // ponytail: 10 s with no answer counts as failed; a slower read that lands later still fills the rows if none did.
   if (!notices && !noticesFailed && !el.dataset.asked) {
     el.dataset.asked = '1';
-    const fail = () => { if (!notices && !noticesFailed) { noticesFailed = true; drawNotices(); } };
+    const fail = () => { if (!notices && !noticesFailed && outer.$('#setDlg').open) { noticesFailed = true; drawNotices(); } };
     const late = setTimeout(fail, 10000);
     window.p9.chat('notices', {}).then(r => {
       clearTimeout(late);
