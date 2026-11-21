@@ -1260,6 +1260,10 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   await page.locator('[data-pj="spback"]').click();
   await until(async () => await btn.locator('[data-sp-closed]').count() === 1, 'the sprint\'s button says Closed');
   assert.match(await btn.locator('[data-sp-closed]').textContent(), /^Closed /);
+  // A sprint never ends (row 846): the project page lists none of the closed sprint's files, only its one button.
+  const home = page.locator(`[data-page="${p.id}"]:not([data-sp-page])`);
+  assert.deepEqual([await home.count(), await home.locator('[data-sprint]').count(), (await home.textContent()).match(/sprint\.md|rules\.md|roles\.json|hooks\.json|lead\.work\.md/g)],
+    [1, 0, null], 'the project page lists a closed sprint\'s files');
   assert.deepEqual(errors, []);
   console.log('PASS Close sprint page: the press asked first and Cancel closed nothing; a before-close exit 1 was said beside the button and the sprint stayed open; the next press closed it: Closed sprint, by you, Ran, the lead Stopped, no Close and no Start, equal to the status route; a box ticked after Close changed nothing; the project page\'s button says Closed');
 });
