@@ -924,6 +924,52 @@ test('O204 review: a refused send clears its pick, a newer pick stays pending, a
   console.log('PASS O204 review: refused pick cleared; newer pick kept; reload drops an unsent pick; missing running model named by its id');
 });
 
+// O206: a refused send clears only the pick it carried. Opus goes and is held, the user picks Haiku and then Opus again, and
+// the old refusal arrives: the newer Opus pick stays pending. The same through the phone's own queue. A plain refusal still clears.
+test('O206: a refused send clears its own pick, not a newer pick of the same model, from the box and from the queue', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
+  const bar = () => page.evaluate(() => { const b = document.querySelector('#modelBtn'); return [b.textContent.trim(), b.getAttribute('aria-label')]; });
+  const is = async (want, why) => assert.deepEqual(await bar(), want, why);
+  const pick = async (value) => { await page.click('#modelBtn'); await page.click(`#sheet[open] [data-model="${value}"]`); await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 }); };
+  const noted = (want) => page.waitForFunction((w) => document.querySelector('#composerNote').textContent.includes(w), want, { timeout: 10000 });
+  const running = ['Claude · Default (recommended)', 'Model: Default (recommended)'], opusPending = ['Claude · Default (recommended) → Opus', 'Model: Default (recommended), Opus pending'];
+  await newChat(page, 'claude');
+  await send(page, 'model'); await replied('model:default');
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 15000 });
+  const prompts = (url) => url.pathname.endsWith('/prompt'); // one matcher: unroute takes the same function
+  const refuse = (route) => route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'model-refused' }) });
+  let release = () => {}; t.after(() => release());
+  // From the box: Opus held, Haiku, Opus again, then the refusal.
+  let held = new Promise((resolve) => { release = resolve; });
+  await page.route(prompts, async (route) => { await held; await refuse(route).catch(() => {}); });
+  await pick('opus'); await send(page, 'refused box');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'refused box', null, { timeout: 5000 });
+  await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
+  await is(opusPending, 'box: the newer Opus pick was cleared by the old refusal');
+  await page.unroute(prompts);
+  // A plain refusal (nothing picked after it) still clears its pick.
+  await page.evaluate(() => { document.querySelector('#composerNote').textContent = ''; });
+  await page.route(prompts, refuse);
+  await page.fill('#prompt', ''); await send(page, 'refused plain'); await noted('Not sent: model-refused');
+  await is(running, 'plain refusal: its pick still shows as pending');
+  await page.unroute(prompts);
+  await page.fill('#prompt', '');
+  // Through the queue: 'turn-running' queues the Opus send; once the drain's send is held, Haiku and Opus are picked, then it is refused.
+  held = new Promise((resolve) => { release = resolve; });
+  let tries = 0;
+  await send(page, 'tools 1'); await page.locator('[data-bar="chat"] .run').waitFor({ timeout: 10000 });
+  await page.route(prompts, async (route) => { if (!tries++) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }); await held; await refuse(route).catch(() => {}); });
+  await page.evaluate(() => { document.querySelector('#composerNote').textContent = ''; });
+  await pick('opus'); await send(page, 'queued one');
+  for (let i = 0; i < 300 && tries < 2; i++) await page.waitForTimeout(100);
+  assert.equal(tries, 2, 'the queued send went once more');
+  await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
+  await is(opusPending, 'queue: the newer Opus pick was cleared by the old refusal');
+  await page.unroute(prompts);
+  console.log('PASS O206: newer same-model pick kept after an old refusal (box and queue); plain refusal clears');
+});
+
 // O59: the chat header names the model the chat's Model sheet shows. A Claude chat next to a Codex chat on another
 // model (as a chat that started a child chat on another agent): back on the Claude chat, no header it draws names the
 // other chat's model. Every header text is recorded as it is drawn, so a wrong first draw fails even if a later one fixes it.
