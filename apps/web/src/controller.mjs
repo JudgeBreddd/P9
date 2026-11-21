@@ -189,17 +189,19 @@ const pickerKind = p => p.category === 'thought_level' || !p.category && /effort
 let starts = null;
 const defaultModel = a => starts?.[a]?.model || '', defaultEffort = a => starts?.[a]?.effort || '';
 async function loadStarts() {
-  const n = startsSeq, r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
+  const n = ++startsSeq, r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
   const keys = a => ({ model: 'p9-model-default:' + a, effort: 'p9-effort-default:' + a });
   const set = Object.fromEntries(Object.keys(r.body).map(a => [a, Object.fromEntries(Object.entries(keys(a)).filter(([k, key]) => !r.body[a][k] && localStorage.getItem(key)).map(([k, key]) => [k, localStorage.getItem(key)]))]).filter(([, f]) => Object.keys(f).length));
-  if (n === startsSeq) starts = r.body; // O133: every read replaces them (Settings reads at each open), unless a save went out meanwhile: its answer is newer
-  if (Object.keys(set).length) { const w = await window.p9.chat('newChatDefaults', { set, onlyEmpty: true }).catch(() => null); if (w?.status !== 200) return; starts = w.body; }
+  takeStarts(n, r.body);
+  if (Object.keys(set).length) { const m = ++startsSeq, w = await window.p9.chat('newChatDefaults', { set, onlyEmpty: true }).catch(() => null); if (w?.status !== 200) return; takeStarts(m, w.body); }
   for (const a of Object.keys(r.body)) Object.values(keys(a)).forEach(k => localStorage.removeItem(k));
 }
-// Sends only the field picked; the daemon merges it. Only the newest save's answer is kept, so an older one answering late never
-// shows a value the daemon has already replaced.
-let startsSeq = 0;
-async function saveStarts(a, kind, v) { const n = ++startsSeq; const r = await window.p9?.chat?.('newChatDefaults', { set: { [a]: { [kind]: v } } }).catch(() => null); if (r?.status === 200 && n === startsSeq) { starts = r.body; renderChats(); } return r?.status === 200; } // O131: the open chats' "(Default)" pills follow at once
+// Sends only the field picked; the daemon merges it. O133 FIX1: every read and save of them is numbered when it goes out, and an
+// answer is kept only if no later one was kept first, so an older answer arriving late (a held boot read after Settings read
+// another window's change, or a save's) never puts back a value the daemon has already replaced.
+let startsSeq = 0, startsTook = 0;
+const takeStarts = (n, body) => { if (n < startsTook) return false; startsTook = n; starts = body; return true; };
+async function saveStarts(a, kind, v) { const n = ++startsSeq; const r = await window.p9?.chat?.('newChatDefaults', { set: { [a]: { [kind]: v } } }).catch(() => null); if (r?.status === 200 && takeStarts(n, r.body)) renderChats(); return r?.status === 200; } // O131: the open chats' "(Default)" pills follow at once
 const fresh = [];
 // O48 provider profiles (threat model "Provider profiles"): what the daemon lists, never a key: { id, name, baseUrl, models,
 // secret: 'key' | 'command' | 'none' }. Read at the first chat list and after each Settings change.

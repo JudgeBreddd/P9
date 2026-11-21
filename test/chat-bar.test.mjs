@@ -402,6 +402,30 @@ test('O133 Settings: the Default model and effort show as kept after a failed fi
   const reply = pane.locator('.hist', { hasText: 'config:model=' }).first();
   await reply.waitFor({ timeout: 20000 });
   assert.match(await reply.innerText(), /effort=low,/, '(4) a New chat starts on the newer save, not the late read');
+  // (5) FIX1 (Reviewer): no save here. The boot read A reaches the daemon first and is answered 5 s late; meanwhile the default
+  // changes elsewhere and Settings' read B shows it. A landing after B must not put the older value back.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.slow2 = 0; globalThis.slow2Done = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && !Object.keys(args[1] ?? {}).length && !globalThis.slow2++
+      ? Promise.resolve(h(e, ...args)).then((r) => new Promise((res) => setTimeout(() => { globalThis.slow2Done = true; res(r); }, 5000))) : h(e, ...args));
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await until(async () => await app.evaluate(() => globalThis.slow2) >= 1, 'boot read A was made');
+  await call(instance, '/start-defaults', 'POST', { set: { claude: { effort: 'medium' } } });
+  await open();
+  assert.equal(await shown('effort'), 'medium', '(5) read B shows the change made elsewhere');
+  await close();
+  await until(async () => await app.evaluate(() => globalThis.slow2Done), 'read A answered', 10000);
+  const before2 = await ids();
+  await page.click('#newBtn');
+  let id2;
+  await until(async () => (id2 = (await ids()).find((x) => !before2.includes(x))), 'the second New chat listed');
+  await page.locator('#nav .row[data-chat="' + id2 + '"]').click();
+  const pane2 = page.locator('#chats .pane[data-id="' + id2 + '"]');
+  await pane2.locator('.composer textarea').fill('config'); await pane2.locator('.composer textarea').press('Enter');
+  const reply2 = pane2.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply2.waitFor({ timeout: 20000 });
+  assert.match(await reply2.innerText(), /effort=medium,/, '(5) a New chat starts on read B, not the late read A');
   assert.deepEqual(errors, []);
   console.log('PASS O133 Settings: Defaults shown as kept; a late read never puts back an older one');
 });
