@@ -477,7 +477,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.click('[data-focus-btn="mission"]');
   // Mission #3: Usage keeps its full height beside the Apps list.
   assert.ok(await page.locator('#fMission [data-panel="musage"] .pscroll').evaluate((p) => p.scrollHeight <= p.clientHeight + 1), 'Usage squeezed by Apps');
-  const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); };
+  const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); await page.locator('#walk').waitFor({ timeout: 5000 }); }; // O203: its steps load with the first one
   const walkNow = () => page.evaluate((steps) => {
     const w = document.querySelector('#walk'), r = w.getBoundingClientRect(), n = +w.querySelector('.eyebrow').textContent.split(' ')[0], sel = steps[n - 1].at;
     const el = sel && document.querySelector(sel), shown = el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
