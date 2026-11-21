@@ -360,6 +360,8 @@ details.tool pre{margin:0;padding:8px 12px 10px;border-top:1px solid var(--borde
 .diff .add{background:color-mix(in oklch,var(--ok) 14%,transparent);color:var(--ok)}
 .diff .del{background:color-mix(in oklch,var(--destructive) 14%,transparent);color:var(--destructive)}
 .diff .ctx{color:var(--muted-foreground)}
+.diff .file{font-weight:600;border-top:1px solid var(--border)}
+.diff .hunk{color:var(--muted-foreground);opacity:.7}
 details.thought summary{color:var(--muted-foreground);font-size:12px;cursor:pointer;list-style:none}
 details.thought summary::-webkit-details-marker{display:none}
 details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid var(--border);color:var(--muted-foreground);font-size:13px}
