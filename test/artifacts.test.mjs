@@ -474,6 +474,17 @@ test('O121 part 4b: the Changes tab marks a v2 deleted file and a v2 renamed fil
   assert.match(await f.locator('pre').innerText(), /^Renamed from was\.md\n@@ -1 \+1 @@\n- a\n\+ b/);
 });
 
+// #423 FIX1: a status-only update (no content) rebuilds the call's files; the deleted mark it had stays (as created does).
+test('O121 part 4b: a v2 deleted file stays Deleted after a status-only completion and a later update for another file', { timeout: 120000 }, async (t) => {
+  const { page, show } = await chatDesktop(t, [['v2 delete then done', 'v2 delete done']]);
+  const { button } = await show();
+  await button.click();
+  const items = page.locator('#side .cf-item');
+  await page.locator('#side .cf-tabs [role=tab]').nth(1).click();
+  await page.locator('#side .cf-item[data-cf-file]', { hasText: 'other.md' }).waitFor({ timeout: 8000 });
+  assert.deepEqual((await items.allTextContents()).sort(), ['Diffgone.mdDeleted · proj', 'Diffother.mdEdited · proj']);
+});
+
 test('artifacts: a chat\'s artifact is still listed after it compacts and the window reloads', { timeout: 120000 }, async (t) => {
   const { id, turn, page, shot, show, frame } = await chatDesktop(t, [[`Here:\n${F}markdown artifact Release notes\n# Shipped\n\nThe list works.\n${F}`, 'echo:Here']]);
   await show();

@@ -625,6 +625,17 @@ const connection = acp.connectAgent(stream, {
     }
     // O222: a Codex (ACP v2) edit as acp-v2.mjs stores it: the lines once, in _meta.hunks, and _meta.added; no old text.
     // O121 part 4b: a v2 rename and a v2 delete, as acp-v2.mjs stores them.
+    // #423 FIX1: a v2 delete reported while the call runs, then a status-only completion (no content), then a later update
+    // with content for another file only: the deleted mark must outlive both.
+    if (text === 'v2 delete then done') {
+      const upd = (u) => connection.sessionUpdate({ sessionId, update: { toolCallId: 'edit-v2d', ...u } });
+      await upd({ sessionUpdate: 'tool_call', title: 'Edit files', kind: 'edit', status: 'in_progress', content: [
+        { type: 'diff', path: 'gone.md', newText: '', _meta: { added: false, deleted: true, hunks: [{ old: 1, new: 0, rows: [['del', 'x']] }] } }] });
+      await upd({ sessionUpdate: 'tool_call_update', status: 'completed' });
+      await upd({ sessionUpdate: 'tool_call_update', content: [{ type: 'diff', path: 'other.md', newText: '', _meta: { added: false, hunks: [{ old: 1, new: 1, rows: [['del', 'a'], ['add', 'b']] }] } }] });
+      await say('v2 delete done');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'v2 kinds') {
       await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-v2k', title: 'Edit files', kind: 'edit', status: 'completed', content: [
         { type: 'diff', path: 'moved.md', newText: '', _meta: { added: false, from: 'was.md', hunks: [{ old: 1, new: 1, rows: [['del', 'a'], ['add', 'b']] }] } },

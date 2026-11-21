@@ -910,7 +910,8 @@ const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true
 });
 // Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
 // and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff that made its file (diffCreated), else a Write.
-// Deleted (O121 part 4b): a v2 diff that removed it (diffDeleted); the newest write's mark wins.
+// Deleted (O121 part 4b): a v2 diff that removed it (diffDeleted); an update with no diff for it keeps the mark it had (#423 FIX1),
+// a later diff for it decides again; across calls the newest write's mark wins.
 // ponytail: a Write over a file that was already there, with no diff, reads as created.
 // Each file keeps its own line diff for the Changes tab (an update with no content keeps the one it had).
 // ponytail: up to 2,000 rows a file, against the chat's 200.
@@ -919,8 +920,9 @@ const editFiles = (d, tool) => {
   const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
   const rows = p => { const r = diffRows(diffs.filter(c => c.path === p), 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
   const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
-  const created = p => { const c = diffs.find(c => c.path === p); return c ? diffCreated(c) : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
-  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), ...(diffDeleted(diffs.find(c => c.path === p)) && { deleted: true }), diff: rows(p) })) : tool.files;
+  const was = p => tool.files?.find(f => f.path === p), created = p => { const c = diffs.find(c => c.path === p); return c ? diffCreated(c) : was(p)?.created ?? /^Write\b/.test(tool.title); };
+  const deleted = p => { const c = diffs.find(c => c.path === p); return c ? diffDeleted(c) : !!was(p)?.deleted; };
+  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), ...(deleted(p) && { deleted: true }), diff: rows(p) })) : tool.files;
 };
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
