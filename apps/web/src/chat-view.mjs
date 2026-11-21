@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
-import { strip, chip, turnKey, keptItems, diffRows, diffCreated } from './composer.mjs';
+import { strip, chip, turnKey, keptItems, diffRows, diffCreated, diffDeleted } from './composer.mjs';
 import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
@@ -81,7 +81,7 @@ function chatItems(s) {
   s.events.forEach((e, i) => {
     if (e.t === 'agent' && e.text?.includes('artifact')) { if (e.artText !== e.text) { e.artText = e.text; e.arts = artifactsIn(e.text); } for (const art of e.arts) { out.push({ type: 'artifact', at: i, art }); loaded.add(artSig(art)); } }
     else if (e.t === 'tool' && e.files && e.status === 'completed') for (const f of e.files) {
-      const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created || !!was?.created };
+      const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created || !!was?.created, deleted: !!f.deleted };
       if (was) out.splice(out.indexOf(was), 1); // one row per file, at its newest write
       seen.set(f.path, item); out.push(item);
     }
@@ -136,7 +136,7 @@ function renderChatFiles() {
     if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact${it.versions.length > 1 ? ` · ${it.versions.length} versions` : ''}</span></button></li>`;
     const rel = wsPath(it.path, s.folder), shown = rel ?? fwd(it.path), cut = shown.lastIndexOf('/');
     const where = rel === null ? (CF.ws ? 'outside the workspace, ' : '') + (shown.slice(0, cut) || '/') : cut < 0 ? 'workspace' : shown.slice(0, cut);
-    return `<li><button type="button" data-cf="${i}" title="Show the changes to ${esc(shown)} (read-only)" class="cf-item" data-cf-file><span class="art-kind">Diff</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></button>`
+    return `<li><button type="button" data-cf="${i}" title="Show the changes to ${esc(shown)} (read-only)" class="cf-item" data-cf-file><span class="art-kind">Diff</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.deleted ? 'Deleted' : it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></button>`
       + `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-cf-copy="${i}" title="Copy ${esc(fwd(it.path))}">Copy path</button></li>`;
   };
   const tab = (id, label, n) => `<button type="button" role="tab" data-slot="button" data-variant="ghost" data-size="sm" data-cf-tab="${id}" aria-selected="${CF.tab === id}">${label} <span class="cf-n">${n}</span></button>`;
@@ -910,6 +910,8 @@ const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true
 });
 // Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
 // and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff that made its file (diffCreated), else a Write.
+// Deleted (O121 part 4b): a v2 diff that removed it (diffDeleted); an update with no diff for it keeps the mark it had (#423 FIX1),
+// a later diff for it decides again; across calls the newest write's mark wins.
 // ponytail: a Write over a file that was already there, with no diff, reads as created.
 // Each file keeps its own line diff for the Changes tab (an update with no content keeps the one it had).
 // ponytail: up to 2,000 rows a file, against the chat's 200.
@@ -918,8 +920,9 @@ const editFiles = (d, tool) => {
   const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
   const rows = p => { const r = diffRows(diffs.filter(c => c.path === p), 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
   const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
-  const created = p => { const c = diffs.find(c => c.path === p); return c ? diffCreated(c) : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
-  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), diff: rows(p) })) : tool.files;
+  const was = p => tool.files?.find(f => f.path === p), created = p => { const c = diffs.find(c => c.path === p); return c ? diffCreated(c) : was(p)?.created ?? /^Write\b/.test(tool.title); };
+  const deleted = p => { const c = diffs.find(c => c.path === p); return c ? diffDeleted(c) : !!was(p)?.deleted; };
+  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), ...(deleted(p) && { deleted: true }), diff: rows(p) })) : tool.files;
 };
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
