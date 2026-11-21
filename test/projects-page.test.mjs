@@ -1187,6 +1187,21 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.equal(await page.locator('[data-sv-phase]').count(), 0, 'a plan with no phase heading has no phase line');
   await writeFile(path.join(run.folder, 'sprint.md'), '# Plan\n\n## Phase 1: the page\n- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead\n\n## Phase 2: the docs\n- [ ] B1: write it up; role docs\n');
   await until(async () => (await page.locator('[data-sv-phase]').textContent().catch(() => '')) === '0 of 2 steps in Phase 1: the page, 0 of 2 phases', async () => 'phase line: ' + await page.locator('[data-sv-phase]').textContent().catch(() => 'none'), 12000);
+  // I1 plan view: pressing the line shows every item in its phase with its tick, then each phase's section in full; the
+  // flat list steps aside. It stays open across the 5 s redraw, and a second press closes it.
+  const line = page.locator('[data-sv-phase]'), pv = page.locator('[data-sv-planview]'), flat = page.locator('[data-sv-flat]');
+  assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['false', false, true]);
+  await line.click();
+  assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['true', true, false], 'the line did not open the plan view');
+  const nested = () => pv.evaluate((v) => [...v.querySelectorAll('h4')].filter((h) => !h.closest('[data-sv-phasetext]')).map((h) => [h.textContent, [...(h.nextElementSibling?.querySelectorAll('[data-sv-pitem]') ?? [])].map((r) => r.dataset.svPitem + r.querySelector('.box').textContent)]));
+  assert.deepEqual(await nested(), [['Phase 1: the page', ['A1☑', 'A2☑']], ['Phase 2: the docs', ['B1☐']]]);
+  assert.deepEqual(await page.locator('[data-sv-phasetext] pre').allTextContents(), ['## Phase 1: the page\n- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead', '## Phase 2: the docs\n- [ ] B1: write it up; role docs'].map((t) => t), 'each phase in full');
+  await pv.evaluate((v) => { v.dataset.old = '1'; });
+  await until(async () => (await page.locator('[data-sv-planview][data-old]').count()) === 0, 'the Sprint View never redrew', 12000);
+  assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['true', true, false], 'the redraw closed the plan view');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-plan ' + (await page.screenshot({ type: 'png', fullPage: true })).toString('base64'));
+  await line.click();
+  assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['false', false, true], 'a second press did not close it');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-phases ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await writeFile(path.join(run.folder, 'sprint.md'), plan(true));
   await until(async () => (await page.locator('[data-sv-phase]').count()) === 0, 'the phase line left with the headings', 12000);
