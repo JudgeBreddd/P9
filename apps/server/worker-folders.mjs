@@ -15,7 +15,7 @@ export const WORKER = ':worker-folder'; // a chat's folder value: found again fr
 const SETUP_MS = 15 * 60_000; // ponytail: one cap for every setup command; a project whose install takes longer needs a setting
 const ADDRESS_MARK = 'p9-from-address'; // inside an address clone's .git (daemon-4): lives and goes with the clone
 const TAIL = 2000;
-const SETUP_FROM = 'the project\'s, else Settings > Delegation';
+const SETUP_FROM = 'the project\'s';
 
 // A1, a sprint's source as an address (SECURITY.md § Worker folders): https://, ssh:// or user@host:path, nothing else.
 // The user name, the host and the path after user@host: never start with '-', so no part git or ssh could read as an

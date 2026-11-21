@@ -135,7 +135,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
   }
 
   // A1, A4: a project's sprint source (a repository address, '' = the folder a worker would start in) and its own setup
-  // command ('' = the one in Settings > Delegation). Written only by the desktop-only route (SECURITY.md § Worker folders).
+  // command ('' = none; O226: Settings > Delegation has none). Written only by the desktop-only route (SECURITY.md § Worker folders).
   const sprintOf = (value) => ({ source: typeof value.sprint?.source === 'string' && remoteOk(value.sprint.source) ? value.sprint.source : '',
     setup: typeof value.sprint?.setup === 'string' && value.sprint.setup.length <= 2000 ? value.sprint.setup : '' });
 
