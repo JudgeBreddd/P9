@@ -56,6 +56,12 @@ test('O219 phone: a streamed command\'s pieces read once, whole, in the tool\'s 
   update({ sessionUpdate: 'tool_call_update', toolCallId: 'exec-3', status: 'completed' });
   update({ sessionUpdate: 'tool_call', toolCallId: 'exec-4', title: 'long', kind: 'execute', status: 'completed' });
   for (const n of [1, 2, 3]) update({ ...piece(String(n).repeat(1500)), toolCallId: 'exec-4' });
+  // An unmarked update replaces the text (the whole output, as the window reads it): after pieces, with a long text, and empty.
+  const whole = (id, text) => ({ sessionUpdate: 'tool_call_update', toolCallId: id, content: text === null ? [] : [{ type: 'content', content: { type: 'text', text } }] });
+  for (const [id, title] of [['exec-5', 'replaced'], ['exec-6', 'bigwhole'], ['exec-7', 'emptied']]) { update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Next: ' + title + '. ' } }); update({ sessionUpdate: 'tool_call', toolCallId: id, title, kind: 'execute', status: 'completed' }); } // a message apart: three tool calls in a row fold into one row
+  update({ ...piece('old\n'), toolCallId: 'exec-5' }); update(whole('exec-5', 'whole\n')); update({ ...piece('more\n'), toolCallId: 'exec-5' });
+  update(whole('exec-6', 'a'.repeat(1000) + 'b'.repeat(2000)));
+  update({ ...piece('gone\n'), toolCallId: 'exec-7' }); update(whole('exec-7', null));
   d.close();
   const { page } = await phone(t, server);
   await openChat(page, server);
@@ -63,5 +69,9 @@ test('O219 phone: a streamed command\'s pieces read once, whole, in the tool\'s 
   await tool.waitFor({ timeout: 15000 });
   assert.equal(await tool.locator('pre').textContent(), 'completed\none\ntwo\nthree\n');
   assert.equal(await page.locator('#events article[data-kind=tool]', { hasText: 'long' }).locator('pre').textContent(), 'completed\n' + '2'.repeat(500) + '3'.repeat(1500), 'a long streamed output shows its last 2,000 characters');
+  const pre = (title) => page.locator('#events article[data-kind=tool]', { hasText: title }).locator('pre').textContent();
+  assert.equal(await pre('replaced'), 'completed\nwhole\nmore\n', 'a whole text replaces the pieces before it');
+  assert.equal(await pre('bigwhole'), 'completed\n' + 'b'.repeat(2000), 'a long whole text shows its last 2,000 characters');
+  assert.equal(await pre('emptied'), 'completed', 'an empty whole text clears the output');
   console.log('PASS O219 phone: detail one/two/three once');
 });
