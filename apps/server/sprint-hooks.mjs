@@ -17,8 +17,11 @@ export const BLOCKING = ['before-start', 'before-new-worker', 'before-merge', 'b
 // every (O189): not a step of the sprint but a clock. Its row says "every": N minutes (EVERY_MIN to EVERY_MAX), and P9
 // runs it again and again while the sprint is started, not paused and not closed (tick, in createHooks).
 export const POINTS = [...BLOCKING, 'sprint-start', 'worker-folder-made', 'before-ready', 'ci-red', 'gate-passed', 'pause', 'resume', 'after-close', 'every'];
-// The points P9 has an action for today; the rest are accepted, approved and never run (SECURITY.md says so).
-export const FIRED = ['before-start', 'sprint-start', 'before-new-worker', 'worker-folder-made', 'before-ready', 'before-close', 'after-close', 'every'];
+// O202: every point now runs. Three of them are things P9 does not do itself (it merges nothing, runs no CI, passes no
+// gate), so the sprint's lead reports them with the sprint_event tool (REPORTED, event() below); pause and resume run at
+// Pause and Resume (ordered() below).
+export const REPORTED = ['before-merge', 'ci-red', 'gate-passed'];
+export const FIRED = POINTS;
 export const EVERY_MIN = 10, EVERY_MAX = 120;
 export const MAX_SCRIPTS = 12, MAX_LIBRARY = 100, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
 const TIMEOUT = { blocking: 60_000, notice: 300_000 }; // ponytail: fixed, no per-script setting; add one when a real script needs longer
@@ -201,7 +204,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // Runs the approved scripts of one point (standing: Start's, and the additional ones the owner allows), in order. A blocking one that fails refuses: the rest do not run
   // and { error: 'script-refused', ... } comes back. Notices are started and not waited for. null: go on.
   // scripts: only Start passes it (the list being approved by this very press, not yet recorded).
-  async function fire(sprint, point, subject, scripts = standing(sprint).running) {
+  // onNotice: given each notice's run (a promise), for a caller that must know when they end (event, ordered).
+  async function fire(sprint, point, subject, scripts = standing(sprint).running, onNotice) {
     const due = scripts.filter((s) => s.point === point);
     if (!due.length || !ID.test(sprint ?? '')) return null;
     const cwd = chat.sprintFiles.folderOf(sprint);
@@ -210,7 +214,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       const blocking = s.blocking && BLOCKING.includes(point);
       const going = speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, say }), s.notify)
         .then((r) => { record(sprint, s, r); return r; });
-      if (!blocking) { going.catch(() => {}); continue; }
+      if (!blocking) { going.catch(() => {}); onNotice?.(going); continue; }
       const r = await going;
       if (r.exit !== 0) {
         const why = r.reason === 'timeout' ? `ran past ${TIMEOUT.blocking / 1000} seconds` : r.reason === 'not-started' ? 'could not be started' : r.reason === 'killed' ? 'was ended by a signal' : 'exit ' + r.exit;
@@ -218,6 +222,50 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       }
     }
     return null;
+  }
+
+  // O202, pause and resume: run one after the other per sprint, each once the last one's scripts have all ended, so a quick
+  // Pause then Resume cannot have the resume script (heavy-services resume) finish before the pause script (pause) and
+  // leave the services paused in a running sprint. A run still waiting when the sprint is closed is dropped: a pause
+  // script after Close would undo what after-close put back. Each run is a notice; nothing waits for it.
+  const chains = new Map();
+  function ordered(sprint, point, subject) {
+    const next = (chains.get(sprint) ?? Promise.resolve()).then(async () => {
+      if (chat.projects.closed(sprint) || off()) return;
+      const going = [];
+      await fire(sprint, point, subject, undefined, (p) => going.push(p));
+      await Promise.allSettled(going);
+    }).catch(() => {});
+    chains.set(sprint, next);
+    next.then(() => { if (chains.get(sprint) === next) chains.delete(sprint); });
+    return next;
+  }
+  // O202, the reported points: the sprint's lead calls sprint_event right before it merges (before-merge, blocking: a
+  // refusal comes back and the lead must not merge), when a CI run went red (ci-red) or when a gate passed (gate-passed).
+  // Only the lead of a started, not closed sprint; only the approved scripts of that point run. One call of a point at a
+  // time per sprint: while the last call's scripts run, another is refused (point-busy), so a loop cannot pile up runs.
+  const busy = new Set();
+  const SUBJECT = { pr: (v) => Number.isInteger(v) && v > 0 && v < 1e9, run: (v) => typeof v === 'string' && /^[0-9]{1,20}$/.test(v),
+    commit: (v) => typeof v === 'string' && /^[0-9a-f]{7,40}$/.test(v), branch: (v) => typeof v === 'string' && v.length <= 200 && v === clean(v) && v !== '',
+    item: (v) => typeof v === 'string' && /^[A-Za-z0-9._-]{1,60}$/.test(v), gate: (v) => typeof v === 'string' && v.length <= 60 && v === clean(v) && v !== '' };
+  async function event(caller, args) {
+    if (chat.lock(caller).on) return { error: 'agent-lock-on' };
+    if (!ID.test(caller ?? '') || !chat.info(caller) || !chat.sprintFiles.exists(caller)) return { error: 'not-a-sprint-lead', detail: 'Only a sprint\'s lead reports a merge, a red CI run or a passed gate.' };
+    const point = args?.point, subject = args?.subject === undefined ? {} : args.subject; // null is refused below, not taken as none
+    if (!REPORTED.includes(point)) return { error: 'request-refused', detail: 'point is one of ' + REPORTED.join(', ') + '.' };
+    if (typeof subject !== 'object' || Array.isArray(subject) || subject === null) return { error: 'request-refused', detail: 'subject is an object.' };
+    for (const [k, v] of Object.entries(subject)) if (!SUBJECT[k]?.(v)) return { error: 'request-refused', detail: `subject.${k} is refused: the fields are pr (a number), run (digits), commit (hex), branch, item and gate.` };
+    if (chat.projects.closed(caller)) return { error: 'sprint-closed' };
+    if (!chat.projects.started(caller)) return { error: 'sprint-not-started', detail: 'Nothing runs before Start: Start approves the scripts.' };
+    const key = caller + '\n' + point;
+    if (busy.has(key)) return { error: 'point-busy', detail: `The ${point} scripts of your last call are still running; call again when they end.` };
+    busy.add(key);
+    const going = [], due = standing(caller).running.filter((s) => s.point === point).length;
+    let refused;
+    try { refused = await fire(caller, point, { ...subject, by: 'lead' }, undefined, (p) => going.push(p)); }
+    finally { Promise.allSettled(going).then(() => busy.delete(key)); }
+    if (refused) return refused;
+    return { point, scripts: due, ...(point === 'before-merge' && { merge: 'allowed' }) };
   }
 
   // O189 (1), the every point. One tick a minute looks at every started sprint that is not paused or closed and runs
@@ -498,5 +546,5 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       return script.error ? script : runNow(sprint, script, 'owner', still);
     },
   };
-  return { fire, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say, tick, stop };
+  return { fire, ordered, event, read, status, view, standing, approved, save, remove, add, run: runAsked, request, owner, where, say, tick, stop };
 }

@@ -1380,9 +1380,20 @@ worker folder is made. Written before the code (sprint spec S18 to S20; threat m
 - **Where the owner's routes are.** `GET` and `POST /sprint-scripts`, `POST /sprints/:id/run-script`,
   `POST /sprint-scripts/allow` (the switch) and `POST /sprints/:id/approve-scripts` exist on the desktop's connection
   only: a phone session gets 404, as for Start.
-- **Points nothing fires yet.** `before-merge`, `ci-red`, `gate-passed`, `pause` and `resume` are accepted in the
-  file and approved like the rest, but P9 has no such action yet, so their scripts do not run. `before-close` and
-  `after-close` run at Close sprint (§ Close sprint).
+- **Every point runs (O202).** `before-close` and `after-close` run at Close sprint (§ Close sprint). `pause` and
+  `resume` run when Pause or Resume (yours, or the lead's `pause_sprint` and `resume_sprint`) changes the sprint; a
+  press on a sprint already paused or already running runs nothing. Their runs go one after the other per sprint, each
+  once the last one's scripts have ended, so a quick Pause then Resume cannot have the resume script end before the
+  pause script; a run still waiting at Close is dropped. They are notices: Pause and Resume never wait for them.
+- **The points P9 cannot see.** P9 merges nothing, runs no CI and passes no gate, so the sprint's lead reports
+  `before-merge`, `ci-red` and `gate-passed` with `sprint_event`, and only the lead of a started sprint not closed:
+  a worker, a chat outside, the agent lock on, before Start and after Close are refused. `subject` takes only `pr` (a
+  number), `run` (digits), `commit` (hex), `branch`, `item` and `gate`, each bounded; P9 adds `by: "lead"`. A blocking
+  `before-merge` script that refuses comes back as `script-refused` with its last line, and the lead must not merge;
+  that is an instruction, not a lock, since the merge is the lead's own `gh` call. While a point's scripts from the
+  lead's last call still run, another call of that point is refused (`point-busy`), so a looping lead cannot pile up
+  runs. A lead can report a merge or a red run that did not happen; the scripts get the sprint's state either way and
+  may act only on what it says.
 
 ## Pause sprint
 
