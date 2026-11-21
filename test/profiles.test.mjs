@@ -292,12 +292,16 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   assert.equal((await pane.locator('[data-pill="Model"]').getAttribute('aria-label')), 'Model: glm-5.3');
   // Its one-model report did not become Claude's list.
   assert.deepEqual(await newRows(page), ['Far Cloud']);
+  // PD-1 (e): stopped first, it offers Resume until its profile is removed.
+  await call(instance, '/chat/' + id + '/stop', 'POST');
+  await pane.locator('[data-resume]').waitFor({ timeout: 10000 });
   // Removed in Settings: gone from the menu, and the chat says why it cannot go on.
   await profilesPage(page);
   await page.click('#setProfiles [data-profile-remove]');
   await page.locator('#setProfiles [data-profile]').waitFor({ state: 'detached' });
   await page.keyboard.press('Escape');
   assert.deepEqual(await newRows(page), CLAUDE);
+  assert.equal(await pane.locator('[data-resume]').count(), 0, 'a stopped chat kept Resume after its profile was removed');
   assert.match((await menu(page, pane)).notes[0], /removed in Settings/);
   await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter');
   await pane.locator('.hist', { hasText: 'was removed' }).waitFor({ timeout: 20000 });
