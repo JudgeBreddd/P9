@@ -253,3 +253,35 @@ export async function openFiles(page, timeout = 20000) {
   }
   await page.locator('#chats > .pane').first().locator('[data-tool=files]').click({ timeout });
 }
+// O58 (l) / O71: the desktop window's startup waits (the live chat row, 'Chat live') timed out on CI and never in the dev space.
+// watchStartup(page) right after firstWindow() keeps the page's console errors and warnings; waitStartup() then waits as before
+// and, on a timeout, prints what the page drew and how long each startup read takes now (the desktop gives each daemon read
+// 10 s, so a read that hangs is the 15 s shape), then throws the same error. Each read here is capped at 3 s so the dump
+// itself cannot hold the test; a capped read prints as '> 3000 ms'.
+export function watchStartup(page) {
+  const watch = { opened: Date.now(), logged: [] };
+  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') watch.logged.push(m.type() + ': ' + m.text().slice(0, 300)); });
+  page.on('pageerror', (e) => watch.logged.push('pageerror: ' + String(e.message).slice(0, 300)));
+  return watch;
+}
+export async function waitStartup(page, watch, locator, { what, chat, timeout }) {
+  const started = Date.now();
+  return locator.waitFor({ timeout }).catch(async (error) => {
+    const seen = await page.evaluate(async (chat) => {
+      const timed = async (action, body) => {
+        const at = performance.now();
+        const r = await Promise.race([window.p9.chat(action, body).catch((e) => ({ status: String(e) })), new Promise((resolve) => setTimeout(() => resolve({ status: 'no answer', capped: true }), 3000))]);
+        return { r, line: action + ' ' + r.status + (r.capped ? ' > 3000' : ' ' + Math.round(performance.now() - at)) + ' ms' };
+      };
+      // events needs chat ids: the one waited on, else every listed chat (none listed: skipped, it would only answer 400).
+      const list = await timed('list', {}), only = chat ? [chat] : (list.r.body?.conversations || []).map((c) => c.id);
+      const events = only.length ? await timed('events', { after: 0, only, tail: 200 }) : { r: {}, line: 'events skipped (no chat listed)' }, profiles = await timed('profiles', {});
+      const r = chat && document.querySelector('#navList .row[data-chat="' + chat + '"]');
+      return { reads: [list.line, events.line + ' ' + (events.r.body?.events?.length ?? '-') + ' events', profiles.line], note: document.querySelector('#dataNote')?.textContent,
+        focus: document.querySelector('.shell')?.dataset.focus, hidden: document.hidden, rows: document.querySelectorAll('#navList .row').length, wrap: r ? r.closest('.rowwrap')?.outerHTML.slice(0, 400) ?? null : null,
+        listed: (list.r.body?.conversations || []).map((c) => ({ id: c.id.slice(0, 8), state: c.state })) };
+    }, chat ?? null).catch((e) => String(e));
+    console.log('startup wait timed out (' + what + '): ' + JSON.stringify({ afterWindowMs: Date.now() - watch.opened, waitedMs: Date.now() - started, seen, logged: watch.logged }));
+    throw error;
+  });
+}

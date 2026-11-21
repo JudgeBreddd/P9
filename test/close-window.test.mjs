@@ -11,7 +11,7 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, http, authenticated, root, watchStartup, waitStartup } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -30,13 +30,14 @@ async function launch(t, instance) {
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
-  const page = await app.firstWindow();
+  const page = await app.firstWindow(), watch = watchStartup(page);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(1568, 1348); });
   await page.setViewportSize({ width: 1568, height: 1348 }).catch(() => {});
-  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
-  return { page, errors };
+  // O71: timed out on CI 3 times (11-20, 11-21), the O58 (l) shape; a timeout prints the page's stage.
+  await waitStartup(page, watch, page.locator('#dataNote', { hasText: 'Chat live' }), { what: 'Chat live', timeout: 20000 });
+  return { page, errors, watch };
 }
 // The MCP client of a chat that was sent 'mcp'.
 async function tools(t, instance, conversation) {
@@ -73,7 +74,7 @@ test('close-window: a worker its lead closes leaves the card, the sidebar and th
   const r = await k.tool('ready', { commit: head, results: [{ check: 'Tests pass', result: 'Passed' }], weakest: 'x' }); assert.ok(r.ready, JSON.stringify(r));
   await a.done(kid);
 
-  const { page, errors } = await launch(t, instance);
+  const { page, errors, watch } = await launch(t, instance);
   await page.locator(`#navList .row[data-chat="${parent}"]`).click();
   const pane = page.locator(`.pane[data-id="${parent}"]`), card = pane.locator('.sprint');
   const onCard = (id) => card.locator(`[data-sprint-open="${id}"]`).count();
@@ -99,7 +100,7 @@ test('close-window: a worker its lead closes leaves the card, the sidebar and th
   await call(instance, '/agent-lock', 'POST', { on: false });
 
   await page.reload();
-  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await waitStartup(page, watch, page.locator('#dataNote', { hasText: 'Chat live' }), { what: 'Chat live after a reload', timeout: 20000 });
   await page.locator(`#navList .row[data-chat="${parent}"]`).click();
   await card.locator(`[data-sprint-open="${live}"]`).waitFor({ state: 'attached', timeout: 20000 });
   assert.deepEqual(await where(kid), { card: 0, sidebar: 0, pinned: 0 }, 'the closed worker came back after a reload');

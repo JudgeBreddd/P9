@@ -6,7 +6,7 @@ import { deflateSync, crc32 } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, http, authenticated, root, watchStartup, waitStartup } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -36,11 +36,12 @@ async function setup(t, name, { provider = 'claude', files = [] } = {}) {
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
-  const page = await app.firstWindow();
+  const page = await app.firstWindow(), watch = watchStartup(page);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => message.type() === 'error' && errors.push(message.text()));
-  await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  // O71: timed out on CI 3 times (11-20, 11-21), the O58 (l) shape; a timeout prints the page's stage.
+  await waitStartup(page, watch, page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]'), { what: name + ' row live', chat: id, timeout: 15000 });
   await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
   const type = async (text) => { await pane.locator('.composer textarea').click(); await page.keyboard.type(text); };

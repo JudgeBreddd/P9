@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, remoteDaemon, http, authenticated, root, versionSeen } from './helpers.mjs';
+import { daemon, remoteDaemon, http, authenticated, root, versionSeen, watchStartup, waitStartup } from './helpers.mjs';
 import { phone } from './phone-c16-helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs'), sdk = path.join(root, 'test/fake-claude-sdk.mjs');
@@ -47,24 +47,11 @@ test('live Claude usage: every desktop Claude chat and Mission Control show the 
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
-  const page = await app.firstWindow(), opened = Date.now(), logged = [];
-  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') logged.push(m.type() + ': ' + m.text().slice(0, 300)); });
+  const page = await app.firstWindow(), watch = watchStartup(page);
   // The desktop reads /usage at launch (which starts the poll) and every minute after: the figures arrive within ~60 s.
   for (const id of chats) {
-    // O58 (l): this wait timed out twice on CI and never in the dev space, even under CPU load. A timeout prints what the page
-    // drew and how long each of its startup reads takes now (the desktop gives each daemon read 10 s), so the next one names its stage.
-    await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 }).catch(async (error) => {
-      const seen = await page.evaluate(async (id) => {
-        const timed = async (action, body) => { const at = performance.now(), r = await window.p9.chat(action, body).catch((e) => ({ status: String(e) })); return { r, line: action + ' ' + r.status + ' ' + Math.round(performance.now() - at) + ' ms' }; };
-        const list = await timed('list', {}), events = await timed('events', { after: 0, only: [id], tail: 200 }), profiles = await timed('profiles', {});
-        const r = document.querySelector('#navList .row[data-chat="' + id + '"]');
-        return { reads: [list.line, events.line + ' ' + (events.r.body?.events?.length ?? '-') + ' events', profiles.line], note: document.querySelector('#dataNote')?.textContent,
-          focus: document.querySelector('.shell')?.dataset.focus, hidden: document.hidden, rows: document.querySelectorAll('#navList .row').length, wrap: r?.closest('.rowwrap')?.outerHTML.slice(0, 400) ?? null,
-          listed: (list.r.body?.conversations || []).map((c) => ({ id: c.id.slice(0, 8), state: c.state })) };
-      }, id).catch((e) => String(e));
-      console.log('O58 (l) row not live: ' + JSON.stringify({ chat: chats.indexOf(id), afterWindowMs: Date.now() - opened, seen, logged }));
-      throw error;
-    });
+    // O58 (l): this wait timed out twice on CI and never in the dev space, even under CPU load; a timeout prints the page's stage.
+    await waitStartup(page, watch, page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]'), { what: 'chat ' + chats.indexOf(id) + ' row live', chat: id, timeout: 15000 });
     await page.locator('#nav .row[data-chat="' + id + '"]').click();
     const meters = page.locator('.pane[data-id="' + id + '"] .meters');
     await until(async () => fresh(await meters.innerText().catch(() => '')), 'chat ' + id + ' meters at 37% / 63%', 90000);
