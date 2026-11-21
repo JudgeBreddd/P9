@@ -1090,7 +1090,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   async function connect(conversation) {
     if (live.has(conversation.id)) return live.get(conversation.id);
     const profile = profileOf(conversation.id);
-    if (profile?.gone) { emit(conversation.id, 'error', { message: PROFILE_ERRORS['profile-gone'] }); throw Object.assign(new Error('profile-gone'), { status: 409, reason: 'profile-gone' }); }
+    // PD-1 (d): the user event put the page on Running; 'stopped' takes it off, as after a failed start below.
+    if (profile?.gone) { emit(conversation.id, 'error', { message: PROFILE_ERRORS['profile-gone'] }); emit(conversation.id, 'stopped', { result: 'stopped' }); throw Object.assign(new Error('profile-gone'), { status: 409, reason: 'profile-gone' }); }
     // O48: the adapter reads the model name from its own environment only (one outside model per agent process). Not a secret.
     // O39: on a resume the Claude adapter sets the session to the computer's default model (the user's own Claude settings)
     // unless its environment names one. Naming the chat's own model there keeps the resume on it: no switch away and back.
@@ -1266,6 +1267,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const result = await endTree(proc);
       emit(conversation.id, 'error', { message: PROFILE_ERRORS[error?.message] ?? profileError(error, session), stderr: stderr.slice(-1000) });
       settle(conversation.id, proc, result);
+      emit(conversation.id, 'stopped', { result });
       throw Object.assign(new Error('adapter-start-failed'), { status: 502 });
     } finally {
       clearTimeout(timer);

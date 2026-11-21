@@ -34,6 +34,8 @@ const said = async (instance, id, text) => {
   if (sent.status === 202 || sent.status === 200) await until(async () => (await events(instance, id)).slice(before).some((e) => e.type === 'turn-end'), 'the turn ended');
   return sent;
 };
+// PD-1 (d): the event types after a chat's last error.
+const ended = (list) => list.slice(list.findLastIndex((e) => e.type === 'error') + 1).map((e) => e.type);
 const PROFILE = { name: 'Far Cloud', baseUrl: 'https://models.example.test/api/', models: ['glm-5.3', 'kimi-k3:cloud'] };
 // Every file under the test's home that holds the key.
 const holders = (instance) => fs.readdirSync(instance.directory, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile())
@@ -125,12 +127,16 @@ test('profile: what is refused; a removed profile\'s chat can be read, not conti
   const refused = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'again' });
   assert.equal(refused.status, 502, refused.text);
   assert.match((await events(instance, id)).filter((e) => e.type === 'error').at(-1).data.message, /did not accept the key of the profile "Far Cloud"/);
+  // PD-1 (d): the user event put the page on Running; a failed start then ends with an event the page reads as stopped.
+  assert.deepEqual(ended(await events(instance, id)), ['stopped'], 'a failed start says the chat stopped');
+  assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === id).state, 'stopped');
 
   assert.equal((await call(instance, '/profiles/' + profile.id, 'DELETE')).status, 200);
   assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === id).profile.gone, true);
   const gone = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'still there?' });
   assert.deepEqual([gone.status, gone.error], [409, 'profile-gone']);
-  assert.match((await events(instance, id)).at(-1).data.message, /profile was removed in Settings/);
+  assert.match((await events(instance, id)).filter((e) => e.type === 'error').at(-1).data.message, /profile was removed in Settings/);
+  assert.deepEqual(ended(await events(instance, id)), ['stopped'], 'a refused start on a removed profile says the chat stopped');
   assert.equal(seen(instance).filter((line) => line.model === 'kimi-k3:cloud').length, 2, 'no agent was started for the removed profile');
   // Removed while its chat is running: that agent holds the key, so the chat is stopped, not left answering.
   const own = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
@@ -187,6 +193,7 @@ test('profile: a key command is run with no shell at each chat start and its fir
   const failed = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'again' });
   assert.equal(failed.status, 502, failed.text);
   assert.match((await events(instance, id)).filter((e) => e.type === 'error').at(-1).data.message, /key command .* failed or printed nothing/);
+  assert.deepEqual(ended(await events(instance, id)), ['stopped'], 'a failed key command says the chat stopped');
   assert.equal(seen(instance).length, count, 'no session was asked for without a key');
   console.log('PASS profile: the key command runs without a shell per chat start; a failing one starts no session');
 });
