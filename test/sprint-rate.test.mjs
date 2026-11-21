@@ -16,7 +16,7 @@ function hooksAt(startedAt, closed = null) {
     family: () => [{ id, project: 'p', title: 'S' }, { id: w, parent: id, key: 'w1' }], list: () => [],
     sprint: (c) => (c === w ? { reviews: { A1: merged(), A2: merged(), A3: merged(), A4: { state: 'passed', commit: 'b'.repeat(40), fixes: 0, at: 1 } } } : {}),
     sprintFiles: { exists: (c) => c === id, read: (_s, f) => (f === 'sprint.md' ? plan : null), folderOf: () => '.', log: () => {} },
-    projects: { started: () => ({ at: startedAt, by: 'owner', plan: null, scripts: [] }), closed: () => closed, prepOf: () => null, record: async () => ({ name: 'P' }) } };
+    projects: { merge: () => true, started: () => ({ at: startedAt, by: 'owner', plan: null, scripts: [] }), closed: () => closed, prepOf: () => null, record: async () => ({ name: 'P' }) } };
   return createHooks({ chat, usage: () => null, stateOf: () => 'running', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
 }
 

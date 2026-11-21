@@ -276,6 +276,9 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     for (const [k, v] of Object.entries(subject)) if (!SUBJECT[k]?.(v)) return { error: 'request-refused', detail: `subject.${k} is refused: the fields are pr (a number), run (digits), commit (hex), branch, item and gate.` };
     if (chat.projects.closed(caller)) return { error: 'sprint-closed' };
     if (!chat.projects.started(caller)) return { error: 'sprint-not-started', detail: 'Nothing runs before Start: Start approves the scripts.' };
+    // H2 (SECURITY.md § Standing merge): with the owner's standing-merge switch off, merge is the owner's; the scripts do
+    // not run for a merge the lead may not make. It binds only a lead that reports before it merges.
+    if (point === 'before-merge' && !chat.projects.merge(caller)) return { error: 'merge-is-the-owners', detail: 'The owner has not turned on standing merge for this sprint: do not merge. Tell the owner the PR is ready to merge.' };
     const key = caller + '\n' + point;
     if (busy.has(key)) return { error: 'point-busy', detail: `The ${point} scripts of your last call are still running; call again when they end.` };
     busy.add(key);
@@ -399,6 +402,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       owner: { done: owned.filter((i) => clicked.has(i.id)).length, total: owned.length,
         items: owned.map((i) => ({ id: i.id, text: i.text, ticked: i.ticked, done: clicked.has(i.id) })) },
       running_ms: ms,
+      // H2: the owner's standing-merge switch. true: the lead may merge what passed review; false: merge is the owner's.
+      standing_merge: chat.projects.merge(sprint),
       // O162: PRs an hour, the items merged per hour since Start (perHour); null before Start.
       prs_per_hour: ms === null ? null : perHour(merged, ms),
       // phases (I1): each "## Phase" heading of the plan with its items merged and its total; current: the first

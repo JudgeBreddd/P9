@@ -341,6 +341,10 @@ export function setupRoutes(outer) {
     const result = await outer.mcp[call](c.req.param('id'));
     return c.json(result, result.error ? 404 : 200);
   });
+  // Desktop only (SECURITY.md § Standing merge): the owner's standing-merge switch on Sprint Setup. No phone route and no
+  // agent tool sets it.
+  outer.app.post('/sprints/:id/merge', async (c) => { const body = await outer.json(c);
+    return outer.reply(c, !body || typeof body !== 'object' || Object.keys(body).join() !== 'on' ? { status: 400, error: 'request-refused' } : outer.chat.projects.setMerge(c.req.param('id'), body.on)); });
   // Desktop only, the project page: a project's sprint source (an address) and its own setup command. Never on the
   // routes the phone reaches, and no agent tool calls it (SECURITY.md § Worker folders).
   outer.app.post('/projects/:id/sprint-settings', async (c) => outer.reply(c, await outer.chat.projects.setSprintSet(c.req.param('id'), await outer.json(c))));

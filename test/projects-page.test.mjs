@@ -872,6 +872,19 @@ test('projects: Start sprint on the sprint section starts the prep, says a failu
   await until(async () => await pausedTag.count() === 0, 'Resume cleared the Paused mark');
   assert.equal((await pause.textContent()).trim(), 'Pause sprint');
   console.log('PASS S13 page: Pause sprint marks the started sprint Paused and turns into Resume sprint; Resume clears it');
+  // H2 (SECURITY.md § Standing merge): a sprint made now starts with the switch off; the owner's click turns it on and off.
+  const merge = section.locator('[data-pj="spmerge"]'), kept = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === sprint).merge;
+  await merge.waitFor({ timeout: 10000 });
+  assert.equal(await merge.isChecked(), false, 'H2: a new sprint\'s standing merge is on');
+  assert.equal(await kept(), false);
+  assert.match(await section.locator('[data-sp-merge]').getAttribute('title'), /A new sprint starts with it off; a sprint made before this switch existed keeps merge on\. It binds a lead that reports before it merges/);
+  await merge.click();
+  await until(async () => await kept() === true, 'H2: the click turned standing merge on');
+  await until(async () => await merge.isChecked() && !(await merge.isDisabled()), 'H2: the switch is drawn on again');
+  await merge.click();
+  await until(async () => await kept() === false, 'H2: the second click turned it off');
+  await until(async () => !(await merge.isChecked()) && !(await merge.isDisabled()), 'H2: the switch is drawn off');
+  console.log('PASS H2 page: Standing merge starts off for a new sprint; the owner\'s clicks turn it on and off');
   assert.deepEqual(errors, []);
   console.log('PASS window-10: Start sprint held shows Starting… and sends one press; halfway says what was made; Start again keeps the lead and makes w2; the record shows by you and the plan\'s sha256');
 });

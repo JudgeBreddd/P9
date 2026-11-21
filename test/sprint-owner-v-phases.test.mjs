@@ -19,7 +19,7 @@ test('sprint-owner-v phases: owner lines in two phases leave each phase its own 
     sprint: (c) => (c === c1 ? { reviews: { a1: { state: 'passed', commit: 'a'.repeat(40), merged: true, at: 1 } } } : {}),
     scriptLibrary: () => [], allowScripts: () => false, mergedNow: async () => undefined,
     sprintFiles: { exists: (c) => c === id, read: (c, name) => (name === 'sprint.md' ? plan : null), folderOf: () => '.', log: () => {} },
-    projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => null, prepOf: () => null, record: async () => null } };
+    projects: { merge: () => true, started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => null, prepOf: () => null, record: async () => null } };
   const hooks = createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
   const got = await hooks.status(id, id);
   assert.deepEqual(got.phases, [{ title: 'Phase 1', merged: 1, total: 1 }, { title: 'Phase 2', merged: 0, total: 2 }], 'phases: ' + JSON.stringify(got.phases));

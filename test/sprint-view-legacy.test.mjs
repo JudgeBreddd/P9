@@ -26,7 +26,7 @@ test('Sprint View legacy: a record saved before done meant merged answers unchan
   const chat = { lock: () => ({ on: false }), info: (c) => (c === id ? { title: 'S', provider: 'fake', project: 'p' } : c === c1 ? { title: 'w1', provider: 'fake', project: 'p', parent: id } : null),
     family: () => [{ id }], list: () => [{ id }], gauge: () => null, mergedNow: async () => null,
     sprintFiles: { exists: (c) => c === id, read: () => null, folderOf: () => '.', log: () => {} },
-    projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => ({ at: 2, by: 'owner', record }), prepOf: () => null, record: async () => null } };
+    projects: { merge: () => true, started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => ({ at: 2, by: 'owner', record }), prepOf: () => null, record: async () => null } };
   const hooks = createHooks({ chat, usage: () => null, stateOf: () => 'stopped', rolesOf: () => ({ error: 'none' }), allowed: async () => true });
   const got = await hooks.status(id, id); // as the sprint_status tool calls it (delegate.mjs: hooks.status(caller, args.sprint))
   assert.equal(got.closed.by, 'owner');
