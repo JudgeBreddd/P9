@@ -1195,7 +1195,7 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['true', true, false], 'the line did not open the plan view');
   const nested = () => pv.evaluate((v) => [...v.querySelectorAll('h4')].filter((h) => !h.closest('[data-sv-phasetext]')).map((h) => [h.textContent, [...(h.nextElementSibling?.querySelectorAll('[data-sv-pitem]') ?? [])].map((r) => r.dataset.svPitem + r.querySelector('.box').textContent)]));
   assert.deepEqual(await nested(), [['Phase 1: the page', ['A1☑', 'A2☑']], ['Phase 2: the docs', ['B1☐']]]);
-  assert.deepEqual(await page.locator('[data-sv-phasetext] pre').allTextContents(), ['## Phase 1: the page\n- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead', '## Phase 2: the docs\n- [ ] B1: write it up; role docs'].map((t) => t), 'each phase in full');
+  assert.deepEqual(await page.locator('[data-sv-phasetext] pre').allTextContents(), ['- [x] A1: draw the page; role lead\n- [x] A2: test the page; role lead', '- [ ] B1: write it up; role docs'], 'each phase in full');
   await pv.evaluate((v) => { v.dataset.old = '1'; });
   await until(async () => (await page.locator('[data-sv-planview][data-old]').count()) === 0, 'the Sprint View never redrew', 12000);
   assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['true', true, false], 'the redraw closed the plan view');

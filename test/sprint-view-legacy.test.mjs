@@ -58,8 +58,8 @@ test('Sprint View plan view: items nest in their phase with their tick, then eac
   const it = (id, phase, ticked) => ({ id, text: id + ': thing', role: 'w1', ticked, review: null, phase });
   const html = statusHtml({ ...record, done: { merged: 0, ticked: 1, total: 3 },
     items: [it('Z1', null, false), it('A1', 0, true), it('A2', 0, false)],
-    phases: [{ title: 'Phase one', merged: 0, total: 2, text: '## Phase one\n- [x] A1 <b>x</b>\nCheck: it draws', truncated: true },
-      { title: 'Phase two', merged: 0, total: 0, text: '## Phase two', truncated: false }] }, esc);
+    phases: [{ title: 'Phase one', merged: 0, total: 2, text: '- [x] A1 <b>x</b>\nCheck: it draws', truncated: true },
+      { title: 'Phase two', merged: 0, total: 0, text: '', truncated: false }] }, esc);
   assert.match(html, /<button type="button" class="sv-phase" data-sv-phase data-sv-plan="[^"]+" aria-expanded="false"[^>]*>0 of 2 steps in Phase one, 0 of 2 phases<\/button>/);
   const view = html.slice(html.indexOf('<div data-sv-planview'));
   assert.ok(view.startsWith('<div data-sv-planview hidden>'), 'closed until the line is pressed');
@@ -70,7 +70,8 @@ test('Sprint View plan view: items nest in their phase with their tick, then eac
   assert.equal((view.match(/data-sv-item=/g) || []).length, 0, 'nested rows are not counted as the flat list\'s rows');
   // Then each phase's section in full, escaped, with the cut said where the server cut it.
   assert.equal((view.match(/data-sv-phasetext/g) || []).length, 2);
-  assert.ok(view.includes('<pre>## Phase one\n- [x] A1 &lt;b&gt;x&lt;/b&gt;\nCheck: it draws</pre><p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>'));
+  assert.ok(view.includes('<pre>- [x] A1 &lt;b&gt;x&lt;/b&gt;\nCheck: it draws</pre><p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>'));
   assert.equal((view.match(/Cut at 4000/g) || []).length, 1, 'only the cut phase says it');
+  assert.ok(view.includes('<h4>Phase two</h4><p class="hint">Nothing is written under this heading.</p>'), 'a heading with nothing under it says so');
   console.log('PASS Sprint View plan view: Phase one A1☑ A2☐, Phase two none, Outside Z1☐; two phase texts, escaped, one cut');
 });
