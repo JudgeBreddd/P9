@@ -430,8 +430,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const contextOf = (usage) => (Number.isFinite(usage?.used) && Number.isFinite(usage?.size) ? { used: usage.used, size: usage.size } : null);
   const emit = (conversation, type, data = {}) => {
     const kept = gauges.get(conversation);
-    if (kept && type === 'config' && data.model?.current) kept.model = data.model.current;
-    else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
+    if (kept && type === 'config') {
+      if (data.model?.current) kept.model = data.model.current;
+      const effort = data.pickers?.find?.((o) => o.category === 'thought_level');
+      if (effort) kept.effort = effort.current;
+    } else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
@@ -480,12 +483,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const gauge = (id) => {
     if (!gauges.has(id)) {
       const newest = (type, has) => { try { return JSON.parse(db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ? AND instr(data, ?) > 0${type === 'config' ? helperConfig : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type, has)?.data ?? 'null'); } catch { return null; } };
-      gauges.set(id, { model: newest('config', '"model"')?.model?.current ?? null, context: contextOf(newest('update', '"usage_update"')), fold: undefined });
+      const config = newest('config', '"model"');
+      gauges.set(id, { model: config?.model?.current ?? null, effort: config?.pickers?.find?.((o) => o.category === 'thought_level')?.current ?? null,
+        context: contextOf(newest('update', '"usage_update"')), fold: undefined });
     }
     // Row 716: spent is what the chat has used so far (its turns' tokens, its reported cost), topped up from the ledger on each read.
     const kept = gauges.get(id), { into, usage } = ledger.spent(id, kept.fold);
     kept.fold = into;
-    return { model: kept.model, context: kept.context, spent: usage };
+    return { model: kept.model, effort: kept.effort, context: kept.context, spent: usage };
   };
   // O48 (SECURITY.md "Provider profiles"): a Claude chat started on a profile keeps { id, name, model } in prefs under
   // profile:<chat>; the key stays in profiles.mjs. gone: the profile was removed, so the chat can be read, not continued.
