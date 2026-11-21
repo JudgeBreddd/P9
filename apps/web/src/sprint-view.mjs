@@ -38,7 +38,7 @@ globalThis.document?.addEventListener('click', e => {
 const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.sprint.id) ? '' : ' hidden'}><h3>Plan by phase</h3>
       ${[...s.phases.map((p, k) => [p.title, plan.filter(i => i.phase === k)]), ['Outside every phase', plan.filter(i => i.phase == null)]].filter(([t, is], k) => is.length || k < s.phases.length)
         .map(([t, is]) => `<h4>${esc(t)}</h4>${is.length ? `<ul class="sv-items">${is.map(i => row(i, 'data-sv-pitem')).join('')}</ul>` : '<p class="hint">No items in this phase.</p>'}`).join('')}
-      ${s.phases.map(p => p.text ? `<section class="sv-ptext" data-sv-phasetext><h4>${esc(p.title)}</h4><pre>${esc(p.text)}</pre>${p.truncated ? '<p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>' : ''}</section>` : '').join('')}</div>`;
+      ${s.phases.map(p => typeof p.text === 'string' ? `<section class="sv-ptext" data-sv-phasetext><h4>${esc(p.title)}</h4>${p.text ? `<pre>${esc(p.text)}</pre>` : '<p class="hint">Nothing is written under this heading.</p>'}${p.truncated ? '<p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>' : ''}</section>` : '').join('')}</div>`;
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
 // out() is called once the press is going out.
