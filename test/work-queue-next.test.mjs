@@ -19,7 +19,7 @@ const status = (reviews, queue = null) => {
     sprint: (c) => (c === c1 ? { reviews } : {}), ...(queue && { queue: (c) => (c === c1 ? queue : null) }),
     scriptLibrary: () => [], allowScripts: () => false, mergedNow: async () => undefined,
     sprintFiles: { exists: (c) => c === id, read: (c, name) => (name === 'sprint.md' ? plan : null), folderOf: () => '.', log: () => {} },
-    projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => null, prepOf: () => null, record: async () => null } };
+    projects: { started: () => ({ at: 1, by: 'owner', plan: null, scripts: [] }), closed: () => null, prepOf: () => null, record: async () => null, merge: () => true } };
   return createHooks({ chat, usage: () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true }).status(id, id);
 };
 const w1 = (got) => got.workers.find((w) => w.key === 'w1');
