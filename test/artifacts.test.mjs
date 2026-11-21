@@ -442,6 +442,23 @@ test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an
   assert.equal(await page.evaluate(id => localStorage.getItem('p9-chat-files:' + id), id), null);
 });
 
+// O222: a v2 diff no longer carries old text, so the created mark reads _meta.added (composer.mjs diffCreated). Main's rule
+// (no old text = created) would show the edited file as Created.
+test('O222: the Changes tab tells a v2 edited file from a created one, and shows its hunk', { timeout: 120000 }, async (t) => {
+  const { page, show, frame } = await chatDesktop(t, [['v2 diff', 'v2 edited']]);
+  const { button } = await show();
+  await button.click();
+  const items = page.locator('#side .cf-item'), tabs = page.locator('#side .cf-tabs [role=tab]');
+  await tabs.nth(1).click();
+  await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Created · proj' }).waitFor({ timeout: 8000 });
+  assert.deepEqual((await items.allTextContents()).sort(), ['Difffresh.mdCreated · proj', 'Diffkept.mdEdited · proj']);
+  await pick(items.filter({ hasText: 'kept.md' }));
+  await page.locator('#side .art-bar .art-title', { hasText: 'proj/kept.md' }).waitFor({ timeout: 8000 });
+  const f = await frame();
+  assert.deepEqual(await f.locator('.del').allTextContents(), ['- old line']);
+  assert.deepEqual(await f.locator('.add').allTextContents(), ['+ new line']);
+});
+
 test('artifacts: a chat\'s artifact is still listed after it compacts and the window reloads', { timeout: 120000 }, async (t) => {
   const { id, turn, page, shot, show, frame } = await chatDesktop(t, [[`Here:\n${F}markdown artifact Release notes\n# Shipped\n\nThe list works.\n${F}`, 'echo:Here']]);
   await show();
