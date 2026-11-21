@@ -682,11 +682,15 @@ const anchorOf = h => { const top = h.getBoundingClientRect().top;
 // O127 rest: more than TAIL new steps arriving while the reader sits up would slide the drawn window past their block, and
 // held() would find nothing to hold. The window grows to keep it drawn, and goes back to its size once the reader follows
 // the bottom again or never scrolled up (s.grown: the size before it grew). Show earlier while it is grown keeps the larger window: the user asked for it.
+// GROW_MAX: the grown window stops at 10 windows (about 2,000 steps), so a reader thousands of steps up in a chat that keeps
+// streaming does not redraw all of them on every batch, which is the cost TAIL exists to avoid (#390's weakest part).
+const GROW_MAX = TAIL * 10;
 const keepIn = (s, v) => {
   if (!s || !v) return;
   if (!v.up) { if (s.grown !== undefined) { s.tail = s.grown || undefined; delete s.grown; } return; }
   const list = v.anchor?.ev && s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), i = list ? list.indexOf(v.anchor.ev) : -1;
-  if (i >= 0 && list.length - i > (s.tail || TAIL)) { s.grown ??= s.tail || 0; s.tail = list.length - i; }
+  const want = Math.min(list.length - i, GROW_MAX); // no further: past it the reader falls back to the pixel restore
+  if (i >= 0 && want > (s.tail || TAIL)) { s.grown ??= s.tail || 0; s.tail = want; }
 };
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
   return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
