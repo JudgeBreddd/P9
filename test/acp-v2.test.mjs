@@ -113,3 +113,85 @@ test('the agent\'s sign-in notices stop at the translator', async () => {
   assert.equal(next.method, 'session/update', JSON.stringify(next));
   assert.equal(next.params.update.content.text, 'next');
 });
+
+// O121 part 3: codex-acp 2.6.0 streams a command's output to a v2 client as terminal_output_chunk pieces, and its exit
+// (terminal_update with exitStatus) carries no output when the output streamed. P9 shows the pieces joined, as the tool
+// call's text, live: the first piece at once, then at most once a second, and what is held at the exit, the tool call's
+// end or the turn's end. A terminal_update that carries output is the whole text (unstreamed output), as before.
+async function v2Pipe() {
+  const toAgent = new TransformStream(), fromAgent = new TransformStream();
+  const p9 = v1Stream({ readable: fromAgent.readable, writable: toAgent.writable });
+  const write = p9.writable.getWriter(), agent = fromAgent.writable.getWriter(), read = p9.readable.getReader(), asked = toAgent.readable.getReader();
+  await write.write({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 2, clientCapabilities: {} } });
+  await asked.read();
+  agent.write({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 2, info: { name: 'x' }, capabilities: {} } });
+  await read.read();
+  const said = [];
+  const send = (update) => agent.write({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update } });
+  // A marker message after each step: everything before it has come through.
+  let marks = 0;
+  const step = async (...updates) => {
+    for (const u of updates) send(u);
+    const mark = 'mark' + (marks += 1);
+    send({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: mark } });
+    for (;;) { const m = (await read.read()).value; if (m.params?.update?.content?.text === mark) return; said.push(m); }
+  };
+  const texts = (id) => said.filter((m) => m.params?.update?.sessionUpdate === 'tool_call_update' && m.params.update.toolCallId === id)
+    .flatMap((m) => m.params.update.content ?? []).filter((c) => c.type === 'content').map((c) => c.content.text);
+  return { step, said, texts, write, asked };
+}
+const b64 = (s) => Buffer.from(s).toString('base64');
+const run = (id) => [{ sessionUpdate: 'terminal_update', terminalId: id, command: 'make', cwd: '/w' },
+  { sessionUpdate: 'tool_call_update', toolCallId: id, kind: 'execute', title: 'make', status: 'in_progress', rawInput: { command: 'make' }, content: [{ type: 'terminal', terminalId: id }] }];
+const chunk = (id, s) => ({ sessionUpdate: 'terminal_output_chunk', terminalId: id, data: b64(s) });
+const exit = (id) => ({ sessionUpdate: 'terminal_update', terminalId: id, exitStatus: { exitCode: 0, signal: null } });
+
+test('O121 part 3: a Codex command\'s streamed output shows live and whole: first piece at once, the rest by its exit', async () => {
+  const p = await v2Pipe();
+  await p.step(...run('t1'), chunk('t1', 'one\n'));
+  assert.deepEqual(p.texts('t1'), ['one\n'], 'the first piece shows at once');
+  await p.step(chunk('t1', 'two\n'), chunk('t1', 'three\n'));
+  assert.deepEqual(p.texts('t1'), ['one\n'], 'pieces within a second are held, not one ledger row each');
+  await p.step(exit('t1'), { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' });
+  assert.deepEqual(p.texts('t1'), ['one\n', 'one\ntwo\nthree\n'], 'the exit shows all of it once');
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  await p.step(...run('t2'), chunk('t2', 'a\n'));
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  await p.step(chunk('t2', 'b\n'));
+  assert.deepEqual(p.texts('t2'), ['a\n', 'a\nb\n'], 'a piece a second after the last shown one shows at once');
+  console.log('PASS O121 part 3: streamed output live and whole');
+});
+
+test('O121 part 3: held output shows at the tool call\'s end or the turn\'s end when no exit comes; two commands stay apart', async () => {
+  const p = await v2Pipe();
+  await p.step(...run('t1'), ...run('t2'), chunk('t1', 'x1\n'), chunk('t2', 'y1\n'), chunk('t1', 'x2\n'), chunk('t2', 'y2\n'));
+  await p.step({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' });
+  assert.deepEqual(p.texts('t1'), ['x1\n', 'x1\nx2\n'], 'the tool call\'s end shows what was held, before its status');
+  const at = p.said.findIndex((m) => m.params?.update?.status === 'failed');
+  assert.equal(p.said[at - 1]?.params?.update?.content?.[0]?.content?.text, 'x1\nx2\n');
+  await p.write.write({ jsonrpc: '2.0', id: 2, method: 'session/prompt', params: { sessionId: 's', prompt: [] } });
+  await p.asked.read();
+  await p.step({ sessionUpdate: 'state_update', state: 'running' }, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled' });
+  assert.deepEqual(p.texts('t2'), ['y1\n', 'y1\ny2\n'], 'a cancelled turn\'s idle shows what was held');
+  const end = p.said.findIndex((m) => m.id === 2);
+  assert.ok(end > p.said.findLastIndex((m) => m.params?.update?.toolCallId === 't2'), 'before the turn\'s end');
+  await p.step(chunk('t2', 'late\n'));
+  assert.deepEqual(p.texts('t2'), ['y1\n', 'y1\ny2\n', 'late\n'], 'the idle forgot the old text: a later piece starts anew');
+  console.log('PASS O121 part 3: held output at tool end and turn end; commands apart');
+});
+
+test('O121 part 3: a character split across pieces stays whole; only the last 20,000 characters show (2,000 while it runs); a whole-text update replaces', async () => {
+  const p = await v2Pipe();
+  const bytes = Buffer.from('é✓\n');
+  await p.step(...run('t1'), { sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(0, 3).toString('base64') },
+    { sessionUpdate: 'terminal_output_chunk', terminalId: 't1', data: bytes.subarray(3).toString('base64') }, exit('t1'));
+  assert.equal(p.texts('t1').at(-1), 'é✓\n');
+  await p.step(...run('t2'), chunk('t2', 'z'.repeat(30000)), chunk('t2', '✓'.repeat(25000)), exit('t2'));
+  assert.equal(p.texts('t2').at(-1), '✓'.repeat(20000));
+  assert.equal(p.texts('t2')[0], 'z'.repeat(2000), 'while it runs, only the last 2,000 characters show');
+  await p.step(...run('t3'), chunk('t3', 'old\n'), { sessionUpdate: 'terminal_update', terminalId: 't3', output: { data: b64('whole\n') }, exitStatus: { exitCode: 1, signal: null } });
+  assert.deepEqual(p.texts('t3'), ['old\n', 'whole\n']);
+  await p.step(chunk('t9', 'never announced\n'), exit('t9'));
+  assert.deepEqual(p.texts('t9'), [], 'output of a terminal no tool call names is not shown, as before');
+  console.log('PASS O121 part 3: split character, 20,000 cap, whole-text replace');
+});

@@ -14,12 +14,14 @@
 //   diffs            a git patch                                    -> path/oldText/newText and its hunks, one per file
 //   permission       title + subject                                -> toolCall
 //   plan_update, notice                                             -> plan, a 'Warning: ' message chunk
-//   command output   terminal_update, base64, id = the tool call's   -> the tool call's text content (its last 20,000 chars)
+//   command output   terminal_update, base64, id = the tool call's;  -> the tool call's text content (its last 20,000 chars)
+//                    streamed as terminal_output_chunk pieces          (O121 part 3: the pieces joined, at most once a second)
 //   the prompt's echo, running/requires_action states, session_info_update with only _meta (Codex's thread status,
 //   about eight a turn), sign-in status: dropped. P9 writes the user's message itself, and the sign-in notices
 //   carry the account's email, which must not reach the ledger or a log.
 
-const DROPPED_UPDATES = new Set(['user_message', 'user_message_chunk', 'terminal_output_chunk']);
+const DROPPED_UPDATES = new Set(['user_message', 'user_message_chunk']);
+const OUTPUT_CHARS = 20000, OUTPUT_LIVE_CHARS = 2000, OUTPUT_EVERY_MS = 1000;
 const DROPPED_NOTIFICATIONS = new Set(['auth/status_update', '_auth/status_update']);
 
 const options = (list) => Array.isArray(list) ? list.map(({ configId, ...rest }) => (configId === undefined ? rest : { id: configId, ...rest })) : list;
@@ -63,6 +65,27 @@ export function v1Stream(stream) {
   const sent = new Map(); // request id -> what its reply needs: { prompt: sessionId } or { config: true }
   const turns = new Map(); // sessionId -> { id, live }: the held v1 prompt request; live once the agent took it
   const tools = new Set(); // sessionId + toolCallId already announced as a tool_call
+  // O121 part 3: each running command's output, by sessionId + terminalId (the tool call's id): { bytes, at, held }.
+  // codex-acp 2.6.0 streams it as pieces; each shown update writes a ledger row with the whole text, so a piece shows
+  // at once only a second after the last one shown, and what is held shows at the exit, the tool call's end or the
+  // turn's end. While it runs only the last 2,000 characters show (a command printing for an hour writes about 7 MB,
+  // not 70); the last update has up to 20,000. Bytes, not text, so a character split across two pieces stays whole.
+  // Forgotten at the exit and the idle.
+  const outputs = new Map();
+  const shown = (sessionId, terminalId, o, live) => {
+    let b = o.bytes.subarray(-OUTPUT_CHARS * 4), i = 0;
+    while (b.length > i && b.length === OUTPUT_CHARS * 4 && (b[i] & 0xc0) === 0x80) i += 1; // a cut character's tail
+    o.at = Date.now(); o.held = false;
+    return { jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: terminalId,
+      content: [{ type: 'content', content: { type: 'text', text: b.subarray(i).toString('utf8').slice(live ? -OUTPUT_LIVE_CHARS : -OUTPUT_CHARS) } }] } } };
+  };
+  // What is held of a session's commands (one tool call's when id is given), shown now; at the idle, forgotten too.
+  const flush = (sessionId, id, forget) => [...outputs].flatMap(([key, o]) => {
+    const [s, terminalId] = key.split('\n');
+    if (s !== sessionId || (id !== undefined && terminalId !== id)) return [];
+    if (forget) outputs.delete(key);
+    return o.held && tools.has(key) ? [shown(sessionId, terminalId, o)] : [];
+  });
 
   function toAgent(message) {
     if (message.method === 'initialize' && message.params?.protocolVersion >= 2) {
@@ -94,20 +117,33 @@ export function v1Stream(stream) {
       const turn = turns.get(sessionId);
       if (u.state === 'running') { if (turn) turn.live = true; return []; }
       // An idle with no prompt taken is not a turn's end: both agents send one after session/resume.
-      if (u.state !== 'idle' || !turn?.live) return [];
+      if (u.state !== 'idle') return [];
+      const held = flush(sessionId, undefined, true);
+      if (!turn?.live) return held;
       turns.delete(sessionId);
-      if (u.stopReason === 'error') return [{ jsonrpc: '2.0', id: turn.id, error: { code: u.error?.code ?? -32603, message: String(u.error?.message ?? 'The agent reported an error'), ...(u.error?.data !== undefined && { data: u.error.data }) } }];
-      return [{ jsonrpc: '2.0', id: turn.id, result: { stopReason: u.stopReason ?? 'end_turn', ...(u.usage && { usage: u.usage }), ...(u._meta && { _meta: u._meta }) } }];
+      if (u.stopReason === 'error') return [...held, { jsonrpc: '2.0', id: turn.id, error: { code: u.error?.code ?? -32603, message: String(u.error?.message ?? 'The agent reported an error'), ...(u.error?.data !== undefined && { data: u.error.data }) } }];
+      return [...held, { jsonrpc: '2.0', id: turn.id, result: { stopReason: u.stopReason ?? 'end_turn', ...(u.usage && { usage: u.usage }), ...(u._meta && { _meta: u._meta }) } }];
     }
     if (kind === 'session_info_update' && !Object.keys(u).some((k) => k !== 'sessionUpdate' && k !== '_meta')) return [];
-    if (kind === 'terminal_update') {
-      // Both agents use the tool call's id as the terminal's. The output is the whole text so far, not a piece.
-      if (typeof u.output?.data !== 'string' || !tools.has(sessionId + '\n' + u.terminalId)) return [];
-      const text = Buffer.from(u.output.data, 'base64').toString('utf8').slice(-20000);
-      return [{ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: u.terminalId, content: [{ type: 'content', content: { type: 'text', text } }] } } }];
+    if (kind === 'terminal_update' || kind === 'terminal_output_chunk') {
+      // Both agents use the tool call's id as the terminal's. A terminal_update's output is the whole text so far; a
+      // chunk is the next piece of it.
+      if (typeof u.terminalId !== 'string') return [];
+      const key = sessionId + '\n' + u.terminalId, data = kind === 'terminal_update' ? u.output?.data : u.data, end = kind === 'terminal_update' && u.exitStatus;
+      let o = outputs.get(key);
+      if (typeof data === 'string') {
+        if (!o) outputs.set(key, o = { bytes: Buffer.alloc(0), at: 0, held: false });
+        const piece = Buffer.from(data, 'base64');
+        o.bytes = (kind === 'terminal_update' ? piece : Buffer.concat([o.bytes, piece])).subarray(-OUTPUT_CHARS * 4);
+        o.held = true;
+      }
+      if (end) outputs.delete(key);
+      if (!o?.held || !tools.has(key) || (!end && Date.now() - o.at < OUTPUT_EVERY_MS)) return [];
+      return [shown(sessionId, u.terminalId, o, !end)];
     }
-    let next = u;
+    let next = u, before = [];
     if (kind === 'tool_call_update') {
+      if (u.status === 'completed' || u.status === 'failed') before = flush(sessionId, u.toolCallId, true);
       const key = sessionId + '\n' + u.toolCallId;
       next = tool(u);
       if (!tools.has(key)) { tools.add(key); next = { title: String(u.name ?? 'Tool'), status: 'pending', ...next, sessionUpdate: 'tool_call' }; }
@@ -118,7 +154,7 @@ export function v1Stream(stream) {
     else if (kind === 'agent_message' || kind === 'agent_thought') {
       return (u.content ?? []).map((block) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: kind + '_chunk', messageId: u.messageId, content: block } } }));
     }
-    return [{ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: next } }];
+    return [...before, { jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: next } }];
   }
 
   function toClient(message) {
