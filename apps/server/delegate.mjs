@@ -532,10 +532,17 @@ export function createDelegate({ chat, allowed, usage }) {
       // remade, so its row must name the agent it runs on: the mode ceiling below is read on the row's agent.
       const runs = lead && (lead.profile ? 'profile:' + lead.profile.id : lead.provider), row = roles.lead.profile ? 'profile:' + roles.lead.profile : roles.lead.provider;
       if (lead && runs !== row) return { error: 'role-refused', role: 'lead', field: 'provider', detail: `Role lead, provider: the lead's chat already runs on ${runs} and is kept as it is; its row names ${row}.` };
-      // A kept chat (the lead, or a worker whose key is a row's) is not put on its row's agent, model and effort: the question
-      // and the answer say what it runs.
-      const asRuns = (r, id) => { const c = id && chat.info(id); return c ? { ...r, provider: c.provider, profile: c.profile?.id ?? null, model: (c.profile ? c.profile.model : c.model) ?? r.model, effort: c.effort?.value ?? r.effort, kept: true } : r; };
-      const kept = lead && asRuns(roles.lead, sprint), keyed = (r) => chat.family().find((c) => c.parent === sprint && c.key === r.key)?.id;
+      // A kept chat (the lead, or a worker whose key is a row's and whose first message arrived) is not put on its row's
+      // agent, model and effort: the question and the answer say what it runs. With no live session that is its last
+      // recorded config (what carry sets it back to), else 'unknown'; never the row's values.
+      const asRuns = (r, id) => {
+        const c = id && chat.info(id);
+        if (!c) return r;
+        const was = c.model ? null : chat.lastPicks(id).config;
+        return { ...r, provider: c.provider, profile: c.profile?.id ?? null, model: (c.profile ? c.profile.model : c.model ?? was?.model?.current) ?? 'unknown',
+          effort: (c.effort?.value ?? was?.pickers?.find((p) => p?.category === 'thought_level')?.current) ?? null, kept: true };
+      };
+      const kept = lead && asRuns(roles.lead, sprint), keyed = (r) => chat.family().find((c) => c.parent === sprint && c.key === r.key && chat.delivered(c.id))?.id;
       // Modes, before any chat is made and again after the user's answer: from an agent's call the lead is never wider
       // than that chat (modeFor refuses a wider row); no chat under the lead is wider than the lead.
       const modes = () => {

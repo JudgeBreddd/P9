@@ -632,21 +632,24 @@ test('Sprint O207: Start (the press, or the lead\'s own start_sprint on the user
   assert.equal((await listed()).started ?? null, null, 'a refused press recorded a Start');
   // The press on the lead's own agent: the running chat is kept as the lead and w2 as its role (its row on another agent:
   // a kept worker is not remade, and is reported on the agent it runs on); nothing is made or sent.
-  fs.writeFileSync(path.join(folder, 'roles.json'), JSON.stringify({ roles: [row('lead'), row('w2', 'codex')] }));
+  fs.writeFileSync(path.join(folder, 'roles.json'), JSON.stringify({ roles: [row('lead'), row('w2', 'codex'), row('w1')] }));
+  // w1 is stopped (no live session): it is named on its last recorded config (the fake's model, effort medium), what it
+  // comes back on, not its row's haiku low.
   // The lead's own agent asks for it (start_sprint on its own sprint): the user is asked in that chat, the question naming
   // the lead as it runs; the yes adopts it.
   const pending = a.tool('start_sprint', { sprint: a.conversation });
   const q = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', a.cursor);
-  assert.match(q.hit.data.toolCall.title, /: lead \(claude [^,)]+(?: \S+)?, kept as it runs\), w2 \(claude [^,)]+(?: \S+)?, kept as it runs\)\. This is your approval/, q.hit.data.toolCall.title);
+  assert.match(q.hit.data.toolCall.title, /: lead \(claude [^,)]+(?: \S+)?, kept as it runs\), w2 \(claude [^,)]+(?: \S+)?, kept as it runs\), w1 \(claude [^,)]+(?: \S+)?, kept as it runs\)\. This is your approval/, q.hit.data.toolCall.title);
   assert.doesNotMatch(q.hit.data.toolCall.title, /lead \(claude haiku low/, 'the question named the row\'s model for the kept lead');
+  assert.doesNotMatch(q.hit.data.toolCall.title, /w1 \(claude (?:haiku|unknown)|w1 \(claude \S+ low/, 'the question named the stopped worker on its row');
   await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: q.hit.data.request, answer: { optionId: 'allow' } });
   const byLead = await pending;
   assert.equal(byLead.error, undefined, JSON.stringify(byLead));
-  assert.deepEqual([byLead.started.by, byLead.chats.map((c) => [c.key, c.chat, c.existing])], [a.conversation, [['lead', a.conversation, true], ['w2', w2, true]]]);
+  assert.deepEqual([byLead.started.by, byLead.chats.map((c) => [c.key, c.chat, c.existing])], [a.conversation, [['lead', a.conversation, true], ['w2', w2, true], ['w1', w1, true]]]);
   // The owner's press after it (Start again): the same chats, kept.
   const press = await call(instance, `/sprints/${a.conversation}/start`, 'POST', {});
   assert.equal(press.status, 200, JSON.stringify(press.body));
-  assert.deepEqual(press.body.chats.map((c) => [c.key, c.chat, c.existing]), [['lead', a.conversation, true], ['w2', w2, true]]);
+  assert.deepEqual(press.body.chats.map((c) => [c.key, c.chat, c.existing]), [['lead', a.conversation, true], ['w2', w2, true], ['w1', w1, true]]);
   // The kept lead is reported as it runs, not as its row (haiku low): its row's model and effort are not applied to it.
   const lead = (await a.tool('sprint_status', {})).workers.find((c) => c.chat === a.conversation);
   assert.ok(lead?.model && lead.model !== 'haiku', JSON.stringify(lead));
@@ -654,6 +657,7 @@ test('Sprint O207: Start (the press, or the lead\'s own start_sprint on the user
   const kw = (await a.tool('sprint_status', {})).workers.find((c) => c.chat === w2);
   assert.ok(kw?.model && kw.model !== 'haiku', JSON.stringify(kw));
   assert.deepEqual([press.body.chats[1].provider, press.body.chats[1].model], ['claude', kw.model], 'the kept worker was reported on its row, not as it runs');
+  assert.deepEqual([press.body.chats[2].model, press.body.chats[2].effort], [kw.model, 'medium'], 'the stopped kept worker was reported on its row, not on its last recorded config');
   assert.equal((await rows(instance)).length, n, 'adopting made a chat');
   assert.deepEqual([await asked(a.conversation), await asked(w2)], [sentLead, sentW2], 'an adopted chat was sent its work again');
   assert.equal((await listed()).started?.by, 'owner');
@@ -661,4 +665,39 @@ test('Sprint O207: Start (the press, or the lead\'s own start_sprint on the user
   const back = await a.tool('send_chat', { chat: w1, text: 'config' });
   assert.equal(back.error, undefined, 'the stopped worker was refused after Start: ' + JSON.stringify(back));
   assert.deepEqual((await rows(instance)).filter((r) => opened.slice(1).includes(r.id)).map((r) => r.state === 'stopped'), [false, false]);
+});
+
+// O207 FIX1: a role chat made by an earlier Start whose first message never reached its agent is sent again on its row
+// (model and effort), so the lead's start_sprint question names it on its row, not as a chat kept as it runs.
+test('Sprint O207 FIX1: the question names a role whose first message never arrived on its row, not as kept', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Undelivered', work: { kind: 'new', parent: '', name: 'undelivered' } })).body.project.id;
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance, project);
+  const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  // The sprint folder is made by the lead's first open_chat (a chat running before Start).
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 3, workers: [] });
+  assert.equal((await a.tool('open_chat', { text: 'config', title: 'w1', key: 'w1' })).error, undefined);
+  const folder = (await a.tool('sprint_status', {})).sprint?.folder;
+  assert.ok(folder && fs.existsSync(folder), 'the sprint folder: ' + folder);
+  fs.writeFileSync(path.join(folder, 'roles.json'), JSON.stringify({ roles: [row('lead'), row('review')] }));
+  let after = a.cursor;
+  const start = async () => {
+    const pending = a.tool('start_sprint', { sprint: a.conversation });
+    const q = await until(instance, (e) => e.conversation === a.conversation && e.type === 'approval', after);
+    after = q.cursor;
+    await call(instance, `/chat/${a.conversation}/answer`, 'POST', { request: q.hit.data.request, answer: { optionId: 'allow' } });
+    return { title: q.hit.data.toolCall.title, got: await pending };
+  };
+  // The review role is made, but its agent cannot start: its first message is not delivered.
+  fs.writeFileSync(path.join(instance.workspace, 'signed-out'), '');
+  const stuck = await start();
+  fs.rmSync(path.join(instance.workspace, 'signed-out'));
+  assert.equal(stuck.got.role, 'review', JSON.stringify(stuck.got));
+  const kid = (await rows(instance)).find((r) => r.parent === a.conversation && r.title === 'review');
+  assert.ok(kid, 'the role\'s chat was made before its agent failed to start');
+  const retry = await start();
+  assert.match(retry.title, /, review \(claude haiku low\)\. This is your approval/, 'the question named a role sent on its row as kept: ' + retry.title);
+  assert.equal(retry.got.error, undefined, JSON.stringify(retry.got));
+  assert.deepEqual(retry.got.chats.map((c) => [c.key, c.sent ?? false, c.model, c.effort]).at(-1), ['review', true, 'haiku', 'low']);
 });
