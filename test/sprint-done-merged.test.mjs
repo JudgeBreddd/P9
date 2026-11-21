@@ -88,7 +88,7 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   let st = await status();
   assert.equal(st.items.find((i) => i.id === 'A1').review.state, 'passed', JSON.stringify(st.items.find((i) => i.id === 'A1')));
   assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 3 }, JSON.stringify(st.done));
-  assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 0, total: 3 }, JSON.stringify(st.workers));
+  assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 0, total: 3, next: 'A2: the second thing. Role: w1' }, JSON.stringify(st.workers));
   const fetched = fs.statSync(fetchHead).mtimeMs;
   st = await status();
   assert.deepEqual(st.done, { merged: 0, ticked: 1, unproven: 0, total: 3 }, 'the second read within the window answered from the recorded evidence');
@@ -102,7 +102,7 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   st = await status();
   assert.equal(st.items.find((i) => i.id === 'A1').review.merged, true, JSON.stringify(st.items.find((i) => i.id === 'A1')));
   assert.deepEqual(st.done, { merged: 1, ticked: 1, unproven: 0, total: 3 }, JSON.stringify(st.done));
-  assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 1, total: 3 }, JSON.stringify(st.workers));
+  assert.deepEqual(st.workers.find((w) => w.key === 'w1').work, { done: 1, total: 3, next: 'A2: the second thing. Role: w1' }, JSON.stringify(st.workers));
   q = await queue();
   assert.deepEqual([q.done, q.total, q.items.find((i) => i.id === 'A1').merged], [1, 3, true], JSON.stringify(q));
   // The second item, passed by nobody, stays open; P9's own record holds the first between looks.

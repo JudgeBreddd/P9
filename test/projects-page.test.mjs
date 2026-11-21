@@ -1158,7 +1158,9 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.ok((await lead.textContent()).includes(`${w.model} · ${w.effort}`), await lead.textContent());
   assert.match(await lead.locator('[data-sv-state]').textContent(), /^(Working|Idle)$/);
   // The lead's own two items (A1, A2) are its ring, and the big ring is drawn at its size (a 15 px page icon rule once shrank it).
-  assert.deepEqual([w.work, await lead.locator('.sv-ring b').textContent(), await page.locator('.sv-ring.big svg').evaluate((el) => el.getBoundingClientRect().width)], [{ done: 0, total: 2 }, '0/2', 76]);
+  assert.deepEqual([w.work, await lead.locator('.sv-ring b').textContent(), await page.locator('.sv-ring.big svg').evaluate((el) => el.getBoundingClientRect().width)], [{ done: 0, total: 2, next: 'A1: draw the page; role lead' }, '0/2', 76]);
+  // Work Queue row: with no item taken, the row names the next one (the first neither passed nor merged).
+  assert.equal(await lead.locator('.sv-item').textContent(), 'Next: A1: draw the page; role lead');
   // The Setup parts are still below: the roles and the files.
   assert.deepEqual([await page.locator('[data-role-row]').count() > 0, await page.locator('[data-pj="spfile"]').count() > 0, (await page.locator('[data-pj="spstart"]').textContent()).trim()], [true, true, 'Start again']);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view ' + (await page.screenshot({ type: 'png' })).toString('base64'));
