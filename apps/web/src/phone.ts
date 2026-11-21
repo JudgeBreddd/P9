@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLine, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf } from './helpers.mjs';
+import { limitLine, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -330,7 +330,7 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
+type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
@@ -421,6 +421,7 @@ function foldBlocks(now: Folded, events: Json[]) {
           if (piece) tool.detail = ((tool.detail ?? '') + more).slice(-DETAIL_CAP);
           else if (Array.isArray(data.content)) tool.detail = more.slice(-DETAIL_CAP);
           if (data.content) tool.images = toolImages(data.content);
+          const exit = exitTag((data._meta as Json | undefined)?.['p9/exit']); if (exit) tool.exit = exit; // O220: a failed or killed command's exit
           // phone-2: Claude's plan call arrives empty and its plan comes in this update (ledger 409673-409674).
           if (tool.plan !== undefined) tool.plan = artPlan({ ...data, kind: 'switch_mode' }) ?? tool.plan;
         }
@@ -449,7 +450,7 @@ function foldBlocks(now: Folded, events: Json[]) {
   }
 }
 // P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
-const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
+const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span>${block.exit ? `<span class="exit">${escape(block.exit)}</span>` : ''}</summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
 // O73: a message another chat's agent sent names that chat (its title when it sent, else now, else "a deleted chat"; P9's
 // own notes say P9), as the desktop window does; the user's own messages have no heading.
 // The block keeps who sent it, not the heading: a title looked up now follows a rename or a deletion (itemsOf signs it).

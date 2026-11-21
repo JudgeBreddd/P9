@@ -16,6 +16,7 @@
 //   plan_update, notice                                             -> plan, a 'Warning: ' message chunk
 //   command output   terminal_update, base64, id = the tool call's;  -> the tool call's text content (its last 20,000 chars)
 //                    streamed as terminal_output_chunk pieces          (O219: each new piece once, marked _meta['p9/append'])
+//   its exit         exitStatus {exitCode, signal}                  -> O220: if not 0 or a signal, a tool_call_update with _meta['p9/exit']
 //   the prompt's echo, running/requires_action states, session_info_update with only _meta (Codex's thread status,
 //   about eight a turn), sign-in status: dropped. P9 writes the user's message itself, and the sign-in notices
 //   carry the account's email, which must not reach the ledger or a log.
@@ -76,6 +77,16 @@ export function v1Stream(stream) {
   // cut). The decoder keeps a character split across two pieces whole. A terminal_update's output is the whole text
   // (whole): it shows as a replacing update, unmarked. Forgotten at the exit, the tool call's end and the idle.
   const outputs = new Map();
+  // O220: a command that failed (exit code not 0) or was killed (signal) says so on its tool call: a tool_call_update with
+  // only _meta['p9/exit'] {exitCode, signal}, after the output its exit flushed. One that ends before its tool call is
+  // announced waits here (by sessionId + terminalId) for the announcement; the idle forgets it. Only a whole number and
+  // a string of at most 32 characters are passed on (the window and phone check again, exitTag in helpers.mjs).
+  const exits = new Map();
+  const failure = (x) => {
+    const exitCode = Number.isSafeInteger(x?.exitCode) ? x.exitCode : null, signal = typeof x?.signal === 'string' && x.signal ? x.signal.slice(0, 32) : null;
+    return exitCode || signal ? { exitCode, signal } : null;
+  };
+  const exitRow = (sessionId, toolCallId, exit) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId, _meta: { 'p9/exit': exit } } } });
   let emit = () => {}; // sends a message to P9 between the agent's messages (the held output's timer)
   const forget = (key, o) => { clearTimeout(o.timer); outputs.delete(key); };
   const pending = (o) => { o.held = o.text !== '' || o.skipped || o.whole !== null; };
@@ -129,6 +140,7 @@ export function v1Stream(stream) {
       // An idle with no prompt taken is not a turn's end: both agents send one after session/resume.
       if (u.state !== 'idle') return [];
       const held = flush(sessionId, undefined, true);
+      for (const key of exits.keys()) if (key.startsWith(sessionId + '\n')) exits.delete(key);
       if (!turn?.live) return held;
       turns.delete(sessionId);
       if (u.stopReason === 'error') return [...held, { jsonrpc: '2.0', id: turn.id, error: { code: u.error?.code ?? -32603, message: String(u.error?.message ?? 'The agent reported an error'), ...(u.error?.data !== undefined && { data: u.error.data }) } }];
@@ -152,9 +164,11 @@ export function v1Stream(stream) {
         pending(o);
       }
       if (end && o) ended(key, o);
-      if (!o?.held || !tools.has(key)) return [];
+      const failed = end && failure(u.exitStatus), told = failed && tools.has(key) ? [exitRow(sessionId, u.terminalId, failed)] : [];
+      if (failed && !told.length) exits.set(key, failed);
+      if (!o?.held || !tools.has(key)) return told;
       const wait = OUTPUT_EVERY_MS - (Date.now() - o.at);
-      if (end || wait <= 0) return [shown(sessionId, u.terminalId, o)];
+      if (end || wait <= 0) return [shown(sessionId, u.terminalId, o), ...told];
       o.timer ??= setTimeout(() => { if (outputs.get(key) === o && o.held) emit(shown(sessionId, u.terminalId, o)); }, wait);
       o.timer.unref?.();
       return [];
@@ -164,7 +178,8 @@ export function v1Stream(stream) {
       const key = sessionId + '\n' + u.toolCallId, end = u.status === 'completed' || u.status === 'failed';
       next = tool(u);
       // Output that came before its tool call was announced shows right after the announcement.
-      if (!tools.has(key)) { tools.add(key); next = { title: String(u.name ?? 'Tool'), status: 'pending', ...next, sessionUpdate: 'tool_call' }; after = flush(sessionId, u.toolCallId, end); }
+      if (!tools.has(key)) { tools.add(key); next = { title: String(u.name ?? 'Tool'), status: 'pending', ...next, sessionUpdate: 'tool_call' }; after = flush(sessionId, u.toolCallId, end);
+        const exit = exits.get(key); if (exit) { exits.delete(key); after.push(exitRow(sessionId, u.toolCallId, exit)); } }
       else if (end) before = flush(sessionId, u.toolCallId, true);
     } else if (kind === 'tool_call_content_chunk') next = { sessionUpdate: 'tool_call_update', toolCallId: u.toolCallId, content: content([u.content]) };
     else if (kind === 'config_option_update') next = withOptions(u);
