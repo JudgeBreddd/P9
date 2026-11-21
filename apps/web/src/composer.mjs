@@ -47,3 +47,16 @@ export const lineDiff = (a, b) => {
   const near = k => out.slice(Math.max(0, k - 3), k + 4).some(r => r[0] !== 'ctx');
   return out.flatMap((r, k) => r[0] !== 'ctx' || near(k) ? [r] : k > 0 && near(k - 1) ? [['ctx', '⋯']] : []);
 };
+export const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
+// O121 part 2: an edit's diff rows, up to max. A diff with _meta.hunks (a Codex git patch, acp-v2.mjs diffs) shows each hunk under
+// an "@@ -old +new @@" line, and each file under its path when the edit wrote more than one; a v1 diff (no hunks) is the
+// line diff of its old and new text, as before.
+// _meta is open to any agent's extensions: only ['ctx'|'add'|'del', text] rows reach the renderer, any other entry is dropped.
+// A hunk's start line is a whole number from 0 up, else 0; never coerced (an object whose toString is null throws).
+const line = v => (Number.isInteger(v) && v >= 0 ? v : 0);
+const okRow = r => Array.isArray(r) && (r[0] === 'ctx' || r[0] === 'add' || r[0] === 'del') && typeof r[1] === 'string';
+export const diffRows = (content, max) => {
+  const list = (content || []).filter(c => c?.type === 'diff'), many = list.some(c => c._meta?.hunks) && new Set(list.map(c => c.path)).size > 1;
+  return list.flatMap(c => [...(many ? [['file', typeof c.path === 'string' ? c.path : '']] : []), ...(Array.isArray(c._meta?.hunks)
+    ? c._meta.hunks.filter(h => Array.isArray(h?.rows)).flatMap(h => [['hunk', `@@ -${line(h.old)} +${line(h.new)} @@`], ...h.rows.filter(okRow)]) : lineDiff(textLines(c.oldText), textLines(c.newText)))]).slice(0, max);
+};

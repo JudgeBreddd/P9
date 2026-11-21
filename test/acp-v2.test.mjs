@@ -44,7 +44,7 @@ test('an agent that answers ACP 2 reaches the ledger in ACP 1 shapes: turn end, 
   assert.ok(says(seen).includes('permission:allow_once'));
   // v2 has only tool_call_update: the first per tool call must arrive as tool_call, which every reader keys on.
   assert.deepEqual(updates(seen, 'tool_call').map((data) => data.toolCallId), ['exec-1', 'exec-2']);
-  assert.deepEqual(updates(seen, 'tool_call')[0].content, [{ type: 'diff', path: '/w/notes.md', oldText: 'one\ntwo', newText: 'one\nthree' }]);
+  assert.deepEqual(updates(seen, 'tool_call')[0].content, [{ type: 'diff', path: '/w/notes.md', oldText: 'one\ntwo', newText: 'one\nthree', _meta: { hunks: [{ old: 1, new: 1, rows: [['ctx', 'one'], ['del', 'two'], ['add', 'three']] }] } }]);
   const output = updates(seen, 'tool_call_update').filter((data) => data.toolCallId === 'exec-2').flatMap((data) => data.content ?? []);
   assert.deepEqual(output, [{ type: 'content', content: { type: 'text', text: 'one\nthree\n' } }]);
   assert.deepEqual(updates(seen, 'plan')[0]?.entries.map((entry) => entry.content), ['Check the file']);
@@ -92,7 +92,7 @@ test('fallback: an agent that answers ACP 1, or refuses the v2 ask, runs on ACP 
 
 test('a git patch becomes one v1 diff per file; a new file has no old text', () => {
   const patch = 'diff --git /a.md /a.md\nnew file mode 100644\n--- /dev/null\n+++ /a.md\n@@ -0,0 +1,2 @@\n+one\n+two\ndiff --git /b.md /b.md\n--- /b.md\n+++ /b.md\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n';
-  assert.deepEqual(diffs({ patch: { text: patch } }), [{ type: 'diff', path: '/a.md', oldText: null, newText: 'one\ntwo' }, { type: 'diff', path: '/b.md', oldText: 'one\ntwo', newText: 'one\nthree' }]);
+  assert.deepEqual(diffs({ patch: { text: patch } }).map(({ _meta, ...d }) => d), [{ type: 'diff', path: '/a.md', oldText: null, newText: 'one\ntwo' }, { type: 'diff', path: '/b.md', oldText: 'one\ntwo', newText: 'one\nthree' }]);
   assert.deepEqual(diffs({ patch: {} }), []);
 });
 

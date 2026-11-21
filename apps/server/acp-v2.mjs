@@ -11,7 +11,7 @@
 //                    ends with a state_update 'idle'                   its stopReason and usage
 //   MCP servers      each names its transport type                  -> 'stdio' added where v1 leaves it off
 //   tool calls       only tool_call_update; the first one creates   -> the first one per id becomes tool_call
-//   diffs            a git patch                                    -> path/oldText/newText, one per file
+//   diffs            a git patch                                    -> path/oldText/newText and its hunks, one per file
 //   permission       title + subject                                -> toolCall
 //   plan_update, notice                                             -> plan, a 'Warning: ' message chunk
 //   command output   terminal_update, base64, id = the tool call's   -> the tool call's text content (its last 20,000 chars)
@@ -27,21 +27,32 @@ const withOptions = (value) => (value && Array.isArray(value.configOptions) ? { 
 
 // One v1 diff per file in a git patch. v1 diffs hold text, not hunks: old is the patch's context and removed lines,
 // new its context and added lines, which is what the v1 adapters sent for an edit (the changed part, not the file).
+// O121 part 2: each file also keeps its hunks in _meta.hunks (the SDK drops a diff's other unknown fields; { old, new, rows }: start lines and ['ctx'|'add'|'del', text] rows), so the
+// chat shows each hunk with its line numbers. A hunk's lines are counted from its @@ header, so a removed line that reads
+// "-- x" or an added "++ x" is content, never a ---/+++ file line.
 export function diffs(item) {
   const text = item?.patch?.text;
   if (typeof text !== 'string') return [];
   const out = [];
-  let file;
+  let file, hunk, left = 0, right = 0;
   for (const line of text.split('\n')) {
-    if (line.startsWith('diff --git ')) { out.push(file = { type: 'diff', path: '', old: [], new: [], added: false }); continue; }
+    if (hunk && (left > 0 || right > 0)) {
+      const sign = line[0], body = line.slice(1);
+      if (sign === '+' && right > 0) { hunk.rows.push(['add', body]); right -= 1; continue; }
+      if (sign === '-' && left > 0) { hunk.rows.push(['del', body]); left -= 1; continue; }
+      if ((sign === ' ' || line === '') && left > 0 && right > 0) { hunk.rows.push(['ctx', body]); left -= 1; right -= 1; continue; }
+    }
+    if (line.startsWith('\\')) continue; // "\ No newline at end of file"
+    if (line.startsWith('diff --git ')) { out.push(file = { path: '', added: false, hunks: [] }); hunk = null; continue; }
     if (!file) continue;
-    if (line.startsWith('--- ')) { if (line.slice(4) === '/dev/null') file.added = true; else file.path = line.slice(4); }
+    const at = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (at) { file.hunks.push(hunk = { old: +at[1], new: +at[3], rows: [] }); left = at[2] === undefined ? 1 : +at[2]; right = at[4] === undefined ? 1 : +at[4]; }
+    else if (line.startsWith('--- ')) { if (line.slice(4) === '/dev/null') file.added = true; else file.path = line.slice(4); }
     else if (line.startsWith('+++ ')) { if (line.slice(4) !== '/dev/null') file.path = line.slice(4); }
-    else if (line.startsWith('+')) file.new.push(line.slice(1));
-    else if (line.startsWith('-')) file.old.push(line.slice(1));
-    else if (line.startsWith(' ')) { file.old.push(line.slice(1)); file.new.push(line.slice(1)); }
+    else if (line.startsWith('rename to ')) file.path = line.slice(10);
   }
-  return out.filter((f) => f.path).map((f) => ({ type: 'diff', path: f.path, oldText: f.added ? null : f.old.join('\n'), newText: f.new.join('\n') }));
+  const side = (f, drop) => f.hunks.flatMap((h) => h.rows.filter((r) => r[0] !== drop).map((r) => r[1])).join('\n');
+  return out.filter((f) => f.path).map((f) => ({ type: 'diff', path: f.path, oldText: f.added ? null : side(f, 'add'), newText: side(f, 'del'), _meta: { hunks: f.hunks } }));
 }
 const content = (list) => Array.isArray(list) ? list.flatMap((item) => (item?.type === 'diff' && item.patch ? diffs(item) : [item])) : list;
 const tool = (call) => (call && Array.isArray(call.content) ? { ...call, content: content(call.content) } : call);
