@@ -1198,7 +1198,9 @@ You prepare a sprint before any of its chats exists, then one press starts it. W
   the lead as it is (no new chat, nothing sent to it again), a worker under it whose key is a row's is kept as that
   role, and the rest of its workers are left as they are. Its `lead` row must name the agent the chat runs on, or the
   press is refused by role and field before anything is recorded. A kept chat (the lead, or a kept worker) is not put
-  on its row's agent, model or effort, so the question you answer and the press's answer name what it runs. From then
+  on its row's agent, model or effort, so the question you answer and the press's answer name what it runs: a stopped
+  one, the model and effort it last recorded (what it comes back on), or `unknown` when it recorded none, never its
+  row's. A role chat whose first message never arrived is sent on its row (below), so it is named on its row. From then
   on the sprint's limits apply to it.
 - **Checked before anything is made.** Every row is checked first: a known key used once, a `lead` row, an agent P9 can
   start, a model that agent (or that profile) lists, an effort it lists (empty when it has none), a mode it has, and no
