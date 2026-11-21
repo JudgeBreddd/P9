@@ -1241,6 +1241,7 @@ test('Settings > Notices (O197 gaps): a failed or hung first read says so and of
         if (how === 'throw') throw new Error('test-thrown');
         const answer = await real(event, action, payload); // a hung read is read now and answered late, so it is old by then
         if (how === 'hang') await new Promise((resolve) => globalThis.readHolds.push(resolve));
+        if (how === 'hang-refuse') { await new Promise((resolve) => globalThis.readHolds.push(resolve)); return { status: 500, body: { error: 'test-refused' } }; }
         return answer;
       }
       return real(event, action, payload);
@@ -1292,6 +1293,18 @@ test('Settings > Notices (O197 gaps): a failed or hung first read says so and of
   assert.equal(await page.locator('#setNotices [data-notice-failed], #setNotices [data-notice-retry]').count(), 0, 'a read that failed while Settings was closed showed at the next open');
   await app.evaluate(() => { globalThis.readHolds.forEach((r) => r()); globalThis.readHolds = []; });
   console.log('PASS O197 gap c: failed while closed');
+  // An older read failing late does not mark a newer open failed: read A held, close, reopen as B (held too),
+  // A answers refused while B is out: B still says Reading from P9, then fills the rows when it answers.
+  await close(); await page.reload(); await page.locator('#rChat').waitFor();
+  await app.evaluate(() => { globalThis.readHolds = []; });
+  await reads(['hang-refuse', 'hang']); await open(); await close(); await open();
+  for (let i = 0; i < 50 && await app.evaluate(() => globalThis.readHolds.length) < 2; i++) await page.waitForTimeout(100);
+  assert.equal(await app.evaluate(() => globalThis.readHolds.length), 2, 'both reads should be held');
+  await app.evaluate(() => { globalThis.readHolds.shift()(); }); await page.waitForTimeout(500);
+  assert.equal(await page.locator('#setNotices [data-notice-failed]').count(), 0, 'an older read failing marked the newer open failed');
+  assert.equal(await page.locator('#setNotices [data-notice-wait]').count(), 1, 'the newer open stopped saying Reading from P9');
+  await app.evaluate(() => { globalThis.readHolds.shift()(); }); await usable();
+  console.log('PASS O197 gap c: older read fails late');
   await close(); await page.reload(); await page.locator('#rChat').waitFor();
   // A read that never answers says it failed after a while; Try again works; the late answer of the first read changes nothing.
   await reads(['hang']); await open();
