@@ -226,4 +226,34 @@ test('O210: the phone shows a project\'s sprints, and Ask to start / close types
   assert.equal((await call(server, '/chat/' + asker + '/prompt', { text: 'perm-json ' + JSON.stringify({ title: 'Start it. Scripts, one per line:\na (after-close): node a.mjs\nb (after-close): node b.mjs' }) })).status, 202);
   await page.waitForSelector('#events .msg.ask.open', { timeout: 15000 });
   assert.equal(await page.locator('#events .msg.ask.open > div').first().innerText(), 'Start it. Scripts, one per line:\na (after-close): node a.mjs\nb (after-close): node b.mjs');
+
+  // O210 fix1 (Reviewer on #402): a reply for a sheet no longer open is dropped. Empty's GET is held; the sheet is closed
+  // and Site's opened and drawn; Empty's reply then arrives and must not replace Site's rows, or Ask would go to Empty.
+  let release; const held = new Promise((r) => { release = r; });
+  const hold = async (route) => { await held; return route.fulfill({ json: await call(server, '/projects/' + empty) }); };
+  const arrived = () => page.waitForResponse((r) => r.url().endsWith('/projects/' + empty));
+  const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 200)))); // ponytail: the dropped reply's parse and draw are a few microtasks after its response
+  const closeSheet = () => page.evaluate(() => document.querySelector('#sheet').close());
+  await page.route('**/projects/' + empty, hold);
+  await page.click('[data-bar="chat"] [data-back]');
+  await page.click(`#chatList [data-project="${empty}"]`);
+  await closeSheet();
+  await page.click(`#chatList [data-project="${site}"]`);
+  await until(async () => (await rows()).length === 1, 'Site\'s row while Empty\'s reply is held');
+  let late = arrived(); release(); await late; await settle();
+  assert.deepEqual([await page.locator('#sheetTitle').textContent(), await rows()], ['Site', [['S2', 'Prepared, not started', 'Ask to start']]], 'a late reply for Empty replaced Site\'s sheet');
+  await page.click('#sheet[open] [data-sprint-ask="start"]');
+  await shown(asker); // Site's newest chat that is no sprint's (Empty's would be `made`)
+  // The same with a failing reply, while another sheet is open: that sheet stays as it is.
+  release = null; const held2 = new Promise((r) => { release = r; });
+  await page.unroute('**/projects/' + empty, hold);
+  const hold2 = async (route) => { await held2; return route.fulfill({ status: 500, json: { error: 'held' } }); };
+  await page.route('**/projects/' + empty, hold2);
+  await page.click('[data-bar="chat"] [data-back]');
+  await page.click(`#chatList [data-project="${empty}"]`);
+  await closeSheet();
+  await page.evaluate(() => dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Other', html: '<p id="otherSheet">another picker</p>' } })));
+  late = arrived(); release(); await late; await settle();
+  assert.deepEqual(await page.evaluate(() => [document.querySelector('#sheetTitle').textContent, document.querySelector('#sheetBody').innerHTML]), ['Other', '<p id="otherSheet">another picker</p>'], 'a late failure for Empty replaced another sheet');
+  await page.unroute('**/projects/' + empty, hold2);
 });

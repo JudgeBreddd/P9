@@ -84,9 +84,11 @@ one('main').addEventListener('scroll', (event) => { const box = event.target as 
 const sheet = one<HTMLDialogElement>('#sheet');
 let artSending: string | null = null, artEntries: string[][] = []; // item 19 (the artifact functions at the end of this file)
 // K10: the Mode sheet borrows #more; a sheet opened over it would wipe them with its HTML, so they go home first.
-function openSheet(title: string, html: string) { const more = one('#more'); if (!one('#modeHome').contains(more)) one('#modeHome').append(more); one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
+// O210 fix1: every open and close of the sheet is a new generation; a late reply for an older one (openProject) is dropped.
+let sheetGen = 0;
+function openSheet(title: string, html: string) { sheetGen++; const more = one('#more'); if (!one('#modeHome').contains(more)) one('#modeHome').append(more); one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
 sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
-sheet.addEventListener('close', () => sheet.classList.remove('full')); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
+sheet.addEventListener('close', () => { sheetGen++; sheet.classList.remove('full'); }); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
 addEventListener('p9-sheet', (event) => { const { title, html, full } = (event as CustomEvent).detail; sheet.classList.toggle('full', full === true); openSheet(String(title), String(html)); }); // ponytail: the one door into the sheet for code outside this file and for its test; callers pass trusted HTML
 // The app is a column the size of the visible viewport: when a keyboard opens, visualViewport shrinks (iOS Safari leaves
 // the layout viewport alone and offsets the visual one), the column follows it, and the composer rides the keyboard. The
@@ -835,9 +837,11 @@ let projectOpen: { id: string; sprints: Json[] } | null = null;
 async function openProject(id: string) {
   projectOpen = null;
   openSheet(projectName(id) || 'Project', '<p class="empty">Loading…</p>');
+  const gen = sheetGen;
   let sprints: Json[];
   try { sprints = (((await request('/projects/' + encodeURIComponent(id))).project as Json)?.sprints ?? []) as Json[]; }
-  catch { one('#sheetBody').innerHTML = '<p class="empty">This project could not be read.</p>'; return; }
+  catch { if (gen === sheetGen) one('#sheetBody').innerHTML = '<p class="empty">This project could not be read.</p>'; return; }
+  if (gen !== sheetGen) return; // the sheet was closed or opened for something else meanwhile
   projectOpen = { id, sprints };
   const said = (s: Json) => s.closed ? 'Closed ' + clock((s.closed as Json).at) : s.prep || !s.started ? 'Prepared, not started' : (s.paused ? 'Paused · ' : '') + 'Started ' + clock(s.started);
   one('#sheetBody').innerHTML = sprints.length ? '<h3 class="sheet-h">Sprints</h3>' + sprints.map((s) => { const ask = sprintAsk(s);
