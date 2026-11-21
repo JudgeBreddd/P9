@@ -160,9 +160,12 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // The data contract, version 1 (SECURITY.md § Sprint scripts, "What a script is told"). Every field is always there;
   // one P9 has nothing for is null or empty, never missing. Nothing here is more than the project page and list_chats
   // show for this sprint: no key, no provider profile's address, no chat text.
+  // https://user:token@host/o/r -> https://host/o/r; git@host:o/r -> host:o/r. Only the authority's user part goes.
+  const bare = (address) => address.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/^[^:/@]+@(?=[^:/]+:)/, '');
   async function state(sprint, point, subject) {
     const family = chat.family(), lead = family.find((c) => c.id === sprint), prep = chat.projects.prepOf(sprint), start = chat.projects.started(sprint);
     const projectId = lead?.project ?? prep?.project ?? null, project = projectId ? await chat.projects.record(projectId) : null;
+    const source = projectId ? (await chat.projects.sprintSet?.(projectId))?.source || null : null;
     const listed = new Map(chat.list().map((c) => [c.id, c]));
     const chats = [...(lead ? [lead] : []), ...family.filter((c) => c.parent === sprint)];
     const workers = [], verdicts = [];
@@ -184,7 +187,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       contract: 1, point, blocking: false, script: { name: '' }, at: new Date().toISOString(),
       sprint: { id: sprint, title: lead?.title ?? prep?.title ?? null, folder: chat.sprintFiles.folderOf(sprint),
         started: start ? { at: iso(start.at), by: start.by, plan: start.plan } : null },
-      project: projectId ? { id: projectId, name: project?.name ?? null } : null,
+      // O211: the project's Clone from, so a script finds its repository; any user name and password are taken out first.
+      project: projectId ? { id: projectId, name: project?.name ?? null, source: source && bare(source) } : null,
       phase: null, // reserved: the plan has items only
       roles: rows.map((r) => ({ key: r.key, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model ?? null, effort: r.effort ?? null, mode: r.mode ?? null, owns: r.owns ?? null })),
       items: planItems(chat.sprintFiles.read(sprint, 'sprint.md')).map((i) => { const v = verdicts.find((r) => r.item === i.id);

@@ -208,7 +208,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.deepEqual([bs.contract, bs.blocking, bs.script, bs.subject, bs.phase, bs.pr], [1, true, { name: 'check' }, null, null, null]);
   assert.deepEqual(bs.sprint, { id: sprint, title: 'Scripts', folder: s.folder, started: null });
   assert.equal(bs.cwd, fs.realpathSync(s.folder), 'a script runs in the sprint folder');
-  assert.deepEqual(bs.project, { id: project, name: 'Fresh' });
+  assert.deepEqual(bs.project, { id: project, name: 'Fresh', source: null }, 'O211: a project with no Clone from gives source null');
   assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null, owns: null }]);
   assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, review: null }]);
   assert.deepEqual([bs.workers, bs.verdicts], [[], []]);
@@ -340,11 +340,15 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => { fs.ap
 
   // The owner starts B naming the file: the script is approved and runs at sprint-start, in B's folder with B's state.
   const shown = (await B.page()).files.find((f) => f.name === 'hooks.json');
+  // O211: B's Clone from carries a password; the script is told the address without it.
+  assert.equal((await call(instance, `/projects/${B.project}/sprint-settings`, 'POST', { source: 'ssh://git:hunter2@example.com/o/r.git', setup: '' })).status, 200);
   const start = await call(instance, `/sprints/${B.sprint}/start`, 'POST', { hooks: shown.hash });
   assert.equal(start.status, 200, JSON.stringify(start.body));
   assert.deepEqual((await B.page()).started.scripts, [kept]);
   const ss = await eventually(() => out().find((r) => r.point === 'sprint-start'), 'sprint-start never ran in B');
   assert.deepEqual([ss.sprint.id, ss.project.name, ss.cwd, ss.script, ss.subject], [B.sprint, 'Beta', fs.realpathSync(B.folder), { name: 'notify' }, null]);
+  assert.equal(ss.project.source, 'ssh://example.com/o/r.git', 'O211: the Clone from reached the script with its user and password');
+  assert.ok(!JSON.stringify(ss).includes('hunter2'), 'O211: the Clone from password is somewhere in a script\'s state');
 
   // The library changed and emptied afterwards: B's file, B's approved copy and what runs there stay as they were.
   got = await A.tool('sprint_script_save', { name: 'notify', command: bad, point: 'sprint-start', library: true });
@@ -1142,6 +1146,7 @@ test('Sprint scripts every live: the daemon\'s own timer runs the row, each run 
 function pointRig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-points-')), prog = path.join(dir, 'point.mjs'), ranFile = path.join(dir, 'ran.txt');
   fs.writeFileSync(prog, `import fs from 'node:fs'; import path from 'node:path'; const j = JSON.parse(fs.readFileSync(0, 'utf8')), d = ${JSON.stringify(dir)};
+fs.writeFileSync(path.join(d, 'project-' + j.point + '.json'), JSON.stringify(j.project));
 fs.appendFileSync(path.join(d, 'ran.txt'), j.point + ' ' + JSON.stringify(j.subject) + '\\n');
 while (fs.existsSync(path.join(d, 'hold-' + j.point))) await new Promise((r) => setTimeout(r, 20));
 fs.appendFileSync(path.join(d, 'ran.txt'), 'end ' + j.point + '\\n');
@@ -1149,11 +1154,11 @@ if (fs.existsSync(path.join(d, 'refuse-' + j.point))) { console.log('no: ' + j.p
   const cmd = `${process.execPath} ${prog}`;
   const scripts = ['before-merge', 'ci-red', 'gate-passed', 'pause', 'resume'].map((point) => ({ name: 'at ' + point, command: cmd, point, blocking: point === 'before-merge' }));
   const r = { dir, lock: false, closed: false, closing: false, gone: false, startAt: 0, stateHold: null, started: true, scripts, logs: [] };
-  const chat = { lock: () => ({ on: r.lock }), info: (c) => (c === EA ? { title: 'S', provider: 'fake' } : c === EB ? { title: 'W', provider: 'fake', parent: EA } : null), family: () => (r.gone ? [] : [{ id: EA }]), list: () => [],
+  const chat = { lock: () => ({ on: r.lock }), info: (c) => (c === EA ? { title: 'S', provider: 'fake' } : c === EB ? { title: 'W', provider: 'fake', parent: EA } : null), family: () => (r.gone ? [] : [{ id: EA, ...(r.source !== undefined && { project: 'P1' }) }]), list: () => [],
     sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
     socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
     sprintFiles: { exists: (c) => c === EA, read: () => null, folderOf: () => dir, log: (c, line) => r.logs.push(line) },
-    projects: { started: () => (r.started ? { at: r.startAt, by: 'owner', plan: null, scripts: r.scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
+    projects: { started: () => (r.started ? { at: r.startAt, by: 'owner', plan: null, scripts: r.scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null, sprintSet: async () => ({ source: r.source, setup: '' }) } };
   r.chat = chat; // usage is read inside the state every run gets, so stateHold holds a run between its rows and its start
   r.hooks = createHooks({ chat, usage: async () => r.stateHold, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, ticking: false });
   r.ran = () => (fs.existsSync(ranFile) ? fs.readFileSync(ranFile, 'utf8').split('\n').filter(Boolean) : []);
@@ -1175,6 +1180,20 @@ test('Sprint scripts O202: every point is fired; sprint_event runs a reported po
   await eventually(() => r.ran().includes('ci-red {"run":"987654","by":"lead"}') && r.ran().includes('gate-passed {"gate":"gate 3","by":"lead"}'), 'the notices ran with their subject');
   assert.ok(r.logs.some((l) => / \| ci-red \| at ci-red \| exit 0 \| /.test(l)), 'the run is a line in hooks.log');
   console.log('PASS O202: FIRED is every point; before-merge allowed then refused by name (exit 4); ci-red and gate-passed ran with their subject and were logged');
+});
+
+test('Sprint scripts O211: a ci-red script is told the project\'s Clone from as project.source, without any user or password, and null when unset', { timeout: 60000 }, async () => {
+  const r = pointRig(), told = async (source) => {
+    r.source = source; fs.rmSync(path.join(r.dir, 'project-ci-red.json'), { force: true });
+    assert.deepEqual(await r.hooks.event(EA, { point: 'ci-red', subject: { run: '123456' } }), { point: 'ci-red', scripts: 1 });
+    return (await eventually(() => fs.existsSync(path.join(r.dir, 'project-ci-red.json')) && JSON.parse(fs.readFileSync(path.join(r.dir, 'project-ci-red.json'), 'utf8')), 'ci-red did not run')).source;
+  };
+  assert.equal(await told('https://github.com/o/r.git'), 'https://github.com/o/r.git', 'ci-red was not told the Clone from');
+  assert.equal(await told('ssh://git:hunter2@example.com:22/o/r.git'), 'ssh://example.com:22/o/r.git', 'a password reached the script');
+  assert.equal(await told('https://u:tok@github.com/o/r'), 'https://github.com/o/r', 'a token reached the script');
+  assert.equal(await told('git@github.com:o/r.git'), 'github.com:o/r.git');
+  assert.equal(await told(''), null, 'an unset Clone from is not null');
+  console.log('PASS O211: ci-red got project.source equal to Clone from, user and password taken out, null when unset');
 });
 
 test('Sprint scripts O202: sprint_event is refused for a wrong point or subject, a caller not the lead, the lock, before Start and after Close', { timeout: 60000 }, async () => {
