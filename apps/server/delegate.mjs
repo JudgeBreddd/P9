@@ -525,8 +525,7 @@ export function createDelegate({ chat, allowed, usage }) {
     starting.add(sprint);
     let reserved = null;
     try {
-      // O174: Delegation Off refuses an agent's call (the lead is that chat's worker), never the user's own press.
-      if (caller && chat.delegation().start === 'off') return OFF;
+      // O225: Delegation has no hold over a sprint: Off refuses no start (the start asks the user every time).
       const roles = rolesOf(sprint);
       if (roles.error) return roles;
       // O207: a lead chat that exists (made by an earlier press, or running before Start, which adopts it) is kept, never
@@ -574,13 +573,12 @@ export function createDelegate({ chat, allowed, usage }) {
       if (file.error) return { error: 'scripts-refused', detail: file.error };
       const moved = { error: 'scripts-changed', detail: 'hooks.json is not the one that was shown. Look at the sprint\'s scripts again, then start it.' };
       if (!caller && file.scripts.length && hooksHash !== hashOf(hooksText)) return moved;
-      // What a wait may have changed (the user's answer, a before-start script's minute): the lock, Delegation, Workers
+      // What a wait may have changed (the user's answer, a before-start script's minute): the lock, Workers
       // per chat and the modes, read again. leadMode is the one read last, so no chat is made wider than its caller is now.
       const again = () => {
         if (caller && chat.lock(caller).on) return { error: 'agent-lock-on' };
         if (chat.paused(sprint) || (caller && chat.paused(caller))) return PAUSED;
         const now = chat.delegation();
-        if (caller && now.start === 'off') return OFF;
         // A lower Workers per chat: the place held is this start's own, so it does not count against it.
         if (reserved && running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
         ({ leadMode, ...refusal } = modes());

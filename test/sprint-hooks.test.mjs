@@ -192,12 +192,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.equal(got.error, 'too-many-chats', JSON.stringify(got));
   assert.equal((await page()).started, undefined, 'a start over the lowered limit left an approval record');
   assert.equal((await rows(instance)).length, before + 2, 'a start over the lowered limit made a chat');
-  // Delegation turned Off while the script runs: an agent's start (the lead is its chat's worker) is refused.
-  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 2, workers: was.workers ?? [] })).status, 200); // back to 2: kid holds one place
-  got = await heldStart(async () => assert.equal((await call(instance, '/delegation', 'POST', { start: 'off', max: 2, workers: was.workers ?? [] })).status, 200));
-  assert.equal(got.error, 'delegate-off', JSON.stringify(got));
-  assert.equal((await page()).started, undefined, 'a start refused after its script left an approval record');
-  assert.equal((await rows(instance)).length, before + 2, 'a start refused after its script made a chat');
+  // O225: Delegation Off no longer refuses a sprint's start (test/sprint-start.test.mjs), so there is no Off case here.
   assert.equal((await call(instance, '/delegation', 'POST', { start: was.start, max: was.max, workers: was.workers ?? [] })).status, 200);
 
   // The press that approves: the record holds the scripts, and each run is told the sprint's state.
@@ -214,7 +209,7 @@ let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', async () => {
   assert.deepEqual(bs.roles, [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high', mode: null, owns: null }]);
   assert.deepEqual(bs.items, [{ id: 'B4', text: 'B4: the one item. Role w1', role: 'w1', ticked: false, review: null }]);
   assert.deepEqual([bs.workers, bs.verdicts], [[], []]);
-  assert.equal(bs.log.length, 5, 'the earlier refusal and the four held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
+  assert.equal(bs.log.length, 4, 'the earlier refusal and the three held runs are in the state\'s log: ' + JSON.stringify(bs.log)); assert.match(bs.log[0], /check \| exit 3/);
   assert.ok(!JSON.stringify(bs).includes(instance.credentials.token ?? '\u0000no-token'), 'the state carries the daemon\'s token');
   const ss = await ran('sprint-start');
   assert.deepEqual([ss.blocking, ss.script.name, ss.sprint.started.by, ss.sprint.started.plan], [false, 'started', 'owner', listed.started.plan]);
