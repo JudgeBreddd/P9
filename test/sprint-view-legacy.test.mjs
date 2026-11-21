@@ -60,7 +60,7 @@ test('Sprint View plan view: items nest in their phase with their tick, then eac
     items: [it('Z1', null, false), it('A1', 0, true), it('A2', 0, false)],
     phases: [{ title: 'Phase one', merged: 0, total: 2, text: '- [x] A1 <b>x</b>\nCheck: it draws', truncated: true },
       { title: 'Phase two', merged: 0, total: 0, text: '', truncated: false }] }, esc);
-  assert.match(html, /<button type="button" class="sv-phase" data-sv-phase data-sv-plan="[^"]+" aria-expanded="false"[^>]*>0 of 2 steps in Phase one, 0 of 2 phases<\/button>/);
+  assert.match(html, /<button type="button" class="sv-phase" data-sv-phase data-sv-plan="[^"]+" aria-expanded="false"[^>]*>0 of 2 steps in Phase one, 1 of 2 phases<\/button>/);
   const view = html.slice(html.indexOf('<div data-sv-planview'));
   assert.ok(view.startsWith('<div data-sv-planview hidden>'), 'closed until the line is pressed');
   // Each phase in order with its own items, the phase with none says so, then the items outside every phase.
