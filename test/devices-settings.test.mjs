@@ -47,13 +47,14 @@ test('O205: Settings lists a waiting phone (code, lapse time) and a signed-in on
     assert.equal((await page.evaluate(([a, p]) => window.p9.chat(a, p), [action, payload])).status, 400, action);
 
   // The list's chunk fails to load the first time: a visible failure with Try again, which then loads it.
-  const chunk = /devices-view[^/]*\.js/; let blocked = true;
-  await page.route(chunk, (route) => (blocked ? route.abort() : route.continue()));
+  // page.route does not see p9:// requests; Chrome's own blocking does.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable'); await cdp.send('Network.setBlockedURLs', { urls: ['*devices-view*'] });
   await page.locator('#setBtn').click();
   await page.locator('#setDlg[open]').waitFor();
   await page.locator('[data-set-page="Remote Connect"]').click();
   await page.locator('#setDevices').getByText('The device list did not load.').waitFor({ timeout: 10000 });
-  blocked = false;
+  await cdp.send('Network.setBlockedURLs', { urls: [] });
   await page.locator('#setDevices [data-devices-retry]').click();
   const list = page.locator('#setDevices'), waiting = list.locator('li', { hasText: 'Kitchen tablet' }), signed = list.locator('li', { hasText: 'Pixel' });
   await waiting.waitFor({ timeout: 10000 });
