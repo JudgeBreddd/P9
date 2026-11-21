@@ -542,7 +542,8 @@ export function createDelegate({ chat, allowed, usage }) {
         return { ...r, provider: c.provider, profile: c.profile?.id ?? null, model: (c.profile ? c.profile.model : c.model ?? was?.model?.current) ?? 'unknown',
           effort: (c.effort?.value ?? was?.pickers?.find((p) => p?.category === 'thought_level')?.current) ?? null, kept: true };
       };
-      const kept = lead && asRuns(roles.lead, sprint), keyed = (r) => chat.family().find((c) => c.parent === sprint && c.key === r.key && chat.delivered(c.id))?.id;
+      // O213: a lead whose first message never arrived is sent it on its row below (model, effort), like a keyed worker.
+      const kept = lead && chat.delivered(sprint) && asRuns(roles.lead, sprint), keyed = (r) => chat.family().find((c) => c.parent === sprint && c.key === r.key && chat.delivered(c.id))?.id;
       // Modes, before any chat is made and again after the user's answer: from an agent's call the lead is never wider
       // than that chat (modeFor refuses a wider row); no chat under the lead is wider than the lead.
       const modes = () => {
