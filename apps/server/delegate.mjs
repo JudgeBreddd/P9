@@ -528,6 +528,21 @@ export function createDelegate({ chat, allowed, usage }) {
       if (caller && chat.delegation().start === 'off') return OFF;
       const roles = rolesOf(sprint);
       if (roles.error) return roles;
+      // O207: a lead chat that exists (made by an earlier press, or running before Start, which adopts it) is kept, never
+      // remade, so its row must name the agent it runs on: the mode ceiling below is read on the row's agent.
+      const runs = lead && (lead.profile ? 'profile:' + lead.profile.id : lead.provider), row = roles.lead.profile ? 'profile:' + roles.lead.profile : roles.lead.provider;
+      if (lead && runs !== row) return { error: 'role-refused', role: 'lead', field: 'provider', detail: `Role lead, provider: the lead's chat already runs on ${runs} and is kept as it is; its row names ${row}.` };
+      // A kept chat (the lead, or a worker whose key is a row's and whose first message arrived) is not put on its row's
+      // agent, model and effort: the question and the answer say what it runs. With no live session that is its last
+      // recorded config (what carry sets it back to), else 'unknown'; never the row's values.
+      const asRuns = (r, id) => {
+        const c = id && chat.info(id);
+        if (!c) return r;
+        const was = c.model ? null : chat.lastPicks(id).config;
+        return { ...r, provider: c.provider, profile: c.profile?.id ?? null, model: (c.profile ? c.profile.model : c.model ?? was?.model?.current) ?? 'unknown',
+          effort: (c.effort?.value ?? was?.pickers?.find((p) => p?.category === 'thought_level')?.current) ?? null, kept: true };
+      };
+      const kept = lead && asRuns(roles.lead, sprint), keyed = (r) => chat.family().find((c) => c.parent === sprint && c.key === r.key && chat.delivered(c.id))?.id;
       // Modes, before any chat is made and again after the user's answer: from an agent's call the lead is never wider
       // than that chat (modeFor refuses a wider row); no chat under the lead is wider than the lead.
       const modes = () => {
@@ -550,7 +565,7 @@ export function createDelegate({ chat, allowed, usage }) {
         holding.set(caller, [...(holding.get(caller) ?? []), reserved]);
       }
       const plan = createHash('sha256').update((chat.sprintFiles.read(sprint, 'sprint.md') ?? '') + '\0' + (chat.sprintFiles.read(sprint, 'roles.json') ?? '')).digest('hex');
-      const said = (r) => `${r.key} (${r.profile ? 'profile:' + r.profile : r.provider} ${r.model}${r.effort ? ' ' + r.effort : ''})`;
+      const said = (r) => `${r.key} (${r.profile ? 'profile:' + r.profile : r.provider} ${r.model}${r.effort ? ' ' + r.effort : ''}${r.kept ? ', kept as it runs' : ''})`;
       // The sprint's scripts: this approval is theirs too, so the user must have seen each command. The copy read here
       // is the one stored and run; the file is never run (an agent can write it).
       const hooksText = chat.sprintFiles.read(sprint, 'hooks.json'), file = parseScripts(hooksText);
@@ -571,7 +586,7 @@ export function createDelegate({ chat, allowed, usage }) {
       };
       if (caller) {
         const request = { toolCallId: 'p9-mcp-' + randomUUID(), kind: 'execute',
-          title: `P9: start the sprint "${(prep?.title ?? lead.title).slice(0, 120)}": ${[roles.lead, ...roles.rest].map(said).join(', ')}. This is your approval of its plan (sha256 ${plan.slice(0, 12)}).`
+          title: `P9: start the sprint "${(prep?.title ?? lead.title).slice(0, 120)}": ${[kept || roles.lead, ...roles.rest.map((r) => asRuns(r, lead && keyed(r)))].map(said).join(', ')}. This is your approval of its plan (sha256 ${plan.slice(0, 12)}).`
             + (file.scripts.length ? ` It also approves ${file.scripts.length === 1 ? 'this script' : `these ${file.scripts.length} scripts`}, which P9 will run as you, outside every agent's mode, one per line:\n${file.scripts.map(scriptSaid).join('\n')}` : '') };
         if (!await chat.approve(caller, request, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
         if (signal?.aborted) return { error: 'cancelled' };
@@ -608,7 +623,7 @@ export function createDelegate({ chat, allowed, usage }) {
         if (sent.status !== 202) return { error: sent.error ?? 'chat-not-sendable', role: 'lead', chats: [{ key: 'lead', chat: sprint }], detail: 'The lead\'s chat was made, but its message was not sent. Press Start again.' };
         await notice(sprint, 'sprint-start', null);
       }
-      chats.push({ key: 'lead', chat: sprint, provider: L.profile ? 'profile:' + L.profile : L.provider, model: L.model, effort: L.effort, existing: Boolean(lead) });
+      chats.push({ key: 'lead', chat: sprint, provider: L.profile ? 'profile:' + L.profile : L.provider, model: (kept || L).model, effort: (kept || L).effort, existing: Boolean(lead) });
       // The chats under the lead need its mode (theirs is never wider): its agent sets it as it starts.
       for (let i = 0; i < 300 && !chat.info(sprint)?.mode && !signal?.aborted; i += 1) await pause(200, signal);
       if (!chat.info(sprint)?.mode) return { error: 'lead-not-started', chats, detail: 'The lead\'s agent did not start within a minute. Press Start again to make the rest.' };
@@ -631,7 +646,8 @@ export function createDelegate({ chat, allowed, usage }) {
         const got = await openChat(sprint, { text: work, title: r.key, key: r.key, provider: r.provider, model: r.model, ...(r.effortId && { effort: r.effort }),
           ...(r.mode && { mode: r.mode }), ...(r.key !== 'review' && { worktree: true }), ...(roles.folder !== undefined && { folder: roles.folder }) }, signal, { approved: true, profile: r.profile });
         if (got.error) return { ...got, role: r.key, chats, detail: (got.detail ? got.detail + ' ' : '') + `Role ${r.key} was not started; press Start again to make the rest.` };
-        chats.push({ key: r.key, chat: got.chat, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model, effort: r.effort, existing: Boolean(got.existing) });
+        const shown = got.existing ? asRuns(r, got.chat) : r;
+        chats.push({ key: r.key, chat: got.chat, provider: shown.profile ? 'profile:' + shown.profile : shown.provider, model: shown.model, effort: shown.effort, existing: Boolean(got.existing) });
       }
       return { lead: sprint, started, chats };
     } finally {

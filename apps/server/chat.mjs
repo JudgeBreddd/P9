@@ -1865,6 +1865,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     paused: (lead) => pausedOf(lead) !== null,
     closing: () => closing, // shutdown has begun (sprint-hooks.mjs: the every timer stops and launches nothing more)
     lastMode,
+    lastPicks, // O207 FIX1 (delegate.mjs startSprint): what carry sets a stopped chat back to
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
     // end. Returns how many were held, or null when the sprint was not paused. resumed(count) is called once the pause is
