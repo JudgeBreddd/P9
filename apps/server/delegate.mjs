@@ -128,7 +128,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'a row P9 cannot start is refused by name before any chat is made. Safe to call again after a failure halfway: what was made is kept. '
       + 'The sprint\'s scripts (hooks.json, see sprint_scripts) are listed in that question, command by command: the user\'s yes approves them too, and P9 runs only that approved copy.',
     input({ sprint: { type: 'string', description: 'The id new_sprint returned.' } }, ['sprint'])],
-    ['sprint_status', 'Read where a sprint stands, as the user\'s Sprint View page shows it: the plan\'s items (ticked, and each one\'s review), phases (each "## Phase" heading of the plan with its items merged and total; phase_now the first not all merged; [] with no such heading), done (items merged into the main line as P9\'s own record shows, items ticked in the plan, items that cannot be proven merged because P9 holds no clone or copy of the repo, and the total), running_ms since Start, each chat of the sprint '
+    ['sprint_status', 'Read where a sprint stands, as the user\'s Sprint View page shows it: the plan\'s items (ticked, each one\'s review, and phase: the index of its phase in phases, null outside every phase), phases (each "## Phase" heading of the plan with its items merged and total; phase_now the first not all merged; [] with no such heading), done (items merged into the main line as P9\'s own record shows, items ticked in the plan, items that cannot be proven merged because P9 holds no clone or copy of the repo, and the total), running_ms since Start, each chat of the sprint '
       + '(its role key, agent, model, effort, state, context, spent (as list_chats has it), its task, ready and verdict, and work: its own items merged of its total), spent (the sum of those chats\' spent; null until one reports any), the verdicts, usage (the plan\'s totals and limits, with limits.claude.models holding each per-model week the plan reports, such as Fable\'s), how many scripts stand (running: every script that runs; additional: those of running approved after Start, already counted in it; waiting: not run yet), and the last lines of hooks.log. '
       + 'standing_merge: the user\'s switch (true: you may merge what passed review, after before-merge allows it; false: merge is the user\'s). A sprint not yet started answers with started null; a closed one answers with its record (as it stood at Close) and closed { at, by }. This tool changes nothing.',
     input({ sprint: sprintArg })],
@@ -1517,7 +1517,10 @@ export function createDelegate({ chat, allowed, usage }) {
     new_sprint: (args, caller) => newSprint(caller, args),
     start_sprint: (args, caller, signal) => startSprint(args.sprint, caller, signal),
     sprint_scripts: (args, caller) => hooks.read(caller, args.sprint),
-    sprint_status: (args, caller) => hooks.status(caller, args.sprint),
+    // I1: each phase's section text is for the page's plan view; an agent reads the plan itself (sprint_setup), so the
+    // tool leaves the text out and a lead's frequent status read stays small.
+    sprint_status: async (args, caller) => { const got = await hooks.status(caller, args.sprint);
+      return Array.isArray(got?.phases) ? { ...got, phases: got.phases.map(({ text, truncated, ...p }) => p) } : got; },
     close_sprint: (args, caller, signal) => closeSprint(args.sprint, caller, signal),
     sprint_setup: (args, caller) => sprintSetup(caller, args),
     sprint_setup_save: (args, caller) => sprintSetupSave(caller, args),

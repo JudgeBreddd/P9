@@ -38,26 +38,45 @@ export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its No
 // with its role (or null) and its box, for a sprint script's input.
 export function planItems(plan) {
   const items = [];
-  for (const line of typeof plan === 'string' ? plan.split('\n') : []) {
+  for (const { line, phase } of walk(plan)) {
+    if (line === undefined) continue;
     const found = /^\s*- \[([ xX])\] (.+)$/.exec(line), item = found?.[2].trim();
     if (!item) continue;
     const id = item.split(':')[0].trim().slice(0, 200);
     // O164 part (3): an id ending in v after its number (O159v) is the owner's own line, whatever role it names.
     const role = /\dv$/.test(id) ? 'owner' : [...item.matchAll(/(?:^|[;.]\s*)role:?\s+([a-z0-9][a-z0-9_-]*(?:\.[a-z0-9_-]+)*)/gi)].at(-1)?.[1].toLowerCase() ?? null;
-    items.push({ id, text: item.slice(0, 500), role, ticked: found[1] !== ' ' });
+    items.push({ id, text: item.slice(0, 500), role, ticked: found[1] !== ' ', phase });
   }
   return items;
 }
-// I1's plan line: the plan's phases, a "## Phase ..." heading (any level from ## down) each, in order, with how many item
-// lines are under it. Items above the first such heading belong to no phase; a plan with no such heading has none ([]).
-export function phasesOf(plan) {
-  const phases = [];
+// I1: the plan's phases. A "## Phase ..." heading (any level from ## down) opens one; it runs to the next phase heading,
+// or to any other heading at its own level or above (the template's "## What I will need from you" after the last phase
+// is in no phase). walk gives each line with its phase's index, null outside every phase; a phase heading comes as head.
+function* walk(plan) {
+  let n = -1, level = 0, open = false;
   for (const line of typeof plan === 'string' ? plan.split('\n') : []) {
-    const head = /^\s*#{2,6}\s+(phase\b.*)$/i.exec(line);
-    if (head) phases.push({ title: head[1].trim().slice(0, 200), items: 0 });
-    else if (phases.length && /^\s*- \[[ xX]\] (.+)$/.exec(line)?.[1].trim()) phases.at(-1).items++; // as planItems counts them
+    const h = /^\s*(#{1,6})\s+(.*)$/.exec(line);
+    if (h && h[1].length >= 2 && /^phase\b/i.test(h[2])) { n += 1; level = h[1].length; open = true; yield { head: h[2].trim(), phase: n }; continue; }
+    if (h && open && h[1].length <= level) open = false;
+    yield { line, phase: open ? n : null };
   }
-  return phases;
+}
+// Each phase's title and its section as written (its items, checks and evidence), for the plan view the I1 line opens.
+// Capped in characters (code points, so no emoji is cut in half): PHASE_TEXT a phase, PLAN_TEXT over all of them, in
+// order (a plan written past MAX_FILE straight to disk); truncated says the text was cut. A plan with no phase: [].
+export const PHASE_TEXT = 4000, PLAN_TEXT = 32000;
+export function phasesOf(plan) {
+  const heads = [];
+  for (const { head, line, phase } of walk(plan)) {
+    if (head !== undefined) heads.push({ title: Array.from(head).slice(0, 200).join(''), lines: [] });
+    else if (phase !== null) heads[phase].lines.push(line);
+  }
+  let left = PLAN_TEXT;
+  return heads.map(({ title, lines }) => {
+    const all = Array.from(lines.join('\n').replace(/^(?:[ \t]*\n)+/, '').trimEnd()), keep = Math.min(PHASE_TEXT, left);
+    left -= Math.min(all.length, keep);
+    return { title, text: all.slice(0, keep).join(''), truncated: all.length > keep };
+  });
 }
 // A Role: owner line is never a worker's queue, even a worker keyed 'owner' (O164 part (3)).
 export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.role !== 'owner' && i.role === key).map(({ id, text }) => ({ id, text }));

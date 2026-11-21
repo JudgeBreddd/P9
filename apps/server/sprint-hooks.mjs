@@ -174,7 +174,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     const left = address.replace(/[?#].*$/s, '').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/^[^:/@]+@(?=[^:/]+:)/, '');
     return /^[A-Za-z0-9._~:/-]+$/.test(left) ? left : null;
   };
-  async function state(sprint, point, subject) {
+  // plan: the plan's text when the caller already read it (view), so its items and its phases come from one read.
+  async function state(sprint, point, subject, plan = chat.sprintFiles.read(sprint, 'sprint.md')) {
     const family = chat.family(), lead = family.find((c) => c.id === sprint), prep = chat.projects.prepOf(sprint), start = chat.projects.started(sprint);
     const projectId = lead?.project ?? prep?.project ?? null, project = projectId ? await chat.projects.record(projectId) : null;
     const source = projectId ? (await chat.projects.sprintSet?.(projectId))?.source || null : null;
@@ -203,7 +204,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       project: projectId ? { id: projectId, name: project?.name ?? null, source: source && bare(source) } : null,
       phase: null, // reserved: the plan has items only
       roles: rows.map((r) => ({ key: r.key, provider: r.profile ? 'profile:' + r.profile : r.provider, model: r.model ?? null, effort: r.effort ?? null, mode: r.mode ?? null, owns: r.owns ?? null })),
-      items: planItems(chat.sprintFiles.read(sprint, 'sprint.md')).map((i) => { const v = verdicts.find((r) => r.item === i.id);
+      items: planItems(plan).map((i) => { const v = verdicts.find((r) => r.item === i.id);
         return { ...i, review: v ? { state: v.state, commit: v.commit, fixes: v.fixes, larger: v.larger, merged: v.merged, at: v.at } : null }; }),
       workers, subject: subject ?? null,
       pr: null, // reserved: P9 tracks no pull request or CI run yet
@@ -382,13 +383,12 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // Sprint View and sprint_status: one answer for the page and the tool, so both show the same sprint. It is what a
   // script is told (state, above) without the parts that are about one script run, plus the counts the page draws:
   // done (plan items merged, and ticked), running_ms (since Start), each worker's own work, and how many scripts stand. Reads only.
-  // items: every plan line, in the plan's order, so the slices line up with phasesOf's counts; a phase counts only the
-  // lines that merge (O164 part (3) FIX1: an owner line is in no phase's steps, the same set as done.total).
+  // items: every plan line with the index of its phase (planItems, from the same text as the phases); a phase counts only
+  // the lines that merge (O164 part (3) FIX1: an owner line is in no phase's steps, the same set as done.total).
+  // Each phase also carries its section's text (capped, truncated when cut) for the plan view the I1 line opens.
   function phasesView(plan, items) {
-    const heads = phasesOf(plan), loose = items.length - heads.reduce((n, p) => n + p.items, 0); // items above the first heading
-    let at = loose;
-    const phases = heads.map((p) => { const mine = items.slice(at, at += p.items).filter((i) => i.role !== 'owner');
-      return { title: p.title, merged: mine.filter((i) => i.review?.merged === true).length, total: mine.length }; });
+    const phases = phasesOf(plan).map((p, n) => { const mine = items.filter((i) => i.phase === n && i.role !== 'owner');
+      return { title: p.title, merged: mine.filter((i) => i.review?.merged === true).length, total: mine.length, text: p.text, truncated: p.truncated }; });
     const current = phases.findIndex((p) => p.merged < p.total);
     return { phases, phase_now: current < 0 ? null : current };
   }
@@ -400,7 +400,8 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     // O164 (done means merged): the one look P9 takes for its own merge evidence before answering. What it proves is
     // recorded on the review record, so the count stays between looks. Best effort: offline, the record stands as it is.
     const repo = await chat.mergedNow?.(sprint).catch(() => undefined);
-    const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status');
+    const plan = chat.sprintFiles.read(sprint, 'sprint.md');
+    const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status', undefined, plan);
     const st = standing(sprint), start = chat.projects.started(sprint);
     // O164 part (3): a v line (Role: owner) never merges — it closes on the owner's click — so it is counted nowhere a
     // merge is counted: not in done.total, not in a phase's steps. It belongs to the owner's own queue and ring (owner).
@@ -424,7 +425,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       spent: spentOf(s.workers),
       // phases (I1): each "## Phase" heading of the plan with its items merged and its total; current: the first
       // with an item not merged (null once all have merged). [] for a plan with no such heading: the page shows no phase line.
-      ...phasesView(chat.sprintFiles.read(sprint, 'sprint.md'), s.items),
+      ...phasesView(plan, s.items),
       // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
       // next (Work Queue row): the first item not passed, the one ready reports (delegate.mjs ready, chat-view itemLine): a merge
       // without a pass (mergedNow records any review commit that landed) leaves it next. null when every item passed.
