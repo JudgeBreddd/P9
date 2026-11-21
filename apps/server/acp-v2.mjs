@@ -130,8 +130,11 @@ export function v1Stream(stream) {
       if (was?.prompt !== undefined) {
         const turn = turns.get(was.prompt);
         if (message.error) { if (turn?.id === message.id) turns.delete(was.prompt); return [message]; }
-        if (turn?.id === message.id) turn.live = true;
-        return []; // the v1 reply comes with the idle
+        if (turn?.id !== message.id) return [];
+        turn.live = true;
+        // The v1 reply comes with the idle. O214: this reply says the agent took the message into its thread now, which
+        // v1 has no word for; told as a notification of P9's own, so a restart before the idle does not send it again.
+        return [{ jsonrpc: '2.0', method: '_p9/prompt_taken', params: { sessionId: was.prompt } }];
       }
       return [was?.config && message.result ? { ...message, result: withOptions(message.result) } : message];
     }

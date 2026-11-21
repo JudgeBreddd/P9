@@ -1,7 +1,7 @@
 // Test-only agent that speaks ACP v2 (0.1.9 O52), as raw JSON-RPC lines: every message shape here is copied from
 // recorded traffic of codex-acp 2.6.0 and claude-agent-acp 0.106.0, so apps/server/acp-v2.mjs is tested against what
 // the real agents send and not against its own idea of v2. The prompt text picks the behaviour: "slow" works until
-// cancelled, "fail" ends the turn with an error, anything else runs an edit that asks first, a command, a plan and a
+// cancelled, "fail" ends the turn with an error, a prompt ending in "echo", or P9's restart line, replies with all of it ("said:" and the text), anything else runs an edit that asks first, a command, a plan and a
 // notice. A set_config_option without v2's `type`, or a session whose MCP server has none, is refused. Files in the working directory: v1-only answers
 // initialize with protocol 1 (and then speaks v1), refuse-v2 answers a v2 initialize with an error.
 import { createInterface } from 'node:readline';
@@ -27,12 +27,13 @@ async function turn(id, params) {
   update(sessionId, { sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type: 'active', activeFlags: [] } } } });
   update(sessionId, { sessionUpdate: 'user_message_chunk', messageId: 'u1', content: { type: 'text', text: said } });
   send({ id, result: { messageId: 'u1' } });
-  if (said === 'slow') {
+  if (said.endsWith('slow')) {
     chunk('working');
     await new Promise((resolve) => cancels.set(sessionId, resolve));
     return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled', _meta: { quota: { token_count: null } } });
   }
-  if (said === 'fail') return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'error', error: { code: -32000, message: 'Authentication required' } });
+  if (said.endsWith('echo') || said.includes('[p9] P9 restarted')) { chunk('said:' + said); return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', usage }); }
+  if (said.endsWith('fail')) return update(sessionId, { sessionUpdate: 'state_update', state: 'idle', stopReason: 'error', error: { code: -32000, message: 'Authentication required' } });
   if (said === 'mode') chunk('mode:' + mode + ' model:' + model);
   else {
     update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'exec-1', kind: 'edit', title: 'Editing files', status: 'in_progress',
