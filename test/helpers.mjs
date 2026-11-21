@@ -270,7 +270,7 @@ export async function waitStartup(page, watch, locator, { what, chat, timeout })
     const seen = await page.evaluate(async (chat) => {
       const timed = async (action, body) => {
         const at = performance.now();
-        const r = await Promise.race([window.p9.chat(action, body).catch((e) => ({ status: String(e) })), new Promise((resolve) => setTimeout(() => resolve({ status: 'no answer', capped: true }), 3000))]);
+        const r = await Promise.race([Promise.resolve().then(() => window.p9.chat(action, body)).catch((e) => ({ status: String(e) })), new Promise((resolve) => setTimeout(() => resolve({ status: 'no answer', capped: true }), 3000))]);
         return { r, line: action + ' ' + r.status + (r.capped ? ' > 3000' : ' ' + Math.round(performance.now() - at)) + ' ms' };
       };
       // events needs chat ids: the one waited on, else every listed chat (none listed: skipped, it would only answer 400).
