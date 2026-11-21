@@ -83,6 +83,20 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   assert.ok(next.hit);
 });
 
+// DUP-1 (c): the copy arrives after the turn-end, under the reply's own id and under a new one: neither is recorded.
+test('a reply the agent sends again after its turn ended is recorded once', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'twice late' });
+  const end = await until(instance, (event) => event.conversation === id && event.type === 'turn-end');
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
+  const next = await until(instance, said(id, 'mode:'), end.cursor);
+  const long = 'p'.repeat(150), tail = 'q'.repeat(150);
+  assert.deepEqual(end.seen.filter(said(id, '')).map((event) => event.data.content.text), [long, tail]);
+  assert.deepEqual(next.seen.filter(said(id, '')).map((event) => event.data.content.text).filter((text) => !text.startsWith('mode:')), [], 'a copy after the turn-end was recorded');
+});
+
 // phone-1: "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
 // desktop. The decline ends the turn as cancelled; an approve followed by the same failure still shows it.
 test('declining the plan ends the turn as cancelled, not as an error', async (t) => {
