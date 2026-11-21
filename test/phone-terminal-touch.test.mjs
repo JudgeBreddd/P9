@@ -228,3 +228,29 @@ test('P13, P14: a press and hold or a double tap opens the terminal text to copy
   await shot(page, 'c23-phone-terminal-off');
   console.log('PASS P13 P14');
 });
+
+// O179: the terminal fills its box: whatever the box's height, the band left under the last row is less than one row.
+test('O179: the phone terminal leaves no empty band taller than one row under its last line', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  const { page } = await phone(t, server);
+  await page.click('[data-nav="terminal"]');
+  await page.click('#newTerminal');
+  await connected(page);
+  const seen = [];
+  for (const height of [844, 700, 611]) { // three heights that do not divide by a row
+    await page.setViewportSize({ width: 390, height });
+    await page.waitForTimeout(400); // fit() runs on resize; xterm draws on the next frame
+    const m = await page.evaluate(() => {
+      const screen = document.querySelector('#screen'), box = screen.getBoundingClientRect(), pad = parseFloat(getComputedStyle(screen).paddingBottom);
+      const rows = document.querySelector('#screen .xterm-rows').children, last = rows[rows.length - 1].getBoundingClientRect();
+      const row = last.height, drawn = document.querySelector('#screen .xterm-screen').getBoundingClientRect();
+      return { rows: rows.length, row: +row.toFixed(2), band: +(box.bottom - pad - drawn.bottom).toFixed(2), clipped: +(drawn.bottom - (box.bottom - pad)).toFixed(2) };
+    });
+    seen.push({ height, ...m });
+  }
+  console.log('O179 ' + JSON.stringify(seen));
+  for (const m of seen) {
+    assert.ok(m.band < m.row, 'the band under the last row is less than one row: ' + JSON.stringify(m));
+    assert.ok(m.clipped <= 0.5, 'no row is cut off at the bottom: ' + JSON.stringify(m));
+  }
+});
