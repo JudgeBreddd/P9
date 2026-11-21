@@ -426,6 +426,30 @@ test('O133 Settings: the Default model and effort show as kept after a failed fi
   const reply2 = pane2.locator('.hist', { hasText: 'config:model=' }).first();
   await reply2.waitFor({ timeout: 20000 });
   assert.match(await reply2.innerText(), /effort=medium,/, '(5) a New chat starts on read B, not the late read A');
+  // (6) FIX1: the other order. High is picked but the save reaches the daemon 3 s late; Settings is opened again meanwhile and its
+  // read (numbered after the save) is served first, with Medium. That read must not stand over the save's answer.
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.held = 0; globalThis.heldDone = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && args[1]?.set && !args[1].onlyEmpty && !globalThis.held++
+      ? new Promise((res) => setTimeout(res, 3000)).then(() => h(e, ...args)).then((r) => { globalThis.heldDone = true; return r; }) : h(e, ...args));
+  });
+  await open();
+  await page.selectOption('[data-default-effort="claude"]', 'high');
+  await until(async () => await app.evaluate(() => globalThis.held) >= 1, 'the High save was sent (and held)');
+  await close(); await open();
+  await until(async () => await app.evaluate(() => globalThis.heldDone), 'the High save answered', 10000);
+  await close();
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', '(6) the daemon has High');
+  const before3 = await ids();
+  await page.click('#newBtn');
+  let id3;
+  await until(async () => (id3 = (await ids()).find((x) => !before3.includes(x))), 'the third New chat listed');
+  await page.locator('#nav .row[data-chat="' + id3 + '"]').click();
+  const pane3 = page.locator('#chats .pane[data-id="' + id3 + '"]');
+  await pane3.locator('.composer textarea').fill('config'); await pane3.locator('.composer textarea').press('Enter');
+  const reply3 = pane3.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply3.waitFor({ timeout: 20000 });
+  assert.match(await reply3.innerText(), /effort=high,/, '(6) a New chat starts on the held save, not the read served before it');
   assert.deepEqual(errors, []);
   console.log('PASS O133 Settings: Defaults shown as kept; a late read never puts back an older one');
 });
