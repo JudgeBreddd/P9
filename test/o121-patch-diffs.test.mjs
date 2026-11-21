@@ -25,6 +25,10 @@ test('O121 part 2: a v2 git patch keeps each file and each hunk with its line nu
   assert.equal(out[0].oldText, 'one\n-- note\ntwo\nforty');
   assert.equal(out[0].newText, 'one\ntwo\nforty\n++ x');
   assert.deepEqual(out[1], { type: 'diff', path: '/w/b.md', oldText: null, newText: 'hello', _meta: { hunks: [{ old: 0, new: 1, rows: [['add', 'hello']] }] } });
+  // A deleted file has no new text; an empty context line (an editor stripped its space) is still context.
+  const gone = diffs({ patch: { text: 'diff --git /w/e.md /w/e.md\ndeleted file mode 100644\n--- /w/e.md\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\ndiff --git /w/f.md /w/f.md\n--- /w/f.md\n+++ /w/f.md\n@@ -1,3 +1,3 @@\n x\n\n-y\n+z\n' } });
+  assert.deepEqual(gone.map(({ path, oldText, newText }) => [path, oldText, newText]), [['/w/e.md', 'a\nb', ''], ['/w/f.md', 'x\n\ny', 'x\n\nz']]);
+  assert.deepEqual(gone[1]._meta.hunks[0].rows, [['ctx', 'x'], ['ctx', ''], ['del', 'y'], ['add', 'z']]);
   // A move with no change in it has no ---/+++ lines: it is kept under its new name, not dropped.
   assert.deepEqual(diffs({ patch: { text: 'diff --git /w/c.md /w/d.md\nsimilarity index 100%\nrename from /w/c.md\nrename to /w/d.md\n' } }).map((d) => d.path), ['/w/d.md']);
 });
