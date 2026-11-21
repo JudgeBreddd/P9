@@ -783,6 +783,12 @@ export async function createDesktop({ state, open } = {}) {
     profiles: () => ['GET', '/profiles'],
     profileSave: body => ['POST', '/profiles', body],
     profileRemove: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['DELETE', '/profiles/' + id],
+    // O205 Settings > Devices: the phones that asked and the ones signed in, over this socket only (the TCP port has no
+    // /devices); the page names an id, never a route.
+    devices: body => !Object.keys(body).length && ['GET', '/devices'],
+    deviceApprove: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['POST', `/devices/enrollments/${id}/approve`],
+    deviceRefuse: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['POST', `/devices/enrollments/${id}/refuse`],
+    deviceRemove: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['POST', `/devices/${id}/revoke`],
     ...projectRoutes(uuid), // N1: projects and a chat's project, title, archive and delete
     // D7/D8: an agent's sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
     agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && action === 'login' && !Object.keys(rest).length

@@ -211,7 +211,8 @@ export function createAuth({ ledger, rpID, origin, now = Date.now,
       db.prepare('DELETE FROM sessions WHERE expires < ?').run(now());
       return {
         devices: db.prepare('SELECT id, name, state, created FROM devices ORDER BY created').all(),
-        enrollments: db.prepare("SELECT id, name, code, state, created FROM enrollments WHERE state IN ('pending', 'approved') ORDER BY created").all(),
+        // O205: expires, so the window shows when a request lapses (expire() above uses the same sum).
+        enrollments: db.prepare("SELECT id, name, code, state, created, COALESCE(approved, created) + ? AS expires FROM enrollments WHERE state IN ('pending', 'approved') ORDER BY created").all(APPROVAL_MS),
         audit: db.prepare('SELECT at, event, device, detail FROM audit ORDER BY rowid DESC LIMIT 50').all(),
       };
     },

@@ -306,8 +306,10 @@ enrollment mutation; a missing or different Origin is 403.
   floods) is audited at most 10 times per window. The window lives in memory only: a daemon restart
   clears it, so an attacker who can also restart the daemon gets a fresh 10 tries (restarting it already
   needs your account).
-- **"The desktop" here means the owner-only Unix socket.** v1 has no device screen in the window: approve,
-  refuse, lock, revoke, reset and the audit list are `pnpm teh devices` on the computer (README).
+- **"The desktop" here means the owner-only Unix socket.** The window's Settings > Remote Connect > Devices
+  lists the waiting requests (name, code, when each lapses) with Approve and Refuse, and the signed-in devices
+  with Remove (revoke); it reaches `/devices` through main's IPC over that socket, and the TCP port has no
+  `/devices` route at all. Lock, reset and the audit list are `pnpm teh devices` on the computer (README).
 - **The 6-digit code** is shown on the phone and by `teh devices` for you to compare by eye;
   the server does not check it. Approval on the desktop is the gate.
 - **Terminal socket.** `/terminals/:id/socket` attaches a tmux control-mode client; input
