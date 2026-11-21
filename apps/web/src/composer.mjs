@@ -57,9 +57,14 @@ const line = v => (Number.isInteger(v) && v >= 0 ? v : 0);
 const okRow = r => Array.isArray(r) && (r[0] === 'ctx' || r[0] === 'add' || r[0] === 'del') && typeof r[1] === 'string';
 // O222: whether a diff made its file. A v2 diff (hunks, no oldText: acp-v2.mjs diffs) says so in _meta.added; a v1 diff,
 // or a v2 one stored before O222 (it still has oldText), is a created file when it has no old text.
-export const diffCreated = c => (Array.isArray(c?._meta?.hunks) && c.oldText === undefined ? c._meta.added === true : c?.oldText == null || c.oldText === '');
+const v2 = c => Array.isArray(c?._meta?.hunks) && c.oldText === undefined;
+export const diffCreated = c => (v2(c) ? c._meta.added === true : c?.oldText == null || c.oldText === '');
+// O121 part 4b: a v2 diff's marks (acp-v2.mjs diffs), each a header line before its hunks; one P9 did not write is not drawn.
+export const diffDeleted = c => v2(c) && c._meta.deleted === true;
+const str = v => typeof v === 'string' && v;
+const marks = c => (v2(c) ? [diffDeleted(c) && 'Deleted', str(c._meta.from) && 'Renamed from ' + c._meta.from, c._meta.binary === true && 'Binary file: the change is not shown', str(c._meta.mode) && 'Mode ' + c._meta.mode].filter(Boolean).map(t => ['hunk', t]) : []);
 export const diffRows = (content, max) => {
   const list = (content || []).filter(c => c?.type === 'diff'), many = list.some(c => c._meta?.hunks) && new Set(list.map(c => c.path)).size > 1;
-  return list.flatMap(c => [...(many ? [['file', typeof c.path === 'string' ? c.path : '']] : []), ...(Array.isArray(c._meta?.hunks)
+  return list.flatMap(c => [...(many ? [['file', typeof c.path === 'string' ? c.path : '']] : []), ...marks(c), ...(Array.isArray(c._meta?.hunks)
     ? c._meta.hunks.filter(h => Array.isArray(h?.rows)).flatMap(h => [['hunk', `@@ -${line(h.old)} +${line(h.new)} @@`], ...h.rows.filter(okRow)]) : lineDiff(textLines(c.oldText), textLines(c.newText)))]).slice(0, max);
 };

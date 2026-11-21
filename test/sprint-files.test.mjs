@@ -465,6 +465,32 @@ test('Sprint files: O82 send_chat key re-keys a reused worker, so that message a
   console.log('PASS O82: re-keyed worker got the new role\'s rules on that message and the next; note, bad key and taken key refused');
 });
 
+test('Standing merge H2: the sprints there the first time this version runs keep merge; one made after starts off; only setMerge changes it, not on a closed sprint', { timeout: 10000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { createProjects } = await import('../apps/server/projects.mjs');
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(':memory:'); db.exec('CREATE TABLE prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)'); // as ledger.mjs makes it
+  const sprintFiles = createSprintFiles({ home: path.join(dir, 'sprints') }), open = () => createProjects({ home: path.join(dir, 'projects'), sprintFiles, db, row: () => null });
+  const OLD = LEAD, CLOSED = '0123abcd-0000-4000-8000-000000000002', NEW = '0123abcd-0000-4000-8000-000000000003', LATER = '0123abcd-0000-4000-8000-000000000004';
+  sprintFiles.ensure(OLD); sprintFiles.ensure(CLOSED);
+  fs.writeFileSync(path.join(dir, 'sprints', 'notes.txt'), ''); // not a sprint folder: never recorded
+  let projects = open();
+  assert.deepEqual([projects.merge(OLD), projects.merge(CLOSED)], [true, true], 'a sprint made before this version lost its merge');
+  sprintFiles.ensure(NEW);
+  assert.equal(projects.merge(NEW), false, 'a sprint made after started with merge on');
+  assert.deepEqual(projects.setMerge(NEW, true), { status: 200, merge: true }); assert.equal(projects.merge(NEW), true);
+  assert.deepEqual(projects.setMerge(NEW, false), { status: 200, merge: false }); assert.equal(projects.merge(NEW), false);
+  assert.equal(projects.setMerge(NEW, 'true').status, 400); assert.equal(projects.setMerge(LATER, true).status, 404); assert.equal(projects.setMerge('../x', true).status, 404);
+  db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('sprint-close:' + CLOSED, JSON.stringify({ at: 1, by: 'owner' }));
+  assert.deepEqual(projects.setMerge(CLOSED, false), { status: 409, error: 'sprint-closed' }); assert.equal(projects.merge(CLOSED), true);
+  // P9 starts again: the record is made once, so a sprint made since is not taken for an old one; the owner's off stays off.
+  sprintFiles.ensure(LATER); projects.setMerge(OLD, false); projects = open();
+  assert.deepEqual([projects.merge(OLD), projects.merge(NEW), projects.merge(LATER), projects.merge(CLOSED)], [false, false, false, true]);
+  assert.equal(projects.merge(undefined), false);
+  console.log('PASS H2: old sprints kept merge, new ones started off, setMerge turned it on and off, refused a bad value, an unknown and a closed sprint; a restart recorded nothing again');
+});
+
 test('Sprint files: a save\'s reply lists the file as it wrote it, so a writer landing right after the rename is refused at the next save, not replaced (O93)', { timeout: 10000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p9-sf-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

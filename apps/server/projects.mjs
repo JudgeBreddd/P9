@@ -90,6 +90,13 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
   const started = (sprint) => (ID.test(sprint ?? '') ? pref('sprint-start:' + sprint) : null);
   // Close sprint's record: { at, by, record } (delegate.mjs, closeSprint). Kept here, not in the sprint's folder, which an agent can write.
   const closed = (sprint) => (ID.test(sprint ?? '') ? pref('sprint-close:' + sprint) : null);
+  // H2, standing merge (SECURITY.md § Standing merge): may the sprint's lead merge (sprint_event before-merge answers
+  // merge allowed), or is merge the owner's. Kept here, never in the sprint's folder an agent writes; only the owner's
+  // desktop route sets it. A sprint made from this version on starts with it off. The sprints there already the first
+  // time this version runs keep merge allowed, as they had it: each is recorded on once, then never looked for again.
+  const put = (key, value) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
+  if (db && sprintFiles && pref('merge-kept') === null) { for (const id of sprintFiles.all()) if (pref('merge:' + id) === null) put('merge:' + id, true); put('merge-kept', true); }
+  const merge = (sprint) => ID.test(sprint ?? '') && pref('merge:' + sprint) === true;
   // H2: who wrote a Setup file the owner has not seen in this text: the writer P9 recorded (an agent through P9's tools),
   // or, for text P9 did not record, someone outside its Setup tools. Seen: the owner's own save, a Seen press, Start's
   // approval of that text, or New sprint's own files. An empty file and P9's empty plan are not marked.
@@ -99,7 +106,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     return w?.hash !== f.hash || typeof w.by !== 'string' ? 'someone outside P9\'s Setup tools' : w.by === 'the user' ? null : w.by;
   };
   const listed = (sprint) => sprintFiles.list(sprint).map((f) => { const by = unseen(sprint, f); return by ? { ...f, unseen: by } : f; });
-  const saw = (sprint, name, hash) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(seenKey(sprint, name), JSON.stringify(hash));
+  const saw = (sprint, name, hash) => put(seenKey(sprint, name), hash);
   const preps = (project) => db.prepare("SELECT key, value FROM prefs WHERE key LIKE 'prep:%'").all()
     .map((r) => { try { return { id: r.key.slice(5), ...JSON.parse(r.value) }; } catch { return null; } }).filter((p) => p?.project === project);
   // A gone or refused work folder is reported, never thrown. AGENTS.md and CLAUDE.md are seen in the listing only.
@@ -113,7 +120,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     const sprints = full && sprintFiles ? [...db.prepare('SELECT id, title FROM conversations WHERE project = ? ORDER BY created').all(value.id),
       ...preps(value.id).filter((p) => !row(p.id))]
       .filter((c) => sprintFiles.exists(c.id)).map((c) => ({ lead: c.id, title: c.title, files: listed(c.id), prep: !row(c.id),
-        ...(started(c.id) && { started: started(c.id) }), ...(pref('paused:' + c.id) && { paused: true }), ...(closed(c.id) && { closed: { at: closed(c.id).at, by: closed(c.id).by } }) })) : [];
+        ...(started(c.id) && { started: started(c.id) }), ...(pref('paused:' + c.id) && { paused: true }), merge: merge(c.id), ...(closed(c.id) && { closed: { at: closed(c.id).at, by: closed(c.id).by } }) })) : [];
     // Two projects may use one work folder (N1 spec, 2026-11-08): the others using it, for the dialog to name.
     const where = value.work.kind === 'p9' ? null : path.resolve(workspace, value.work.folder);
     const sharedWith = [];
@@ -297,6 +304,14 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     },
     prepOf,
     started,
+    merge,
+    // The owner's switch (desktop only): on, the lead may merge what passed review; a closed sprint keeps its record.
+    setMerge(sprint, on) {
+      if (!ID.test(sprint ?? '') || !sprintFiles?.exists(sprint)) return refused(404, 'unknown-sprint');
+      if (typeof on !== 'boolean') return refused(400, 'request-refused');
+      if (closed(sprint)) return refused(409, 'sprint-closed');
+      put('merge:' + sprint, on); return { status: 200, merge: on };
+    },
     recordStart: (sprint, value) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('sprint-start:' + sprint, JSON.stringify(value)); },
     closed,
     recordClose: (sprint, value) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('sprint-close:' + sprint, JSON.stringify(value)); },
