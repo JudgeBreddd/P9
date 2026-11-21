@@ -3,7 +3,6 @@ import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileI
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
-import { WALKTHROUGH } from './walkthrough.mjs';
 import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
@@ -881,8 +880,13 @@ $('#stopGo').onclick = () => { if (liveChat.on) { S.sessions.filter(s => s.live 
 /* ---------- walkthrough (first login, then Ctrl K) ---------- */
 // The guide pet is Chat's system pet at Settings' largest size, 128 px; without one the bubble is text only. A step whose
 // element is hidden or empty is shown in the middle of the window. Ends back in the focus it started from.
+let WALKTHROUGH = null;
 function walkthrough(i = 0, from = S.focus) {
   document.querySelector('.walk-at')?.classList.remove('walk-at'); $('#walk')?.remove();
+  // O203: the steps' text loads with the first walkthrough, not at startup (it is not needed before the shell is usable).
+  // A load that fails says so and is tried again on the next open.
+  if (!WALKTHROUGH) return void import('./walkthrough.mjs').then(m => { WALKTHROUGH = m.WALKTHROUGH; walkthrough(i, from); },
+    () => toast({ kind: 'walkthrough', txt: 'Walkthrough did not load. Open it again to retry', level: 'warn' }, true));
   const step = WALKTHROUGH[i];
   if (!step) return setFocus(from);
   if (step.focus && step.focus !== S.focus) setFocus(step.focus);
