@@ -1867,14 +1867,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lastMode,
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
-    // end. Returns how many were held, or null when the sprint was not paused.
-    async resume(lead, narrow) {
+    // end. Returns how many were held, or null when the sprint was not paused. resumed(count) is called once the pause is
+    // cleared and before anything is sent (delegate.mjs queues the resume scripts there, in the order of the presses).
+    async resume(lead, narrow, resumed) {
       const list = pausedOf(lead);
       if (!list) return null;
       for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
       db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
       try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       wakeAll('resumed');
+      resumed?.(list.length);
       await deliver(lead, narrow);
       return list.length;
     },

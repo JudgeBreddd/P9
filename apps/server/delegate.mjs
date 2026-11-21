@@ -502,9 +502,10 @@ export function createDelegate({ chat, allowed, usage }) {
   async function resumeSprint(lead, owner) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
-    const sent = await chat.resume(lead, narrow);
+    // O202: the resume scripts are queued the moment the pause is cleared, before the kept messages are sent (which waits),
+    // so a Pause pressed while they go is queued after this Resume, not before it.
+    const sent = await chat.resume(lead, narrow, (n) => hooks.ordered(lead, 'resume', { by: owner ? 'owner' : 'lead', sent: n }));
     if (sent === null) return { paused: false, already: true };
-    hooks.ordered(lead, 'resume', { by: owner ? 'owner' : 'lead', sent }); // O202: after the pause scripts have ended
     if (owner) notify(lead, 'sprint', `[p9] The user resumed this sprint. ${sent} kept message${sent === 1 ? '' : 's'} sent in order.`, 'sprint');
     return { paused: false, sent };
   }

@@ -205,13 +205,20 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // and { error: 'script-refused', ... } comes back. Notices are started and not waited for. null: go on.
   // scripts: only Start passes it (the list being approved by this very press, not yet recorded).
   // onNotice: given each notice's run (a promise), for a caller that must know when they end (event, ordered).
-  async function fire(sprint, point, subject, scripts = standing(sprint).running, onNotice) {
-    const due = scripts.filter((s) => s.point === point);
+  async function fire(sprint, point, subject, scripts, onNotice) {
+    // O202: the sprint's own list (no list given) is checked again right before each start, after the state read and
+    // each blocking script waited: a sprint closed, deleted, started again or P9 shutting down meanwhile starts nothing
+    // more (a blocking point is refused). The lists Start and Close hand in (before-start, before-close, after-close)
+    // are run as given: those points are about the sprint not being started, or being closed, by definition.
+    const own = scripts === undefined, at = chat.projects.started(sprint)?.at ?? 0;
+    const open = () => !own || (!off() && chat.family().some((c) => c.id === sprint) && (chat.projects.started(sprint)?.at ?? null) === at && !chat.projects.closed(sprint));
+    const due = (own ? standing(sprint).running : scripts).filter((s) => s.point === point);
     if (!due.length || !ID.test(sprint ?? '')) return null;
     const cwd = chat.sprintFiles.folderOf(sprint);
     let base; try { base = await state(sprint, point, subject); } catch { base = { contract: 1, point, error: 'state-unavailable' }; }
     for (const s of due) {
       const blocking = s.blocking && BLOCKING.includes(point);
+      if (!open()) return BLOCKING.includes(point) ? { error: 'sprint-gone', point, detail: 'The sprint was closed, deleted or started again, or P9 began shutting down, before its script started; nothing more ran.' } : null;
       const going = speaking(sprint, s.name, (say) => run(s.command, JSON.stringify({ ...base, blocking, script: { name: s.name } }), { cwd, timeout: blocking ? TIMEOUT.blocking : TIMEOUT.notice, say }), s.notify)
         .then((r) => { record(sprint, s, r); return r; });
       if (!blocking) { going.catch(() => {}); onNotice?.(going); continue; }
@@ -227,8 +234,10 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   // O202, pause and resume: run one after the other per sprint, each once the last one's scripts have all ended, so a quick
   // Pause then Resume cannot have the resume script (heavy-services resume) finish before the pause script (pause) and
   // leave the services paused in a running sprint. A run still waiting when the sprint is closed runs nothing (standing()
-  // lists no scripts for a closed sprint): a pause script after Close would undo what after-close put back. One still
-  // waiting while P9 shuts down is dropped. Each run is a notice; nothing waits for it.
+  // lists no scripts for a closed sprint, and fire() checks again right before each start): a pause script after Close
+  // would undo what after-close put back. One still waiting while P9 shuts down is dropped. Each run is a notice; nothing
+  // waits for it. Callers queue a run at the moment the sprint changes, before anything of theirs waits, so the runs
+  // are in the order of the presses (resumeSprint queues inside chat.resume, before the kept messages are sent).
   const chains = new Map();
   function ordered(sprint, point, subject) {
     const next = (chains.get(sprint) ?? Promise.resolve()).then(async () => {

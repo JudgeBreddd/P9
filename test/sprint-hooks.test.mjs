@@ -12,6 +12,7 @@ import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 import { parse, run, said, clean, createHooks, POINTS, BLOCKING, FIRED } from '../apps/server/sprint-hooks.mjs';
 import { planItems, hashOf } from '../apps/server/sprint-files.mjs';
+import { createDelegate } from '../apps/server/delegate.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -1147,13 +1148,14 @@ fs.appendFileSync(path.join(d, 'ran.txt'), 'end ' + j.point + '\\n');
 if (fs.existsSync(path.join(d, 'refuse-' + j.point))) { console.log('no: ' + j.point); process.exit(4); }\n`);
   const cmd = `${process.execPath} ${prog}`;
   const scripts = ['before-merge', 'ci-red', 'gate-passed', 'pause', 'resume'].map((point) => ({ name: 'at ' + point, command: cmd, point, blocking: point === 'before-merge' }));
-  const r = { dir, lock: false, closed: false, closing: false, started: true, logs: [] };
-  const chat = { lock: () => ({ on: r.lock }), info: (c) => (c === EA ? { title: 'S', provider: 'fake' } : c === EB ? { title: 'W', provider: 'fake', parent: EA } : null), family: () => [{ id: EA }], list: () => [],
+  const r = { dir, lock: false, closed: false, closing: false, gone: false, startAt: 0, stateHold: null, started: true, scripts, logs: [] };
+  const chat = { lock: () => ({ on: r.lock }), info: (c) => (c === EA ? { title: 'S', provider: 'fake' } : c === EB ? { title: 'W', provider: 'fake', parent: EA } : null), family: () => (r.gone ? [] : [{ id: EA }]), list: () => [],
     sprint: () => ({}), gauge: () => null, startFolder: async () => dir, scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
     socketPath: '/nowhere', note: async () => ({}), closing: () => r.closing,
     sprintFiles: { exists: (c) => c === EA, read: () => null, folderOf: () => dir, log: (c, line) => r.logs.push(line) },
-    projects: { started: () => (r.started ? { at: 0, by: 'owner', plan: null, scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
-  r.hooks = createHooks({ chat, usage: async () => null, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, ticking: false });
+    projects: { started: () => (r.started ? { at: r.startAt, by: 'owner', plan: null, scripts: r.scripts } : null), closed: () => (r.closed ? { at: 1, by: 'owner' } : null), prepOf: () => null, record: async () => null } };
+  r.chat = chat; // usage is read inside the state every run gets, so stateHold holds a run between its rows and its start
+  r.hooks = createHooks({ chat, usage: async () => r.stateHold, stateOf: () => 'idle', rolesOf: () => ({ error: 'none' }), allowed: async () => true, ticking: false });
   r.ran = () => (fs.existsSync(ranFile) ? fs.readFileSync(ranFile, 'utf8').split('\n').filter(Boolean) : []);
   r.hold = (point) => fs.writeFileSync(path.join(dir, 'hold-' + point), ''); r.free = (point) => fs.rmSync(path.join(dir, 'hold-' + point));
   return r;
@@ -1266,4 +1268,45 @@ if (fs.existsSync(path.join(here, 'refuse-' + j.point))) { console.log('no merge
   assert.equal(count('resume'), 1);
   assert.match(fs.readFileSync(path.join(s.folder, 'hooks.log'), 'utf8'), / \| pause \| at pause \| exit 0 \| /);
   console.log('PASS O202 live: sprint_event before-merge allowed, then refused by name; ci-red ran; owner Pause (twice, one run), Resume, and the lead\'s pause_sprint each ran their script');
+});
+
+test('Sprint scripts O202: a run whose state read is held while the sprint is closed, deleted, started again or P9 shuts down starts nothing', { timeout: 60000 }, async () => {
+  const r = pointRig(), wait = (ms) => new Promise((done) => setTimeout(done, ms));
+  const cases = [['closed', (v) => { r.closed = v; }], ['deleted', (v) => { r.gone = v; }], ['started again', (v) => { r.startAt = v ? 5 : 0; }], ['shutdown', (v) => { r.closing = v; }]];
+  for (const [what, set] of cases) {
+    let release; r.stateHold = new Promise((done) => { release = done; });
+    const p = r.hooks.ordered(EA, 'pause', { by: 'owner' }), e = r.hooks.event(EA, { point: 'ci-red' }), m = r.hooks.event(EA, { point: 'before-merge' });
+    await wait(100); set(true); release(null); r.stateHold = null;
+    await p; await e;
+    assert.equal((await m).error, 'sprint-gone', what + ': before-merge was not refused');
+    await wait(300);
+    assert.deepEqual(r.ran(), [], what + ': a script started after the state read');
+    set(false); await wait(50);
+  }
+  // Between two blocking scripts: the sprint closed while the first runs, the second does not start.
+  r.scripts = [...r.scripts, { ...r.scripts[0], name: 'at before-merge 2' }];
+  r.hold('before-merge');
+  const m = r.hooks.event(EA, { point: 'before-merge' });
+  await eventually(() => r.ran().length === 1, 'the first before-merge script started');
+  r.closed = true; r.free('before-merge');
+  assert.equal((await m).error, 'sprint-gone');
+  assert.deepEqual(r.ran(), ['before-merge {"by":"lead"}', 'end before-merge'], 'the second blocking script started after Close');
+  console.log('PASS O202: closed, deleted, started again and shutdown during the state read started nothing; before-merge refused; the second blocking script after Close did not start');
+});
+
+test('Sprint scripts O202: a Pause pressed while a Resume still sends its kept messages runs its script after the resume script', { timeout: 60000 }, async () => {
+  const r = pointRig();
+  let paused = true, release;
+  const held = new Promise((done) => { release = done; });
+  // createDelegate registers listeners on the real chat when it is made (settled, restarted); here they do nothing.
+  const chat = { ...r.chat, settled: () => {}, restarted: () => new Promise(() => {}), paused: () => paused, pause: () => { if (paused) return false; paused = true; return true; },
+    resume: async (lead, narrow, resumed) => { if (!paused) return null; paused = false; resumed?.(2); await held; return 2; } };
+  const tools = createDelegate({ chat, usage: async () => null });
+  const q = tools.resume_sprint({}, EA);
+  await new Promise((done) => setTimeout(done, 50));
+  assert.deepEqual(await tools.pause_sprint({}, EA), { paused: true });
+  release(); assert.deepEqual(await q, { paused: false, sent: 2 });
+  await eventually(() => r.ran().length === 4, 'both scripts ran');
+  assert.deepEqual(r.ran(), ['resume {"by":"lead","sent":2}', 'end resume', 'pause {"by":"lead"}', 'end pause'], 'the scripts ran out of the order of the presses');
+  console.log('PASS O202: Resume (delivery held) then Pause ran resume, then pause');
 });
