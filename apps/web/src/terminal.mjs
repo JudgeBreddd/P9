@@ -84,10 +84,16 @@ export function createTerminal({ screen, state, connect, open }) {
     // row to 2 px, leaving a band taller than a row under the last line. A drawn row's height is xterm's own, used once there.
     const box = screen.getBoundingClientRect(), pad = getComputedStyle(screen);
     const width = box.width - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight), height = box.height - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
-    const row = view.element.querySelector('.xterm-rows > div')?.getBoundingClientRect().height || cell.height;
+    const drawn = () => view.element.querySelector('.xterm-rows > div')?.getBoundingClientRect().height || cell.height;
     if (!box.width || !cell.width) return;
-    const cols = Math.max(2, Math.min(500, Math.floor(width / (cell.width / 40)))), rows = Math.max(1, Math.min(200, Math.floor(height / row)));
-    if (cols !== view.cols || rows !== view.rows) view.resize(cols, rows);
+    const cols = Math.max(2, Math.min(500, Math.floor(width / (cell.width / 40)))), fits = (row) => Math.max(1, Math.min(200, Math.floor(height / row)));
+    const row = drawn(), rows = fits(row);
+    if (cols !== view.cols || rows !== view.rows) {
+      view.resize(cols, rows);
+      // O179-FLAKE: a resize makes xterm measure its cell again, so a font that arrived since it last measured (JetBrains
+      // Mono swaps in late) changes the row here; fit to that row, or the last rows are cut off until the next resize.
+      const now = drawn(); if (now !== row && fits(now) !== view.rows) view.resize(cols, fits(now));
+    }
     if (term.socket?.readyState === WebSocket.OPEN) term.socket.send(JSON.stringify({ resize: [view.cols, view.rows] }));
   }
   // Closes the open socket, if any; says whether there was one.
