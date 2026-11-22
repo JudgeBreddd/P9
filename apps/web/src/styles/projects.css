@@ -96,6 +96,10 @@
 .ppage .sv-say{display:flex;flex-direction:column;gap:3px;flex:1 1 240px;min-width:0}
 .ppage .sv-say b{font-size:15px;font-weight:600}
 .ppage .sv-phase{font-size:12px;font-variant-numeric:tabular-nums}
+.ppage button.sv-phase{align-self:flex-start;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:12px;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px} /* I1: the line opens the plan view */
+.ppage button.sv-phase:focus-visible{outline:2px solid var(--ring,var(--primary));outline-offset:2px}
+.ppage [data-sv-planview] h4{margin:14px 0 4px;font-size:13px;font-weight:600}
+.ppage .sv-ptext pre{margin:0;padding:10px 12px;border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--foreground) 5%,transparent);font-size:12.5px;white-space:pre-wrap;overflow-wrap:anywhere}
 .ppage .sv-facts{display:flex;gap:8px;margin:0;flex-wrap:wrap}
 .ppage .sv-ctl{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);flex-wrap:wrap}
 .ppage .sv-ctl [data-slot="button"]{background:var(--secondary);color:var(--secondary-foreground,var(--foreground));border-color:var(--border)} /* ghost (transparent) read as plain text under the card's rule; the secondary button look instead */
