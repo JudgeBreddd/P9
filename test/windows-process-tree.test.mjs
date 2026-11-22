@@ -66,6 +66,7 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
   assert.doesNotMatch(host, /AssignProcessToJobObject/);
   assert.ok(main.indexOf('windowsLockEndpoint') < main.indexOf('await readdir(state)'), 'lock must precede state or ledger mutation');
   assert.ok(main.includes('else lockPipe({ host: windowsHost, pipe: socketPath, env: childEnv() });'), 'Windows locks its pipe through lockPipe');
+  assert.ok(main.includes('if (windows) lockFolders({ host: windowsHost, folders: [state, recovery, ownershipDirectory], env: childEnv() });'), 'Windows checks its three folders through lockFolders (timed)');
   assert.ok(main.indexOf('lockPipe({') < main.indexOf("'desktop.json'), 'wx'"), 'pipe ACL check must precede credentials');
   assert.ok(main.includes("console.error('P9_START_FAILED_CODE ' + ([error?.code, error?.name]"), 'a refused start names its code (PIPE_ACL) in the log');
   assert.match(pack, /extract-node-windows\.ps1/);
@@ -100,6 +101,31 @@ test('N6-1 PIPE_ACL: lockPipe runs PipeLock on the pipe with a timeout; any exit
   refused({ status: 3221225786 }, 'killed by Windows (an NTSTATUS exit)');
   refused(undefined, 'no result');
   console.log('PASS N6-1 PIPE_ACL: exit 0 locks; exit 1, no PowerShell, timeout, NTSTATUS and no result refuse as PIPE_ACL (timeout ' + PIPE_LOCK_MS + ' ms)');
+});
+
+// N6-1 (the row's last piece): main.mjs's B8 folder check (windows-host.ps1 -Mode Acl on state, recovery and the ownership
+// folder) ran spawnSync with no timeout, so a hung PowerShell held the start forever, as the pipe lock did before #364.
+test('N6-1 B8: lockFolders runs the Acl check on the three folders with a timeout; any exit but 0 refuses, naming the ownership folder when the check prints it', () => {
+  const { lockFolders, PIPE_LOCK_MS } = windowsModule;
+  assert.equal(typeof lockFolders, 'function', 'no lockFolders: the B8 folder check is inline in main.mjs with no timeout');
+  const host = 'C:\\P9\\scripts\\windows-host.ps1', env = { Path: 'C:\\Windows' };
+  const folders = ['C:\\Users\\one\\AppData\\Local\\P9\\state', 'C:\\Users\\one\\AppData\\Local\\P9\\recovery', 'C:\\Users\\one\\AppData\\Local\\P9'];
+  const calls = [];
+  const stub = (result) => (command, args, options) => { calls.push({ command, args, options }); return result; };
+  assert.equal(lockFolders({ host, folders, env, run: stub({ status: 0, stdout: '' }) }), undefined);
+  assert.equal(calls[0].command, 'powershell.exe');
+  assert.deepEqual(calls[0].args, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', host, '-Mode', 'Acl',
+    '-Payload', Buffer.from(folders.join('\n')).toString('base64')]);
+  assert.equal(calls[0].options.env, env);
+  assert.equal(calls[0].options.shell, undefined, 'no shell: the payload is one argument');
+  assert.equal(calls[0].options.timeout, PIPE_LOCK_MS, 'a hung PowerShell must not hold the start forever');
+  const refused = (result, message, why) => assert.throws(() => lockFolders({ host, folders, env, run: stub(result) }), (error) => error.message === message, why);
+  refused({ status: 1, stdout: folders[0] + '\r\n' }, 'unsafe-private-directory', 'the state folder grants someone else');
+  refused({ status: 1, stdout: folders[2] + '\r\n' }, 'unsafe-ownership-directory', 'the ownership folder grants someone else');
+  refused({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'unsafe-private-directory', 'killed at the timeout');
+  refused({ status: null, error: Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' }) }, 'unsafe-private-directory', 'no PowerShell');
+  refused(undefined, 'unsafe-private-directory', 'no result');
+  console.log('PASS N6-1 B8: exit 0 passes; a folder named, timeout, no PowerShell and no result refuse (timeout ' + PIPE_LOCK_MS + ' ms)');
 });
 
 test('O23: bare bash and sh skip the WSL launchers and fall back to Git Bash; cmd, node and powershell are unchanged', () => {
