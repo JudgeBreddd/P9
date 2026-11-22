@@ -10,7 +10,7 @@ import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
 import { decide } from './carry.mjs';
-import { TIER, AUTO } from './agents.mjs';
+import { TIER, AUTO, CATALOG, AGENT_IDS } from './agents.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
 import { BLOCKING, EVERY_MAX as SCRIPT_EVERY_MAX, EVERY_MIN as SCRIPT_EVERY_MIN, POINTS, REPORTED as SCRIPT_REPORTED, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
@@ -61,8 +61,8 @@ export const DELEGATE_TOOLS = (input) => {
     input({ text: { type: 'string', description: 'The first message: the whole task, since the worker knows nothing of your chat.' },
       item: { type: 'string', description: 'The plan item this worker builds. Give item, done_means and checks together, or none of them.' }, done_means: { type: 'string', description: 'What done means for the item. Needs item and checks.' }, checks: { type: 'array', items: { type: 'string' }, description: 'The checks the worker reports against, 1 to 50. Needs item and done_means.' },
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -, not shaped like a chat ID' },
-      provider: { type: 'string', description: 'claude, codex, or profile:<id> of a provider profile (list_providers gives each one\'s id and models).' }, model: { type: 'string', description: 'A model that agent or profile offers.' },
-      effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
+      provider: { type: 'string', description: AGENT_IDS.join(', ') + ', or profile:<id> of a provider profile (list_providers gives each one\'s id and models).' }, model: { type: 'string', description: 'A model that agent or profile offers.' },
+      effort: { type: 'string' }, mode: { type: 'string', description: CATALOG.map((a) => a.name + ': ' + Object.keys(a.modes).join(', ')).join('. ') + '.' }, // CAT-1d: each catalog agent's modes
       folder: { type: 'string', description: 'Where it starts, relative to the workspace. With worktree, every worker of your sprint comes from one repository: a folder of another is refused.' },
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
     ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string', description: 'The commit id of the work to review, as git in your start folder\'s repository knows it; it is recorded as sent (unknown-commit if that repository does not have it).' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' }, row: { type: 'string', description: 'The plan row this commit is for (its O-number, say O84). Each row gets its own review record; without it the record is your task\'s item, so two rows would share one.' } }, ['commit', 'results', 'weakest'])],

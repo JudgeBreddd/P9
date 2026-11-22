@@ -33,6 +33,7 @@ import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createPhoneErrors } from './phone-errors.mjs';
 import { createIcons } from './icons.mjs';
+import { AGENT_IDS } from './agents.mjs'; // CAT-1d: away from the agents.mjs line above, which CAT-1a and CAT-1b edit
 import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
 import { AGENTS, adminCommand, wizardDependencies, found as onPath, placeAgents } from './deps.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -442,7 +443,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // MC-1: mode, the start mode the window shows on its pill, so the build runs in what the pill says. Without one (an older
     // window, the phone) the agent's default runs and the chat's mode event says which (chat.mjs tellMode).
     const { provider, space, mode, ...rest } = (await json(c)) ?? {};
-    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider) || (space !== undefined && !draftAt(drafts, space))
+    if (Object.keys(rest).length || !AGENT_IDS.includes(provider) || (space !== undefined && !draftAt(drafts, space))
       || (mode !== undefined && !chat.modeNames(provider).includes(mode))) return reply(c, { status: 400, error: 'request-refused' });
     if (space !== undefined && (await draftNames(drafts)).includes(space)) return reply(c, { status: 409, error: 'space-exists' });
     const made = await chat.create({ provider, title: 'Build Mission Control' });
