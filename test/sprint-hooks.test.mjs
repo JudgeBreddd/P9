@@ -885,7 +885,48 @@ fs.appendFileSync(${JSON.stringify(held)}, '1'); const t = setInterval(() => { i
   assert.deepEqual([done.error, done.stopped, typeof done.note], [undefined, [sprint], 'string'], JSON.stringify(done));
   assert.deepEqual([await stateOf(sprint), await stateOf(w1.chat) === 'stopped'], ['stopped', false], 'the calling worker was stopped with its lead');
   assert.equal((await status()).closed.by, w1.chat);
+  assert.match(done.cleaned?.skipped ?? '', /not cleaned up/, 'a chat of the sprint closing it cleans nothing: ' + JSON.stringify(done.cleaned));
   console.log('PASS Close held: the lock turned on during a blocking before-close refused agent-lock-on with nothing stopped or recorded; the worker\'s own close stopped only the lead and left the worker running');
+});
+
+// A sprint never ends (the owner, 2026-11-22): the owner's Close cleans the worker folders by Clean up's rules. The merged,
+// saved folder and its branch go; a folder with unsaved changes and one with unmerged work stay, each with its branch;
+// the sprint's own files stay.
+test('Close sprint cleans up: a merged folder goes; a dirty worktree and an unmerged branch survive, and the sprint files stay', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await replied(instance, first, 'config:');
+  const project = (await call(instance, '/projects', 'POST', { name: 'Sweep', work: { kind: 'new', parent: '', name: 'sweep' } })).body.project.id;
+  const s = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Sweep close' })).body, sprint = s.sprint;
+  const role = (key) => ({ key, provider: 'claude', model: key === 'lead' ? 'opus' : 'haiku', effort: 'low' });
+  fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: the thing; role done\n');
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
+  fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
+  const L = await attach(t, instance, sprint);
+  fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: ['lead', 'done', 'dirty', 'open'].map(role) }));
+  const w = {};
+  for (const key of ['done', 'dirty', 'open']) { w[key] = await L.tool('open_chat', { text: 'cwd', key, folder: 'repo', worktree: true }); assert.ok(w[key].folder && !w[key].error, JSON.stringify(w[key])); }
+  fs.writeFileSync(path.join(w.dirty.folder, 'wip.txt'), 'unsaved\n');
+  fs.writeFileSync(path.join(w.open.folder, 'o.txt'), 'o\n'); g(w.open.folder, 'add', 'o.txt'); g(w.open.folder, 'commit', '-qm', 'not merged');
+  const branches = () => g(w.open.folder, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n').filter(Boolean).map((b) => b.split('/').pop()).sort();
+  assert.deepEqual(branches(), ['dirty', 'done', 'open']);
+  const files = fs.readdirSync(s.folder, { recursive: true }).filter((f) => !/^(workers|ready|clone|copy)([/\\]|$)/.test(f)).sort(); // the sprint's own files; those four are Clean up's (worker-folders.mjs)
+  assert.ok(['sprint.md', 'roles.json', 'roles/lead.work.md'].every((f) => files.includes(f)), JSON.stringify(files));
+  const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.deepEqual([closed.body.cleaned.removed, closed.body.cleaned.kept.map((k) => [k.item, k.why])], [['done'], [['dirty', 'unsaved changes'], ['open', 'not in the main line']]], JSON.stringify(closed.body));
+  assert.deepEqual([fs.existsSync(w.done.folder), fs.existsSync(w.dirty.folder), fs.existsSync(w.open.folder)], [false, true, true], 'only the merged folder went');
+  assert.equal(fs.readFileSync(path.join(w.dirty.folder, 'wip.txt'), 'utf8'), 'unsaved\n', 'the dirty worktree keeps its unsaved file');
+  assert.deepEqual(branches(), ['dirty', 'open'], 'the unmerged and the dirty branch stay; the merged one goes');
+  assert.equal(g(w.open.folder, 'log', '-1', '--format=%s'), 'not merged');
+  assert.deepEqual(fs.readdirSync(s.folder, { recursive: true }).filter((f) => files.includes(f)).sort(), files, 'every sprint file stays');
+  console.log('PASS Close cleans up: the merged folder went; the dirty worktree and the unmerged branch stayed with the sprint files');
 });
 
 // Sprint Setup as tools (row 697: an agent can read and change Setup the same way the page does): sprint_setup reads every Setup field with its file's hash; sprint_setup_save writes one file or one role row
