@@ -905,8 +905,7 @@ test('Close sprint cleans up: a merged folder goes; a dirty worktree and an unme
   fs.writeFileSync(path.join(s.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: the thing; role done\n');
   fs.writeFileSync(path.join(s.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
   fs.writeFileSync(path.join(s.folder, 'roles/lead.work.md'), 'mcp');
-  const row = async () => (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint);
-  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json')?.hash ?? '' });
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
   assert.equal(started.status, 200, JSON.stringify(started.body));
   assert.equal((await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: Array(5).fill({ agent: 'claude', model: 'haiku', effort: 'low' }) })).status, 200);
   const L = await attach(t, instance, sprint);
