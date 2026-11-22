@@ -53,13 +53,14 @@ daemon_check() {
 signin_check() {
   docker exec -i -u p9 -w /srv/p9/p9 -e XDG_RUNTIME_DIR=/run/user/1000 "$NAME" bash -lc '$(ls ~/.local/share/p9/node-*/bin/node | head -1) --input-type=module -' <<'EOF' || true
 import { daemonRequest } from './scripts/teh.mjs';
+import { AGENT_IDS } from './apps/server/agents.mjs';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 const s = process.env.XDG_RUNTIME_DIR + '/p9-foundation';
 const call = (method, route, body) => daemonRequest(s, method, route, body).catch((e) => ({ status: 0, body: String(e) }));
-const installed = await call('POST', '/setup/agents', { claude: true, codex: true });
+const installed = await call('POST', '/setup/agents', Object.fromEntries(AGENT_IDS.map((id) => [id, true])));
 console.log('BARE_WIZARD_INSTALL', installed.status, JSON.stringify(installed.body));
-for (const agent of ['claude', 'codex']) {
+for (const agent of AGENT_IDS) {
   let version;
   try { version = execFileSync(os.homedir() + '/.local/share/p9/bin/' + agent, ['--version'], { encoding: 'utf8', timeout: 60000 }).trim(); }
   catch (e) { version = 'FAILED ' + String(e.stderr || e.message).slice(0, 300); }

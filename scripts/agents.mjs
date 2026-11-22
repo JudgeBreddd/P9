@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AGENT_IDS, agentOfPackage } from '../apps/server/agents.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.platform + '-' + process.arch;
@@ -24,11 +25,11 @@ if (!Array.isArray(pins)) {
 }
 const from = process.env.P9_AGENTS_FROM;
 const args = process.argv.slice(2), at = args.indexOf('--keep'), keep = at < 0 ? null : args.splice(at, 2)[1];
-if (at >= 0 && !keep || args.some((name) => !['claude', 'codex'].includes(name))) {
-  console.error('Usage: agents.mjs [--keep FOLDER] [claude] [codex]');
+if (at >= 0 && !keep || args.some((name) => !AGENT_IDS.includes(name))) {
+  console.error('Usage: agents.mjs [--keep FOLDER] ' + AGENT_IDS.map((id) => '[' + id + ']').join(' '));
   process.exit(2);
 }
-const wanted = args.length || keep ? new Set(args) : new Set(['claude', 'codex']);
+const wanted = args.length || keep ? new Set(args) : new Set(AGENT_IDS);
 const modules = path.join(root, 'node_modules');
 // The version a pin names: its tarball is <name>-<version>.tgz under registry.npmjs.org/<scope>/<name>/-/.
 const pinned = (url) => { const file = path.basename(new URL(url).pathname, '.tgz'), name = new URL(url).pathname.split('/-/')[0].split('/').pop(); return file.slice(name.length + 1); };
@@ -50,7 +51,7 @@ try {
       await rename(out, target);
       continue;
     }
-    if (!wanted.has(folder.startsWith('@openai/') ? 'codex' : 'claude')) continue;
+    if (!wanted.has(agentOfPackage(folder))) continue;
     console.log('P9 agents: ' + folder);
     let bytes;
     if (from) bytes = await readFile(path.join(from, path.basename(new URL(url).pathname)));

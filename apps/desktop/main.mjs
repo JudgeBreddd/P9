@@ -14,6 +14,7 @@ import { connectServer, forwardPath, restartServer, startServer, stopServer, ssh
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
+import { AGENT_IDS, SIGN_IN_KIND } from '../server/agents.mjs';
 import { trimLog, unitOf, windowsTaskName } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
@@ -220,7 +221,7 @@ export async function createDesktop({ state, open } = {}) {
   // The agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
   // after connecting; the install there sends none, and fetchAgents below asks that daemon for these once connected.
   // agentsAgain: the machine menu's AI agents item asks again on this remote (this launch only).
-  const pickable = list => Array.isArray(list) && list.length <= 2 && new Set(list).size === list.length && list.every(a => a === 'claude' || a === 'codex');
+  const pickable = list => Array.isArray(list) && list.length <= AGENT_IDS.length && new Set(list).size === list.length && list.every(a => AGENT_IDS.includes(a));
   const agentsFor = Object.fromEntries(Object.entries(saved?.agents && typeof saved.agents === 'object' ? saved.agents : {}).filter(([h, list]) => named(h) && pickable(list)));
   const agentsAgain = new Set(), agentsTried = new WeakSet();
   let agentsJob = null; // { host, names, phase: running | done | failed, error, at }
@@ -241,7 +242,7 @@ export async function createDesktop({ state, open } = {}) {
   const fetchAgents = (host, names) => {
     if (!names.length || !server?.slim || (agentsJob?.host === host && agentsJob.phase === 'running')) return;
     const job = agentsJob = { host, names, phase: 'running' };
-    daemonRequest(state, 'POST', '/setup/agents-fetch', { claude: names.includes('claude'), codex: names.includes('codex') }, undefined, 1320000) // review 3 L4: past the daemon's 1,300 s
+    daemonRequest(state, 'POST', '/setup/agents-fetch', Object.fromEntries(AGENT_IDS.map(a => [a, names.includes(a)])), undefined, 1320000) // review 3 L4: past the daemon's 1,300 s
       .then(r => r.status === 200 ? { phase: 'done' } : { phase: 'failed', error: r.status === 404 || r.body?.error === 'request-refused' ? 'daemon-outdated' : r.body?.detail ?? r.body?.error ?? 'daemon-unavailable' },
         () => ({ phase: 'failed', error: 'daemon-unavailable' }))
       .then(end => { if (agentsJob === job) agentsJob = { ...job, ...end, at: Date.now() }; });
@@ -625,7 +626,7 @@ export async function createDesktop({ state, open } = {}) {
       if (result.status !== 200) return result;
       if (action === 'state') return { status: 200, body: Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map(name => [name,
         { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && signInUrl(name, result.body[name].url) !== null,
-          code: name === 'codex' && typeof result.body[name]?.code === 'string' && DEVICE_CODE.test(result.body[name].code) ? result.body[name].code : null,
+          code: SIGN_IN_KIND[name] === 'device-code' && typeof result.body[name]?.code === 'string' && DEVICE_CODE.test(result.body[name].code) ? result.body[name].code : null,
           unsupported: result.body[name]?.unsupported === true, exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
       const open = typeof result.body[agent]?.url === 'string' ? signInUrl(agent, result.body[agent].url) : null;
       if (!open) return { status: 409, body: { error: 'no-sign-in-page' } };
@@ -652,7 +653,7 @@ export async function createDesktop({ state, open } = {}) {
     // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
     guide: () => ['GET', '/mission/guide'],
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
-    build: ({ provider, space, mode }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}), ...(typeof mode === 'string' ? { mode } : {}) }],
+    build: ({ provider, space, mode }) => AGENT_IDS.includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}), ...(typeof mode === 'string' ? { mode } : {}) }],
     space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
     deleteSpace: ({ name, confirm }) => typeof name === 'string' && ['POST', '/mission/space/delete', { name, ...(confirm !== undefined ? { confirm } : {}) }],
     saveTemplate: ({ name, about, replace }) => typeof name === 'string' && ['POST', '/mission/template/save', { name, ...(about !== undefined ? { about } : {}), ...(replace !== undefined ? { replace } : {}) }],
@@ -791,12 +792,12 @@ export async function createDesktop({ state, open } = {}) {
     deviceRemove: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['POST', `/devices/${id}/revoke`],
     ...projectRoutes(uuid), // N1: projects and a chat's project, title, archive and delete
     // D7/D8: an agent's sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
-    agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && action === 'login' && !Object.keys(rest).length
+    agentTerminal: ({ agent, action, ...rest }) => AGENT_IDS.includes(agent) && action === 'login' && !Object.keys(rest).length
       && ['POST', '/setup/agent-terminal', { agent, action }],
     // Item 15: the wizard's Install of the agents picked (launchers for the CLIs P9 ships), and a system package's admin
     // command typed into a terminal (row 61); the daemon holds the commands, the page only names a dependency.
-    installAgents: ({ claude, codex, ...rest }) => typeof claude === 'boolean' && typeof codex === 'boolean' && !Object.keys(rest).length
-      && ['POST', '/setup/agents', { claude, codex }],
+    installAgents: body => exactly(body, [...AGENT_IDS].sort().join()) && AGENT_IDS.every(a => typeof body[a] === 'boolean')
+      && ['POST', '/setup/agents', Object.fromEntries(AGENT_IDS.map(a => [a, body[a]]))],
     adminTerminal: ({ id, ...rest }) => ['tmux', 'ssh'].includes(id) && !Object.keys(rest).length && ['POST', '/setup/admin-terminal', { id }],
     // A worker's notes file (SECURITY.md § Sprint files): read-only; the daemon builds the name from the chat's parent and key.
     notes: ({ id: chat, ...rest }) => uuid(chat) && !Object.keys(rest).length && ['GET', `/chat/${chat}/notes`],

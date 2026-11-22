@@ -182,11 +182,18 @@ test('U8 packaged: the AppImage\'s resources/daemon, laid out as electron-builde
   console.log('P9_SLIM packaged ' + packaged.size + ' files, the same as the checkout\'s');
 });
 
+// The fetcher in a P9 folder; CAT-1i: with the agent catalog it reads, which SLIM ships with apps/server.
+async function fetcherIn(folder) {
+  for (const file of ['scripts/agents.mjs', 'apps/server/agents.mjs']) {
+    await mkdir(path.dirname(path.join(folder, file)), { recursive: true }); await cp(path.join(root, file), path.join(folder, file));
+  }
+}
+
 // A stand-in for registry.npmjs.org: P9_AGENTS_FROM, a folder of .tgz files, with the same check.
 async function agentsStage(tamper, args = []) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-agents-')), p9 = path.join(dir, 'p9'), from = path.join(dir, 'from');
   await mkdir(path.join(p9, 'scripts'), { recursive: true }); await mkdir(path.join(dir, 'pkg', 'package'), { recursive: true }); await mkdir(from);
-  await cp(path.join(root, 'scripts', 'agents.mjs'), path.join(p9, 'scripts', 'agents.mjs'));
+  await fetcherIn(p9);
   await writeFile(path.join(dir, 'pkg', 'package', 'codex'), 'the binary\n');
   await writeFile(path.join(dir, 'pkg', 'package', 'package.json'), '{"version":"1.0.0-linux"}');
   assert.equal((await run('tar', ['-czf', path.join(from, 'codex-1.0.0-linux.tgz'), '-C', path.join(dir, 'pkg'), 'package'])).code, 0);
@@ -215,7 +222,7 @@ test('U8 agents.mjs: a package that does not match its pin installs nothing and 
 // The slim install keeps the agents the old one had (install.sh --slim runs --keep), and the desktop
 // fetches only the ones the owner picked once connected (POST /setup/agents-fetch runs agents.mjs claude and/or codex).
 test('agents.mjs: fetches only the agents named, skips one already there, and --keep links the old install\'s instead of downloading', { skip, timeout: 30000 }, async () => {
-  const s = await agentsStage(false, ['claude']), script = path.join(s.p9, 'scripts', 'agents.mjs');
+  const s = await agentsStage(false, ['claude']);
   assert.equal(s.code, 0, s.out);
   assert.equal(existsSync(path.join(s.modules, '@openai')), false, 'codex was not picked');
   const again = (args, env = {}, cwd = s.p9) => run(process.execPath, [path.join(cwd, 'scripts', 'agents.mjs'), ...args], { env: { ...process.env, P9_AGENTS_FROM: s.from, ...env } });
@@ -229,7 +236,7 @@ test('agents.mjs: fetches only the agents named, skips one already there, and --
   // A new install beside it keeps the old one's, linked, with no download and none named.
   const next = path.join(s.dir, 'next');
   await mkdir(path.join(next, 'scripts'), { recursive: true });
-  await cp(script, path.join(next, 'scripts', 'agents.mjs')); await cp(path.join(s.p9, 'agents.json'), path.join(next, 'agents.json'));
+  await fetcherIn(next); await cp(path.join(s.p9, 'agents.json'), path.join(next, 'agents.json'));
   const kept = await again(['--keep', s.p9], { P9_AGENTS_FROM: empty }, next);
   assert.equal(kept.code, 0, kept.out);
   assert.match(kept.out, /\(kept\)/);
@@ -237,7 +244,7 @@ test('agents.mjs: fetches only the agents named, skips one already there, and --
   // --keep with nothing to keep fetches nothing.
   const none = path.join(s.dir, 'none');
   await mkdir(path.join(none, 'scripts'), { recursive: true });
-  await cp(script, path.join(none, 'scripts', 'agents.mjs')); await cp(path.join(s.p9, 'agents.json'), path.join(none, 'agents.json'));
+  await fetcherIn(none); await cp(path.join(s.p9, 'agents.json'), path.join(none, 'agents.json'));
   assert.equal((await again(['--keep', empty], { P9_AGENTS_FROM: empty }, none)).code, 0);
   assert.equal(existsSync(path.join(none, 'node_modules', '@openai')), false);
 });
