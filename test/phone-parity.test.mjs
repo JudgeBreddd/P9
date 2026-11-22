@@ -818,13 +818,17 @@ test('USE-1 web on the phone: Usage draws one plan card per agent in the usage l
   const now = Date.now(), w = (p) => ({ usedPercent: p, resetsAt: now + 3600000, windowMins: 300 });
   usage.limits = { claude: { asOf: now, fiveHour: w(40), sevenDay: null, stale: false, pool: 'claude' }, codex: null,
     kestrel: { asOf: now - 20 * 60000, fiveHour: w(40), sevenDay: null, stale: true, pool: 'claude' }, signedOut: ['codex'] };
-  // GET /agents answers 4 s late, after Usage is drawn: the cards are named when it lands, not at the next 20 s redraw.
-  await page.route('**/agents', async (route) => { await new Promise((r) => setTimeout(r, 4000)); await route.fulfill({ json: agents }); });
+  // GET /agents answers 8 s late, after Usage is drawn with the bare id: the cards take the name within 3 s of the answer,
+  // not at the next 20 s redraw.
+  let answered; const named = new Promise((r) => { answered = r; });
+  await page.route('**/agents', async (route) => { await new Promise((r) => setTimeout(r, 8000)); await route.fulfill({ json: agents }); answered(); });
   await page.route('**/usage', (route) => route.fulfill({ json: usage }));
   await page.reload(); await page.locator('#newChat').waitFor();
   await page.click('[data-nav="usage"]');
   const read = () => page.locator('#usage [data-limits] article.plan').evaluateAll((all) => all.map((a) => [a.querySelector('h2').textContent, a.querySelector('small').textContent, a.classList.contains('muted')]));
-  await page.waitForFunction(() => [...document.querySelectorAll('#usage [data-limits] h2')].some((h) => h.textContent === '<i>Kes</i> plan'), null, { timeout: 12000 }).catch(() => {});
+  const card = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#usage [data-limits] h2')].some((h) => h.textContent === w), want, { timeout: 3000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('#usage [data-limits] h2')].some((h) => h.textContent === 'kestrel plan'), null, { timeout: 7000 });
+  await named; await card('<i>Kes</i> plan').catch(() => {});
   assert.deepEqual(await read(), [['Claude plan', 'Last read just now · shared plan with <i>Kes</i>', false], ['Codex plan', 'Codex not logged in', true],
     ['<i>Kes</i> plan', 'Last read 20 min ago · shared plan with Claude', true]]);
   assert.equal(await page.locator('#usage i:text-is("Kes")').count(), 0, 'the name is text, not markup');
