@@ -1210,6 +1210,20 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   }
   console.log('WALL-SV-FOCUS ' + JSON.stringify(kept));
   assert.deepEqual(kept.map(([, k]) => k), ['kept', 'kept', 'kept'], 'a Sprint View button lost the focus at the redraw: ' + JSON.stringify(kept));
+  // WALL-SV-MORPH-KEY: a worker row above the focused one goes away at the redraw (a worker above was closed: rows are in the
+  // order the workers were made, so the rows below move up). The focus stays on the same worker's row, the same element,
+  // never lost or left on a row showing another chat. The row above is a copy put in the page; the 5 s redraw removes it.
+  const mine = (await call(instance, `/sprints/${run.sprint}/status`)).workers[0].chat, rows = page.locator('.sv .sv-row');
+  await page.locator(`.sv .sv-row[data-chat="${mine}"]`).focus();
+  await page.evaluate(() => {
+    window.p9focus = document.activeElement; const li = window.p9focus.closest('li'), gone = li.cloneNode(true);
+    gone.dataset.key = 'gone'; gone.querySelector('.sv-row').dataset.chat = 'gone'; li.before(gone);
+  });
+  assert.equal(await rows.count(), 2);
+  await until(async () => (await rows.count()) === 1, 'the redraw never removed the row above', 12000);
+  const at = await page.evaluate(() => [document.activeElement?.dataset?.chat ?? document.activeElement?.tagName, document.activeElement === window.p9focus && window.p9focus.isConnected]);
+  console.log('WALL-SV-MORPH-KEY ' + JSON.stringify(at));
+  assert.deepEqual(at, [mine, true], 'the focus left the worker\'s row when the row above it went: ' + JSON.stringify(at));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-plan ' + (await page.screenshot({ type: 'png', fullPage: true })).toString('base64'));
   await line.click();
   assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['false', false, true], 'a second press did not close it');
