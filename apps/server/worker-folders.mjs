@@ -278,10 +278,12 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
   // The branch as a verified bundle under a name not yet used, or null (nothing written) when git could not.
   async function bundleOf(clone, sprint, item, branch) {
     const dir = path.join(dirOf(sprint), 'bundles');
-    if (await mkdir(dir, { recursive: true, mode: 0o700 }).then(() => false, () => true)) return null;
+    // #473 FIX1: only a real folder, as worker folders and the clone (realDir): never through a link, here or at the sprint's folder.
+    if (await mkdir(dir, { recursive: true, mode: 0o700 }).then(() => false, () => true) || !await realDir(dir, 2)) return null;
     let file, n = 0;
     while (await lstat(file = path.join(dir, item + (n ? '~' + n : '') + '.bundle')).then(() => true, () => false)) n++;
     const part = file + '.part';
+    await rm(part, { force: true }); // a leftover (or a link) is never written through
     const ok = (await git(clone, ['bundle', 'create', '--quiet', part, 'refs/heads/' + branch], { timeout: 5 * 60_000 })).code === 0
       && (await git(clone, ['bundle', 'verify', '--quiet', part])).code === 0;
     if (!ok) { await rm(part, { force: true }); return null; }

@@ -191,7 +191,18 @@ test('Worker folders close bundles: at Close an unmerged branch survives as a bu
   const real = path.join(home, ID, 'bundles'); fs.renameSync(real, real + '.away'); write(real, 'not a folder\n');
   const failed = await folders.clean(ID, { bundle: true });
   assert.deepEqual([failed.bundled, failed.kept.map((k) => [k.item, k.why])], [[], [['blocked', 'not in the main line; its bundle could not be written'], ['locked', 'not in the main line; its bundle could not be written']]]);
-  fs.rmSync(real); fs.renameSync(real + '.away', real);
+  fs.rmSync(real);
+  // #473 FIX1: a bundles folder that is a link (here to a folder outside the sprint) is refused the same way; nothing is
+  // written through it and the folders and branches stay.
+  const outside = path.join(dir, 'outside'); fs.mkdirSync(outside);
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(outside, real);
+    const linked = await folders.clean(ID, { bundle: true });
+    assert.deepEqual([linked.bundled, linked.kept.map((k) => k.item), fs.readdirSync(outside)], [[], ['blocked', 'locked'], []], 'nothing written through the link');
+    assert.ok(fs.existsSync(blocked) && fs.existsSync(locked));
+    fs.rmSync(real);
+  }
+  fs.renameSync(real + '.away', real);
   const third = await folders.clean(ID, { bundle: true });
   assert.deepEqual([third.bundled.map((b) => b.item), third.kept.map((k) => [k.item, k.why])], [['blocked'], [['locked', 'git would not remove it']]]);
   assert.deepEqual([fs.existsSync(blocked), fs.existsSync(locked), fs.readdirSync(real).sort()], [false, true, ['blocked.bundle', 'open.bundle', 'open~1.bundle']], 'no bundle left for the folder git kept');
