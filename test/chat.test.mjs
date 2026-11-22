@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes, rm } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes, rm, stat } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { request } from 'node:http';
@@ -483,6 +484,59 @@ test('setting pickers: effort and fast mode reach the window, a mode-category op
   await turn({ text: 'config' }, picked.cursor);
   assert.equal((await until(instance, said(id, 'config:'), picked.cursor)).hit.data.content.text, 'config:model=default,effort=high,fast=on,sandbox=on', 'a refused setting changed nothing');
   console.log('PASS setting pickers: effort + fast listed, sandbox hidden, high/on set and kept, 8 bad settings 400');
+});
+
+test('files: any file is saved in the chat folder and reaches the agent as a link; bad names, symlinks and sizes refused; delete and resume (A2 step 1, SECURITY.md Files you send in a chat)', async (t) => {
+  const instance = await start(t);
+  await writeFile(path.join(instance.workspace, 'dirs.log'), '');
+  const id = await create(instance), other = await create(instance);
+  const b64 = (text) => Buffer.from(text).toString('base64');
+  const attachments = path.join(instance.directory, '.local', 'state', 'p9-foundation', 'attachments'), mine = path.join(attachments, id);
+  const send = (chat, body) => json(call(instance, `/chat/${chat}/prompt`, 'POST', { text: '', ...body }));
+  assert.equal((await send(id, { text: 'take', files: [{ name: 'notes.txt', data: b64('hello') }, { name: 'empty.bin', data: '' }] })).status, 202);
+  let { hit, seen, cursor } = await until(instance, said(id, 'echo:'));
+  assert.equal(hit.data.content.text, `echo:take[file notes.txt ${pathToFileURL(path.join(mine, 'notes.txt')).href}][file empty.bin ${pathToFileURL(path.join(mine, 'empty.bin')).href}]`);
+  assert.deepEqual(seen.find((event) => event.type === 'user' && event.conversation === id).data, { text: 'take', files: [{ name: 'notes.txt', size: 5 }, { name: 'empty.bin', size: 0 }] }, 'the event names the file, not its bytes');
+  assert.equal(await readFile(path.join(mine, 'notes.txt'), 'utf8'), 'hello');
+  if (process.platform !== 'win32') assert.deepEqual([(await stat(mine)).mode & 0o777, (await stat(path.join(mine, 'notes.txt'))).mode & 0o777], [0o700, 0o600]);
+  const dirs = (await readFile(path.join(instance.workspace, 'dirs.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(dirs.find((d) => d.what === 'new' && d.dirs?.[0] === mine)?.dirs, [mine], 'the agent may open and save there');
+  cursor = (await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, cursor - 1)).cursor;
+  // The same name again, and a name the agent made a link to a file outside: neither is overwritten or followed.
+  await writeFile(path.join(instance.directory, 'outside.txt'), 'keep');
+  await symlink(path.join(instance.directory, 'outside.txt'), path.join(mine, 'link.txt'));
+  assert.equal((await send(id, { files: [{ name: 'notes.txt', data: b64('second') }, { name: 'link.txt', data: b64('evil') }] })).status, 202);
+  ({ hit, cursor } = await until(instance, said(id, 'echo:'), cursor));
+  assert.equal(await readFile(path.join(mine, 'notes.txt'), 'utf8'), 'hello', 'the first notes.txt stays');
+  assert.equal(await readFile(path.join(instance.directory, 'outside.txt'), 'utf8'), 'keep', 'the link is not followed');
+  const names = [...hit.data.content.text.matchAll(/\[file (\S+) /g)].map((m) => m[1]);
+  assert.match(names[0], /^notes-[0-9a-f]{8}\.txt$/); assert.match(names[1], /^link-[0-9a-f]{8}\.txt$/);
+  assert.deepEqual([await readFile(path.join(mine, names[0]), 'utf8'), await readFile(path.join(mine, names[1]), 'utf8')], ['second', 'evil']);
+  cursor = (await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, cursor - 1)).cursor;
+  // A name cannot leave the folder; a chat id cannot either; over the limit is said plainly.
+  for (const [why, files] of [['parent', [{ name: '../x', data: '' }]], ['slash', [{ name: 'a/x', data: '' }]], ['backslash', [{ name: 'a\\x', data: '' }]],
+    ['dot dot', [{ name: '..', data: '' }]], ['dot', [{ name: '.', data: '' }]], ['empty name', [{ name: '', data: '' }]], ['nul', [{ name: 'x\0y', data: '' }]], ['over 200 bytes', [{ name: '\u20ac'.repeat(67) + '.txt', data: '' }]],
+    ['absolute', [{ name: '/tmp/x', data: '' }]], ['not base64', [{ name: 'x', data: '<script>' }]], ['five', Array(5).fill({ name: 'x', data: '' })], ['not a list', { name: 'x', data: '' }],
+    ['a forged link', undefined]])
+    assert.equal((await send(id, files ? { files } : { images: [{ file: '../../desktop.json', size: 1 }] })).status, 400, why);
+  assert.equal((await send('..%2F..%2Fx', { files: [{ name: 'x', data: '' }] })).status, 404, 'not a chat id');
+  const big = await send(id, { files: [{ name: 'big.bin', data: 'A'.repeat(8 * 1024 * 1024 + 4) }] });
+  assert.deepEqual([big.status, big.body.error, big.body.message], [413, 'file-too-large', 'A file is over 6 MiB (8 MiB as sent); nothing was sent.']);
+  assert.equal(existsSync(path.join(instance.directory, 'x')) || existsSync(path.join(attachments, 'x')) || existsSync(path.join(mine, 'big.bin')), false, 'nothing written');
+  // Deleting a chat deletes its folder only.
+  assert.equal((await send(other, { files: [{ name: 'theirs.txt', data: b64('x') }] })).status, 202);
+  await until(instance, (event) => event.type === 'turn-end' && event.conversation === other);
+  assert.equal((await call(instance, `/chat/${other}/delete`, 'POST', {})).status, 200);
+  assert.deepEqual([existsSync(path.join(attachments, other)), existsSync(path.join(mine, 'notes.txt')), existsSync(path.join(instance.directory, 'outside.txt'))], [false, true, true]);
+  // A resumed chat gets its folder too (the real Claude adapter restarts its query once when it changes), and the message it was sent is answered.
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'after', files: [{ name: 'later.txt', data: b64('l') }] })).status, 202);
+  const back = await until(second, said(id, 'echo:after'), 0);
+  assert.equal(back.hit.data.content.text, `echo:after[file later.txt ${pathToFileURL(path.join(mine, 'later.txt')).href}]`);
+  const resumed = (await readFile(path.join(instance.workspace, 'dirs.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line)).filter((d) => d.what === 'resume');
+  assert.deepEqual(resumed.at(-1)?.dirs, [mine]);
+  console.log('PASS files: saved 0600 in a 0700 chat folder, sent as links, clash and link renamed, 13 bad shapes 400, 8 MiB+ 413 plainly, delete took only its chat folder, resume carried the folder');
 });
 
 test('images: a photo reaches the agent as an image block; bad types, encodings, counts, sizes and image-free agents refused (threat model row 20)', async (t) => {
