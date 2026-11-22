@@ -21,7 +21,7 @@ the handlers and security boundary here are new code.
 | electron | 44.7.2 | MIT plus bundled third-party notices |
 | @agentclientprotocol/sdk | 2.6.0 | Apache-2.0 |
 | @agentclientprotocol/claude-agent-acp | 0.106.0 | Apache-2.0 |
-| @agentclientprotocol/codex-acp | 2.6.0 | Apache-2.0 (brings @openai/codex 0.166.0, Apache-2.0) |
+| @agentclientprotocol/codex-acp | 2.9.0 | Apache-2.0 (brings @openai/codex 0.171.0, Apache-2.0) |
 
 The Claude adapter brings @anthropic-ai/claude-agent-sdk 0.3.322 and its native
 claude-agent-sdk-linux-x64 binary, under Anthropic's own terms (their LICENSE.md and
