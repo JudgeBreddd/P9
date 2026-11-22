@@ -1,13 +1,16 @@
-// CAT-1: the agent catalog, one entry per agent P9 can run. The server's per-agent tables are read from here; behaviour
-// that differs per agent beyond data (the usage readers) stays where it is for now.
+// CAT-1: the agent catalog, one entry per agent P9 can run. The server's per-agent tables are read from here.
 // No imports: scripts/deps.mjs (install.sh's check) loads deps.mjs, which reads this, before the daemon's modules are built.
 // modes: name -> { value: what the agent is sent, tier: 0 reads only, 1 asks before each action, 2 edits files, 3 acts with
 // a reviewer, 4 acts unasked }. start: the mode value a chat starts in; auto: the mode name a sprint worker starts in;
 // narrow: the no-write mode value (the agent lock's, and a turn answering another chat's question).
+// usage: reader, the limits.mjs reader of its plan limits; staleMs, how old a reading may be before it is marked stale (the
+// ledger's own 15 min line); pool, the plan the reading counts against; hideSignedOut, the limits are shown as signed out
+// (null) when the sign-in file is missing. Claude's is false: on a Mac its sign-in can live in the keychain, not a file.
 // acp: the ACP version P9 asks the agent for (chat.mjs ACP_ASK says why each is what it is). tellStart: the start mode P9
 // sets on a new or resumed session is shown at once; false, it is set quietly and the window's mode comes with the first
 // prompt (Claude's, as its adapter's own start was).
-const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes) });
+const STALE = 15 * 60 * 1000;
+const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes), usage: Object.freeze(agent.usage) });
 export const CATALOG = Object.freeze([
   entry({ id: 'claude', name: 'Claude Code', adapter: 'claude-agent-acp', cliPass: ' --cli',
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], command: 'claude auth login' },
@@ -15,7 +18,7 @@ export const CATALOG = Object.freeze([
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
       'Accept edits': { value: 'acceptEdits', tier: 2 }, 'Bypass permissions': { value: 'bypassPermissions', tier: 4 } },
     acp: 1, tellStart: false,
-    start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: 'claude-json',
+    start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', staleMs: STALE, pool: 'claude', hideSignedOut: false },
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
     why: 'Claude Code, for Claude chats and a terminal.' }),
   entry({ id: 'codex', name: 'Codex', adapter: 'codex-acp', cliPass: '',
@@ -24,7 +27,7 @@ export const CATALOG = Object.freeze([
     modes: { 'Read-only': { value: 'read-only', tier: 0 }, 'Workspace access': { value: 'workspace-write', tier: 2 },
       'Auto review': { value: 'agent', tier: 3 }, 'Full access': { value: 'agent-full-access', tier: 4 } },
     acp: 2, tellStart: true,
-    start: 'agent', auto: 'Auto review', narrow: 'read-only', models: 'session', usage: 'codex-files',
+    start: 'agent', auto: 'Auto review', narrow: 'read-only', models: 'session', usage: { reader: 'codex-files', staleMs: STALE, pool: 'codex', hideSignedOut: true },
     signedOut: 'Codex is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal and run codex login. Then start a new chat.',
     why: 'Codex, for Codex chats and a terminal.' }),
 ]);
@@ -54,4 +57,4 @@ export const TELL_START = each((a) => a.tellStart);
 // GET /agents: what a window may know about each agent. No paths, no commands, no adapter package.
 export const publicAgents = () => ({ agents: CATALOG.map((a) => ({ id: a.id, name: a.name,
   modes: Object.entries(a.modes).map(([name, m]) => ({ name, tier: m.tier })), start: Object.keys(a.modes).find((k) => a.modes[k].value === a.start),
-  auto: a.auto, narrow: Object.keys(a.modes).find((k) => a.modes[k].value === a.narrow), models: a.models, usage: a.usage })) });
+  auto: a.auto, narrow: Object.keys(a.modes).find((k) => a.modes[k].value === a.narrow), models: a.models, usage: a.usage.reader })) });
