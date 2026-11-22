@@ -20,7 +20,8 @@ export const CATALOG = Object.freeze([
     acp: 1, tellStart: false,
     start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', poll: 'claude-sdk', staleMs: STALE, pool: 'claude', hideSignedOut: false },
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
-    why: 'Claude Code, for Claude chats and a terminal.' }),
+    why: 'Claude Code, for Claude chats and a terminal.',
+    short: 'Claude', pick: 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.', account: 'A Claude account. After you sign in the browser shows a code: paste it here.' }),
   entry({ id: 'codex', name: 'Codex', adapter: 'codex-acp', cliPass: '',
     login: { args: ['cli', 'login', '--device-auth'], command: 'codex login' },
     signIn: { kind: 'device-code', flag: '--device-auth', dir: 'codexHome', file: 'auth.json' },
@@ -29,7 +30,8 @@ export const CATALOG = Object.freeze([
     acp: 2, tellStart: true,
     start: 'agent', auto: 'Auto review', narrow: 'read-only', models: 'session', usage: { reader: 'codex-files', poll: 'codex-app', staleMs: STALE, pool: 'codex', hideSignedOut: true },
     signedOut: 'Codex is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal and run codex login. Then start a new chat.',
-    why: 'Codex, for Codex chats and a terminal.' }),
+    why: 'Codex, for Codex chats and a terminal.',
+    short: 'Codex', pick: 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.', account: 'A ChatGPT account. P9 shows a one-time code to enter on OpenAI\'s sign-in page.' }),
 ]);
 
 const each = (pick) => Object.freeze(Object.fromEntries(CATALOG.map((a) => [a.id, pick(a)])));
@@ -54,7 +56,8 @@ export const SIGN_IN_KIND = each((a) => a.signIn.kind);
 export const SIGN_IN_FLAG = each((a) => a.signIn.flag ?? null);
 export const ACP = each((a) => a.acp);
 export const TELL_START = each((a) => a.tellStart);
-// GET /agents: what a window may know about each agent. No paths, no commands, no adapter package.
+// GET /agents: what a window may know about each agent. No paths, no commands, no adapter package. CAT-1e: short, pick and
+// account are the setup wizard's name and lines for it; signIn is its sign-in kind (SIGN_IN_KIND).
 export const publicAgents = () => ({ agents: CATALOG.map((a) => ({ id: a.id, name: a.name,
   modes: Object.entries(a.modes).map(([name, m]) => ({ name, tier: m.tier })), start: Object.keys(a.modes).find((k) => a.modes[k].value === a.start),
-  auto: a.auto, narrow: Object.keys(a.modes).find((k) => a.modes[k].value === a.narrow), models: a.models, usage: a.usage.reader })) });
+  auto: a.auto, narrow: Object.keys(a.modes).find((k) => a.modes[k].value === a.narrow), models: a.models, usage: a.usage.reader, short: a.short, pick: a.pick, account: a.account, signIn: a.signIn.kind })) });
