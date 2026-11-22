@@ -390,7 +390,7 @@ function renderModal() {
   } else if (m.kind === 'asks') {
     const asks = S.sessions.filter(s => s.pending); if (!asks.length) return closeModal();
     $('#mdlT').textContent = asks.length + ' agents need you';
-    body.innerHTML = `<ul class="mlist">${asks.map(s => row(s.id, `<span class="dot" data-agent="${esc(s.agent)}" data-live></span>`, esc(s.title), names[s.agent] + ' · ' + (s.pending === 'approval' ? 'wants approval' : 'asks a question'))).join('')}</ul>`;
+    body.innerHTML = `<ul class="mlist">${asks.map(s => row(s.id, `<span class="dot" data-agent="${esc(s.agent)}" data-live></span>`, esc(s.title), esc(names[s.agent]) + ' · ' + (s.pending === 'approval' ? 'wants approval' : 'asks a question'))).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'chat', id: b.dataset.i, back: m }));
   } else if (m.kind === 'reviews') {
     if (!S.reviews.length) return closeModal();

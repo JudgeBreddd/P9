@@ -347,6 +347,35 @@ test('CAT-1f: a failed first agents read is asked again; the third agent shows w
   console.log('PASS CAT-1f: the agents read was asked again after a 503 and the third agent showed without a reload');
 });
 
+// CAT-1f: a name and a mode from GET /agents are text, never markup: the chat pane and Settings drew the names into HTML
+// raw. Forced: main answers with Claude's short name and one more mode carrying an element.
+test('CAT-1f: an agent name or mode with markup in it shows as text in the chat pane and Settings', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-cat1f-')), 'profile');
+  const { app, page } = await launch(t, instance, profile);
+  const bad = '<b data-x>Cl"</b>';
+  await app.evaluate(({ ipcMain }, bad) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (e, ...args) => { const r = await h(e, ...args); if (args[0] !== 'agents' || r.status !== 200) return r;
+      return { ...r, body: { agents: r.body.agents.map((a) => a.id === 'claude' ? { ...a, short: bad, modes: [...a.modes, { name: '<i data-x>Go</i>', tier: 9 }] } : a) } }; });
+  }, bad);
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await page.click('#newBtn');
+  await page.locator('#navList .row[data-chat]').first().waitFor({ timeout: 15000 });
+  const id = await page.locator('#navList .row[data-chat]').first().getAttribute('data-chat');
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
+  const pane = page.locator('#chats .pane[data-id="' + id + '"]');
+  await pane.waitFor();
+  assert.equal(await pane.getAttribute('aria-label'), bad + ' chat');
+  assert.equal(await page.locator('[data-x]').count(), 0, 'no element from the name in the pane');
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]');
+  const row = page.locator('.set-defaults').first();
+  assert.equal(await row.locator('strong').innerText(), bad);
+  assert.ok((await row.locator('[data-default-mode] option').allInnerTexts()).includes('<i data-x>Go</i>'));
+  assert.equal(await page.locator('[data-x]').count(), 0, 'no element from the name or mode in Settings');
+  console.log('PASS CAT-1f: a catalog name and mode with markup show as text in the chat pane and Settings');
+});
+
 test('O131: after a daemon restart and a window reload whose first read of the defaults failed, a New chat starts on the saved Default model and effort', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-o131-')), 'profile');
