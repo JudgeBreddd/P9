@@ -148,6 +148,48 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   console.log('PASS Worker folders A6');
 });
 
+// A sprint never ends (3): the agent's scratch folder for a worker folder (<tmp>/claude-<uid>/<the folder, each character
+// other than a letter or digit as ->) goes with the folder clean-up removes; a kept folder keeps its own. Two folders
+// whose names differ only in . _ - share one scratch folder, so a kept one keeps it.
+test('Worker folders A6: clean-up removes a removed folder\'s agent scratch folder; a kept folder, and one sharing its name, keep theirs', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const scratch = path.join(dir, 'scratch'), named = (folder) => path.join(scratch, folder.replace(/[^a-zA-Z0-9]/g, '-'));
+  const folders = createWorkerFolders({ home, scratch });
+  const work = async (item) => { const { folder } = await folders.make(ID, item, owner); write(path.join(folder, item + '.txt'), item + '\n'); g(folder, 'add', '.'); g(folder, 'commit', '-qm', item); return folder; };
+  const merged = await work('merged'), open = await work('open'), dotted = await work('a.b'), dashed = await work('a-b');
+  for (const [folder, item] of [[merged, 'merged'], [dotted, 'a.b']]) { g(folder, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/' + item, item); }
+  for (const folder of [merged, open, dotted]) write(path.join(named(folder), 'tasks', 'one.output'), 'output\n');
+  assert.equal(named(dotted), named(dashed), 'a.b and a-b share one scratch folder');
+  write(path.join(scratch, 'unrelated', 'x'), 'x\n');
+  const result = await folders.clean(ID);
+  assert.deepEqual(result.removed, ['a.b', 'merged']);
+  assert.equal(fs.existsSync(named(merged)), false, 'the removed folder\'s scratch went with it');
+  assert.ok(fs.existsSync(path.join(named(open), 'tasks', 'one.output')), 'a kept folder keeps its scratch');
+  assert.ok(fs.existsSync(path.join(named(dashed), 'tasks', 'one.output')), 'a.b went, but a-b is kept and shares the scratch: it stays');
+  assert.ok(fs.existsSync(path.join(scratch, 'unrelated', 'x')), 'another folder\'s scratch is not touched');
+  console.log('PASS Worker folders A6 scratch');
+});
+
+// Fix 2 (review of #464): the scratch name is lossy and the scratch place is shared by every folder of this user, so a
+// folder outside this sprint can have the same name (here <dir>/sprints-<id>/workers/merged against
+// <dir>/sprints/<id>/workers/merged). While any existing folder still gives that name, the scratch stays.
+test('Worker folders A6: a removed folder\'s scratch stays while a folder outside the sprint gives the same scratch name', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const scratch = path.join(dir, 'scratch'), named = (folder) => path.join(scratch, folder.replace(/[^a-zA-Z0-9]/g, '-'));
+  const folders = createWorkerFolders({ home, scratch });
+  const { folder } = await folders.make(ID, 'merged', owner);
+  write(path.join(folder, 'm.txt'), 'm\n'); g(folder, 'add', '.'); g(folder, 'commit', '-qm', 'm');
+  g(folder, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
+  const other = path.join(dir, 'sprints-' + ID, 'workers', 'merged');
+  fs.mkdirSync(other, { recursive: true });
+  assert.equal(named(other), named(folder), 'the outside folder gives the same scratch name');
+  write(path.join(named(folder), 'tasks', 'one.output'), 'output\n');
+  assert.deepEqual((await folders.clean(ID)).removed, ['merged']);
+  assert.ok(fs.existsSync(path.join(named(folder), 'tasks', 'one.output')), 'the outside folder may own the scratch: it stays');
+  fs.rmSync(path.join(dir, 'sprints-' + ID), { recursive: true });
+  console.log('PASS Worker folders A6 scratch outside');
+});
+
 // daemon-6 (nightly 8: three squash-merged folders were kept as "not in the main line"): a later PR changes a
 // file the worker's merged PR also changed. The work is still in the main line, so its folder goes; a worker whose lines
 // the main line later rewrote, and one not merged, are kept.
