@@ -1266,13 +1266,21 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   const row = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === run.sprint);
   const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash });
   assert.equal(started.status, 200, JSON.stringify(started));
+  // A sprint never ends (nightly 11): hooks.json changed after Start, as on the owner's closed sprint.
+  await writeFile(hooksFile, JSON.stringify({ scripts: [{ name: 'gate', command: `${process.execPath} ${gate}`, point: 'before-close', blocking: true }, { name: 'later', command: 'true', point: 'after-close' }] }));
   const { page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const spSec = page.locator(`[data-sprint="${run.sprint}"]`);
+  const drawn = async () => [await spSec.locator('[data-sp-roles] select, [data-sp-roles] input').count() > 0, await spSec.locator('[data-pj="spscripts"]').count(), await spSec.locator('[data-pj="spclean"]').count(),
+    await spSec.locator('[data-sp-scripts]').count() > 0, await spSec.locator('[data-pj="spfile"]').count() > 0, /press Start again/.test(await spSec.textContent())];
   const btn = page.locator(`[data-pj="spopen"][data-lead="${run.sprint}"]`), view = page.locator('[data-sv]'), close = page.locator('[data-pj="spclose"]'), ask = page.locator('dialog[open] form');
   const status = () => call(instance, `/sprints/${run.sprint}/status`);
   await btn.click();
   await close.waitFor({ timeout: 10000 });
   assert.deepEqual([await view.getAttribute('data-sv'), await page.locator('[data-sp-title]').textContent()], ['open', 'Sprint View']);
+  // An open sprint's page is unchanged: editable roles, Sprint scripts and Clean up, the scripts Start again approves, its files.
+  await spSec.locator('[data-sp-roles]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await drawn(), [true, 1, 1, true, true, true], 'the open sprint\'s page');
   // The press asks first; Cancel closes nothing.
   await close.click();
   assert.match(await ask.textContent(), /Close this sprint\?.*Nothing is deleted/s);
@@ -1292,6 +1300,13 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Closed sprint');
   assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record/);
   assert.deepEqual([await close.count(), await page.locator('[data-pj="spstart"]').count()], [0, 0], 'a closed sprint has no Close and no Start');
+  // A sprint never ends (nightly 11): under the record, no editable roles or Add worker, no Sprint scripts, no scripts or
+  // "press Start again"; Clean up stays (folders Close kept) and its files stay listed, read only.
+  await until(async () => await spSec.locator('[data-sp-roles]').count() === 0, 'the closed page drops its roles');
+  assert.deepEqual(await drawn(), [false, 0, 1, false, true, false], 'the closed sprint\'s page');
+  await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  assert.equal(await page.locator('[data-sp-box]').getAttribute('readonly'), '', 'a closed sprint\'s file reads only');
+  await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
   assert.deepEqual([await page.locator('.sv-facts dt').first().textContent(), await page.locator('[data-sv-fact="ticked"]').textContent(), await page.locator('[data-sv-worker="lead"] [data-sv-state]').textContent()],
     ['Ran', `${st.done.ticked} of ${st.done.total}`, 'Stopped']);
   // The record no longer changes: a box ticked after Close is not counted, on the page or by the route.
