@@ -208,6 +208,13 @@ export const limitLine = (name, limits, now = Date.now(), signedOut = false) => 
   const old = age < 15 * 60000 ? 'just now' : hours < 1 ? Math.round(age / 60000) + ' min old' : hours < 48 ? Math.round(hours) + ' h old' : Math.round(hours / 24) + ' d old';
   return { name, text: part('5 h', limits.fiveHour) + ' · ' + part('week', limits.sevenDay) + ' · ' + old, stale: hours >= 1 };
 };
+// CAT-1g: /usage limits hold one key per catalog agent (an older daemon: claude, codex) and signedOut; names is GET /agents'.
+export const limitAgents = (limits) => Object.keys(limits ?? {}).filter((a) => a !== 'signedOut');
+export const limitLines = (limits, names) => limitAgents(limits).map((a) => ({ ...limitLine(names[a] || a, limits[a], undefined, !!limits.signedOut?.includes(a)), id: a }));
+// Mission Control's Usage list items; an agent's name and text are the daemon's, so both are escaped here.
+export const limitItems = (limits, names) => limitLines(limits, names).map((l) => `<li class="sm${l.stale ? ' muted' : ''}"><b>${esc(l.name)}</b> ${esc(l.text)}</li>`).join('');
+// The Usage card's one line: the first agent with a reading, else the first agent's line.
+export const limitCard = (limits, names) => { const lines = limitLines(limits, names); return lines.find((l) => limits[l.id]) ?? lines[0]; };
 
 // A workspace image from the Files pane, desktop and phone (rows 23/26/27 adds): read-only, through GET /files/image, which names
 // the type from the bytes. fileImageSrc lets only that type and plain base64 into an img tag; anything else is null.

@@ -1,4 +1,4 @@
-import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -565,7 +565,7 @@ const wins = {
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (an app's or page's graphic
     // or icon is its launch button). ponytail: the registry has no icon field yet.
     body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
-  musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
+  musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitCard(usage.limits, names); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? c.name + ' · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's plan windows as rows with the pace tick
     inline: () => { const rows = usageRows();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>${tokensSay()}`) + profileLines(usage); } },
