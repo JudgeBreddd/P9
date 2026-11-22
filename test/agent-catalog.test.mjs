@@ -45,6 +45,10 @@ test('CAT-1: every server table read from the catalog holds the value its litera
   assert.equal(Object.isFrozen(CATALOG) && CATALOG.every((a) => Object.isFrozen(a) && Object.isFrozen(a.modes)), true);
 });
 
+const WIZARD = {
+  claude: ['Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.', 'A Claude account. After you sign in the browser shows a code: paste it here.', 'browser'],
+  codex: ['Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.', 'A ChatGPT account. P9 shows a one-time code to enter on OpenAI\'s sign-in page.', 'device-code'],
+};
 test('CAT-1: GET /agents through a real daemon serves each agent, its modes and tiers, and no path or command', async (t) => {
   assert.ok(ROUTES.includes('/agents'));
   const instance = await daemon(t);
@@ -57,6 +61,8 @@ test('CAT-1: GET /agents through a real daemon serves each agent, its modes and 
   for (const a of agents) {
     assert.deepEqual(a.modes.map((m) => [m.name, m.tier]), Object.keys(BEFORE.MODES[a.id]).map((name) => [name, BEFORE.TIER[a.id][name]]));
     assert.deepEqual([a.start, a.auto, a.narrow], { claude: ['Manual', 'Auto', 'Plan'], codex: ['Auto review', 'Auto review', 'Read-only'] }[a.id]);
+    // CAT-1e: the setup wizard's name, pick line, sign-in line and sign-in kind, read from here (no list of its own).
+    assert.deepEqual([a.short, a.pick, a.account, a.signIn], WIZARD[a.id], 'wizard ' + a.id);
   }
   for (const secret of ['.credentials.json', 'auth.json', 'login', '--cli', 'claude-agent-acp', 'codex-acp', 'claudeDir', 'codexHome']) assert.equal(answer.text.includes(secret), false, secret);
 });

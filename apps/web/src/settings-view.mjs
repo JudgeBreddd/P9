@@ -465,10 +465,12 @@ async function loadSetup(paths) {
 // card leaves it out: a missing pick is a missing sign-in too.
 function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: (!s.settingsPresent && !s.found?.registry && !s.found?.waiting) || s.settings && s.agentsFile !== false && s.registryFile !== false && !(s.agentsFile === null && s.registryFile === null && (s.found?.registry || s.found?.waiting)), terminal: s.tmux !== false }; }
 function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
-// Item 15: the agents the wizard offers, each with the one line that says what it needs.
-const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
+// Item 15: the agents the wizard offers, each with the one line that says what it needs. CAT-1e: GET /agents, read when
+// the wizard opens (W.agents; read again on each refresh until one answers). An older remote's has no short: its name then.
+const AGENTS_PICK = () => W.agents || [];
+const wizAgents = async () => W.agents ||= await window.p9.chat('agents', {}).then(r => r.status === 200 ? r.body.agents.map(a => ({ short: a.name, ...a })) : null, () => null);
 // What the pick step shows as picked: this run's choice, else what is installed or signed in already.
-const wizPicked = () => W.picked || AGENTS_PICK.filter(([a]) => W.s?.[a + 'Cli'] || W.s?.[a]).map(([a]) => a);
+const wizPicked = () => W.picked || AGENTS_PICK().filter(({ id }) => W.s?.[id + 'Cli'] || W.s?.[id]).map(({ id }) => id);
 const wizReady = () => { const on = wizPicked(); return on.length > 0 && on.every(a => W.s?.[a + 'Cli']); };
 // The admin screen's name for each system item /setup can report missing (deps.mjs wizardDependencies).
 const ADMIN_NAMES = { tmux: 'tmux', ssh: 'SSH client' };
@@ -500,6 +502,7 @@ async function welcome(at, agent, stale) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
   Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, have: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
   W.s = await loadSetup();
+  await wizAgents();
   if (agent) W.picked = [...new Set([...wizPicked(), agent])];
   const d = W.s && setupDone(W.s);
   W.i = typeof at === 'string' ? Math.max(0, wizSteps().indexOf(at)) : at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
@@ -509,12 +512,13 @@ async function welcome(at, agent, stale) {
   if (!outer.$('#welDlg').open) outer.$('#welDlg').showModal();
 }
 async function wizRefresh() {
-  const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
+  const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null), wizAgents()]);
   W.s = s; W.login = l?.status === 200 ? l.body : {};
   const began = W.login[W.began];
   if (began && !began.running) { if (began.exit === 0 && W.stale === W.began) W.stale = null; W.began = null; }
   if (s) { outer.S.setup = Object.values(setupDone(s)).includes(false) ? s : null; outer.renderCards(); }
-  if (s && !outer.S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
+  // CAT-1e: nor while the agents are unread (a failed GET /agents), or a done setup's wizard would stay without them.
+  if (s && !outer.S.setup && W.agents && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
   else if (!W.timer && outer.$('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
   outer.wizRender();
 }

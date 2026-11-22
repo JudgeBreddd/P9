@@ -803,6 +803,7 @@ export async function createDesktop({ state, open } = {}) {
     notes: ({ id: chat, ...rest }) => uuid(chat) && !Object.keys(rest).length && ['GET', `/chat/${chat}/notes`],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
+    agents: (body) => !Object.keys(body).length && ['GET', '/agents'], // CAT-1e: the catalog the setup wizard reads
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
     // "Create my starter files" with them; {} is the settings file's paths, or the starter set in an empty folder.
     setup: body => wizardPaths(body) && ['GET', '/setup' + (Object.keys(body).length ? '?' + new URLSearchParams(body) : '')],
