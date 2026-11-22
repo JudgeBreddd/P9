@@ -29,3 +29,11 @@ test('CAT-1g: the Usage card shows the first agent with a reading, not a signed-
   assert.equal(helpers.limitCard?.({ claude: null, codex: null }, names)?.text, 'no plan limits recorded yet', 'none read: the first line');
   assert.equal(helpers.limitCard?.({}, names), undefined, 'no agents: no line');
 });
+
+test('CAT-1g: a markup-like agent id or name in /usage limits shows as text in the Usage list', () => {
+  const html = helpers.limitItems?.({ '<img src=x onerror=alert(1)>': reading(5), kestrel: null, signedOut: ['kestrel'] }, { kestrel: '<b>Kes</b>' }) ?? '';
+  assert.match(html, /<b>&lt;img src=x onerror=alert\(1\)&gt;<\/b> 5 h 5%/, 'an unnamed id is escaped');
+  assert.match(html, /<b>&lt;b&gt;Kes&lt;\/b&gt;<\/b> &lt;b&gt;Kes&lt;\/b&gt; not logged in/, 'a name and its signed-out text are escaped');
+  assert.doesNotMatch(html, /<img|<b>Kes/);
+  assert.equal(helpers.limitItems?.({ claude: reading(42) }, names), '<li class="sm"><b>Claude</b> 5 h 42% · week n/a · just now</li>');
+});
