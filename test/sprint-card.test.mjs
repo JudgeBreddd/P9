@@ -313,8 +313,8 @@ test('Sprint card stays open when displaced left of the centered column', { time
 });
 
 // Row 722: a worker holding a role works its role's plan items (work, chat.mjs queueOf), so its card row says Work Queue
-// and names the item it is on: its open_chat task when it has one, else the first item not yet passed (as ready picks it),
-// and says when all have passed. A worker with no queue keeps its task or 'No item set'. A verdict moves it on in place.
+// and names the item it is on: the first item not yet passed (as ready picks it), even when an old open_chat task is set
+// (nightly 11: a worker's start task hid its queue item), and says when all have passed. A worker with no queue keeps its task or 'No item set'. A verdict moves it on in place.
 test('Sprint card: a queue worker\'s row says Work Queue and names its next item', { timeout: 90000 }, async (t) => {
   const { app, page } = await launch(t);
   await sizeTo(app, 1400, 900);
@@ -327,6 +327,7 @@ test('Sprint card: a queue worker\'s row says Work Queue and names its next item
   await page.evaluate(w => window.__sprint.add(...w), [
     worker('q-next', 'Queue next', { work: items('passed', 'fix', 'todo') }),
     worker('q-task', 'Queue task', { task: { item: 'O9 its task' }, work: items('todo') }),
+    worker('q-taskdone', 'Task, queue done', { task: { item: 'O9 its task' }, work: items('passed') }),
     worker('q-done', 'Queue done', { work: items('passed', 'passed') }),
     worker('q-none', 'No queue', {}),
     worker('q-old', 'Task only', { task: { item: 'A1 login form' } }),
@@ -338,7 +339,8 @@ test('Sprint card: a queue worker\'s row says Work Queue and names its next item
   if (await page.locator('.sprint[data-folded="true"]').count()) await page.click('[data-sprint-fold]');
   const rows = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.sprint .sp-row')].map(r => [r.dataset.sprintOpen, [r.querySelector('.sp-item').textContent, r.querySelector('.sp-item').hasAttribute('data-work-queue')]])));
   assert.deepEqual(await rows(), {
-    'q-next': ['Work Queue · O2: item 2. Role w', true], 'q-task': ['Work Queue · O9 its task', true], 'q-done': ['Work Queue · all 2 passed', true],
+    'q-next': ['Work Queue · O2: item 2. Role w', true], 'q-task': ['Work Queue · O1: item 1. Role w', true], 'q-done': ['Work Queue · all 2 passed', true],
+    'q-taskdone': ['Work Queue · all 1 passed', true],
     'q-none': ['No item set', false], 'q-old': ['A1 login form', false], 'q-noid': ['Work Queue · : no id here. Role w', true], 'q-bare': ['Work Queue · next item', true], 'q-notext': ['Work Queue · O5', true] });
   // The Reviewer passes O2: the row moves on to O3 without a reload.
   await page.evaluate(w => window.__sprint.set('q-next', { work: w }), items('passed', 'passed', 'todo'));
