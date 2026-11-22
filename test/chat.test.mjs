@@ -573,15 +573,31 @@ test('files: no more than 4 files in all, and no name Windows would treat as a d
     assert.equal((await send({ files: [{ name, data: '' }] })).status, 400, `name ${JSON.stringify(name)}`);
   assert.equal((await send({ images: [{ file: 'CON', size: 1 }] })).status, 400, 'a forged link with a device name');
   assert.equal(existsSync(mine), false, 'nothing refused was saved');
-  // Names that only look like one are fine, and a 200-byte name that clashes still fits once tagged (209 bytes).
+  // Names that only look like one are fine, and a 200-byte name that clashes is cut before its tag, so it stays at 200 bytes.
   const long = 'a'.repeat(196) + '.txt';
   assert.equal((await send({ text: 'ok', files: [{ name: 'console.txt', data: '' }, { name: 'com10.txt', data: '' }, { name: long, data: '' }, { name: long, data: '' }] })).status, 202);
   const { hit } = await until(instance, said(id, 'echo:ok'));
   const names = [...hit.data.content.text.matchAll(/\[file (\S+) /g)].map((m) => m[1]);
   assert.deepEqual(names.slice(0, 3), ['console.txt', 'com10.txt', long]);
-  assert.match(names[3], new RegExp(`^a{196}-[0-9a-f]{8}\\.txt$`));
+  assert.match(names[3], new RegExp(`^a{187}-[0-9a-f]{8}\\.txt$`)); assert.equal(Buffer.byteLength(names[3]), 200);
   assert.equal(existsSync(path.join(mine, names[3])), true);
-  console.log('PASS files FIX2: 5 files in all refused both ways, 21 Windows device/stream/trailing names and a forged CON refused, look-alikes and a tagged 209-byte name saved');
+  console.log('PASS files FIX2: 5 files in all refused both ways, 21 Windows device/stream/trailing names and a forged CON refused, look-alikes saved, a tagged 200-byte name kept at 200');
+});
+
+test('files: a clashing 200-byte name sent while the chat works is still answered when its queued turn starts (A2 step 1 FIX3)', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  const long = 'b'.repeat(196) + '.txt', euro = '\u20ac'.repeat(64) + '.txt'; // 200 and 196 bytes; the second cut must not split a character
+  assert.equal((await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'tools 1' }))).status, 202);
+  const queued = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'later', when: 'queue',
+    files: [{ name: long, data: '' }, { name: long, data: '' }, { name: euro, data: '' }, { name: euro, data: '' }] }));
+  assert.deepEqual([queued.status, queued.body.when], [202, 'queue']);
+  const { hit } = await until(instance, said(id, 'echo:later'));
+  const names = [...hit.data.content.text.matchAll(/\[file (\S+) /g)].map((m) => m[1]);
+  assert.equal(names.length, 4);
+  assert.deepEqual(names.map((name) => Buffer.byteLength(name) <= 200), [true, true, true, true], 'every saved name fits the check it is read back with');
+  assert.match(names[1], /^b{187}-[0-9a-f]{8}\.txt$/); assert.match(names[3], /^\u20ac{62}-[0-9a-f]{8}\.txt$/);
+  console.log('PASS files FIX3: a queued message with two clashing 200-byte names (ASCII and 3-byte characters) was answered; tagged names 200 and 199 bytes');
 });
 
 test('images: a photo reaches the agent as an image block; bad types, encodings, counts, sizes and image-free agents refused (threat model row 20)', async (t) => {

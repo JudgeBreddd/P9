@@ -47,8 +47,8 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp
 const MAX_FILES = 4, MAX_FILE = 8 * 1024 * 1024, BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 // FIX2 (Reviewer): a name is also refused if Windows would read it as something else: a device (CON, NUL, COM1, LPT\u00b9,
 // CONIN$... with or without an extension, any case), a name it would trim (a trailing dot or space) or a stream (':', above).
-// 200 bytes leaves room for the 9-character tag a taken name gets, under every system's 255 per name; Node opens long
-// Windows paths itself.
+// 200 bytes is under every system's 255 per name; a taken name's tag is cut to fit the same 200 (tagged, below). Node opens
+// long Windows paths itself.
 const DEVICE = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\.|$)/i;
 const fileName = (name) => typeof name === 'string' && name.length > 0 && Buffer.byteLength(name) <= 200 && name !== '.' && name !== '..' && !/[\x00-\x1f/\\:*?"<>|]/.test(name)
   && !/[. ]$/.test(name) && !DEVICE.test(name);
@@ -378,9 +378,18 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   // Each file is created new (O_EXCL, so a name taken by an earlier file or by a link the agent made is never written
   // through), 0600; a taken name gets a short random tag before its extension.
+  // FIX3 (Reviewer): the tagged name keeps fileName's own limit, so a queued or held message that names it again passes
+  // imagesOk: the base is cut, whole characters only, to make room (a very long extension goes behind the tag, cut too).
+  const tagged = (name, ext) => {
+    if (Buffer.byteLength(ext) > 100) ext = '';
+    const base = Array.from(name.slice(0, name.length - ext.length)), tag = '-' + randomUUID().slice(0, 8) + ext;
+    while (base.length && Buffer.byteLength(base.join('') + tag) > 200) base.pop();
+    return base.join('') + tag;
+  };
   const save = (id, files) => files.map(({ name, data }) => {
     const dir = filesOf(id), bytes = Buffer.from(data, 'base64'), ext = path.extname(name);
-    for (let n = 0, file = name; ; n += 1, file = name.slice(0, name.length - ext.length) + '-' + randomUUID().slice(0, 8) + ext) {
+    for (let n = 0, file = name; ; n += 1, file = tagged(name, ext)) {
+      if (!fileName(file)) throw new Error('file-name');
       let fd;
       try { fd = openSync(path.join(dir, file), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
       catch (error) { if (error.code === 'EEXIST' && n < 8) continue; throw error; }
