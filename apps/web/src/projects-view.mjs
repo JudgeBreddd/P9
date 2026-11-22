@@ -244,8 +244,12 @@ export function installProjects(o, api) {
     if (shown) queueMicrotask(() => o.renderChats()); // O212: every way back paints the chats at once (archiving the shown project did not), so a pane hidden meanwhile is placed before the user can scroll it
     if (!on || v.kind !== 'project' || v.id !== instrOpen || spPage) instrOpen = ''; // O198: another page (a chat, another project, Archived, a sprint's page) closes it
     if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
-    if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
+    // A sprint closed meanwhile (elsewhere too) is drawn even while a field of it has the focus, so its file box reads only;
+    // the draft stays in drafts, its pending save still goes, and fillBox puts its text back (A sprint never ends FIX1).
+    const a = document.activeElement, shutA = page.contains(a) && cur?.sprints?.find(x => x.lead === a.closest('[data-sprint]')?.dataset.sprint)?.closed;
+    if (page.contains(a) && a.matches('[contenteditable], textarea, input') && !shutA) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());
+    if (shutA) fillBox(false);
     // morph changes an option's selected attribute only; a pick the user changed keeps showing their choice, so each role
     // pick is set to what roles.json says (after a refused save it says the lead's value).
     page.querySelectorAll('select[data-spr]').forEach(s => { s.value = s.querySelector('option[selected]')?.value ?? ''; });
@@ -267,7 +271,7 @@ export function installProjects(o, api) {
   // O138: the shown sprint's files are read again with it (on opening, then every 5 s), so a roles.json changed on disk
   // shows: a torn or broken one through takeFiles (last good rows, then the file as written and why it does not read),
   // a fixed one as its rows. Drawn again only when a file of that sprint changed.
-  const filesSeen = sp => (sp?.files ?? []).map(f => f.name + ' ' + f.hash).join('\n');
+  const filesSeen = sp => (sp?.closed ? 'closed\n' : '') + (sp?.files ?? []).map(f => f.name + ' ' + f.hash).join('\n'); // closed: a Close made elsewhere is taken
   async function rereadFiles(lead) {
     const id = cur?.id, r = id && await call('project', { id }, { quiet: true }).catch(() => null);
     if (r?.status !== 200 || cur?.id !== id || spPage !== lead) return;

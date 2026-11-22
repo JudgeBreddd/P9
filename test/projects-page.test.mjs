@@ -1326,6 +1326,49 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   console.log('PASS Close sprint page: the press asked first and Cancel closed nothing; a before-close exit 1 was said beside the button and the sprint stayed open; the next press closed it: Closed sprint, by you, Ran, the lead Stopped, no Close and no Start, equal to the status route; a box ticked after Close changed nothing; the project page\'s button says Closed');
 });
 
+// A sprint never ends FIX1 (review of #453): a sprint closed elsewhere (another window, an agent's close_sprint) while one of
+// its files has the focus. The page's focus guard kept the box editable; now the closure is taken on the 5 s re-read and
+// the box reads only, with the live Setup gone. A draft typed before the Close keeps its text and its pending save.
+test('projects: a sprint closed elsewhere while its file box has the focus turns read only and keeps the typed text', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Elsewhere', work: { kind: 'new', parent: '', name: 'elsewhere' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const plan = '# Plan\n\n- [ ] A1: the thing; role lead\n', sprints = {};
+  for (const key of ['draft', 'none']) {
+    const run = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Closed ' + key });
+    await writeFile(path.join(run.folder, 'sprint.md'), plan);
+    await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+    await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+    const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', {});
+    assert.equal(started.status, 200, key + ': ' + JSON.stringify(started));
+    sprints[key] = run;
+  }
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  for (const [key, run] of Object.entries(sprints)) {
+    await page.locator(`[data-pj="spopen"][data-lead="${run.sprint}"]`).click();
+    const spSec = page.locator(`[data-sprint="${run.sprint}"]`), box = page.locator('[data-sp-box]');
+    await spSec.locator('[data-sp-roles]').waitFor({ timeout: 10000 });
+    await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+    await box.waitFor({ timeout: 10000 });
+    await box.evaluate((b) => { b.focus(); b.setSelectionRange(b.value.length, b.value.length); });
+    if (key === 'draft') await page.keyboard.type('typed');
+    const want = key === 'draft' ? plan + 'typed' : plan;
+    const closed = await call(instance, `/sprints/${run.sprint}/close`, 'POST', {}); // not this page's button: as another window or an agent would
+    assert.equal(closed.status, 200, JSON.stringify(closed));
+    await until(async () => await box.getAttribute('readonly') !== null, key + ': the focused box of a sprint closed elsewhere reads only', 20000);
+    assert.deepEqual([await spSec.locator('[data-sp-roles]').count(), await spSec.locator('[data-pj="spscripts"]').count(), await box.inputValue()], [0, 0, want], key + ': live Setup gone, the text kept');
+    await until(async () => (await readFile(path.join(run.folder, 'sprint.md'), 'utf8')) === want, key + ': the text typed before the Close is saved', 10000);
+    await page.keyboard.type('more');
+    assert.equal(await box.inputValue(), want, key + ': nothing more can be typed');
+    await page.locator('[data-pj="spback"]').click();
+  }
+  assert.deepEqual(errors, []);
+  console.log('PASS Close elsewhere: both sprints closed by the route while sprint.md had the focus; each box turned read only with roles and Sprint scripts gone; the draft "typed" was kept and saved, the other kept the file; more typing changed nothing');
+});
+
 // Row 697 A: Instructions typed and then left by the side panel (a chat, another project) inside the 600 ms were dropped:
 // the timer ran after the page was emptied and found no box. They are sent as the page is left. B, C: a role's row on
 // Sprint Setup sets what it owns and its mode (permissions), both kept in roles.json with the rest of the file.
