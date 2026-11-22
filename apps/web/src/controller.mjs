@@ -111,7 +111,7 @@ const $ = s => document.querySelector(s);
 // Mission panels, restarting every halo. paint writes only when the HTML changed; callers still re-wire their handlers.
 const written = new WeakMap();
 // Brings el's children in line with html without rebuilding them (the flashing was still there after the blink fix: every
-// event rebuilt the panes, tabs and cards, restarting halos, blinks and thumbnails). Nodes are matched by position; kept
+// event rebuilt the panes, tabs and cards, restarting halos, blinks and thumbnails). Nodes are matched by data-key, else by position; kept
 // ones keep their animations, decoded images and scroll. Form values follow the new markup, as a rebuild did. Pets
 // (canvas.pet, added by tickPets) are left in place.
 function morph(el, html) { const t = document.createElement('template'); t.innerHTML = html; sync(el, addHalos(t.content)); return el; }
@@ -121,25 +121,39 @@ function addHalos(root) {
   for (const h of [root, ...root.querySelectorAll('.fx-halo')]) if (h.matches?.('.fx-halo') && !h.querySelector(':scope > .halo')) h.insertAdjacentHTML('beforeend', '<span class="halo" aria-hidden="true"><i></i></span>');
   return root;
 }
+// WALL-SV-MORPH-KEY: a child with data-key is matched to the old child with the same key, so a row drawn above or removed
+// above a focused row leaves the focus (and its state) on the same row; children without one match by position among
+// themselves. A kept child out of place moves with moveBefore where the browser has it (keeps focus and animations).
+const pet = n => n.nodeType === 1 && n.matches('canvas.pet'), keyOf = n => n.nodeType === 1 && n.getAttribute('data-key');
 function sync(a, b) {
-  const olds = [...a.childNodes].filter(n => !(n.nodeType === 1 && n.matches('canvas.pet'))), news = [...b.childNodes];
-  news.forEach((n, i) => {
-    const o = olds[i];
-    if (!o) return a.appendChild(n);
-    if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) return a.replaceChild(n, o);
-    if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; return; }
-    // F2: an unchanged subtree (most of a pane while one reply streams) is compared natively and left alone. Not when it holds
-    // a form control: those take their value from the markup below, which the attributes alone do not show.
-    if (o.isEqualNode(n) && !FORM.has(n.tagName) && !n.querySelector('input, textarea, select')) return;
-    attrs(o, n);
-    if (o.tagName !== 'TEXTAREA') sync(o, n); // rewriting a textarea's text resets its caret
-    // read from the markup: a template's own .value is not filled in
-    const v = o.tagName === 'TEXTAREA' ? n.defaultValue : o.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(o.type) ? n.getAttribute('value') ?? '' : null;
-    if (v !== null) { if (o.value !== v) o.value = v; }
-    else if (o.tagName === 'INPUT') o.checked = n.hasAttribute('checked');
-    else if (o.tagName === 'SELECT') o.selectedIndex = Math.max(0, [...n.options].findIndex(x => x.defaultSelected));
-  });
-  olds.slice(news.length).forEach(n => n.remove());
+  const olds = [...a.childNodes].filter(n => !pet(n)), byKey = new Map(), free = [], used = new Set();
+  for (const o of olds) { const k = keyOf(o); k && !byKey.has(k) ? byKey.set(k, o) : free.push(o); }
+  let at = null;
+  for (const n of [...b.childNodes]) {
+    const k = keyOf(n), m = k ? byKey.get(k) : free.shift();
+    if (k) byKey.delete(k);
+    const o = m && m.nodeType === n.nodeType && m.nodeName === n.nodeName ? m : n;
+    if (m && o !== m) m.remove();
+    let ref = at ? at.nextSibling : a.firstChild;
+    while (ref && pet(ref)) ref = ref.nextSibling;
+    if (o !== ref) a.moveBefore && o.parentNode === a ? a.moveBefore(o, ref) : a.insertBefore(o, ref);
+    if (o !== n) { used.add(o); patch(o, n); }
+    at = o;
+  }
+  olds.forEach(o => used.has(o) || o.remove());
+}
+function patch(o, n) {
+  if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; return; }
+  // F2: an unchanged subtree (most of a pane while one reply streams) is compared natively and left alone. Not when it holds
+  // a form control: those take their value from the markup below, which the attributes alone do not show.
+  if (o.isEqualNode(n) && !FORM.has(n.tagName) && !n.querySelector('input, textarea, select')) return;
+  attrs(o, n);
+  if (o.tagName !== 'TEXTAREA') sync(o, n); // rewriting a textarea's text resets its caret
+  // read from the markup: a template's own .value is not filled in
+  const v = o.tagName === 'TEXTAREA' ? n.defaultValue : o.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(o.type) ? n.getAttribute('value') ?? '' : null;
+  if (v !== null) { if (o.value !== v) o.value = v; }
+  else if (o.tagName === 'INPUT') o.checked = n.hasAttribute('checked');
+  else if (o.tagName === 'SELECT') o.selectedIndex = Math.max(0, [...n.options].findIndex(x => x.defaultSelected));
 }
 const FORM = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
 function attrs(o, n) {
