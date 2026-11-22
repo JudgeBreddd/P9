@@ -678,7 +678,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `compact_chat`, `rename_chat`, `list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `archive_chat`, `compact_chat`, `rename_chat`, `list_chats`, `list_providers`, `plan_usage`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `sprint_setup_save`, `close_sprint` (§ Close sprint), `set_rules`,
 `answer_chat` and `ask_chat`, and record task completion and review with `ready` and `verdict`. The
 chat that starts them is the parent, the chats it starts are its workers, and the group is a
 sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
@@ -780,8 +780,11 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   is read again just before it goes, so one changed, paused or removed meanwhile goes as it is now, or not at all.
   A restart keeps them; runs missed while P9 was down go once.
 - **The agent lock.** `open_chat`, `send_chat`, `set_rules`, `sprint_setup_save`, `archive_chat`, `compact_chat`, `rename_chat`, `answer_chat`, `schedule_prompt` and `remove_schedule` are refused while it
-  is on, as are `ready`, `verdict` and `close_sprint`. Reading (`list_chats`, `list_providers`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+  is on, as are `ready`, `verdict` and `close_sprint`. Reading (`list_chats`, `list_providers`, `plan_usage`, `sprint_scripts`, `sprint_status`, `sprint_setup`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started. A close under the lock stops and archives nothing.
+- **Plan use.** `plan_usage` gives any chat's agent what the Usage page shows for each agent P9 runs: the percent used of
+  each plan window, when it resets, the pace word, how old the reading is and which plan it counts against. Numbers and
+  P9's own words only: no account name, email, token or file path.
 - **Completion and review records.** A worker can mark its assigned task ready only during its own active turn (a turn P9 prompted, or the run its agent works on with no prompt open, as after a compaction; O176; a prompted turn ends that run, so a `ready` begun in it and still checking when that turn has come and gone is refused; with no turn end to wait for, each `ready` from such a run pins its own report and tells the parent once), never from a turn answering another chat, with results for every check and a weakest part. A reachable independent reviewer can record a verdict only for the current ready commit; a worker, its descendants and a reviewer of its own descendants cannot review that work. These tools write sprint records in P9's database; a solo peer-answer turn allows only read tools and cannot call them. The agent lock refuses both, and `ready` checks it again after Git inspection. To refuse a dirty folder, the daemon runs Git status in the worker's validated starting folder with fixed arguments, disabled hooks and fsmonitor, a restricted environment and a timeout. Git can still run configured clean filters while checking a repository: this is not a sandbox. When Git facts cannot provide a commit or changed-file list, `ready` is refused rather than accepting a claim. File protection does not itself prevent these P9 database records.
 - **Sprint Setup.** `sprint_setup` gives a chat the script tools let reach a sprint (its lead, its workers, a chat of
   its project) every Setup file with its text and hash, and roles.json's rows. `sprint_setup_save` writes one of those

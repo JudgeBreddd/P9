@@ -115,7 +115,7 @@ export const AGENTS_FETCH_MS = 1_300_000;
 // answers as a packaged app would, P9_BUILD runs instead of pnpm build. Outside it both are ignored.
 export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P9_PACKAGED === '1', build: (env.P9_TEST_HOME && env.P9_BUILD) || null });
 
-export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs, claudeUsage, codexUsage }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs, polls = {} }) {
   // outer: createListener's names that the modules split out of it (F9) read and set; getters and setters keep them live.
   const outer = { get AGENTS_FETCH_MS() { return AGENTS_FETCH_MS; }, get AGENT_COMMANDS() { return AGENT_COMMANDS; },
     get STARTER_AGENTS() { return STARTER_AGENTS; }, get STARTER_SETTINGS() { return STARTER_SETTINGS; },
@@ -521,7 +521,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
     // ponytail: the two polls are still started per agent (CAT-1b/1d); every other step loops the catalog.
-    const limits = await planLimits({ home: os.homedir(), polled: { claude: claudeUsage?.look(), codex: codexUsage?.look() }, live: { claude: claudeLive } });
+    const limits = await planLimits({ home: os.homedir(), polled: Object.fromEntries(Object.entries(polls).map(([id, poll]) => [id, poll.look()])), live: { claude: claudeLive } });
     const on = await signedIn(), signedOut = CATALOG.filter((a) => a.usage.hideSignedOut && !on[a.id]).map((a) => a.id);
     return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut } };
   };

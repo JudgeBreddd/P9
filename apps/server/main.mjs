@@ -21,6 +21,7 @@ import { internalEndpoint, lockPipe, trimLog, windowsLockEndpoint, windowsStateR
 import { keepOldPhotos } from './chat.mjs';
 import { createClaudeUsage, openQuery } from './claude-usage.mjs';
 import { createCodexUsage, readOnce } from './codex-usage.mjs';
+import { CATALOG } from './agents.mjs';
 import { watchIdle } from './idle.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
@@ -183,9 +184,16 @@ delete process.env.P9_GITHUB_TOKEN;
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
 // W2: kept here so stop() ends the processes they hold open (the unit's KillMode=process signals only the daemon).
-const codexUsage = adapterOverride === undefined ? createCodexUsage() : codexUsageEntry && createCodexUsage({ read: () => readOnce(codexUsageEntry) });
-const claudeUsage = adapterOverride === undefined ? createClaudeUsage() : usageSdk && createClaudeUsage({ open: () => openQuery(usageSdk) });
-const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, codexUsage, claudeUsage, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
+// USE-1: one live usage poll per catalog agent whose usage names one, keyed by agent id. With --acp-override, a poll runs
+// only when its flag above gives a stand-in.
+const POLLS = { 'claude-sdk': { make: createClaudeUsage, stub: usageSdk && { open: () => openQuery(usageSdk) } },
+  'codex-app': { make: createCodexUsage, stub: codexUsageEntry && { read: () => readOnce(codexUsageEntry) } } };
+const polls = Object.fromEntries(CATALOG.flatMap((a) => {
+  const poll = Object.hasOwn(POLLS, a.usage.poll ?? '') ? POLLS[a.usage.poll] : null;
+  const made = poll && (adapterOverride === undefined ? poll.make() : poll.stub && poll.make(poll.stub));
+  return made ? [[a.id, made]] : [];
+}));
+const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, polls, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
   ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'],
   ...(values['update-turn-ms'] ? { updateTurnMs: Number(values['update-turn-ms']) } : {}) });
 try {
@@ -226,7 +234,7 @@ function stop() {
   setTimeout(() => { server.closeAllConnections(); process.exit(1); }, 10000).unref();
   if (server.remote) { server.remote.close(); server.remote.closeAllConnections(); }
   // W2: the Claude usage poll's SDK process (claude) would outlive the daemon; Codex's app server ends with its stdin.
-  const usage = Promise.all([claudeUsage?.close(), codexUsage?.close()]);
+  const usage = Promise.all(Object.values(polls).map((poll) => poll.close()));
   server.editor?.stop(); // Server mode's editor runs in its own systemd scope, so it would outlive the daemon
   // Agents stop first, alongside the request drain: an open long poll would otherwise hold server.close for 8 s.
   // The woken polls answer, then sit idle on keep-alive; close them once the agents are down.
