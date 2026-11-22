@@ -1036,7 +1036,7 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   to call it, and P9 never runs it on its own. It refuses while any worker the sprint's lead started is still running
   (anything but stopped, or moved to another computer), and while the lead is in a turn or has a message waiting, since it may be making a worker
   folder that moment (a new folder has nothing of its own yet, so it would read as merged). It removes only what the
-  rule above allows, and answers with each folder removed and each folder kept, with why and its size. Written before
+  rule above allows (on a closed sprint, unmerged saved work too, once bundled: § Close sprint), and answers with each folder removed and each folder kept, with why and its size. Written before
   the code (sprint spec A6). What remains: you can restart a stopped worker while clean-up runs; its folder is then
   removed only if it still has nothing unsaved and its work is in the main line, so nothing git tracks or would track is lost, and its next start
   is refused because the folder is gone.
@@ -1270,8 +1270,12 @@ before the tests (sprint spec S16; 0.1.9 phase 4.5).
   one. The two `after-close` runs use the list that stood just before the close. `start_sprint` and the Start press
   refuse a closed sprint (`sprint-closed`). The sprint's files stay editable as § Sprint files says; they are no
   longer part of the record's numbers.
-- **What close does not do.** It does not remove worker folders (that stays its own button, § Worker folders), does
-  not archive the chats, and does not stop you from typing in one of them again. A chat of a closed sprint that you
+- **Worker folders at close.** The owner's Close runs Clean up's rule (§ Worker folders); a close by a chat of the
+  sprint does not, and the page's Clean up does it later. At a close, a worker branch whose saved work is not in the
+  main line is written as a git bundle beside the sprint's notes (`bundles/<item>.bundle`, never over an earlier one;
+  `git clone -b <branch> <bundle>` brings it back), and only then are its folder and branch removed. A folder with
+  unsaved changes, or one not on its sprint branch, stays as it is: a bundle holds only commits.
+- **What close does not do.** It does not archive the chats, and does not stop you from typing in one of them again. A chat of a closed sprint that you
   start again is an ordinary chat: Delegate's rules still apply to it, the sprint's scripts do not run for it.
 - **Your own items (O164).** A plan line whose id ends in `v` after its number (`O159v`) is yours, whatever role it
   names: it is in no worker's queue or ring and in no merged count. It closes only with your Close on that line in the

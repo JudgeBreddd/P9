@@ -1068,105 +1068,105 @@
     }
   },
   {
-    "name": "@peculiar/asn1-android@2.10.0",
+    "name": "@peculiar/asn1-android@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "3ee7c4b649b783688f1186c9aa0da50e331027514c9bfa143f27983e23783c71"
     }
   },
   {
-    "name": "@peculiar/asn1-asym-key@2.10.0",
+    "name": "@peculiar/asn1-asym-key@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "1a00d37fb9fca78a7f792fa6c8fd13f0123388756d81b471bcec11484316ff73"
     }
   },
   {
-    "name": "@peculiar/asn1-cms@2.10.0",
+    "name": "@peculiar/asn1-cms@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "1ecdd8e8977af83c07c5f97bec87b47d27059b7ea323ca3160fbfa2314f5d99c"
     }
   },
   {
-    "name": "@peculiar/asn1-csr@2.10.0",
+    "name": "@peculiar/asn1-csr@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
     }
   },
   {
-    "name": "@peculiar/asn1-ecc@2.10.0",
+    "name": "@peculiar/asn1-ecc@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
     }
   },
   {
-    "name": "@peculiar/asn1-pfx@2.10.0",
+    "name": "@peculiar/asn1-pfx@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
     }
   },
   {
-    "name": "@peculiar/asn1-pkcs8@2.10.0",
+    "name": "@peculiar/asn1-pkcs8@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
     }
   },
   {
-    "name": "@peculiar/asn1-pkcs9@2.10.0",
+    "name": "@peculiar/asn1-pkcs9@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "3ee7c4b649b783688f1186c9aa0da50e331027514c9bfa143f27983e23783c71"
     }
   },
   {
-    "name": "@peculiar/asn1-rsa@2.10.0",
+    "name": "@peculiar/asn1-rsa@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
     }
   },
   {
-    "name": "@peculiar/asn1-schema@2.10.0",
+    "name": "@peculiar/asn1-schema@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "1ecdd8e8977af83c07c5f97bec87b47d27059b7ea323ca3160fbfa2314f5d99c"
     }
   },
   {
-    "name": "@peculiar/asn1-x509-attr@2.10.0",
+    "name": "@peculiar/asn1-x509-attr@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "031b1aac1313d91559ecc89cb6ce7c822f39f1a1259fae0f9b8d01a90c35c85a"
     }
   },
   {
-    "name": "@peculiar/asn1-x509-post-quantum@2.10.0",
+    "name": "@peculiar/asn1-x509-post-quantum@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "1a00d37fb9fca78a7f792fa6c8fd13f0123388756d81b471bcec11484316ff73"
     }
   },
   {
-    "name": "@peculiar/asn1-x509@2.10.0",
+    "name": "@peculiar/asn1-x509@3.0.0",
     "license": "MIT",
     "files": {
       "LICENSE": "1ecdd8e8977af83c07c5f97bec87b47d27059b7ea323ca3160fbfa2314f5d99c"
     }
   },
   {
-    "name": "@peculiar/utils@2.0.3",
+    "name": "@peculiar/utils@4.1.0",
     "license": "MIT",
     "files": {
       "LICENSE": "ce2ae0f0066d1be56ab4ec851cc611805bb95cdc8dd858b301e22ee54b351d43"
     }
   },
   {
-    "name": "@peculiar/x509@2.1.0",
+    "name": "@peculiar/x509@3.1.0",
     "license": "MIT",
     "files": {
       "LICENSE": "3d5d1b1150b1fc25144d342daaba3875899b8dc2fcb172ea4810cc69affbe4d3"
@@ -1838,7 +1838,7 @@
     }
   },
   {
-    "name": "asn1js@3.1.0",
+    "name": "asn1js@4.0.0",
     "license": "BSD-3-Clause",
     "files": {
       "LICENSE": "ebe5d98519d0dfcbcb80e20b22a56e7321e8557cd14355760434bbd4c1f4f683"
@@ -2592,7 +2592,7 @@
     }
   },
   {
-    "name": "electron@44.7.2",
+    "name": "electron@45.3.1",
     "license": "MIT",
     "files": {
       "LICENSE": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
@@ -3326,6 +3326,13 @@
     }
   },
   {
+    "name": "marked@18.2.0",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+    }
+  },
+  {
     "name": "math-intrinsics@1.1.0",
     "license": "MIT",
     "files": {
@@ -3748,20 +3755,6 @@
     "license": "MIT",
     "files": {
       "LICENSE": "a7996721249a136fbcfc1c201bcb5f414f38a701d4a24f28abe65e16cfcce813"
-    }
-  },
-  {
-    "name": "pvtsutils@1.3.6",
-    "license": "MIT",
-    "files": {
-      "LICENSE": "c620c1d08a47c93ce242914a4269b86e41df5a97845325725a5f83d5d6f9d7fd"
-    }
-  },
-  {
-    "name": "pvutils@1.2.0",
-    "license": "MIT",
-    "files": {
-      "LICENSE": "15c88630f1e778db64a446cb31b67362cc9eb7a048fdf5ac7ab51905b74464cd"
     }
   },
   {
