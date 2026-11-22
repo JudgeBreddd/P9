@@ -809,6 +809,25 @@ test('CAT-1f on the phone: New chat lists every agent from GET /agents, a new on
   assert.deepEqual(await page.locator('#sheet[open] [data-new]').evaluateAll((all) => all.map((b) => b.dataset.new + ':' + b.textContent)),
     ['claude:New Claude chat', 'codex:New Codex chat', 'tester:New Tester chat']);
 });
+// USE-1 web on the phone: one plan card per agent in /usage limits, named from GET /agents (as text), each with its own
+// signed-out mark and the daemon's stale mark, and two agents on one plan say so.
+test('USE-1 web on the phone: Usage draws one plan card per agent in the usage limits, shared plans marked', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const [agents, usage] = await page.evaluate(() => Promise.all(['/agents', '/usage'].map((p) => fetch(p).then((r) => r.json()))));
+  agents.agents.push({ id: 'kestrel', name: 'Kestrel Agent', short: '<i>Kes</i>', modes: [{ name: 'Careful', tier: 0 }] });
+  const now = Date.now(), w = (p) => ({ usedPercent: p, resetsAt: now + 3600000, windowMins: 300 });
+  usage.limits = { claude: { asOf: now, fiveHour: w(40), sevenDay: null, stale: false, pool: 'claude' }, codex: null,
+    kestrel: { asOf: now - 20 * 60000, fiveHour: w(40), sevenDay: null, stale: true, pool: 'claude' }, signedOut: ['codex'] };
+  await page.route('**/agents', (route) => route.fulfill({ json: agents }));
+  await page.route('**/usage', (route) => route.fulfill({ json: usage }));
+  await page.reload(); await page.locator('#newChat').waitFor();
+  await page.click('[data-nav="usage"]');
+  const read = () => page.locator('#usage [data-limits] article.plan').evaluateAll((all) => all.map((a) => [a.querySelector('h2').textContent, a.querySelector('small').textContent, a.classList.contains('muted')]));
+  await page.waitForFunction(() => [...document.querySelectorAll('#usage [data-limits] h2')].some((h) => h.textContent === '<i>Kes</i> plan'), null, { timeout: 30000 }).catch(() => {});
+  assert.deepEqual(await read(), [['Claude plan', 'Last read just now · shared plan with <i>Kes</i>', false], ['Codex plan', 'Codex not logged in', true],
+    ['<i>Kes</i> plan', 'Last read 20 min ago · shared plan with Claude', true]]);
+  assert.equal(await page.locator('#usage i:text-is("Kes")').count(), 0, 'the name is text, not markup');
+});
 test('O48 on the phone: New chat lists each provider profile\'s models; the chat it starts is on that profile and model; the phone reads id, name and model names only', { timeout: 90000 }, async (t) => {
   const { page, server, session } = await phoneOn(t);
   const KEY = 'sk-profile-test-0f3a9c71d2e84b56';

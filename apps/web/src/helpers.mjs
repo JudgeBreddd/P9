@@ -199,18 +199,24 @@ export async function readImage(file) {
 // O191: a provider profile's chats (/usage profiles), outside the Claude totals; its cost is the adapter's estimate, never a
 // Claude bill. Drawn whatever /usage's state: state counts Claude records only. Old daemon (no profiles): nothing.
 export const profileLines = (usage, cls = 'sm') => (usage.profiles ?? []).map(p => `<p class="${cls}" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');
-export const limitLine = (name, limits, now = Date.now(), signedOut = false) => {
+// USE-1: stale is the daemon's mark (each agent's own staleMs, apps/server/agents.mjs); an older daemon sends none: 1 h.
+// shared names the other agents on the same plan (limitLines); it sits before the age, which callers read as the last part.
+export const limitLine = (name, limits, now = Date.now(), signedOut = false, shared = '') => {
   if (signedOut) return { name, text: name + ' not logged in', stale: true };
   if (!limits) return { name, text: 'no plan limits recorded yet', stale: true };
   const when = at => new Date(at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
   const part = (label, w) => !w ? label + ' n/a' : w.resetsAt && w.resetsAt < now ? label + ' new window' : `${label} ${Math.round(w.usedPercent)}%` + (w.resetsAt ? ` (resets ${when(w.resetsAt)})` : '');
   const age = now - limits.asOf, hours = age / 3600000;
   const old = age < 15 * 60000 ? 'just now' : hours < 1 ? Math.round(age / 60000) + ' min old' : hours < 48 ? Math.round(hours) + ' h old' : Math.round(hours / 24) + ' d old';
-  return { name, text: part('5 h', limits.fiveHour) + ' · ' + part('week', limits.sevenDay) + ' · ' + old, stale: hours >= 1 };
+  return { name, text: part('5 h', limits.fiveHour) + ' · ' + part('week', limits.sevenDay) + (shared ? ' · shared plan with ' + shared : '') + ' · ' + old,
+    stale: typeof limits.stale === 'boolean' ? limits.stale : hours >= 1 };
 };
 // CAT-1g: /usage limits hold one key per catalog agent (an older daemon: claude, codex) and signedOut; names is GET /agents'.
 export const limitAgents = (limits) => Object.keys(limits ?? {}).filter((a) => a !== 'signedOut');
-export const limitLines = (limits, names) => limitAgents(limits).map((a) => ({ ...limitLine(names[a] || a, limits[a], undefined, !!limits.signedOut?.includes(a)), id: a }));
+// USE-1: agents whose readings carry the same pool count against one plan; each line names the others (shared).
+export const limitLines = (limits, names) => { const ids = limitAgents(limits), pool = (a) => limits[a]?.pool;
+  return ids.map((a) => { const shared = pool(a) ? ids.filter((b) => b !== a && pool(b) === pool(a)).map((b) => names[b] || b).join(', ') : '';
+    return { ...limitLine(names[a] || a, limits[a], undefined, !!limits.signedOut?.includes(a), shared), id: a, shared }; }); };
 // Mission Control's Usage list items; an agent's name and text are the daemon's, so both are escaped here.
 export const limitItems = (limits, names) => limitLines(limits, names).map((l) => `<li class="sm${l.stale ? ' muted' : ''}"><b>${esc(l.name)}</b> ${esc(l.text)}</li>`).join('');
 // The Usage card's one line: the first agent with a reading, else the first agent's line.

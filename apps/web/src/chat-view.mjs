@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, keptItems, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -263,7 +263,8 @@ const HOT = 75;
 const meterBar = (label, w, line, now = Date.now(), mins = 0) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent), pace = mins ? paceOf(w, mins, now) : null;
   return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="mbar"${pace ? ` data-pace="${pace.state}"` : ''}><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div>${pace ? `<u class="ptick" style="left:${Math.round(pace.elapsed * 1000) / 10}%"></u>` : ''}</div></div>`; };
 // Each agent's plan windows as rows (the Usage window, Mission's Usage card): helpers.mjs paceRow, the phone draws the same.
-const usageRows = () => { const now = Date.now(); return Object.keys(outer.names).filter(a => outer.usage.limits?.[a]).map(a => { const lim = outer.usage.limits[a], line = limitLine(outer.names[a], lim, now); return `<section class="uagent" data-agent="${a}"${line.stale ? ' data-stale' : ''}><h5>${esc(outer.names[a])}<small>${esc(line.text.split(' · ').at(-1))}</small></h5>${planWindows(lim).map(([label, w, mins]) => paceRow(label, w, mins, now)).join('')}</section>`; }).join(''); };
+// USE-1: one row per agent in /usage limits (helpers limitLines: an agent GET /agents has not named shows its id), muted by the daemon's stale mark.
+const usageRows = () => { const now = Date.now(), lims = outer.usage.limits; return limitLines(lims, outer.names).filter(l => lims[l.id]).map(l => `<section class="uagent" data-agent="${esc(l.id)}"${l.stale ? ' data-stale' : ''}><h5>${esc(l.name)}<small>${esc((l.shared ? 'shared plan with ' + l.shared + ' · ' : '') + l.text.split(' · ').at(-1))}</small></h5>${planWindows(lims[l.id]).map(([label, w, mins]) => paceRow(label, w, mins, now)).join('')}</section>`).join(''); };
 // The cache clock: text and state, so the 15 s tick can move it without rebuilding the pane.
 const cacheOf = s => {
   const cacheMin = !s.live ? s.cacheMin : s.agent === 'claude' && s.lastEnd ? Math.floor((Date.now() - s.lastEnd) / 60000) : null;
