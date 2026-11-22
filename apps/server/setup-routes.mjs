@@ -253,7 +253,8 @@ export function setupRoutes(outer) {
   outer.app.post('/sprints/:id/clean', async (c) => {
     const id = c.req.param('id'), busy = idle(id);
     if (busy) return c.json(busy, 409);
-    const result = await outer.chat.workers.clean(id);
+    // Close bundles: a closed sprint's Clean up (a chat of it closed it, so Close cleaned nothing) bundles as Close does.
+    const result = await outer.chat.workers.clean(id, { bundle: Boolean(outer.chat.projects?.closed?.(id)) });
     return c.json(result, result.error === 'request-refused' ? 400 : result.error ? 500 : 200);
   });
   // Desktop only (SECURITY.md § Sprint from a folder with no remote, "Applying to your folder is a yes"): the change the
