@@ -1049,26 +1049,26 @@ function wizRender() {
     // admin password; a no-op when it is there) and goes on to sign in to the ones picked. D16: always Continue, since a CLI the
     // owner installed may be outside the background service's PATH; when setting up fails, the reason shows and the button
     // goes on without it (chats run on the CLI the adapter ships; only P9 terminals need the launcher).
-    title = 'Claude, Codex or both?';
-    const on = wizPicked();
+    const on = wizPicked(), all = AGENTS_PICK(), short = a => all.find(x => x.id === a)?.short;
+    title = all.map(x => x.short).join(', ') + (all.length > 2 ? ' or several?' : ' or both?');
     body = '<p data-why>P9\'s chats run on an agent, and you need an account with the one you pick: pick the one you already have.</p>'
-      + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('choose:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
-      + `<p class="muted sm">Continue sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
+      + all.map(({ id: a, short: name, pick: sub }) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('choose:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
+      + `<p class="muted sm">Continue sets up ${on.length > 1 ? (on.length > 2 ? 'all ' + on.length : 'both') : on.length ? short(on[0]) : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
       + (note?.error ? fail(note.error, note.detail) : '');
     next = on.length ? btn('install', note?.error ? 'Continue without it' : 'Continue', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Continue', 'default').replace('<button', '<button disabled');
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
-    const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
+    const all = AGENTS_PICK(), shown = W.picked || (all.some(({ id }) => s[id + 'Cli'] || s[id]) ? wizPicked() : all.map(({ id }) => id));
     body = '<p class="muted sm">Chats need at least one agent signed in. Sign in starts the agent\'s own sign-in; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
-      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account. P9 shows a one-time code to enter on OpenAI\'s sign-in page.']].filter(([a]) => shown.includes(a)).map(([a, name, sub]) => {
+      + all.filter(({ id }) => shown.includes(id)).map(({ id: a, short: name, account: sub, signIn }) => {
         const l = W.login[a] || {}, on = s[a] && W.stale !== a, ended = !on && !l.running && l.exit !== null && l.exit !== undefined;
         // D17: a login that expired still reads as signed in here, so Sign in again is always offered.
         // D8: Codex signs in with a one-time code on OpenAI's page, which P9 opens when asked (nothing opens by itself).
-        const device = a === 'codex';
+        const device = signIn === 'device-code';
         return row(name, sub, l.running ? `<span class="muted sm">${device ? (l.code ? '' : 'Getting a code…') : 'Waiting for the browser…'}</span>` : on ? yes(true, 'Signed in') : yes(false, '', s[a] ? 'Sign-in expired' : 'Not signed in'),
           l.running ? (l.url ? btn('open:' + a, device ? 'Open the sign-in page' : "Browser didn't open?", device ? 'default' : undefined) : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : on ? 'Sign in again' : 'Sign in', on ? undefined : 'default'))
           + (l.running && device && l.code ? `<div class="set-row" data-device-code><span class="muted sm">Your one-time code, for 15 minutes</span><span class="spacer"></span><code style="font:600 18px ui-monospace,monospace;letter-spacing:.08em;user-select:all">${esc(l.code)}</code></div>` : '')
-          + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
+          + (l.running && !device ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:' + a, 'Send')}</div>` : '')
           // O71: the note goes below the code box: the redraw matches nodes by position, so a note above it replaced the box
           // and lost what the owner was typing.
           + (l.running && W.note[a]?.info ? `<p class="muted sm">${esc(W.note[a].info)}</p>` : '')

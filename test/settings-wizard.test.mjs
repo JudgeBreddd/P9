@@ -366,6 +366,38 @@ test('Setup wizard: polls every 10 s while a check fails and stops once setup is
   console.log('PASS wizard poll: ' + failing + ' checks in 25 s while a check fails, none once done');
 });
 
+// CAT-1e: the wizard's agents come from GET /agents. A first read that fails (a daemon still starting) leaves the pick step
+// empty; the 10 s refresh reads them again, so the rows come without reopening the wizard.
+test('Setup wizard: the agents read again on refresh after a failed first read, and an older answer shows full names (CAT-1e)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  const instance = await missionDaemon(t, false, ['--terminal-platform', 'darwin']);
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-agents-')), 'profile');
+  const { app, page } = await launchOn(t, instance, profile);
+  await app.evaluate(({ ipcMain }) => {
+    const handler = ipcMain._invokeHandlers.get('p9:chat');
+    globalThis.agentReads = 0;
+    // The second read answers as an older P9 would: no wizard fields.
+    const old = (r) => ({ ...r, body: { agents: r.body.agents.map(({ id, name, modes }) => ({ id, name, modes })) } });
+    ipcMain._invokeHandlers.set('p9:chat', async (event, action, ...rest) => action !== 'agents' ? handler(event, action, ...rest)
+      : (globalThis.agentReads++, !globalThis.agentsUp) ? { status: 503, body: { error: 'daemon-unavailable' } } : old(await handler(event, action, ...rest)));
+  });
+  await page.reload(); // the first-run tour may have read them already: start the page again behind the stand-in
+  await page.locator('#rChat').waitFor();
+  const card = page.locator('#cards [data-key="welcome"]');
+  await card.waitFor({ timeout: 10000 });
+  await card.locator('.open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  const body = page.locator('#welBody');
+  // The pick step, or sign-in when a CLI is on PATH already: either shows Claude's row once the agents are read, named
+  // by its full name when the answer has no short one.
+  const claude = body.locator('strong', { hasText: /^Claude Code$/ });
+  assert.equal(await claude.count(), 0, 'the failed read shows no agents');
+  await app.evaluate(() => { globalThis.agentsUp = true; });
+  await claude.first().waitFor({ timeout: 15000 });
+  assert.equal(await body.getByText('undefined').count(), 0, 'no field reads undefined');
+  assert.ok(await app.evaluate(() => globalThis.agentReads) >= 2);
+  console.log('PASS wizard agents: read again on refresh after a failed first read; an older answer shows full names');
+});
+
 const MISSION_FILES = { primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' };
 const missionDaemon = (t, signedIn, args = []) => daemon(t, undefined, false, async ({ directory, workspace }) => {
   const file = path.join(directory, '.config', 'p9', 'settings.json');
