@@ -251,7 +251,7 @@ const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startM
 const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
 const names = { claude: 'Claude', codex: 'Codex' };
 // O29: the agent used last here. ponytail: per computer, like the last mode (p9-mode:); a second device keeps its own.
-const lastAgent = () => { const a = localStorage.getItem('p9-agent-last'); return names[a] ? a : 'claude'; };
+const lastAgent = () => { const a = localStorage.getItem('p9-agent-last'); return names[a] ? a : Object.keys(names)[0]; };
 const usedAgent = a => { try { localStorage.setItem('p9-agent-last', a); } catch {} };
 // The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
 const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });

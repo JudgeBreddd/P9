@@ -133,6 +133,10 @@ function csrfToken() {
   } catch {}
   return null;
 }
+// CAT-1f: each agent's name and modes (helpers modes), from GET /agents once it answers; until then the two built in.
+const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
+const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
+  for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); }, () => {});
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
   if (response.status === 401) toLogin();
@@ -202,7 +206,7 @@ let loads = Promise.resolve();
 const loadChat = () => loads = loads.then(readChat);
 async function readChat() {
   try {
-    const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request)]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
+    const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request), loadAgents()]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
@@ -629,7 +633,7 @@ let barSig = '';
 let agentLists: Record<string, unknown> = {}; // O47: each agent's lists as the daemon keeps them (GET /chat)
 function chatBar(id: string, run: string) {
   const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
-  const agent = item?.provider === 'codex' ? 'Codex' : 'Claude', picked = model.selectedOptions[0]?.textContent || '', current = model.dataset.current ?? '';
+  const agent = agentName(String(item?.provider ?? 'claude')), picked = model.selectedOptions[0]?.textContent || '', current = model.dataset.current ?? '';
   // O204 (O133's rule, as the desktop): the bar names the model the chat runs (its last config); a pick not taken yet is pending,
   // kept in view beside it (the running name is the part that shortens on a narrow bar).
   // Review 1: a running model the list lacks is named by its own id, never by the option the select fell back to; and only a pick the
@@ -867,7 +871,7 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
   if (button.dataset.back !== undefined) back();
   else if (button.id === 'stopTurn') stopChat(openId);
   else if (button.id === 'newChat') {
-    openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>`);
+    openSheet('New chat', Object.entries(names).map(([a, n]) => `<button type="button" class="opt" data-new="${escape(a)}">New ${escape(n)} chat</button>`).join(''));
     // O48p: one row per model of each provider profile (id, name and model names are all the phone is given). A daemon
     // without the route, or offline: the two agents alone.
     if (navigator.onLine) request('/profiles/names').then((body) => {
@@ -1047,7 +1051,7 @@ function label() {
   const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
   const box = one<HTMLTextAreaElement>('#prompt');
   if (id === boxFor) setDraft(id, box.value);
-  box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
+  box.placeholder = 'Message ' + agentName(provider(id));
   // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
   // here. ponytail: by hand, as iOS Safari has no field-sizing.
   // O63: measured only when the text changed, and the chat's place is put back: the measure makes the box one line for a
@@ -1062,7 +1066,7 @@ function label() {
   one('#send .vh').textContent = busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
   // P18: the slim card over the box says a send goes into a running turn, and how (Steer is the arrow's default).
   one<HTMLElement>('#midTurn').hidden = !busy || empty;
-  one('#midTurnLabel').textContent = (provider(id) === 'codex' ? 'Codex' : 'Claude') + ' is working';
+  one('#midTurnLabel').textContent = agentName(provider(id)) + ' is working';
 }
 // O109: the waiting messages are one line, "N queued", that opens to the list with a Take back on each; 30 of them used
 // to be 30 full rows that pushed the box off the screen. Open or closed is kept across redraws (each event redraws).
@@ -1416,7 +1420,7 @@ loose.addEventListener('close', () => { if (!loose.open) { answer?.(loose.return
 one<HTMLSelectElement>('#mode').onchange = async (event) => {
   const mode = event.target as HTMLSelectElement, pick = mode.value, id = openId, agent = provider(id);
   if (pick in LOOSE && !localStorage.getItem('p9-mode-ok:' + pick)) {
-    one('#looseT').textContent = `Turn on ${pick} for ${agent === 'codex' ? 'Codex' : 'Claude'}?`; one('#looseP').textContent = (LOOSE as Record<string, string>)[pick];
+    one('#looseT').textContent = `Turn on ${pick} for ${agentName(agent)}?`; one('#looseP').textContent = (LOOSE as Record<string, string>)[pick];
     answer?.('no');
     const value = await new Promise<string>((done) => { answer = done; loose.returnValue = ''; loose.showModal(); });
     if (value === 'never') localStorage.setItem('p9-mode-ok:' + pick, '1');

@@ -299,7 +299,7 @@ function event(e, s) {
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
     case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span>${e.exit ? `<span data-slot="badge" data-variant="bad" data-exit>${esc(e.exit)}</span>` : ''}<span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent])}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
-    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/^(Claude Code|Codex) is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
+    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/ is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
   }
   return '';
 }
@@ -788,7 +788,7 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = () => outer.leave(s));
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
     // Item 15: by name (the pick step now comes first), with the chat's own agent on the step even when it was not picked.
-    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => outer.welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude', true));
+    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => outer.welcome('agents', s.agent, true));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
     p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
@@ -886,6 +886,11 @@ function reply(s, text) {
 }
 const dataNote = () => { outer.$('#dataNote').textContent = [outer.live.on && !outer.serverInfo?.slim && 'Mission Control live', outer.liveChat.on && 'Chat live', !outer.liveChat.on && (outer.sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), outer.sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
+// CAT-1f: GET /agents replaces the agents' names, modes and chat model (controller names, helpers modes, chatModel) once it
+// answers, so the pickers offer every catalog agent; until then, and in the sample view, they hold the two built in.
+const loadAgents = async () => { const r = !loadAgents.done && await window.p9.chat('agents', {}).catch(() => null); if (r?.status !== 200) return; loadAgents.done = 1;
+  for (const t of [outer.names, modes, chatModel]) for (const k in t) delete t[k];
+  for (const a of r.body.agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; };
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
@@ -1071,7 +1076,7 @@ async function loadChat() {
     // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
   };
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
   let sprintStale = false, sprintAt = 0;
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
