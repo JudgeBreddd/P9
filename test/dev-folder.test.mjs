@@ -21,7 +21,7 @@ function side({ server = null, workspace = '/w', picked = '/w', found, set = { s
 // Dev Focus Open Folder in Server mode (threat model rows 41/50 adds): main asks for the server path instead of refusing, checks
 // it with the server's rules, and every refusal names its own reason.
 test('Dev Focus Open Folder in Server mode: a typed server path, the server\'s real path decides inside or outside, and the real reason on a refusal', { timeout: 10000 }, async () => {
-  const open = (options, ...args) => { const fake = side({ server: 'srv', ...options }); return folder.openFolder?.(fake.o, args).then(reply => ({ reply, ...fake })); };
+  const open = (options, ...args) => { const fake = side({ server: 'srv', ...options }); return folder.openFolder?.(fake.o, args).then(reply => ({ reply, ...fake }), error => ({ reply: error, ...fake })); }; // a throw still leaves calls to check
   // No path yet: the page is asked for one (Server mode is not refused as daemon-unavailable); the open folder, else the workspace.
   assert.deepEqual((await open({})).reply, { pathNeeded: true, value: '/w' }, 'Server mode asks the page for the server path');
   assert.deepEqual((await open({ folder: { path: '/srv/o', outside: true } })).reply, { pathNeeded: true, value: '/srv/o' });
@@ -76,7 +76,7 @@ test('U2: Trust this folder? with Don\'t ask again, only in Unrestricted mode', 
   assert.equal(await folder.unrestricted?.(async () => { throw new Error('down'); }, async () => gone.push(true)), false, 'no daemon reads as off');
   assert.deepEqual(gone, [true]);
   // Outside the workspace on this computer: the mode decides which ask, and the flag skips it only while the mode is on.
-  const open = (options) => { const fake = side({ picked: '/x', ...options }); return folder.openFolder?.(fake.o, []).then(reply => ({ reply, ...fake })); };
+  const open = (options) => { const fake = side({ picked: '/x', ...options }); return folder.openFolder?.(fake.o, []).then(reply => ({ reply, ...fake }), error => ({ reply: error, ...fake })); }; // a throw still leaves calls to check
   let r = await open({});
   const warning = r.calls.find(c => c[0] === 'ask')[1];
   assert.deepEqual([warning.type, warning.title, warning.message, warning.buttons, warning.defaultId, warning.checkboxLabel], ['warning', 'Open a folder outside the workspace?', 'Open /x in Dev Focus?', ['Cancel', 'Open folder'], 0, undefined], 'mode off: the old confirm');
