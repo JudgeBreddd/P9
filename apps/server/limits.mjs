@@ -128,12 +128,14 @@ export const READERS = Object.freeze({
 });
 
 // One key per catalog agent: polled and live are keyed by agent id. Each reading carries stale (older than its reader's
-// staleMs) and pool (the plan it counts against). A missing reader or one that throws gives null for that agent only.
+// staleMs), pool (the plan it counts against) and sharedWith (the other catalog agents on that pool, named whether or not they
+// have a reading: a partner signed out still shares the plan). A missing reader or one that throws gives null for that agent only.
 export async function planLimits({ home, polled = {}, live = {}, catalog = CATALOG, readers = READERS, now = Date.now(), ...paths }) {
   const one = async (agent) => {
     const read = Object.hasOwn(readers, agent.usage.reader) ? readers[agent.usage.reader] : null;
     const found = read && await Promise.resolve().then(() => read({ ...paths, home, polled: polled[agent.id] ?? null, live: live[agent.id] ?? null })).catch(() => null);
-    return found ? { ...found, stale: !(now - found.asOf <= agent.usage.staleMs), pool: agent.usage.pool } : null;
+    return found ? { ...found, stale: !(now - found.asOf <= agent.usage.staleMs), pool: agent.usage.pool,
+      sharedWith: catalog.filter((b) => b.id !== agent.id && b.usage.pool === agent.usage.pool).map((b) => b.id) } : null;
   };
   return Object.fromEntries(await Promise.all(catalog.map(async (agent) => [agent.id, await one(agent)])));
 }

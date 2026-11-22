@@ -213,10 +213,9 @@ export const limitLine = (name, limits, now = Date.now(), signedOut = false, sha
 };
 // CAT-1g: /usage limits hold one key per catalog agent (an older daemon: claude, codex) and signedOut; names is GET /agents'.
 export const limitAgents = (limits) => Object.keys(limits ?? {}).filter((a) => a !== 'signedOut');
-// USE-1: agents whose readings carry the same pool count against one plan; each line names the others (shared).
-export const limitLines = (limits, names) => { const ids = limitAgents(limits), pool = (a) => limits[a]?.pool;
-  return ids.map((a) => { const shared = pool(a) ? ids.filter((b) => b !== a && pool(b) === pool(a)).map((b) => names[b] || b).join(', ') : '';
-    return { ...limitLine(names[a] || a, limits[a], undefined, !!limits.signedOut?.includes(a), shared), id: a, shared }; }); };
+// USE-1: a reading's sharedWith (the daemon's, from the catalog pools) names the agents on the same plan, even one with no reading.
+export const limitLines = (limits, names) => limitAgents(limits).map((a) => { const shared = (limits[a]?.sharedWith ?? []).map((b) => names[b] || b).join(', ');
+  return { ...limitLine(names[a] || a, limits[a], undefined, !!limits.signedOut?.includes(a), shared), id: a, shared }; });
 // Mission Control's Usage list items; an agent's name and text are the daemon's, so both are escaped here.
 export const limitItems = (limits, names) => limitLines(limits, names).map((l) => `<li class="sm${l.stale ? ' muted' : ''}"><b>${esc(l.name)}</b> ${esc(l.text)}</li>`).join('');
 // The Usage card's one line: the first agent with a reading, else the first agent's line.

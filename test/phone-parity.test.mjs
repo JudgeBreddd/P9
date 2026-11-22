@@ -816,8 +816,8 @@ test('USE-1 web on the phone: Usage draws one plan card per agent in the usage l
   const [agents, usage] = await page.evaluate(() => Promise.all(['/agents', '/usage'].map((p) => fetch(p).then((r) => r.json()))));
   agents.agents.push({ id: 'kestrel', name: 'Kestrel Agent', short: '<i>Kes</i>', modes: [{ name: 'Careful', tier: 0 }] });
   const now = Date.now(), w = (p) => ({ usedPercent: p, resetsAt: now + 3600000, windowMins: 300 });
-  usage.limits = { claude: { asOf: now, fiveHour: w(40), sevenDay: null, stale: false, pool: 'claude' }, codex: null,
-    kestrel: { asOf: now - 20 * 60000, fiveHour: w(40), sevenDay: null, stale: true, pool: 'claude' }, signedOut: ['codex'] };
+  usage.limits = { claude: { asOf: now, fiveHour: w(40), sevenDay: null, stale: false, pool: 'claude', sharedWith: ['kestrel'] }, codex: null,
+    kestrel: { asOf: now - 20 * 60000, fiveHour: w(40), sevenDay: null, stale: true, pool: 'claude', sharedWith: ['claude'] }, signedOut: ['codex'] };
   // GET /agents answers 8 s late, after Usage is drawn with the bare id: the cards take the name within 3 s of the answer,
   // not at the next 20 s redraw.
   let answered; const named = new Promise((r) => { answered = r; });
