@@ -798,6 +798,17 @@ for (const how of ['a cancelled mode warning', 'a pick of the value already sele
   assert.equal(users, 1, 'the message shows once');
 });
 // Threat model row O48p: the phone starts chats with any provider.
+test('CAT-1f on the phone: New chat lists every agent from GET /agents, a new one too', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  // The real answer is read in the page (only the browser resolves the test host), then served with a third agent.
+  const body = await page.evaluate(() => fetch('/agents').then((r) => r.json()));
+  body.agents.push({ id: 'tester', name: 'Test Agent', short: 'Tester', modes: [{ name: 'Careful', tier: 0 }] });
+  await page.route('**/agents', (route) => route.fulfill({ json: body }));
+  await page.reload(); await page.locator('#newChat').waitFor();
+  await page.click('#newChat'); await page.locator('#sheet[open]').waitFor();
+  assert.deepEqual(await page.locator('#sheet[open] [data-new]').evaluateAll((all) => all.map((b) => b.dataset.new + ':' + b.textContent)),
+    ['claude:New Claude chat', 'codex:New Codex chat', 'tester:New Tester chat']);
+});
 test('O48 on the phone: New chat lists each provider profile\'s models; the chat it starts is on that profile and model; the phone reads id, name and model names only', { timeout: 90000 }, async (t) => {
   const { page, server, session } = await phoneOn(t);
   const KEY = 'sk-profile-test-0f3a9c71d2e84b56';
