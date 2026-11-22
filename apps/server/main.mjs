@@ -17,7 +17,7 @@ import { parseSettings } from './mission.mjs';
 import { drainSaves, guardFolders, desktopFolders } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
 import { AGENTS, placeAgents } from './deps.mjs';
-import { internalEndpoint, lockPipe, trimLog, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+import { internalEndpoint, lockFolders, lockPipe, trimLog, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
 import { keepOldPhotos } from './chat.mjs';
 import { createClaudeUsage, openQuery } from './claude-usage.mjs';
 import { createCodexUsage, readOnce } from './codex-usage.mjs';
@@ -85,14 +85,7 @@ if (!ownershipStat.isDirectory() || inside(workspace, await realpath(ownershipDi
     || (!windows && (ownershipStat.uid !== process.getuid() || (ownershipStat.mode & 0o777) !== 0o700))) throw new Error('unsafe-ownership-directory');
 // Windows has no mode bits: the three folders' ACLs may grant only this user, SYSTEM and Administrators (B8). The
 // installer makes %LOCALAPPDATA%\P9 owner-only; a source run's folders inherit the profile's ACL, which holds those three.
-if (windows) {
-  const folders = Buffer.from([state, recovery, ownershipDirectory].join('\n')).toString('base64');
-  const acl = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-    '-File', windowsHost, '-Mode', 'Acl', '-Payload', folders], { encoding: 'utf8', env: childEnv() });
-  if (acl.status !== 0) {
-    throw new Error(String(acl.stdout).split(/\r?\n/).includes(ownershipDirectory) ? 'unsafe-ownership-directory' : 'unsafe-private-directory');
-  }
-}
+if (windows) lockFolders({ host: windowsHost, folders: [state, recovery, ownershipDirectory], env: childEnv() });
 let workspaceLock;
 if (windows) {
   workspaceLock = createNetServer();
