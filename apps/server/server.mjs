@@ -27,7 +27,7 @@ import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
-import { COMMANDS, publicAgents } from './agents.mjs';
+import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createPhoneErrors } from './phone-errors.mjs';
@@ -518,8 +518,10 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const usageNow = async () => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
-    const limits = await planLimits({ home: os.homedir(), claudeLive, claudePolled: claudeUsage?.look(), codexPolled: codexUsage?.look() }), signedOut = (await signedIn()).codex ? [] : ['codex'];
-    return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } };
+    // ponytail: the two polls are still started per agent (CAT-1b/1d); every other step loops the catalog.
+    const limits = await planLimits({ home: os.homedir(), polled: { claude: claudeUsage?.look(), codex: codexUsage?.look() }, live: { claude: claudeLive } });
+    const on = await signedIn(), signedOut = CATALOG.filter((a) => a.usage.hideSignedOut && !on[a.id]).map((a) => a.id);
+    return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut } };
   };
   api.get('/usage', async (c) => c.json(await usageNow()));
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));

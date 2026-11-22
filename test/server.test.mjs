@@ -110,7 +110,7 @@ test('plan limits: missing sources give null, the newer Claude source wins, noth
   const ledger = openLedger(path.join(home, 'ledger.db')), meta = (five, week) => ({ sessionUpdate: 'usage_update', used: 1, size: 10,
     _meta: { '_claude/rateLimit': { status: 'allowed', unifiedWindows: { five_hour: { utilization: five, resetsAt: fiveAt }, seven_day: { utilization: week, resetsAt: weekAt } } } } });
   ledger.append('c1', 'update', meta(0.3, 0.2)); ledger.append('c1', 'update', meta(0.36, 0.25));
-  limits = await planLimits({ home, statusLine, claudeLive: ledger.usage().claudeLive });
+  limits = await planLimits({ home, statusLine, live: { claude: ledger.usage().claudeLive } });
   assert.deepEqual([limits.claude.fiveHour, limits.claude.sevenDay.usedPercent], [{ usedPercent: 36, resetsAt: fiveAt * 1000, windowMins: 300 }, 25]);
   assert.match(limitLine('Claude', limits.claude).text, /^5 h 36% \(resets .+\) · week 25% \(resets .+\) · just now$/);
   assert.equal(limitLine('Claude', limits.claude).stale, false);
@@ -161,6 +161,10 @@ test('plan limits and the welcome check read CODEX_HOME and CLAUDE_CONFIG_DIR wh
   assert.deepEqual([out.codex, out.signedOut, out.claude.fiveHour.usedPercent], [null, ['codex'], 55]);
   assert.deepEqual(limitLine('Codex', out.codex, undefined, out.signedOut.includes('codex')), { name: 'Codex', text: 'Codex not logged in', stale: true });
   assert.deepEqual(limits.signedOut, [], 'signed in, nothing is named signed out');
+  // CAT-1a: Claude's sign-in file missing proves nothing (the keychain), so only Codex is ever named signed out.
+  await rm(path.join(dirs.claude, '.credentials.json'));
+  const both = (await get('/usage')).limits;
+  assert.deepEqual([both.codex, both.signedOut, both.claude.fiveHour.usedPercent], [null, ['codex'], 55]);
   // Unset (or empty), the defaults under home.
   assert.deepEqual(agentDirs('/h', {}), { claudeDir: '/h/.claude', claudeJson: '/h/.claude.json', codexHome: '/h/.codex' });
   assert.deepEqual(agentDirs('/h', { CLAUDE_CONFIG_DIR: '', CODEX_HOME: '' }), agentDirs('/h', {}));
