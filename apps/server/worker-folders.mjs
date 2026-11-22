@@ -134,6 +134,19 @@ function runSetup(command, cwd, limit) {
 // ponytail: the agent's default place on Linux and macOS; a scratch place moved by its own settings is not found, and Windows has none here.
 const SCRATCH = process.getuid ? path.join(os.tmpdir(), 'claude-' + process.getuid()) : null;
 const scratchName = (folder) => folder.replace(/[^a-zA-Z0-9]/g, '-');
+// The scratch place is shared by every folder of this user, so a name is in use while any path still on disk gives it
+// (a removed folder is gone by then). Walks from / along the name, entering only entries whose name fits; each step
+// takes at least two characters of the name, so it ends. A folder on the way that can't be read counts as in use.
+async function nameInUse(name, dir = path.parse(process.cwd()).root, at = 0) {
+  if (name[at] !== '-') return false;
+  let entries;
+  try { entries = await readdir(dir); } catch (e) { return e.code !== 'ENOTDIR' && e.code !== 'ENOENT'; }
+  for (const entry of entries) {
+    const part = '-' + scratchName(entry);
+    if (name.startsWith(part, at) && (at + part.length === name.length || await nameInUse(name, path.join(dir, entry), at + part.length))) return true;
+  }
+  return false;
+}
 
 export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['https', 'ssh'], scratch = SCRATCH }) {
   const busy = new Map(); // one make or clean per sprint at a time: two workers never clone twice, clean never races a make
@@ -283,13 +296,14 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
         removed.push(item);
       } else kept.push({ item, folder, branch, bytes: await bytes(folder), why: why ?? 'git would not remove it' });
     }
-    // Each removed folder's agent scratch goes too; never one a kept folder's name shares (a.b and a-b give the same), and
-    // only a real folder (not a link) directly in the scratch place.
+    // Each removed folder's agent scratch goes too; never one a kept folder's name shares (a.b and a-b give the same), nor
+    // one any other path still on disk gives (the place is shared by all of this user's folders), and only a real folder
+    // (not a link) directly in the scratch place.
     const keep = new Set(kept.map((k) => scratchName(k.folder)));
     for (const k of kept) keep.add(scratchName(await realpath(k.folder).catch(() => k.folder)));
     for (const name of new Set(scratch ? gone.map(scratchName) : [])) {
       const where = path.join(scratch, name);
-      if (!keep.has(name) && (await lstat(where).catch(() => null))?.isDirectory()) await rm(where, { recursive: true, force: true });
+      if (!keep.has(name) && !await nameInUse(name) && (await lstat(where).catch(() => null))?.isDirectory()) await rm(where, { recursive: true, force: true });
     }
     // The clone goes only when no worker folder and no sprint branch is left in it: a branch is never lost with it. The
     // sprint's own files (plan, rules, roles, notes: sprint-files.mjs) stay; the folder goes only when nothing else is in it.
