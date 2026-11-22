@@ -437,6 +437,7 @@ const planOpt = p => p.options.find(o => /plan/i.test(o.value)) || p.options.fin
 const planOn = s => { const p = pickerOf(s, 'collab'); return !!p && pickVal(s, p) === planOpt(p)?.value; };
 // The Mode menu's order per agent. Codex's Plan is its plan collaboration mode on top of the sandbox mode picked before
 // (s.mode stays that mode; choosing any other mode turns plan off); Claude's is its own plan mode.
+// The menu's order for the two built in; another catalog agent lists its modes in the catalog's order (helpers modes).
 const MODE_ORDER = { claude: ['Manual', 'Auto', 'Accept edits', 'Plan', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access', 'Plan'] };
 const modeNow = s => planOn(s) ? 'Plan' : s.mode;
 const modeShown = s => s.modeNext || modeNow(s);
@@ -473,7 +474,7 @@ const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes
   + (started(s) ? `<p class="pm-note muted">${STAYS}</p>` : '');
 function pillMenuHtml(s, kind) {
   if (kind === 'Agent') return agentMenu(s);
-  if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + MODE_ORDER[s.agent].map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
+  if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + (MODE_ORDER[s.agent] ?? modes[s.agent]).map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
   if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`, p && s, p?.id); }
   const m = modelList(s);
   if (s.profile) return `<div class="hd eyebrow">${esc(s.profile.name)}</div>` + radio(m.options, m.current, 'data-model') + `<p class="pm-note muted" data-list-note>${s.profile.gone ? 'This profile was removed in Settings, so this chat can be read but not continued.' : started(s) ? 'This chat runs on this model only. Start a new chat for another one.' : 'Choose a model before the first message.'}</p>`;
