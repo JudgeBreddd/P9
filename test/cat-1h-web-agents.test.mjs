@@ -42,3 +42,19 @@ test('CAT-1h: the onboarding card offers a build button for each agent it is giv
   assert.match(onboardCard({ agents: [{ id: 'k<x', name: '<b>' }] }, esc), /data-build="k&lt;x">Have &lt;b&gt; build it</, 'names are escaped');
   console.log('PASS CAT-1h onboarding: a build button per agent given');
 });
+
+test('CAT-1h: Unrestricted mode reads off once a catalog-only agent with a loosened mode arrives, and turning it on starts that agent loosest too', () => {
+  const kept = new Map();
+  globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
+  security.setStarts(true, 'p9-mode:'); security.setWarnsLoose(false); // turned on before the agent was read
+  for (const k of ['p9-mode:kestrel', 'p9-mode-ok:Free run']) kept.delete(k);
+  security.fillLoose?.([KESTREL]);
+  assert.equal(security.unrestricted(false, false, 'p9-mode:'), false, 'a new agent is not loosened without the owner turning it on');
+  security.setStarts(true, 'p9-mode:'); security.setWarnsLoose(false); // the owner turns it on again
+  assert.equal(kept.get('p9-mode:kestrel'), 'Free run');
+  assert.equal(security.unrestricted(false, false, 'p9-mode:'), true);
+  security.setStarts(false, 'p9-mode:');
+  assert.equal(kept.get('p9-mode:kestrel'), undefined, 'off takes it back');
+  delete globalThis.localStorage;
+  console.log('PASS CAT-1h unrestricted: a new agent reads off until turned on, then starts loosest');
+});

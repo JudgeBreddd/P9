@@ -4,7 +4,7 @@ import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, war
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, keptItems, diffRows, diffCreated, diffDeleted } from './composer.mjs';
-import { LABEL, projectOf } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
+import { LABEL, projectOf } from './panel.mjs'; import { fillLoose } from './security.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 // The two button looks repeated in the pane's markup, written once (they cost bytes in the startup JS each time).
 const GH = 'data-slot="button" data-variant="ghost" data-size="sm"', OL = 'data-slot="button" data-variant="outline" data-size="sm"';
 
@@ -896,7 +896,9 @@ const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 // An id goes into HTML attributes, so only a-z 0-9 - is taken (agents.mjs keeps its ids to that).
 const loadAgents = async () => { const r = await window.p9.chat('agents', {}).catch(() => 0);
   if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats())), 1e4);
-  for (const a of r.body.agents) if (/^[a-z0-9-]+$/.test(a.id)) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; };
+  const agents = r.body.agents.filter(a => /^[a-z0-9-]+$/.test(a.id));
+  for (const a of agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP';
+  fillLoose(agents); };
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
