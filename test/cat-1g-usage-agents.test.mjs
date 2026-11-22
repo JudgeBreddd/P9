@@ -22,3 +22,10 @@ test('CAT-1g: an older daemon\'s limits draw Claude and Codex as before', () => 
   assert.deepEqual(lines.map((l) => [l.name, l.text]), [['Claude', '5 h 42% · week n/a · just now'], ['Codex', 'no plan limits recorded yet']]);
   assert.deepEqual(helpers.limitLines?.(undefined, names), [], 'no limits: no lines');
 });
+
+test('CAT-1g: the Usage card shows the first agent with a reading, not a signed-out or empty one before it', () => {
+  assert.equal(helpers.limitCard?.({ claude: null, codex: null, kestrel: reading(30), signedOut: ['claude'] }, names)?.name, 'Kestrel');
+  assert.equal(helpers.limitCard?.({ claude: reading(42), codex: reading(9) }, names)?.name, 'Claude', 'Claude first when it has one');
+  assert.equal(helpers.limitCard?.({ claude: null, codex: null }, names)?.text, 'no plan limits recorded yet', 'none read: the first line');
+  assert.equal(helpers.limitCard?.({}, names), undefined, 'no agents: no line');
+});

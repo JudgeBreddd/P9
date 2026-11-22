@@ -1,6 +1,6 @@
 // Mission Control's page: sections, windows, the space menu, notes and file modals. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { tileLevel, tileAnswer, tileHtml, quickNoteHtml, linkHtml, quickNotePath, quickNoteWords } from './data-tiles.mjs';
-import { esc, limitLine, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImageError, sprintTimes, md } from './helpers.mjs';
+import { esc, limitLines, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImageError, sprintTimes, md } from './helpers.mjs';
 import { editItems, editorModal } from './mission-editor.mjs';
 import { freeName, templateWords } from './onboarding.mjs';
 import { checklistHtml, checklistAnswer, checklistAction } from './checklist.mjs';
@@ -208,7 +208,7 @@ const icmSpace = () => outer.sampleView || outer.M.space.some(namesPanel) || out
 const allNotes = () => outer.S.alerts;
 // O190: what the token totals count, in the daemon's words (/usage tokens, ledger.mjs TOKENS); an older daemon sends none.
 const tokensSay = () => usage.tokens ? `<p class="sm" data-tokens>Tokens counted: ${esc(usage.tokens)}</p>` : '';
-const usageBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
+const usageBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${limitLines(usage.limits, outer.names).map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div>${tokensSay()}<p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`)
   + profileLines(usage);
