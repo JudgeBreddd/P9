@@ -349,7 +349,7 @@ test('CAT-1f: a failed first agents read is asked again; the third agent shows w
 
 // CAT-1f: a name and a mode from GET /agents are text, never markup: the chat pane and Settings drew the names into HTML
 // raw. Forced: main answers with Claude's short name and one more mode carrying an element.
-test('CAT-1f: an agent name or mode with markup in it shows as text in the chat pane and Settings', { timeout: 120000 }, async (t) => {
+test('CAT-1f: an agent name, mode or id with markup in it shows as text in the chat pane and Settings', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-cat1f-')), 'profile');
   const { app, page } = await launch(t, instance, profile);
@@ -357,7 +357,8 @@ test('CAT-1f: an agent name or mode with markup in it shows as text in the chat 
   await app.evaluate(({ ipcMain }, bad) => {
     const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
     ipcMain.handle('p9:chat', async (e, ...args) => { const r = await h(e, ...args); if (args[0] !== 'agents' || r.status !== 200) return r;
-      return { ...r, body: { agents: r.body.agents.map((a) => a.id === 'claude' ? { ...a, short: bad, modes: [...a.modes, { name: '<i data-x>Go</i>', tier: 9 }] } : a) } }; });
+      const agents = r.body.agents.map((a) => a.id === 'claude' ? { ...a, short: bad, modes: [...a.modes, { name: '<i data-x>Go</i>', tier: 9 }] } : a);
+      return { ...r, body: { agents: [...agents, { ...agents[1], id: 'x" data-x="1', short: 'Odd' }] } }; });
   }, bad);
   await page.reload(); await page.locator('#rChat').waitFor();
   await page.click('#newBtn');
@@ -372,8 +373,9 @@ test('CAT-1f: an agent name or mode with markup in it shows as text in the chat 
   const row = page.locator('.set-defaults').first();
   assert.equal(await row.locator('strong').innerText(), bad);
   assert.ok((await row.locator('[data-default-mode] option').allInnerTexts()).includes('<i data-x>Go</i>'));
-  assert.equal(await page.locator('[data-x]').count(), 0, 'no element from the name or mode in Settings');
-  console.log('PASS CAT-1f: a catalog name and mode with markup show as text in the chat pane and Settings');
+  assert.equal(await page.locator('[data-x]').count(), 0, 'no element or attribute from the name, mode or id in Settings');
+  assert.deepEqual(await page.locator('.set-defaults [data-default-mode]').evaluateAll((l) => l.map((e) => e.dataset.defaultMode)), ['claude', 'codex'], 'an id outside a-z 0-9 - is not taken');
+  console.log('PASS CAT-1f: a catalog name, mode or id with markup shows as text in the chat pane and Settings');
 });
 
 test('O131: after a daemon restart and a window reload whose first read of the defaults failed, a New chat starts on the saved Default model and effort', { timeout: 180000 }, async (t) => {

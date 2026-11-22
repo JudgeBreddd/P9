@@ -891,9 +891,10 @@ const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 // answers, so the pickers offer every catalog agent; until then, and in the sample view, they hold the two built in. Called
 // once, from list(); a failed read (the daemon still starting) asks again every 10 s and redraws. The window and its daemon
 // ship together, so the catalog only adds agents and the two built in are never taken out.
+// An id goes into HTML attributes, so only a-z 0-9 - is taken (agents.mjs keeps its ids to that).
 const loadAgents = async () => { const r = await window.p9.chat('agents', {}).catch(() => 0);
   if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats())), 1e4);
-  for (const a of r.body.agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; };
+  for (const a of r.body.agents) if (/^[a-z0-9-]+$/.test(a.id)) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; };
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
