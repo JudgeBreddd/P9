@@ -402,7 +402,7 @@ function bindOnboard(root) {
     b.disabled = false;
     if (r.status === 201 && r.body.space) {
       outer.live.adding = false; outer.renderMission();
-      outer.toast({ kind: 'chat', txt: (b.dataset.build === 'codex' ? 'Codex' : 'Claude') + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
+      outer.toast({ kind: 'chat', txt: (outer.names[b.dataset.build] ?? b.dataset.build) + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
     }
     if (r.status === 201) outer.openModal({ kind: 'chat', id: r.body.conversation });
     else outer.toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
