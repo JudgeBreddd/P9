@@ -267,17 +267,34 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
   }
 
   // A6: remove only folders with nothing unsaved whose work is in the main line; keep and list the rest.
-  async function clean(sprint) {
+  // Close bundles (the owner, 2026-11-22, "Bundle"): with bundle (a closed sprint), a folder on its own branch with nothing
+  // unsaved whose work is not in the main line goes too, once its branch is written as a git bundle beside the sprint's
+  // notes (bundles/<item>.bundle; never over an earlier one). Unsaved work and a folder off its branch stay as folders:
+  // a bundle holds only commits.
+  async function clean(sprint, { bundle = false } = {}) {
     if (!home || !ID.test(sprint ?? '')) return { error: 'request-refused' };
-    return queued(sprint, () => cleanNow(sprint));
+    return queued(sprint, () => cleanNow(sprint, bundle));
   }
-  async function cleanNow(sprint) {
+  // The branch as a verified bundle under a name not yet used, or null (nothing written) when git could not.
+  async function bundleOf(clone, sprint, item, branch) {
+    const dir = path.join(dirOf(sprint), 'bundles');
+    if (await mkdir(dir, { recursive: true, mode: 0o700 }).then(() => false, () => true)) return null;
+    let file, n = 0;
+    while (await lstat(file = path.join(dir, item + (n ? '~' + n : '') + '.bundle')).then(() => true, () => false)) n++;
+    const part = file + '.part';
+    const ok = (await git(clone, ['bundle', 'create', '--quiet', part, 'refs/heads/' + branch], { timeout: 5 * 60_000 })).code === 0
+      && (await git(clone, ['bundle', 'verify', '--quiet', part])).code === 0;
+    if (!ok) { await rm(part, { force: true }); return null; }
+    await rename(part, file);
+    return file;
+  }
+  async function cleanNow(sprint, bundle) {
     const copy = path.join(dirOf(sprint), 'copy'), hasCopy = await realDir(copy, 2), root = path.join(dirOf(sprint), 'workers');
     const clone = hasCopy ? copy : path.join(dirOf(sprint), 'clone');
-    if (!await realDir(clone, 2)) return { removed: [], kept: [] };
+    if (!await realDir(clone, 2)) return bundle ? { removed: [], kept: [], bundled: [] } : { removed: [], kept: [] };
     // Best effort: offline, the main line known so far. A copy has no origin of its own (SECURITY.md): it is never fetched.
     if (!hasCopy) await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 });
-    const removed = [], kept = [], gone = [];
+    const removed = [], kept = [], gone = [], bundled = [];
     for (const item of (await readdir(root).catch(() => [])).sort()) {
       const folder = path.join(root, item), branch = branchOf(sprint, item);
       const facts = KEY.test(item) && await realDir(folder, 3) ? await gitFacts(folder) : null;
@@ -285,16 +302,23 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
       // switched branches (or detached) keeps its folder and branch, whatever the folder now shows.
       const on = facts && await one(folder, ['symbolic-ref', '-q', 'HEAD']);
       const tip = facts && await one(clone, ['rev-parse', '-q', '--verify', 'refs/heads/' + branch + '^{commit}']);
-      const why = !facts ? 'not a worker folder' : on !== 'refs/heads/' + branch || !tip || tip !== facts.commit ? 'not on its sprint branch'
+      let why = !facts ? 'not a worker folder' : on !== 'refs/heads/' + branch || !tip || tip !== facts.commit ? 'not on its sprint branch'
         : facts.dirty ? 'unsaved changes' : await facts.inMain(tip) !== true ? 'not in the main line' : null;
+      const saved = bundle && why === 'not in the main line' ? await bundleOf(clone, sprint, item, branch) : null;
+      if (saved) why = null; else if (bundle && why === 'not in the main line') why = 'not in the main line; its bundle could not be written';
       const real = !why && await realpath(folder).catch(() => folder);
       if (!why && (await git(clone, ['worktree', 'remove', folder])).code === 0) {
         gone.push(folder, real);
         // Deleted only if the tip is still the one checked (a commit made meanwhile keeps the branch).
         await git(clone, ['update-ref', '-d', 'refs/heads/' + branch, tip]);
         await rm(path.join(dirOf(sprint), 'ready', item), { force: true });
-        removed.push(item);
-      } else kept.push({ item, folder, branch, bytes: await bytes(folder), why: why ?? 'git would not remove it' });
+        // A bundled item is also in removed, with where it went: the page's text says so with no code of its own.
+        if (saved) bundled.push({ item, branch, commit: tip, bundle: saved });
+        removed.push(saved ? `${item} (kept as bundles/${path.basename(saved)})` : item);
+      } else {
+        if (saved) await rm(saved, { force: true }); // the folder and branch stay, so the bundle is not needed
+        kept.push({ item, folder, branch, bytes: await bytes(folder), why: why ?? 'git would not remove it' });
+      }
     }
     // Each removed folder's agent scratch goes too; never one a kept folder's name shares (a.b and a-b give the same), nor
     // one any other path still on disk gives (the place is shared by all of this user's folders), and only a real folder
@@ -314,7 +338,7 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
       for (const part of parts) await rm(path.join(dirOf(sprint), part), { recursive: true, force: true });
       await rmdir(dirOf(sprint)).catch(() => {});
     }
-    return { removed, kept };
+    return bundle ? { removed, kept, bundled } : { removed, kept };
   }
 
   // daemon-6 (lead): the clone holds every worker's branches and stashes, not only the sprint branches. It goes only when
