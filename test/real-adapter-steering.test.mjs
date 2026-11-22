@@ -37,9 +37,9 @@ for (const provider of ['claude', 'codex']) {
   });
 }
 
-// The hold on #193 (O52 / O121): Claude is asked for ACP 1 in chat.mjs (ACP_ASK.claude), because its ACP 2 surface has no
+// The hold on #193 (O52 / O121): Claude is asked for ACP 1 (its catalog entry's acp in agents.mjs, read by chat.mjs ACP_ASK), because its ACP 2 surface has no
 // steering. This case asks ACP 2 directly and asserts steering is NOT offered. When the adapter gains it there, this goes
-// red: set ACP_ASK.claude back to 2 (O121) and retire this case.
+// red: set claude's acp back to 2 in agents.mjs (O121) and retire this case.
 test('real claude adapter on ACP 2: steering is not offered yet (set ACP_ASK.claude back to 2, O121)', { timeout: 60000 }, async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-steer2-'));
   process.env.HOME = home;

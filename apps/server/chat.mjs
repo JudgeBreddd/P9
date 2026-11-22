@@ -25,7 +25,7 @@ import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted } from './ledger.mjs';
-import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG } from './agents.mjs';
+import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START } from './agents.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(AGENT_IDS);
@@ -70,10 +70,11 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // in at the next tool-call boundary (session.steering, hold() and toolStep() below). Steer goes to the agent
 // between tool calls and never cancels a running tool call. Back to 2 once the adapter
 // advertises steering there: the ACP 2 case in test/real-adapter-steering.test.mjs goes red once it does.
-const ACP_ASK = { claude: 1, codex: 2 };
+// CAT-1c: the numbers are each catalog entry's acp (agents.mjs).
+const ACP_ASK = ACP;
 // O109: the line on a kept message P9 sends again after a restart that cut its sending short.
 const REPEAT = '[P9: P9 restarted while this message was being sent, so it may have reached you already.]';
-export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
+export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : Object.hasOwn(ACP_ASK, provider) ? ACP_ASK[provider] : 1); // hasOwn: a built-in name ('constructor') is not an agent
 // O194: _meta advertises claude-agent-acp's opt-in asyncTasks capability (its air-extension.js), so the adapter marks a
 // run it starts with no prompt. Codex and an ACP 2 start (acp-v2.mjs keeps only elicitation) never see it.
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} },
@@ -1236,7 +1237,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
         const was = lastPicks(conversation.id);
-        await bounded(setMode(session, conversation.provider, undefined, conversation.provider === 'codex' || locked));
+        await bounded(setMode(session, conversation.provider, undefined, TELL_START[conversation.provider] || locked));
         await bounded(carry(session, conversation, resumed?.configOptions, was));
         const label = (item) => item?.options?.find((o) => o.value === item.current)?.name ?? item?.current ?? 'unknown';
         const changes = [];
@@ -1258,7 +1259,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         db.prepare('UPDATE conversations SET session = ? WHERE id = ?').run(session.sessionId, conversation.id);
         // contracts.md rule 2: P9 picks the starting mode, not the adapter (claude-agent-acp 0.104.1 starts in auto, 0.88.0 in default).
         // Claude's is quiet, as the adapter's own start was: the window's picked mode comes with the first prompt.
-        await bounded(setMode(session, conversation.provider, undefined, conversation.provider === 'codex' || locked));
+        await bounded(setMode(session, conversation.provider, undefined, TELL_START[conversation.provider] || locked));
         emit(conversation.id, 'connected', { session: session.sessionId });
         session.fresh = true; // nobody has changed this session yet: its current values are the agent's defaults (MC-16)
         models(session, conversation.id, created.configOptions);
