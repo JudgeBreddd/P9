@@ -890,9 +890,9 @@ fs.appendFileSync(${JSON.stringify(held)}, '1'); const t = setInterval(() => { i
 });
 
 // A sprint never ends (the owner, 2026-11-22): the owner's Close cleans the worker folders by Clean up's rules. The merged,
-// saved folder and its branch go; a folder with unsaved changes and one with unmerged work stay, each with its branch;
-// the sprint's own files stay.
-test('Close sprint cleans up: a merged folder goes; a dirty worktree and an unmerged branch survive, and the sprint files stay', { timeout: 300000 }, async (t) => {
+// saved folder and its branch go; a folder with unsaved changes stays with its branch; unmerged saved work is kept as a
+// bundle beside the sprint's notes and its folder goes (the owner, "Bundle"); the sprint's own files stay.
+test('Close sprint cleans up: a merged folder goes; a dirty worktree survives and an unmerged branch survives as a bundle, and the sprint files stay', { timeout: 300000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const ws = instance.workspace, repo = path.join(ws, 'repo');
   fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
@@ -914,19 +914,22 @@ test('Close sprint cleans up: a merged folder goes; a dirty worktree and an unme
   for (const key of ['done', 'dirty', 'open']) { w[key] = await L.tool('open_chat', { text: 'cwd', key, folder: 'repo', worktree: true }); assert.ok(w[key].folder && !w[key].error, JSON.stringify(w[key])); }
   fs.writeFileSync(path.join(w.dirty.folder, 'wip.txt'), 'unsaved\n');
   fs.writeFileSync(path.join(w.open.folder, 'o.txt'), 'o\n'); g(w.open.folder, 'add', 'o.txt'); g(w.open.folder, 'commit', '-qm', 'not merged');
-  const branches = () => g(w.open.folder, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n').filter(Boolean).map((b) => b.split('/').pop()).sort();
+  const branches = () => g(w.dirty.folder, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n').filter(Boolean).map((b) => b.split('/').pop()).sort();
   assert.deepEqual(branches(), ['dirty', 'done', 'open']);
   const files = fs.readdirSync(s.folder, { recursive: true }).filter((f) => !/^(workers|ready|clone|copy)([/\\]|$)/.test(f)).sort(); // the sprint's own files; those four are Clean up's (worker-folders.mjs)
   assert.ok(['sprint.md', 'roles.json', 'roles/lead.work.md'].every((f) => files.includes(f)), JSON.stringify(files));
   const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
-  assert.deepEqual([closed.body.cleaned.removed, closed.body.cleaned.kept.map((k) => [k.item, k.why])], [['done'], [['dirty', 'unsaved changes'], ['open', 'not in the main line']]], JSON.stringify(closed.body));
-  assert.deepEqual([fs.existsSync(w.done.folder), fs.existsSync(w.dirty.folder), fs.existsSync(w.open.folder)], [false, true, true], 'only the merged folder went');
+  assert.deepEqual([closed.body.cleaned.removed, closed.body.cleaned.kept.map((k) => [k.item, k.why])], [['done', 'open (kept as bundles/open.bundle)'], [['dirty', 'unsaved changes']]], JSON.stringify(closed.body));
+  const tip = closed.body.cleaned.bundled?.[0]?.commit, bundle = path.join(s.folder, 'bundles', 'open.bundle');
+  assert.deepEqual(closed.body.cleaned.bundled?.map((b) => [b.item, b.branch.split('/').pop()]), [['open', 'open']], JSON.stringify(closed.body));
+  assert.deepEqual([fs.existsSync(w.done.folder), fs.existsSync(w.dirty.folder), fs.existsSync(w.open.folder)], [false, true, false], 'the merged and the bundled folder went');
   assert.equal(fs.readFileSync(path.join(w.dirty.folder, 'wip.txt'), 'utf8'), 'unsaved\n', 'the dirty worktree keeps its unsaved file');
-  assert.deepEqual(branches(), ['dirty', 'open'], 'the unmerged and the dirty branch stay; the merged one goes');
-  assert.equal(g(w.open.folder, 'log', '-1', '--format=%s'), 'not merged');
+  assert.deepEqual(branches(), ['dirty'], 'the dirty branch stays; the merged and the bundled one go');
+  const back = path.join(ws, 'back'); g(ws, 'clone', '-q', '-b', closed.body.cleaned.bundled[0].branch, bundle, back);
+  assert.deepEqual([g(back, 'rev-parse', 'HEAD'), g(back, 'log', '-1', '--format=%s')], [tip, 'not merged'], 'the unmerged branch, cloned from its bundle');
   assert.deepEqual(fs.readdirSync(s.folder, { recursive: true }).filter((f) => files.includes(f)).sort(), files, 'every sprint file stays');
-  console.log('PASS Close cleans up: the merged folder went; the dirty worktree and the unmerged branch stayed with the sprint files');
+  console.log('PASS Close cleans up: the merged folder went; the dirty worktree stayed, the unmerged branch was bundled, the sprint files stayed');
 });
 
 // Sprint Setup as tools (row 697: an agent can read and change Setup the same way the page does): sprint_setup reads every Setup field with its file's hash; sprint_setup_save writes one file or one role row
