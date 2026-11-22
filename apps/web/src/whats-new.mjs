@@ -2,15 +2,16 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.10',
+  version: '0.1.9-beta.11',
   changes: [
-    "Sprints: each sprint has a Setup page and a page showing where it stands, with Start, Pause, Resume and Close.",
-    "Sprints: Start gives each chat its role row, scripts run only as approved, and Clean up removes landed folders.",
-    "Steer waits for the next tool step; Queue waits for turn end; Interrupt stops the turn and sends.",
-    "Each chat row shows what it is doing: a spinning ring, a green circle or a red hand.",
-    "Scheduled prompts: the daemon sends a prompt once or on a repeat, and keeps it across a restart.",
-    "Agents can rename, compact and close chats, list providers, and answer a worker's approval.",
-    "A name you gave a chat wins over the agent's title, and a helper agent's model never becomes the chat's.",
-    "P9 opens in Chat or the first enabled view; the landing page is gone, and an early reload keeps the app open.",
+    "Sprints: the Sprint View shows each phase's plan; Setup has a standing-merge switch and marks others' file edits.",
+    "Sprints: the Sprint View shows Used, PRs an hour and each worker's next item; sprint scripts can repeat.",
+    "Settings: Delegation and Sprints are separate, and Notices picks a note or a message per kind of worker notice.",
+    "A scrolled-up desktop chat stays on its message while tool calls and replies arrive.",
+    "Codex edits show per file and hunk with line numbers; its commands stream live and show their exit code.",
+    "A message from another chat's agent shows under that chat's title, not as You, on desktop and phone.",
+    "Dev editor: closing a changed tab asks Save, Don't Save or Cancel, and Revert drops unsaved changes.",
+    "Settings > Remote Connect > Devices approves or removes phones; the phone's chat bar names the running model.",
+    "11 themes and 4 effects remain; a look saved under a removed one loads as the default.",
   ],
 };
