@@ -134,7 +134,8 @@ export const DELEGATE_TOOLS = (input) => {
     input({ sprint: sprintArg })],
     ['close_sprint', 'Close a started sprint on the user\'s word, as the Close sprint button on the user\'s Sprint View does: P9 asks the user first, in every mode. It runs the before-close scripts (a blocking one that fails refuses the close), '
       + 'stops every chat of the sprint (the chats under the lead, then the lead; the chat that calls this is left to end its own turn), keeps the record (sprint_status as it stood), turns the sprint\'s scripts off and runs the after-close scripts. '
-      + 'Nothing is deleted: the sprint\'s files, its worker folders and its chats stay. A closed sprint is not started again.',
+      + 'Then it removes each worker folder with nothing unsaved whose work is in the main line, with its branch (the answer\'s cleaned lists what went and what stayed, and why); every other folder and branch, the sprint\'s files and its chats stay. '
+      + 'Called from a chat of the sprint, no folder is removed. A closed sprint is not started again.',
     input({ sprint: sprintArg })],
     ['sprint_setup', 'Read a sprint\'s Setup, every field the user\'s Sprint Setup page shows: its files (sprint.md the plan, rules.md, roles.json, roles/<key>.instructions.md, .rules.md and .work.md), each with its text and hash; '
       + 'missing (Setup files not made yet: save one with hash ""); roles (roles.json\'s rows: key, provider, model, effort, mode its permissions, owns what it owns) or roles_error (why roles.json does not parse); started; and standing_merge (the user\'s switch on that page, which only the user sets: false, merge is the user\'s). This tool changes nothing.',
@@ -678,7 +679,7 @@ export function createDelegate({ chat, allowed, usage }) {
   // close_sprint from a chat of the sprint or of its project, asked first in every mode. In order: before-close (may
   // refuse), the record (the Sprint View's answer, read before anything is stopped), every chat stopped (deepest first,
   // the lead last, the calling chat left alone), the close recorded, after-close. A chat that does not stop refuses the
-  // close with nothing recorded, so the press can be made again. Nothing is deleted.
+  // close with nothing recorded, so the press can be made again. Then the finished worker folders go (Clean up's rules).
   async function closeSprint(sprint, caller, signal) {
     if (caller && sprint === undefined) sprint = chat.sprintFiles.exists(caller) ? caller : chat.info(caller)?.parent;
     if (!ID.test(sprint ?? '')) return { error: caller ? 'unknown-sprint' : 'request-refused' };
@@ -694,9 +695,14 @@ export function createDelegate({ chat, allowed, usage }) {
     if (no()) return no();
     if (starting.has(sprint)) return { error: 'sprint-starting', detail: 'This sprint is being started or closed now.' };
     starting.add(sprint);
+    // A sprint never ends (Tyler, 2026-11-22): Close cleans its worker folders by Clean up's own rules (worker-folders.mjs:
+    // only a folder with nothing unsaved whose work is in the main line goes; the rest stays as folder and branch; the
+    // sprint's files are never touched). Not when a chat of this sprint closes it: it is still running, as the clean
+    // route refuses (a folder it is making has no commit yet and would read as merged). Its page's Clean up does it then.
+    const inside = caller && (caller === sprint || below(chat.family(), sprint).includes(caller));
     try {
       if (caller) {
-        const request = { toolCallId: 'p9-mcp-' + randomUUID(), kind: 'execute', title: `P9: close the sprint "${(lead?.title ?? prep.title).slice(0, 120)}": stop every chat of it, keep its record and turn its scripts off. Nothing is deleted. A closed sprint is not started again.` };
+        const request = { toolCallId: 'p9-mcp-' + randomUUID(), kind: 'execute', title: `P9: close the sprint "${(lead?.title ?? prep.title).slice(0, 120)}": stop every chat of it, keep its record and turn its scripts off.${inside ? ' No worker folder is removed (this chat is one of the sprint\'s).' : ' Worker folders whose work is merged and saved are removed; the rest stay.'} A closed sprint is not started again.` };
         if (!await chat.approve(caller, request, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
         if (signal?.aborted) return { error: 'cancelled' };
         if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -723,7 +729,10 @@ export function createDelegate({ chat, allowed, usage }) {
       chat.projects.recordClose(sprint, end);
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
+      const swept = inside ? null : await chat.workers.clean(sprint).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
       return { sprint, closed: { at: new Date(end.at).toISOString(), by: end.by }, stopped,
+        cleaned: swept && !swept.error ? { removed: swept.removed, kept: swept.kept.map(({ item, branch, why }) => ({ item, branch, why })) }
+          : { skipped: inside ? 'A chat of this sprint closed it, so its worker folders were not cleaned up: press Clean up worker folders on its page.' : 'Clean up failed: ' + (swept.detail ?? swept.error) + '. Nothing more was removed; press Clean up worker folders on its page.' },
         ...(own && { note: 'Your own chat was not stopped: end your turn now. The sprint is closed.' }) };
     } finally { starting.delete(sprint); }
   }

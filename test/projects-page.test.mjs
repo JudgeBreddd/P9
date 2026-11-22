@@ -1283,7 +1283,7 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   assert.deepEqual(await drawn(), [true, 1, 1, true, true, true], 'the open sprint\'s page');
   // The press asks first; Cancel closes nothing.
   await close.click();
-  assert.match(await ask.textContent(), /Close this sprint\?.*Nothing is deleted/s);
+  assert.match(await ask.textContent(), /Close this sprint\?.*whose work is merged are removed; the rest and the sprint's files stay/s);
   await ask.locator('[value="no"]').click();
   assert.deepEqual([(await status()).closed ?? null, await view.getAttribute('data-sv')], [null, 'open']);
   // A before-close script that exits 1 refuses the close: said beside the button, the sprint stays open.
