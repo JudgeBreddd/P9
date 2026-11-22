@@ -87,7 +87,8 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       # Retried: a GitHub/npm 50x during install (Electron's zip comes from github.com) failed whole runs (2026-11-08 outage).
-      - run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
+      - id: install
+        run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
         shell: bash
       # The Electron tests load apps/web/dist and apps/dev/dist; the passkey and surface-2 tests use Playwright's own Chromium.
       - run: pnpm build
@@ -125,6 +126,12 @@ jobs:
             xvfb-run -a node scripts/with-tmp.mjs node --test --test-timeout=600000 --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/file-limit.mjs --test-reporter-destination=stderr $FILES 2>&1 | tee -a "$RUNNER_TEMP/tests.log" | cut -c1-2000 || rc=$?
           done
           exit $rc
+      # O232: dependency-licenses.json matches what is installed, so an update PR that skips `node scripts/licenses.mjs --write`
+      # goes red. Linux only: elsewhere optional platform packages read installed: false and the inventory differs. One shard
+      # is enough; after the tests (and only once install worked), so a drifted file never hides a test result.
+      - name: Licence inventory
+        if: ${{ !cancelled() && matrix.shard == 0 && steps.install.outcome == 'success' }}
+        run: node scripts/licenses.mjs
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()
