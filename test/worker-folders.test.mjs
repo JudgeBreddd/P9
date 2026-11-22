@@ -170,6 +170,26 @@ test('Worker folders A6: clean-up removes a removed folder\'s agent scratch fold
   console.log('PASS Worker folders A6 scratch');
 });
 
+// Fix 2 (review of #464): the scratch name is lossy and the scratch place is shared by every folder of this user, so a
+// folder outside this sprint can have the same name (here <dir>/sprints-<id>/workers/merged against
+// <dir>/sprints/<id>/workers/merged). While any existing folder still gives that name, the scratch stays.
+test('Worker folders A6: a removed folder\'s scratch stays while a folder outside the sprint gives the same scratch name', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const scratch = path.join(dir, 'scratch'), named = (folder) => path.join(scratch, folder.replace(/[^a-zA-Z0-9]/g, '-'));
+  const folders = createWorkerFolders({ home, scratch });
+  const { folder } = await folders.make(ID, 'merged', owner);
+  write(path.join(folder, 'm.txt'), 'm\n'); g(folder, 'add', '.'); g(folder, 'commit', '-qm', 'm');
+  g(folder, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
+  const other = path.join(dir, 'sprints-' + ID, 'workers', 'merged');
+  fs.mkdirSync(other, { recursive: true });
+  assert.equal(named(other), named(folder), 'the outside folder gives the same scratch name');
+  write(path.join(named(folder), 'tasks', 'one.output'), 'output\n');
+  assert.deepEqual((await folders.clean(ID)).removed, ['merged']);
+  assert.ok(fs.existsSync(path.join(named(folder), 'tasks', 'one.output')), 'the outside folder may own the scratch: it stays');
+  fs.rmSync(path.join(dir, 'sprints-' + ID), { recursive: true });
+  console.log('PASS Worker folders A6 scratch outside');
+});
+
 // daemon-6 (nightly 8: three squash-merged folders were kept as "not in the main line"): a later PR changes a
 // file the worker's merged PR also changed. The work is still in the main line, so its folder goes; a worker whose lines
 // the main line later rewrote, and one not merged, are kept.
