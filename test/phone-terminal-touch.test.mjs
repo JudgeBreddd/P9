@@ -11,10 +11,10 @@ const evidence = process.env.P9_SCREENSHOTS || path.join(os.tmpdir(), 'p9-phone-
 
 // A phone-sized touch browser on the phone page, signed in, with every frame the page sends on a socket recorded
 // (the bytes after the 8-byte lease, as text) so a test reads exactly what reached the terminal.
-async function phone(t, server, { touchScreen = true } = {}) {
+async function phone(t, server, { touchScreen = true, serviceWorkers = 'allow' } = {}) {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ hasTouch: touchScreen, viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ hasTouch: touchScreen, viewport: { width: 390, height: 844 }, serviceWorkers });
   await context.addInitScript(() => {
     window.p9sent = [];
     const send = WebSocket.prototype.send;
@@ -232,11 +232,29 @@ test('P13, P14: a press and hold or a double tap opens the terminal text to copy
 // O179: the terminal fills its box: whatever the box's height, the band left under the last row is less than one row.
 test('O179: the phone terminal leaves no empty band taller than one row under its last line', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
-  const { page } = await phone(t, server);
+  const { page } = await phone(t, server, { serviceWorkers: 'block' }); // the service worker would serve the font past page.route
+  // O179-FLAKE: CI (2 logs, both at 844) had 45 rows of 17 px in a box that holds 40. JetBrains Mono (font-display swap)
+  // was still loading when xterm opened, so xterm measured the fallback font's 15 px rows; the font arrived before the
+  // socket opened; fit() on open read the stale 15 px row, asked for 45 rows, and that resize made xterm measure again
+  // (17 px) with nothing fitting after it. 844 is the starting size, so no resize event fit it again. Here that order is
+  // held every run: the font waits until xterm has opened, the socket's open waits until the font is in.
+  let release; const held = new Promise((done) => { release = done; });
+  await page.route(/jetbrains-mono/, async (route) => { await held; await route.continue(); });
+  await page.reload({ waitUntil: 'domcontentloaded' }); // the phone page has already loaded the font; routing turns the cache off
+  await page.evaluate(() => {
+    window.p9open = new Promise((done) => { window.p9opened = done; });
+    const set = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onopen').set;
+    Object.defineProperty(WebSocket.prototype, 'onopen', { configurable: true, set(fn) { set.call(this, (event) => window.p9open.then(() => fn.call(this, event))); } });
+  });
   await page.click('[data-nav="terminal"]');
   await page.click('#newTerminal');
+  await page.waitForSelector('#screen .xterm-rows > div');
+  const lateFont = await page.evaluate(() => !document.fonts.check('13px "JetBrains Mono"'));
+  release();
+  await page.evaluate(() => document.fonts.load('13px "JetBrains Mono"'));
+  await page.evaluate(() => window.p9opened());
   await connected(page);
-  const seen = [];
+  const seen = [{ lateFont }];
   for (const height of [844, 700, 611]) { // three heights that do not divide by a row
     await page.setViewportSize({ width: 390, height });
     await page.waitForTimeout(400); // fit() runs on resize; xterm draws on the next frame
@@ -249,7 +267,8 @@ test('O179: the phone terminal leaves no empty band taller than one row under it
     seen.push({ height, ...m });
   }
   console.log('O179 ' + JSON.stringify(seen));
-  for (const m of seen) {
+  assert.ok(lateFont, 'the font was already loaded when the socket opened, so the late swap was not tested');
+  for (const m of seen.slice(1)) {
     assert.ok(m.band < m.row, 'the band under the last row is less than one row: ' + JSON.stringify(m));
     assert.ok(m.clipped <= 0.5, 'no row is cut off at the bottom: ' + JSON.stringify(m));
   }
