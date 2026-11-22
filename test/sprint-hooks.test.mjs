@@ -916,7 +916,8 @@ test('Close sprint cleans up: a merged folder goes; a dirty worktree and an unme
   fs.writeFileSync(path.join(w.open.folder, 'o.txt'), 'o\n'); g(w.open.folder, 'add', 'o.txt'); g(w.open.folder, 'commit', '-qm', 'not merged');
   const branches = () => g(w.open.folder, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n').filter(Boolean).map((b) => b.split('/').pop()).sort();
   assert.deepEqual(branches(), ['dirty', 'done', 'open']);
-  const files = fs.readdirSync(s.folder, { recursive: true }).sort();
+  const files = fs.readdirSync(s.folder, { recursive: true }).filter((f) => !/^(workers|ready|clone|copy)([/\\]|$)/.test(f)).sort(); // the sprint's own files; those four are Clean up's (worker-folders.mjs)
+  assert.ok(['sprint.md', 'roles.json', 'roles/lead.work.md'].every((f) => files.includes(f)), JSON.stringify(files));
   const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
   assert.deepEqual([closed.body.cleaned.removed, closed.body.cleaned.kept.map((k) => [k.item, k.why])], [['done'], [['dirty', 'unsaved changes'], ['open', 'not in the main line']]], JSON.stringify(closed.body));
