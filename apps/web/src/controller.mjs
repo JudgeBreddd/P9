@@ -251,7 +251,7 @@ const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startM
 const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
 const names = { claude: 'Claude', codex: 'Codex' };
 // O29: the agent used last here. ponytail: per computer, like the last mode (p9-mode:); a second device keeps its own.
-const lastAgent = () => { const a = localStorage.getItem('p9-agent-last'); return names[a] ? a : 'claude'; };
+const lastAgent = () => { const a = localStorage.getItem('p9-agent-last'); return names[a] ? a : Object.keys(names)[0]; };
 const usedAgent = a => { try { localStorage.setItem('p9-agent-last', a); } catch {} };
 // The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
 const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });
@@ -390,7 +390,7 @@ function renderModal() {
   } else if (m.kind === 'asks') {
     const asks = S.sessions.filter(s => s.pending); if (!asks.length) return closeModal();
     $('#mdlT').textContent = asks.length + ' agents need you';
-    body.innerHTML = `<ul class="mlist">${asks.map(s => row(s.id, `<span class="dot" data-agent="${esc(s.agent)}" data-live></span>`, esc(s.title), names[s.agent] + ' · ' + (s.pending === 'approval' ? 'wants approval' : 'asks a question'))).join('')}</ul>`;
+    body.innerHTML = `<ul class="mlist">${asks.map(s => row(s.id, `<span class="dot" data-agent="${esc(s.agent)}" data-live></span>`, esc(s.title), esc(names[s.agent]) + ' · ' + (s.pending === 'approval' ? 'wants approval' : 'asks a question'))).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'chat', id: b.dataset.i, back: m }));
   } else if (m.kind === 'reviews') {
     if (!S.reviews.length) return closeModal();

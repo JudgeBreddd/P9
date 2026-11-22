@@ -36,6 +36,7 @@ export const CATALOG = Object.freeze([
 ]);
 
 const each = (pick) => Object.freeze(Object.fromEntries(CATALOG.map((a) => [a.id, pick(a)])));
+// An id is a-z 0-9 - only: the desktop puts it in HTML attributes and drops any other.
 export const AGENT_IDS = Object.freeze(CATALOG.map((a) => a.id));
 // The tables the server reads, keyed by agent id.
 export const MODES = each((a) => Object.freeze(Object.fromEntries(Object.entries(a.modes).map(([name, m]) => [name, m.value]))));
