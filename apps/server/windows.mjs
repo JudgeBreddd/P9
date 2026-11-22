@@ -55,11 +55,12 @@ export function missingWindowsBinaries(installed, arch = 'x64') {
 // 17-20 s on CI runners, so 120 s is far past a slow start). run is spawnSync; tests pass a stub (no Windows needed).
 export const PIPE_LOCK_MS = 120_000;
 // B8: windows-host.ps1 -Mode Acl checks that state, recovery and the ownership folder grant only this user, SYSTEM and
-// Administrators. Same timeout as the pipe lock (N6-1: it had none). Any exit but 0 refuses; the check prints the folders
+// Administrators. Same timeout as the pipe lock (N6-1: it had none). Any exit but 0 refuses (a timeout says so); the check prints the folders
 // that fail, so the ownership folder is named apart.
 export function lockFolders({ host, folders, env, run = spawnSync, timeout = PIPE_LOCK_MS }) {
   const result = run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', host, '-Mode', 'Acl', '-Payload', Buffer.from(folders.join('\n')).toString('base64')], { encoding: 'utf8', env, timeout });
+  if (result?.error?.code === 'ETIMEDOUT') throw new Error('folder-acl-check-timed-out'); // a hang is not an unsafe folder
   if (result?.status !== 0) throw new Error(String(result?.stdout ?? '').split(/\r?\n/).includes(folders.at(-1)) ? 'unsafe-ownership-directory' : 'unsafe-private-directory');
 }
 export function lockPipe({ host, pipe, env, run = spawnSync, timeout = PIPE_LOCK_MS }) {
