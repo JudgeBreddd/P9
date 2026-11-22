@@ -25,9 +25,10 @@ import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted } from './ledger.mjs';
+import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN } from './agents.mjs';
 
 const run = promisify(execFile);
-const PROVIDERS = new Set(['claude', 'codex']);
+const PROVIDERS = new Set(AGENT_IDS);
 const ID = /^[0-9a-f-]{36}$/;
 const MAX_TEXT = 100_000, MAX_EVENT = 64 * 1024;
 // O197: each P9 notice kind and how it reaches a parent by default (Settings > Notices changes it).
@@ -87,12 +88,11 @@ export const rawResults = OWN_RUNS.map((origin) => ({ type: 'result', origin }))
 const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
 // The approval a P9 MCP tool asks for (run_script, answer_needs_you): the chat's own prompt, two buttons.
 const MCP_OPTIONS = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
-export const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@agentclientprotocol/${provider === 'claude' ? 'claude-agent-acp' : 'codex-acp'}/dist/index.js`, import.meta.url));
+export const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@agentclientprotocol/${ADAPTER[provider]}/dist/index.js`, import.meta.url));
 const refused = (status, error) => ({ status, error });
 // ACP's authRequired (code -32000) means the agent's own CLI on this computer is not signed in (GitHub issue #4: the
 // window showed only "Authentication required"). Say how to sign in; any other error passes through, cut to 500 chars.
-const SIGN_IN = { claude: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
-  codex: 'Codex is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal and run codex login. Then start a new chat.' };
+const SIGN_IN = SIGNED_OUT; // CAT-1: each agent's line, from the catalog
 // O48: a chat start that failed before the agent was asked anything. None of these holds a key or a command's output.
 const PROFILE_ERRORS = { 'profile-no-key': 'This chat\'s provider profile has no key. Add one in Settings.', 'profile-command-failed': 'The key command of this chat\'s provider profile failed or printed nothing. Check it in Settings.', 'profile-gone': 'This chat\'s provider profile was removed in Settings. It can be read, not continued.' };
 const agentError = (error, provider) => (error?.code === -32000 ? SIGN_IN[provider] : String(error?.message ?? error).slice(0, 500));
@@ -860,8 +860,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     emit(id, 'auto-allowed', { toolCall: trim(call) });
     return { outcome: { outcome: 'selected', optionId: allow.optionId } };
   };
-  const NARROW = { claude: 'plan', codex: 'read-only' }; // each agent's no-write mode: the lock's, and a turn answering another chat's question
-  const modeFor = (provider) => locked ? NARROW[provider] : provider === 'claude' ? 'default' : 'agent';
+  // NARROW (catalog): each agent's no-write mode, the lock's and a turn answering another chat's question.
+  const modeFor = (provider) => locked ? NARROW[provider] : START[provider];
   // One set at a time per session, sent in the order asked: a set that answers late can never land after a later one.
   // modeWaits counts the sets not settled yet; while there is one, a prompt sets its own mode instead of trusting session.mode.
   // MC-3: the mode event the window's and the phone's pills show. told: this run of the session has said its mode, so a
@@ -877,8 +877,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   // The chat's Mode picker, sent with each desktop prompt (Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
-  const MODES = { claude: { Auto: 'auto', Manual: 'default', Plan: 'plan', 'Accept edits': 'acceptEdits', 'Bypass permissions': 'bypassPermissions' },
-    codex: { 'Read-only': 'read-only', 'Workspace access': 'workspace-write', 'Auto review': 'agent', 'Full access': 'agent-full-access' } };
+  // MODES: from the catalog (agents.mjs).
   // The agent's own model list (the picker offered two models). The window shows it; a prompt picks only from it.
   // Threat model row 22: beside the model, only effort, fast mode and Codex's plan switch (all of them
   // wired). Mode stays P9's own picker with the lock; any other or future category never reaches the window.
@@ -986,7 +985,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // handed to one already running, closes with it.
   // D8: Codex signs in with its device code (a hidden flag in the codex P9 ships, pinned in the lockfile): it prints a
   // page and a one-time code and listens on no port, so it works when the daemon runs on another computer.
-  const LOGIN = { claude: ['--cli', 'auth', 'login', '--claudeai'], codex: ['cli', 'login', '--device-auth'] };
+  // LOGIN: each agent's sign-in arguments, from the catalog.
   const logins = new Map(); // agent -> { tree, url, code, unsupported, exit, timer }
   const agentName = (value) => typeof value === 'string' && Object.hasOwn(LOGIN, value); // never ['claude'], which hasOwn reads as 'claude'
   const endLogin = async (agent) => {

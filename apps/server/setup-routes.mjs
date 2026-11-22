@@ -2,6 +2,7 @@
 import { parseSettings, createMission } from './mission.mjs';
 import path from 'node:path';
 import { agentDirs } from './limits.mjs';
+import { CATALOG } from './agents.mjs';
 import os from 'node:os';
 import { readdir, access, stat, mkdir, open } from 'node:fs/promises';
 import { constants as fsConstants, existsSync } from 'node:fs';
@@ -29,8 +30,7 @@ export function setupRoutes(outer) {
     return Object.fromEntries(Object.entries(own).filter(([key, value]) => loaded[key] !== value));
   };
   // Whether each agent is signed in: its credentials file exists (never read).
-  const signedIn = async () => ({ claude: await outer.present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')),
-    codex: await outer.present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')) });
+  const signedIn = async () => Object.fromEntries(await Promise.all(CATALOG.map(async ({ id, signIn }) => [id, await outer.present(path.join(agentDirs(os.homedir())[signIn.dir], signIn.file))])));
   outer.app.get('/setup', async (c) => {
     const disk = await outer.settingsOnDisk(), empty = !(await readdir(outer.workspace)).length;
     // A settings file (loaded or on disk) decides the paths. Without one: an empty folder gets the starter paths, any other

@@ -10,6 +10,7 @@ import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 import { WORKER } from './worker-folders.mjs';
 import { decide } from './carry.mjs';
+import { TIER, AUTO } from './agents.mjs';
 import { EVERY_MAX, SCHEDULES_MAX, SCHEDULE_TEXT_MAX, createSchedules } from './schedules.mjs';
 import { MAX_FILE, SENT, hashOf, notesLine, planItems } from './sprint-files.mjs';
 import { BLOCKING, EVERY_MAX as SCRIPT_EVERY_MAX, EVERY_MIN as SCRIPT_EVERY_MIN, POINTS, REPORTED as SCRIPT_REPORTED, createHooks, parse as parseScripts, said as scriptSaid } from './sprint-hooks.mjs';
@@ -18,8 +19,7 @@ const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 // How wide a mode is, across both agents: 0 reads only, 1 asks before each action, 2 edits files, 3 acts with a
 // reviewer, 4 acts unasked. A worker's tier is never above its sender's.
-const TIER = { claude: { Plan: 0, Manual: 1, 'Accept edits': 2, Auto: 3, 'Bypass permissions': 4 },
-  codex: { 'Read-only': 0, 'Workspace access': 2, 'Auto review': 3, 'Full access': 4 } };
+// TIER: each mode's tier, from the catalog (agents.mjs).
 // A sprint role row's fields (roles.json, Sprint Setup H3). owns: what the role owns (front end, named features), for the
 // lead to send work by; P9 only keeps and shows it.
 export const ROW_KEYS = ['key', 'provider', 'model', 'effort', 'mode', 'owns'], OWNS_MAX = 500;
@@ -215,7 +215,6 @@ export function createDelegate({ chat, allowed, usage }) {
   // O137 (the owner, 2026-11-19): under Unrestricted a new worker with no mode asked (by open_chat or its roles.json row)
   // starts in the Settings > New chats start in mode the user saved for its agent, else the agent's Auto, never wider than
   // its parent (a narrower parent's own mode). Restricted, it takes the parent's mode, as before (modeFor).
-  const AUTO = { claude: 'Auto', codex: 'Auto review' };
   const startMode = (caller, provider, asked) => {
     if (asked !== undefined || !chat.loose?.(caller) || !AUTO[provider]) return asked;
     const mine = chat.info(caller), ceiling = tierOf(mine.provider, mine.mode), want = chat.newChatDefaults?.()[provider]?.mode || AUTO[provider];
