@@ -9,10 +9,11 @@
 // acp: the ACP version P9 asks the agent for (chat.mjs ACP_ASK says why each is what it is). tellStart: the start mode P9
 // sets on a new or resumed session is shown at once; false, it is set quietly and the window's mode comes with the first
 // prompt (Claude's, as its adapter's own start was).
+// native: the agent's binary package name before its platform (linux-x64, win32-arm64, ...), as agents.json names it.
 const STALE = 15 * 60 * 1000;
 const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes), usage: Object.freeze(agent.usage) });
 export const CATALOG = Object.freeze([
-  entry({ id: 'claude', name: 'Claude Code', adapter: 'claude-agent-acp', cliPass: ' --cli',
+  entry({ id: 'claude', name: 'Claude Code', adapter: 'claude-agent-acp', native: '@anthropic-ai/claude-agent-sdk-', cliPass: ' --cli',
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], command: 'claude auth login' },
     signIn: { kind: 'browser', dir: 'claudeDir', file: '.credentials.json' },
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
@@ -21,7 +22,7 @@ export const CATALOG = Object.freeze([
     start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', poll: 'claude-sdk', staleMs: STALE, pool: 'claude', hideSignedOut: false },
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
     why: 'Claude Code, for Claude chats and a terminal.' }),
-  entry({ id: 'codex', name: 'Codex', adapter: 'codex-acp', cliPass: '',
+  entry({ id: 'codex', name: 'Codex', adapter: 'codex-acp', native: '@openai/codex-', cliPass: '',
     login: { args: ['cli', 'login', '--device-auth'], command: 'codex login' },
     signIn: { kind: 'device-code', flag: '--device-auth', dir: 'codexHome', file: 'auth.json' },
     modes: { 'Read-only': { value: 'read-only', tier: 0 }, 'Workspace access': { value: 'workspace-write', tier: 2 },
@@ -54,6 +55,8 @@ export const SIGN_IN_KIND = each((a) => a.signIn.kind);
 export const SIGN_IN_FLAG = each((a) => a.signIn.flag ?? null);
 export const ACP = each((a) => a.acp);
 export const TELL_START = each((a) => a.tellStart);
+// CAT-1i: the agent a binary package belongs to (scripts/agents.mjs fetches only the picked agents'), or null.
+export const agentOfPackage = (folder) => CATALOG.find((a) => folder.startsWith(a.native))?.id ?? null;
 // GET /agents: what a window may know about each agent. No paths, no commands, no adapter package.
 export const publicAgents = () => ({ agents: CATALOG.map((a) => ({ id: a.id, name: a.name,
   modes: Object.entries(a.modes).map(([name, m]) => ({ name, tier: m.tier })), start: Object.keys(a.modes).find((k) => a.modes[k].value === a.start),
