@@ -1,7 +1,7 @@
 // Worker folders (sprint spec A1, A2, A4, A6, A7; SECURITY.md § Worker folders). One clone of the repository per sprint
 // in P9's own folder, one git worktree and branch per worker, made by P9 when the worker starts. The owner's folder is
 // only read. gitFacts is what P9 reads from git by itself, for the sprint's version stamp.
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -286,9 +286,10 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     await rm(part, { force: true }); // a leftover (or a link) is never written through
     const ok = (await git(clone, ['bundle', 'create', '--quiet', part, 'refs/heads/' + branch], { timeout: 5 * 60_000 })).code === 0
       && (await git(clone, ['bundle', 'verify', '--quiet', part])).code === 0;
-    if (!ok) { await rm(part, { force: true }); return null; }
-    await rename(part, file);
-    return file;
+    // #473 FIX2: link, not rename: a file that appeared at that name meanwhile is never replaced (the folder then stays).
+    const placed = ok && await link(part, file).then(() => true, () => false);
+    await rm(part, { force: true });
+    return placed ? file : null;
   }
   async function cleanNow(sprint, bundle) {
     const copy = path.join(dirOf(sprint), 'copy'), hasCopy = await realDir(copy, 2), root = path.join(dirOf(sprint), 'workers');
