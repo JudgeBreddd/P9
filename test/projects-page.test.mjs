@@ -1266,13 +1266,21 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   const row = async () => (await call(instance, '/projects/' + p.id)).project.sprints.find((x) => x.lead === run.sprint);
   const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', { hooks: (await row()).files.find((f) => f.name === 'hooks.json').hash });
   assert.equal(started.status, 200, JSON.stringify(started));
+  // A sprint never ends (nightly 11): hooks.json changed after Start, as on the owner's closed sprint.
+  await writeFile(hooksFile, JSON.stringify({ scripts: [{ name: 'gate', command: `${process.execPath} ${gate}`, point: 'before-close', blocking: true }, { name: 'later', command: 'true', point: 'after-close' }] }));
   const { page, errors } = await launch(t, instance);
   await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  const spSec = page.locator(`[data-sprint="${run.sprint}"]`);
+  const drawn = async () => [await spSec.locator('[data-sp-roles] select, [data-sp-roles] input').count() > 0, await spSec.locator('[data-pj="spscripts"]').count(), await spSec.locator('[data-pj="spclean"]').count(),
+    await spSec.locator('[data-sp-scripts]').count() > 0, await spSec.locator('[data-pj="spfile"]').count() > 0, /press Start again/.test(await spSec.textContent())];
   const btn = page.locator(`[data-pj="spopen"][data-lead="${run.sprint}"]`), view = page.locator('[data-sv]'), close = page.locator('[data-pj="spclose"]'), ask = page.locator('dialog[open] form');
   const status = () => call(instance, `/sprints/${run.sprint}/status`);
   await btn.click();
   await close.waitFor({ timeout: 10000 });
   assert.deepEqual([await view.getAttribute('data-sv'), await page.locator('[data-sp-title]').textContent()], ['open', 'Sprint View']);
+  // An open sprint's page is unchanged: editable roles, Sprint scripts and Clean up, the scripts Start again approves, its files.
+  await spSec.locator('[data-sp-roles]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await drawn(), [true, 1, 1, true, true, true], 'the open sprint\'s page');
   // The press asks first; Cancel closes nothing.
   await close.click();
   assert.match(await ask.textContent(), /Close this sprint\?.*Nothing is deleted/s);
@@ -1292,6 +1300,13 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Closed sprint');
   assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record/);
   assert.deepEqual([await close.count(), await page.locator('[data-pj="spstart"]').count()], [0, 0], 'a closed sprint has no Close and no Start');
+  // A sprint never ends (nightly 11): under the record, no editable roles or Add worker, no Sprint scripts, no scripts or
+  // "press Start again"; Clean up stays (folders Close kept) and its files stay listed, read only.
+  await until(async () => await spSec.locator('[data-sp-roles]').count() === 0, 'the closed page drops its roles');
+  assert.deepEqual(await drawn(), [false, 0, 1, false, true, false], 'the closed sprint\'s page');
+  await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  assert.equal(await page.locator('[data-sp-box]').getAttribute('readonly'), '', 'a closed sprint\'s file reads only');
+  await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
   assert.deepEqual([await page.locator('.sv-facts dt').first().textContent(), await page.locator('[data-sv-fact="ticked"]').textContent(), await page.locator('[data-sv-worker="lead"] [data-sv-state]').textContent()],
     ['Ran', `${st.done.ticked} of ${st.done.total}`, 'Stopped']);
   // The record no longer changes: a box ticked after Close is not counted, on the page or by the route.
@@ -1309,6 +1324,49 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
     [1, 0, null], 'the project page lists a closed sprint\'s files');
   assert.deepEqual(errors, []);
   console.log('PASS Close sprint page: the press asked first and Cancel closed nothing; a before-close exit 1 was said beside the button and the sprint stayed open; the next press closed it: Closed sprint, by you, Ran, the lead Stopped, no Close and no Start, equal to the status route; a box ticked after Close changed nothing; the project page\'s button says Closed');
+});
+
+// A sprint never ends FIX1 (review of #453): a sprint closed elsewhere (another window, an agent's close_sprint) while one of
+// its files has the focus. The page's focus guard kept the box editable; now the closure is taken on the 5 s re-read and
+// the box reads only, with the live Setup gone. A draft typed before the Close keeps its text and its pending save.
+test('projects: a sprint closed elsewhere while its file box has the focus turns read only and keeps the typed text', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Elsewhere', work: { kind: 'new', parent: '', name: 'elsewhere' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const plan = '# Plan\n\n- [ ] A1: the thing; role lead\n', sprints = {};
+  for (const key of ['draft', 'none']) {
+    const run = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Closed ' + key });
+    await writeFile(path.join(run.folder, 'sprint.md'), plan);
+    await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+    await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+    const started = await call(instance, `/sprints/${run.sprint}/start`, 'POST', {});
+    assert.equal(started.status, 200, key + ': ' + JSON.stringify(started));
+    sprints[key] = run;
+  }
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  for (const [key, run] of Object.entries(sprints)) {
+    await page.locator(`[data-pj="spopen"][data-lead="${run.sprint}"]`).click();
+    const spSec = page.locator(`[data-sprint="${run.sprint}"]`), box = page.locator('[data-sp-box]');
+    await spSec.locator('[data-sp-roles]').waitFor({ timeout: 10000 });
+    await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+    await box.waitFor({ timeout: 10000 });
+    await box.evaluate((b) => { b.focus(); b.setSelectionRange(b.value.length, b.value.length); });
+    if (key === 'draft') await page.keyboard.type('typed');
+    const want = key === 'draft' ? plan + 'typed' : plan;
+    const closed = await call(instance, `/sprints/${run.sprint}/close`, 'POST', {}); // not this page's button: as another window or an agent would
+    assert.equal(closed.status, 200, JSON.stringify(closed));
+    await until(async () => await box.getAttribute('readonly') !== null, key + ': the focused box of a sprint closed elsewhere reads only', 20000);
+    assert.deepEqual([await spSec.locator('[data-sp-roles]').count(), await spSec.locator('[data-pj="spscripts"]').count(), await box.inputValue()], [0, 0, want], key + ': live Setup gone, the text kept');
+    await until(async () => (await readFile(path.join(run.folder, 'sprint.md'), 'utf8')) === want, key + ': the text typed before the Close is saved', 10000);
+    await page.keyboard.type('more');
+    assert.equal(await box.inputValue(), want, key + ': nothing more can be typed');
+    await page.locator('[data-pj="spback"]').click();
+  }
+  assert.deepEqual(errors, []);
+  console.log('PASS Close elsewhere: both sprints closed by the route while sprint.md had the focus; each box turned read only with roles and Sprint scripts gone; the draft "typed" was kept and saved, the other kept the file; more typing changed nothing');
 });
 
 // Row 697 A: Instructions typed and then left by the side panel (a chat, another project) inside the 600 ms were dropped:

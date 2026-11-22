@@ -28,6 +28,7 @@ import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
 import { COMMANDS, publicAgents } from './agents.mjs';
+import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createPhoneErrors } from './phone-errors.mjs';
@@ -1010,7 +1011,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       const state = chat.login.state(), on = await signedIn();
       c.header('cache-control', 'no-store');
       return c.json(Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map((agent) => { const l = state[agent]; return [agent, { signedIn: on[agent],
-        running: l.running, url: typeof l.url === 'string' ? signInUrl(agent, l.url) : null, code: agent === 'codex' && DEVICE_CODE.test(l.code ?? '') ? l.code : null,
+        running: l.running, url: typeof l.url === 'string' ? signInUrl(agent, l.url) : null, code: SIGN_IN_KIND[agent] === 'device-code' && DEVICE_CODE.test(l.code ?? '') ? l.code : null,
         unsupported: l.unsupported, exit: l.exit }]; })));
     });
     remoteApp.post('/phone/sign-in', async (c) => reply(c, await chat.login.start(await json(c))));

@@ -42,7 +42,7 @@ const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.s
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
 // out() is called once the press is going out.
-export const closedAbout = 'This sprint is closed. Its record is first: what it built and its numbers, as they stood at Close; an agent reads the same with sprint_status. Its roles and files are below.';
+export const closedAbout = 'This sprint is closed. Its record is first: what it built and its numbers, as they stood at Close; an agent reads the same with sprint_status. Its files are below, read only.';
 // b: the pressed button. One with data-item is the Close on one of the owner's own lines (O164 part (3)): it closes only
 // that line, with no confirm (nothing stops) and no out(); P9 records the click, no merge or review is involved.
 export async function closePress(b, confirmIt, call, out) {
