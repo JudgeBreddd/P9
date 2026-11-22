@@ -26,7 +26,7 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
-import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
+import { agentDirs, claudeWindow, planLimits, usageReport } from './limits.mjs';
 import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
 import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
 import { loginPage, loginScript } from './login-page.mjs';
@@ -520,12 +520,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const usageNow = async () => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
-    // ponytail: the two polls are still started per agent (CAT-1b/1d); every other step loops the catalog.
     const limits = await planLimits({ home: os.homedir(), polled: Object.fromEntries(Object.entries(polls).map(([id, poll]) => [id, poll.look()])), live: { claude: claudeLive } });
     const on = await signedIn(), signedOut = CATALOG.filter((a) => a.usage.hideSignedOut && !on[a.id]).map((a) => a.id);
     return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut } };
   };
   api.get('/usage', async (c) => c.json(await usageNow()));
+  api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));
   api.get('/chat/:id/folder', async (c) => reply(c, await chat.folder(c.req.param('id'))));

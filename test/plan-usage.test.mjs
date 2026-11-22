@@ -42,7 +42,7 @@ test('plan_usage: the pace word is the Usage page\'s, and the tool names no agen
   assert.doesNotMatch(tool[1], /claude|codex/i);
 });
 
-test('plan_usage: through the daemon, an agent reads the numbers /usage shows', { timeout: 90000 }, async (t) => {
+test('plan_usage: through the daemon, an agent and GET /usage/plan read the numbers /usage shows', { timeout: 90000 }, async (t) => {
   const fake = path.join(root, 'test/fake-acp-agent.mjs');
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake, '--codex-usage', path.join(root, 'test/fake-codex-app-server.mjs')] }));
   await mkdir(path.join(instance.directory, '.codex'), { recursive: true });
@@ -69,6 +69,10 @@ test('plan_usage: through the daemon, an agent reads the numbers /usage shows', 
     if (!got.providers.codex) await new Promise((resolve) => setTimeout(resolve, 250));
   }
   const page = (await call('/usage')).limits;
+  // The route and the tool answer from one function: the same, but for when the reading was taken (a poll may land between the calls).
+  assert.equal((await http({ socketPath: instance.credentials.socketPath, route: '/usage/plan' })).status, 401);
+  const route = await call('/usage/plan'), ageless = (r) => JSON.stringify(r, (k, v) => (k === 'ageMs' || k === 'asOf' ? undefined : v));
+  assert.equal(ageless(route), ageless(got));
   assert.deepEqual(Object.keys(got.providers), AGENT_IDS);
   const codex = got.providers.codex;
   assert.deepEqual([codex.fiveHour.usedPercent, codex.sevenDay.usedPercent, codex.pool, codex.stale], [page.codex.fiveHour.usedPercent, page.codex.sevenDay.usedPercent, 'codex', false]);
