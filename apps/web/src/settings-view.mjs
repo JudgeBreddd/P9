@@ -517,7 +517,8 @@ async function wizRefresh() {
   const began = W.login[W.began];
   if (began && !began.running) { if (began.exit === 0 && W.stale === W.began) W.stale = null; W.began = null; }
   if (s) { outer.S.setup = Object.values(setupDone(s)).includes(false) ? s : null; outer.renderCards(); }
-  if (s && !outer.S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
+  // CAT-1e: nor while the agents are unread (a failed GET /agents), or a done setup's wizard would stay without them.
+  if (s && !outer.S.setup && W.agents && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
   else if (!W.timer && outer.$('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
   outer.wizRender();
 }
