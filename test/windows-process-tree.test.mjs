@@ -122,10 +122,10 @@ test('N6-1 B8: lockFolders runs the Acl check on the three folders with a timeou
   const refused = (result, message, why) => assert.throws(() => lockFolders({ host, folders, env, run: stub(result) }), (error) => error.message === message, why);
   refused({ status: 1, stdout: folders[0] + '\r\n' }, 'unsafe-private-directory', 'the state folder grants someone else');
   refused({ status: 1, stdout: folders[2] + '\r\n' }, 'unsafe-ownership-directory', 'the ownership folder grants someone else');
-  refused({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'unsafe-private-directory', 'killed at the timeout');
+  refused({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'folder-acl-check-timed-out', 'killed at the timeout: names the hang, not the folders');
   refused({ status: null, error: Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' }) }, 'unsafe-private-directory', 'no PowerShell');
   refused(undefined, 'unsafe-private-directory', 'no result');
-  console.log('PASS N6-1 B8: exit 0 passes; a folder named, timeout, no PowerShell and no result refuse (timeout ' + PIPE_LOCK_MS + ' ms)');
+  console.log('PASS N6-1 B8: exit 0 passes; a folder named, a timeout named, no PowerShell and no result refuse (timeout ' + PIPE_LOCK_MS + ' ms)');
 });
 
 test('O23: bare bash and sh skip the WSL launchers and fall back to Git Bash; cmd, node and powershell are unchanged', () => {
