@@ -294,6 +294,15 @@ const connection = acp.connectAgent(stream, {
         ['pending', 'Check it on the phone']].map(([status, content]) => ({ status, content, priority: 'medium' })) } });
       return { stopReason: 'end_turn' };
     }
+    // "plan step <n>": the same three steps sent again as work moves on (step n in progress, the ones before it done; 3 = all
+    // done), as a real agent re-sends its whole plan on each change (ACP: each plan update replaces the last).
+    const step = /^plan step ([123])$/.exec(text);
+    if (step) {
+      const n = +step[1];
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'plan', entries: ['Read the chat ledger', 'Write the plan test', 'Check it on the phone']
+        .map((content, i) => ({ content, priority: 'medium', status: i < n - 1 || n === 3 ? 'completed' : i === n - 1 ? 'in_progress' : 'pending' })) } });
+      return { stopReason: 'end_turn' };
+    }
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }
     if (text === 'cwd') { await say('cwd:' + cwd); return { stopReason: 'end_turn' }; }
