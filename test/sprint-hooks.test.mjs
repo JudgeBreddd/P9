@@ -889,7 +889,7 @@ fs.appendFileSync(${JSON.stringify(held)}, '1'); const t = setInterval(() => { i
   console.log('PASS Close held: the lock turned on during a blocking before-close refused agent-lock-on with nothing stopped or recorded; the worker\'s own close stopped only the lead and left the worker running');
 });
 
-// A sprint never ends (Tyler, 2026-11-22): the owner's Close cleans the worker folders by Clean up's rules. The merged,
+// A sprint never ends (the owner, 2026-11-22): the owner's Close cleans the worker folders by Clean up's rules. The merged,
 // saved folder and its branch go; a folder with unsaved changes and one with unmerged work stay, each with its branch;
 // the sprint's own files stay.
 test('Close sprint cleans up: a merged folder goes; a dirty worktree and an unmerged branch survive, and the sprint files stay', { timeout: 300000 }, async (t) => {

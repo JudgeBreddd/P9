@@ -695,7 +695,7 @@ export function createDelegate({ chat, allowed, usage }) {
     if (no()) return no();
     if (starting.has(sprint)) return { error: 'sprint-starting', detail: 'This sprint is being started or closed now.' };
     starting.add(sprint);
-    // A sprint never ends (Tyler, 2026-11-22): Close cleans its worker folders by Clean up's own rules (worker-folders.mjs:
+    // A sprint never ends (the owner, 2026-11-22): Close cleans its worker folders by Clean up's own rules (worker-folders.mjs:
     // only a folder with nothing unsaved whose work is in the main line goes; the rest stays as folder and branch; the
     // sprint's files are never touched). Not when a chat of this sprint closes it: it is still running, as the clean
     // route refuses (a folder it is making has no commit yet and would read as merged). Its page's Clean up does it then.
