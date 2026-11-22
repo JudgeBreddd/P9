@@ -155,19 +155,19 @@ export function installProjects(o, api) {
   function sprintHtml(sp) {
     const about = { 'sprint.md': 'the plan', 'rules.md': 'sent with every message the lead sends a worker', 'roles.json': 'the roles above', 'hooks.json': 'the sprint\'s scripts: P9 runs only what you approved at Start', 'hooks.log': 'P9\'s log of script runs, read only', 'review-trail.md': 'P9\'s record of reviews, read only' };
     const what = n => about[n] || (/\.instructions\.md$/.test(n) ? 'this role gets it at its start' : /\.rules\.md$/.test(n) ? 'sent to this role with the sprint rules' : /\.work\.md$/.test(n) ? 'its first message at Start' : 'the worker keeps it itself');
-    const roles = rolesOf(sp), files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
+    const roles = rolesOf(sp), shut = sp.closed, files = [...sp.files, ...[...roleFiles(sp), 'hooks.json'].filter(n => !sp.files.some(f => f.name === n)).map(name => ({ name, text: '', hash: '', unmade: true }))];
     const fixed = ['sprint.md', 'rules.md', 'roles.json', 'hooks.json'], rank = n => fixed.includes(n) ? fixed.indexOf(n) : fixed.length;
     files.sort((x, y) => rank(x.name) - rank(y.name) || (rank(x.name) < fixed.length ? 0 : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}${sp.paused ? '<span class="tag" data-sp-paused>Paused</span>' : ''}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${pauseBtn(sp)}${svMod?.mergeHtml(sp, esc) ?? ''}<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
+    return `<section class="sec" data-sprint="${esc(sp.lead)}" aria-label="Sprint files: ${esc(sp.title)}"><div class="sh2"><h2>${esc(sp.title)}</h2>${sp.prep ? '<span class="tag" data-sp-prep>Prep</span><span class="muted">not started: its chats are made at Start sprint</span>' : '<span class="muted">its files, kept in P9</span>'}${sp.paused ? '<span class="tag" data-sp-paused>Paused</span>' : ''}<span class="saved" data-sp-saved role="status">Saved</span>${startBtn(sp)}${pauseBtn(sp)}${svMod?.mergeHtml(sp, esc) ?? ''}${shut ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spscripts" data-lead="${esc(sp.lead)}" title="This sprint's scripts and your library: make one, remove one, keep one for other sprints, run an approved one.">Sprint scripts</button>`}${sp.prep ? '' : `<button data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclean" data-lead="${esc(sp.lead)}">Clean up worker folders</button>`}</div>
       ${sp.prep ? '' : '<p class="hint" data-sp-ignored>Clean up removes a finished worker\'s whole folder, including files git ignores, such as build output or a local .env.</p>'}
-      ${startedHtml(sp)}${scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
+      ${startedHtml(sp)}${shut ? '' : scriptsHtml(sp)}${startSaid.has(sp.lead) ? `<p class="hint" data-sp-start role="status">${esc(startSaid.get(sp.lead))}</p>` : ''}
       ${cleaned.has(sp.lead) ? `<p class="hint" data-sp-clean role="status">${esc(cleaned.get(sp.lead))}</p>` : ''}
-      ${rolesHtml(sp, roles)}
+      ${shut ? '' : rolesHtml(sp, roles)}
       ${[...files, ...goneDrafts(sp)].map(f => { const on = sprintOpen === sp.lead + ' ' + f.name;
         const sz = what(f.name) + (f.gone ? ' · deleted, your text not saved' : drafts.has(sp.lead + ' ' + f.name) ? ' · not saved'
           : f.unmade && f.name === 'rules.md' ? ' · none yet, P9\'s defaults are sent' : f.unmade || f.text === '' ? ' · empty' : '');
         return `<button class="crow file" data-pj="spfile" data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-expanded="${on}">${svg.files}<span class="t mono">${esc(f.name)}</span><span class="sz" title="${esc(sz)}">${esc(sz)}</span></button>`
-          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false"${f.name === 'hooks.log' || f.name === 'review-trail.md' ? ' readonly' : ''}>${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
+          + (on ? `<textarea data-slot="textarea" class="sp-box" data-sp-box data-lead="${esc(sp.lead)}" data-name="${esc(f.name)}" aria-label="${esc(f.name)}" maxlength="32000" spellcheck="false"${shut || f.name === 'hooks.log' || f.name === 'review-trail.md' ? ' readonly' : ''}>${esc(drafts.get(sprintOpen)?.text ?? f.text)}</textarea><p class="hint" data-sp-note role="alert">${spNoteHtml(sprintOpen)}</p>` : ''); }).join('')}</section>`;
   }
   // H1-H3: the roles a sprint starts with, read from its roles.json, the same file the lead's tools write. null: the file
   // is missing or not a roles list; then it shows only as its file, never rewritten from the rows.
@@ -244,8 +244,12 @@ export function installProjects(o, api) {
     if (shown) queueMicrotask(() => o.renderChats()); // O212: every way back paints the chats at once (archiving the shown project did not), so a pane hidden meanwhile is placed before the user can scroll it
     if (!on || v.kind !== 'project' || v.id !== instrOpen || spPage) instrOpen = ''; // O198: another page (a chat, another project, Archived, a sprint's page) closes it
     if (!on) { if (v?.kind === 'project' && !cur) return; flushInstr(); page.innerHTML = ''; return; }
-    if (page.contains(document.activeElement) && document.activeElement.matches('[contenteditable], textarea, input')) return;
+    // A sprint closed meanwhile (elsewhere too) is drawn even while a field of it has the focus, so its file box reads only;
+    // the draft stays in drafts, its pending save still goes, and fillBox puts its text back (A sprint never ends FIX1).
+    const a = document.activeElement, shutA = page.contains(a) && cur?.sprints?.find(x => x.lead === a.closest('[data-sprint]')?.dataset.sprint)?.closed;
+    if (page.contains(a) && a.matches('[contenteditable], textarea, input') && !shutA) return;
     o.morph(page, v.kind === 'project' ? projectHtml(cur) : archivedHtml());
+    if (shutA) fillBox(false);
     // morph changes an option's selected attribute only; a pick the user changed keeps showing their choice, so each role
     // pick is set to what roles.json says (after a refused save it says the lead's value).
     page.querySelectorAll('select[data-spr]').forEach(s => { s.value = s.querySelector('option[selected]')?.value ?? ''; });
@@ -267,7 +271,7 @@ export function installProjects(o, api) {
   // O138: the shown sprint's files are read again with it (on opening, then every 5 s), so a roles.json changed on disk
   // shows: a torn or broken one through takeFiles (last good rows, then the file as written and why it does not read),
   // a fixed one as its rows. Drawn again only when a file of that sprint changed.
-  const filesSeen = sp => (sp?.files ?? []).map(f => f.name + ' ' + f.hash).join('\n');
+  const filesSeen = sp => (sp?.closed ? 'closed\n' : '') + (sp?.files ?? []).map(f => f.name + ' ' + f.hash).join('\n'); // closed: a Close made elsewhere is taken
   async function rereadFiles(lead) {
     const id = cur?.id, r = id && await call('project', { id }, { quiet: true }).catch(() => null);
     if (r?.status !== 200 || cur?.id !== id || spPage !== lead) return;
