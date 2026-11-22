@@ -322,6 +322,31 @@ test('CAT-1f: the Agent pill lists every agent from GET /agents, a new one too',
   console.log('PASS CAT-1f: the Agent pill lists Claude, Codex and a third agent from GET /agents');
 });
 
+// CAT-1f: a first read of GET /agents that fails (the daemon still starting) is asked again; without that the pickers kept
+// the two built-in agents for the window's whole life. Forced: main answers 503 until the test lets it through.
+test('CAT-1f: a failed first agents read is asked again; the third agent shows without a reload', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-cat1f-')), 'profile');
+  const { app, page } = await launch(t, instance, profile);
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'agents') return h(e, ...args);
+      if (!globalThis.agentsUp) return { status: 503, body: { error: 'daemon-unavailable' } }; const r = await h(e, ...args);
+      return { ...r, body: { agents: [...r.body.agents, { id: 'tester', name: 'Test Agent', short: 'Tester', modes: [{ name: 'Careful', tier: 0 }] }] } }; });
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await page.click('#newBtn');
+  await page.locator('#navList .row[data-chat]').first().waitFor({ timeout: 15000 });
+  await app.evaluate(() => { globalThis.agentsUp = true; });
+  await page.waitForTimeout(11000); // one 10 s retry
+  const id = await page.locator('#navList .row[data-chat]').first().getAttribute('data-chat');
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
+  const pane = page.locator('#chats .pane[data-id="' + id + '"]');
+  await pillOf(pane, 'Agent').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
+  await menuItem(page, 'Tester').waitFor({ timeout: 3000 });
+  console.log('PASS CAT-1f: the agents read was asked again after a 503 and the third agent showed without a reload');
+});
+
 test('O131: after a daemon restart and a window reload whose first read of the defaults failed, a New chat starts on the saved Default model and effort', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-o131-')), 'profile');

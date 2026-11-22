@@ -888,9 +888,11 @@ const dataNote = () => { outer.$('#dataNote').textContent = [outer.live.on && !o
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 // CAT-1f: GET /agents replaces the agents' names, modes and chat model (controller names, helpers modes, chatModel) once it
 // answers, so the pickers offer every catalog agent; until then, and in the sample view, they hold the two built in.
-const loadAgents = async () => { const r = !loadAgents.done && await window.p9.chat('agents', {}).catch(() => null); if (r?.status !== 200) return; loadAgents.done = 1;
+// A failed read (the daemon still starting) asks again every 10 s and redraws once it answers; 404 is an older P9, none.
+const loadAgents = async () => { if (loadAgents.done) return; const r = await window.p9.chat('agents', {}).catch(() => null);
+  if (r?.status !== 200) { if (r?.status !== 404 && !outer.lifetime.signal.aborted) outer.setTimeout(() => loadAgents().then(ok => ok && (refreshPill(), renderChats())), 1e4); return; } loadAgents.done = 1;
   for (const t of [outer.names, modes, chatModel]) for (const k in t) delete t[k];
-  for (const a of r.body.agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; };
+  for (const a of r.body.agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; return 1; };
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
