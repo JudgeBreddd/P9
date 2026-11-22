@@ -560,6 +560,30 @@ test('files: an attachments folder swapped for a link is never written through o
   console.log('PASS files FIX1: a linked attachments folder refused on save (500), start made nothing, delete left the outside folder');
 });
 
+test('files: no more than 4 files in all, and no name Windows would treat as a device, a stream or a different name (A2 step 1 FIX2)', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  const mine = path.join(instance.directory, '.local', 'state', 'p9-foundation', 'attachments', id);
+  const send = (body) => json(call(instance, `/chat/${id}/prompt`, 'POST', { text: '', ...body }));
+  const linkedFour = Array.from({ length: 4 }, (_, n) => ({ file: `old${n}.txt`, size: 1 }));
+  assert.equal((await send({ images: linkedFour, files: [{ name: 'fifth.txt', data: '' }] })).status, 400, '4 saved + 1 new is 5 files');
+  assert.equal((await send({ images: linkedFour.slice(0, 2), files: Array(3).fill({ name: 'x.txt', data: '' }) })).status, 400, '2 saved + 3 new is 5 files');
+  for (const name of ['CON', 'con.txt', 'NUL', 'Nul.tar.gz', 'prn', 'AUX.log', 'COM1', 'com0.txt', 'lpt9.log', 'COM¹', 'LPT².txt', 'CONIN$', 'conout$.txt',
+    'aux .txt', 'NUL ', 'x.', 'x ', 'x. ', 'x .', 'a:b', 'file.txt::$DATA'])
+    assert.equal((await send({ files: [{ name, data: '' }] })).status, 400, `name ${JSON.stringify(name)}`);
+  assert.equal((await send({ images: [{ file: 'CON', size: 1 }] })).status, 400, 'a forged link with a device name');
+  assert.equal(existsSync(mine), false, 'nothing refused was saved');
+  // Names that only look like one are fine, and a 200-byte name that clashes still fits once tagged (209 bytes).
+  const long = 'a'.repeat(196) + '.txt';
+  assert.equal((await send({ text: 'ok', files: [{ name: 'console.txt', data: '' }, { name: 'com10.txt', data: '' }, { name: long, data: '' }, { name: long, data: '' }] })).status, 202);
+  const { hit } = await until(instance, said(id, 'echo:ok'));
+  const names = [...hit.data.content.text.matchAll(/\[file (\S+) /g)].map((m) => m[1]);
+  assert.deepEqual(names.slice(0, 3), ['console.txt', 'com10.txt', long]);
+  assert.match(names[3], new RegExp(`^a{196}-[0-9a-f]{8}\\.txt$`));
+  assert.equal(existsSync(path.join(mine, names[3])), true);
+  console.log('PASS files FIX2: 5 files in all refused both ways, 21 Windows device/stream/trailing names and a forged CON refused, look-alikes and a tagged 209-byte name saved');
+});
+
 test('images: a photo reaches the agent as an image block; bad types, encodings, counts, sizes and image-free agents refused (threat model row 20)', async (t) => {
   const instance = await start(t);
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', bytes = Buffer.from(png, 'base64').length;

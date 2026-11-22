@@ -45,7 +45,13 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp
 // the images list as { file, size }, so a held, paused or joined message carries it; its path is always that chat's folder
 // plus the name, so a forged entry can only name a file already in its own chat's folder.
 const MAX_FILES = 4, MAX_FILE = 8 * 1024 * 1024, BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
-const fileName = (name) => typeof name === 'string' && name.length > 0 && Buffer.byteLength(name) <= 200 && name !== '.' && name !== '..' && !/[\x00-\x1f/\\:*?"<>|]/.test(name);
+// FIX2 (Reviewer): a name is also refused if Windows would read it as something else: a device (CON, NUL, COM1, LPT\u00b9,
+// CONIN$... with or without an extension, any case), a name it would trim (a trailing dot or space) or a stream (':', above).
+// 200 bytes leaves room for the 9-character tag a taken name gets, under every system's 255 per name; Node opens long
+// Windows paths itself.
+const DEVICE = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\.|$)/i;
+const fileName = (name) => typeof name === 'string' && name.length > 0 && Buffer.byteLength(name) <= 200 && name !== '.' && name !== '..' && !/[\x00-\x1f/\\:*?"<>|]/.test(name)
+  && !/[. ]$/.test(name) && !DEVICE.test(name);
 const linked = (image) => typeof image?.file === 'string';
 const photos = (images) => images.filter((image) => !linked(image));
 const imagesOk = (images) => Array.isArray(images) && photos(images).length <= MAX_IMAGES && images.length - photos(images).length <= MAX_FILES
@@ -1695,7 +1701,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!conversation) { release(); return refused(404, 'unknown-conversation'); }
       let images = body?.images ?? [];
       const files = body?.files ?? [];
-      if (typeof body?.text !== 'string' || !imagesOk(images) || !filesOk(files) || (files.length && !attachDir) || (!body.text.trim() && !images.length && !files.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
+      if (typeof body?.text !== 'string' || !imagesOk(images) || !filesOk(files) || images.length - photos(images).length + files.length > MAX_FILES || (files.length && !attachDir) || (!body.text.trim() && !images.length && !files.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (files.some((file) => file.data.length > MAX_FILE)) { release(); return { status: 413, error: 'file-too-large', message: 'A file is over 6 MiB (8 MiB as sent); nothing was sent.' }; }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
       if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }

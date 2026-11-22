@@ -1512,12 +1512,15 @@ agent is sent a link to that path, not the bytes. The daemon and that chat's age
 given it as an extra folder (`additionalDirectories`) on every start and resume, so its own tools can open, edit and save
 the file. The agent lock still wins: under it the agent writes nothing there either. File protection does not cover this
 folder; it covers the registry and space only. A file name is a base name only: one with `/`, `\`, `..`, a control
-character or a character Windows refuses is refused (400), and a chat id is checked before anything is written, so
+character, a character Windows refuses, a trailing dot or space (Windows would trim it to another name), or a Windows
+device name (`CON`, `NUL`, `COM1`, `LPT1`, `CONIN$` and the rest, any case, with or without an extension) is refused (400); a
+`:` (a Windows stream) is one of the refused characters. A name is at most 200 bytes, so with its tag it stays under 255. A chat id is checked before anything is written, so
 nothing lands outside that chat's folder. Each file is created new: a name already taken, by an earlier file or by a link
 the agent made, is never written through; the file gets a short random tag before its extension instead. At most 4 files
-a message and 8 MiB of base64 (6 MiB) each; a bigger one is refused with a plain message (413 `file-too-large`), and the
+a message in all, counting files the message already names (below), and 8 MiB of base64 (6 MiB) each; a bigger one is refused with a plain message (413 `file-too-large`), and the
 whole request stays under the server's body limit (12 MiB). A message that names a saved file again (held, paused or
-joined) names it by its name in that same chat's folder only. Deleting a chat deletes its folder; no other chat's files.
+joined) names it by its name in that same chat's folder only. Deleting a chat deletes its folder; no other chat's files. The attachments folder itself must be a real folder: if
+it is a link, nothing is saved (500 `file-not-saved`), a chat start makes no folder through it, and a delete removes nothing.
 Photos still go as photos (§ Photos you send).
 
 ## Files sent to the server
