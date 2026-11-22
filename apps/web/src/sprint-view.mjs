@@ -45,12 +45,13 @@ const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.s
 export const closedAbout = 'This sprint is closed. Its record is first: what it built and its numbers, as they stood at Close; an agent reads the same with sprint_status. Its files are below, read only.';
 // b: the pressed button. One with data-item is the Close on one of the owner's own lines (O164 part (3)): it closes only
 // that line, with no confirm (nothing stops) and no out(); P9 records the click, no merge or review is involved.
-export async function closePress(b, confirmIt, call, out) {
+export async function closePress(b, confirmIt, call, out, got) { // got(answer): Close's answer, which says what it cleaned up
   const lead = b.dataset.lead, item = b.dataset.item, said = r => r.status === 200 ? '' : 'Not closed: ' + (r.body?.detail || r.body?.error || r.status || 'no answer');
   if (item) return said(await call('ownerDone', { sprint: lead, item }, { quiet: true }).catch(() => ({})));
   if (!await confirmIt({ title: 'Close this sprint?', body: 'Every chat of this sprint is stopped, its record is kept and its scripts are turned off. Worker folders with nothing unsaved whose work is merged are removed; the rest and the sprint\'s files stay. A closed sprint is not started again.', ok: 'Close sprint', danger: true })) return null;
   out();
-  return said(await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})));
+  const r = await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})); got?.(r);
+  return said(r);
 }
 export function statusHtml(s, esc, opts = {}) {
   // O164 part (3) FIX1: owner lines leave the worker counts and the Plan list only where the record has its owner

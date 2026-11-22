@@ -731,7 +731,7 @@ export function createDelegate({ chat, allowed, usage }) {
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
       return { sprint, closed: { at: new Date(end.at).toISOString(), by: end.by }, stopped,
-        cleaned: swept && !swept.error ? { removed: swept.removed, kept: swept.kept.map(({ item, branch, why }) => ({ item, branch, why })) }
+        cleaned: swept && !swept.error ? { removed: swept.removed, kept: swept.kept.map(({ item, branch, why, bytes }) => ({ item, branch, why, bytes })) }
           : { skipped: inside ? 'A chat of this sprint closed it, so its worker folders were not cleaned up: press Clean up worker folders on its page.' : 'Clean up failed: ' + (swept.detail ?? swept.error) + '. Nothing more was removed; press Clean up worker folders on its page.' },
         ...(own && { note: 'Your own chat was not stopped: end your turn now. The sprint is closed.' }) };
     } finally { starting.delete(sprint); }
