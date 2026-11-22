@@ -7,8 +7,9 @@ const R = 16, C = +(2 * Math.PI * R).toFixed(2);
 const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" role="img" aria-label="${label}"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="t" cx="20" cy="20" r="${R}"/>${done && total ? `<circle class="a" cx="20" cy="20" r="${R}" stroke-dasharray="${+(C * Math.min(1, done / total)).toFixed(2)} ${C}"/>` : ''}</svg><b>${done}/${total}</b></span>`;
 // 3 725 000 ms reads "1 h 2 min".
 // O162 (usage): the status answer's spent, the sum of the sprint's chats; compact counts, the cost only when one was reported.
+// Also each worker row's own spent (spec I3, tokens used); a field not reported counts as 0.
 const k = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
-export const usedText = u => u === null ? 'Nothing reported yet' : `${k.format(u.inputTokens)} in · ${k.format(u.outputTokens)} out · ${k.format(u.cachedTokens)} cached${u.costUsd > 0 ? ` · $${u.costUsd.toFixed(2)}` : ''}`;
+export const usedText = u => u === null ? 'Nothing reported yet' : `${k.format(u.inputTokens || 0)} in · ${k.format(u.outputTokens || 0)} out · ${k.format(u.cachedTokens || 0)} cached${u.costUsd > 0 ? ` · $${u.costUsd.toFixed(2)}` : ''}`;
 export const span = ms => { const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : m ? `${m} min` : 'under a minute'; };
 const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Failed' };
 // What a worker's row says: a review's answer first, then a question to you, then what the chat is doing.
@@ -79,7 +80,7 @@ export function statusHtml(s, esc, opts = {}) {
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
-        <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}</span></span>
+        <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}${w.spent ? ' · ' + usedText(w.spent) : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? (q.next ? 'Next: ' + q.next : q.next === null ? 'All its items passed review' : 'No item taken yet') : 'No items in the plan for this role'))}</span>
         <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
