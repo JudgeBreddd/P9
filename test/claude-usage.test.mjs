@@ -30,7 +30,7 @@ test('live Claude usage: the idle query\'s answer reaches planLimits as the newe
   const usage = createClaudeUsage({ open, log: (line) => lines.push(line), wait: () => new Promise(() => {}) });
   assert.equal(usage.look(), null, 'the first look starts the poll; nothing to show yet');
   await settle();
-  const polled = usage.look(), limits = await planLimits({ home: dir, claudePolled: polled });
+  const polled = usage.look(), limits = await planLimits({ home: dir, polled: { claude: polled } });
   assert.equal(limits.claude.fiveHour.usedPercent, 42);
   assert.equal(limits.claude.sevenDay.usedPercent, 12);
   assert.ok(Date.now() - limits.claude.asOf < 120000, 'under 2 minutes old');
@@ -46,7 +46,7 @@ for (const [what, call] of [['the SDK lacks the method', null], ['the call throw
     usage.look();
     for (const end = Date.now() + 8000; !made.closed && Date.now() < end;) await settle();
     assert.equal(usage.look(), null);
-    const limits = await planLimits({ home: dir, claudePolled: usage.look() });
+    const limits = await planLimits({ home: dir, polled: { claude: usage.look() } });
     assert.equal(limits.claude.fiveHour.usedPercent, 80, 'the old source stays');
     assert.equal(made.closed, 1, 'the broken query is closed, to be restarted at the next poll');
     assert.equal(lines.length, 1); assert.match(lines[0], /^claude usage: .*; the meters keep their other sources$/);

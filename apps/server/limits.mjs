@@ -5,6 +5,7 @@
 // folders (agentDirs) and Claude's auto-compact window (claudeWindow, P5).
 import { open, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { CATALOG } from './agents.mjs';
 
 const TAIL = 512 * 1024; // token_count events come every turn, so the last one is near the end of a rollout file
 const seconds = (value) => typeof value === 'string' ? Date.parse(value) / 1000 : value > 1e12 ? value / 1000 : value;
@@ -115,9 +116,42 @@ export async function claudeWindow(claudeDir, env = process.env) {
   try { return tokens(JSON.parse(await readFile(path.join(claudeDir, 'settings.json'), 'utf8'))?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW); } catch { return null; }
 }
 
-export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null, claudePolled = null, codexPolled = null }) {
-  const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive, claudePolled), codexFiles(codexHome)]);
+// CAT-1a: one reader per catalog usage id, called as reader({ home, polled, live, ...paths }) with that agent's own poll
+// and live reading. The paths (statusLine, claudeJson, codexHome) are overrides for tests; each reader takes its own.
+export const READERS = Object.freeze({
+  'claude-json': ({ home, polled, live, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json') }) => claude(claudeJson, statusLine, live, polled),
   // Codex: the newest reading wins, the daemon's own read or this computer's session files.
-  const asked = codexPolledLimits(codexPolled), codexNewest = asked && (!codexLimits || asked.asOf >= codexLimits.asOf) ? asked : codexLimits;
-  return { claude: claudeLimits, codex: codexNewest };
+  'codex-files': async ({ home, polled, codexHome = agentDirs(home).codexHome }) => {
+    const files = await codexFiles(codexHome), asked = codexPolledLimits(polled);
+    return asked && (!files || asked.asOf >= files.asOf) ? asked : files;
+  },
+});
+
+// One key per catalog agent: polled and live are keyed by agent id. Each reading carries stale (older than its reader's
+// staleMs) and pool (the plan it counts against). A missing reader or one that throws gives null for that agent only.
+export async function planLimits({ home, polled = {}, live = {}, catalog = CATALOG, readers = READERS, now = Date.now(), ...paths }) {
+  const one = async (agent) => {
+    const read = Object.hasOwn(readers, agent.usage.reader) ? readers[agent.usage.reader] : null;
+    const found = read && await Promise.resolve().then(() => read({ ...paths, home, polled: polled[agent.id] ?? null, live: live[agent.id] ?? null })).catch(() => null);
+    return found ? { ...found, stale: !(now - found.asOf <= agent.usage.staleMs), pool: agent.usage.pool } : null;
+  };
+  return Object.fromEntries(await Promise.all(catalog.map(async (agent) => [agent.id, await one(agent)])));
+}
+
+// USE-1: the pace mark of one window, as the Usage page words it (apps/web/src/helpers.mjs paceOf; a test keeps the two
+// equal): 'ahead' over 5 points past even use, 'headroom' under 5 below it, else 'on'; null with no reset ahead.
+export function paceState(w, now = Date.now()) {
+  const len = w?.windowMins * 60000;
+  if (!w || !Number.isFinite(w.usedPercent) || !w.resetsAt || w.resetsAt <= now || !(len > 0)) return null;
+  const gap = w.usedPercent - Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)) * 100;
+  return gap > 5 ? 'ahead' : gap < -5 ? 'headroom' : 'on';
+}
+
+// USE-1: the plan_usage tool's answer from /usage's limits: one key per catalog agent (null when nothing is recorded or it
+// is signed out), each window with its pace, and ageMs, how old the reading is. Numbers and P9's own words only.
+export function usageReport(limits, now = Date.now()) {
+  const paced = (w) => w && typeof w === 'object' && Number.isFinite(w.usedPercent) ? { ...w, pace: paceState(w, now) } : w;
+  const { signedOut = [], ...agents } = limits ?? {};
+  return { providers: Object.fromEntries(Object.entries(agents).map(([id, r]) => [id, r && { ...Object.fromEntries(Object.entries(r)
+    .map(([k, v]) => [k, Array.isArray(v) ? v.map(paced) : paced(v)])), ageMs: Math.max(0, now - r.asOf) }])), signedOut };
 }

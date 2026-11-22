@@ -59,8 +59,8 @@ test('pace: one row says what is left, the pace, where the tick is and when it r
 test('pace: the daemon says how long each window is, and keeps a plan\'s per-model week windows', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-pace-'));
   const at = (hours) => new Date(Date.now() + hours * HOUR).toISOString();
-  const limits = await planLimits({ home, claudePolled: { at: Date.now(), windows: { five_hour: { utilization: 12, resets_at: at(2) }, seven_day: { utilization: 40, resets_at: at(50) },
-    seven_day_opus: { utilization: 55, resets_at: at(50) }, seven_day_sonnet: null, 'seven_day_<i>': { utilization: 1, resets_at: at(1) } } } });
+  const limits = await planLimits({ home, polled: { claude: { at: Date.now(), windows: { five_hour: { utilization: 12, resets_at: at(2) }, seven_day: { utilization: 40, resets_at: at(50) },
+    seven_day_opus: { utilization: 55, resets_at: at(50) }, seven_day_sonnet: null, 'seven_day_<i>': { utilization: 1, resets_at: at(1) } } } } });
   assert.deepEqual([limits.claude.fiveHour.windowMins, limits.claude.sevenDay.windowMins], [300, 10080]);
   assert.deepEqual(limits.claude.models.map((m) => [m.name, m.usedPercent, m.windowMins]), [['opus', 55, 10080]], 'only a named window with a reading');
   const day = path.join(home, '.codex', 'sessions', '2026', '11', '10');
@@ -164,11 +164,11 @@ test('codex read: the newer reading wins, the daemon\'s own or the session files
   const windows = { primary: { usedPercent: 71, windowDurationMins: 10080, resetsAt: Math.round((now + 50 * HOUR) / 1000) }, secondary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.round((now + HOUR) / 1000) } };
   const figures = (l) => l && [l.fiveHour?.usedPercent, l.sevenDay?.usedPercent, l.sevenDay?.windowMins, l.asOf];
   // Told by its length, not its slot: here the week came first.
-  assert.deepEqual(figures((await planLimits({ home, codexPolled: { windows, at: now } })).codex), [40, 71, 10080, now]);
-  assert.deepEqual(figures((await planLimits({ home, codexPolled: { windows, at: fileAt - 1 } })).codex), [5, 33, 10080, fileAt], 'an older read does not hide a newer session file');
-  assert.deepEqual(figures((await planLimits({ home, codexPolled: null })).codex), [5, 33, 10080, fileAt]);
-  assert.deepEqual(figures((await planLimits({ home: path.join(home, 'none'), codexPolled: { windows, at: now } })).codex), [40, 71, 10080, now], 'no session file at all');
-  assert.equal((await planLimits({ home: path.join(home, 'none'), codexPolled: { windows: { primary: { usedPercent: 9, windowDurationMins: 60 } }, at: now } })).codex, null, 'a window of another length is not shown as one of ours');
+  assert.deepEqual(figures((await planLimits({ home, polled: { codex: { windows, at: now } } })).codex), [40, 71, 10080, now]);
+  assert.deepEqual(figures((await planLimits({ home, polled: { codex: { windows, at: fileAt - 1 } } })).codex), [5, 33, 10080, fileAt], 'an older read does not hide a newer session file');
+  assert.deepEqual(figures((await planLimits({ home, polled: { codex: null } })).codex), [5, 33, 10080, fileAt]);
+  assert.deepEqual(figures((await planLimits({ home: path.join(home, 'none'), polled: { codex: { windows, at: now } } })).codex), [40, 71, 10080, now], 'no session file at all');
+  assert.equal((await planLimits({ home: path.join(home, 'none'), polled: { codex: { windows: { primary: { usedPercent: 9, windowDurationMins: 60 } }, at: now } } })).codex, null, 'a window of another length is not shown as one of ours');
 });
 
 test('codex read: the daemon shows Codex\'s own figures with no session file on this computer', { timeout: 60000 }, async (t) => {

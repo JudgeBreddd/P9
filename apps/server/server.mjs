@@ -26,8 +26,8 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
-import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
-import { COMMANDS, publicAgents } from './agents.mjs';
+import { agentDirs, claudeWindow, planLimits, usageReport } from './limits.mjs';
+import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
 import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
@@ -115,7 +115,7 @@ export const AGENTS_FETCH_MS = 1_300_000;
 // answers as a packaged app would, P9_BUILD runs instead of pnpm build. Outside it both are ignored.
 export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P9_PACKAGED === '1', build: (env.P9_TEST_HOME && env.P9_BUILD) || null });
 
-export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs, claudeUsage, codexUsage }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs, polls = {} }) {
   // outer: createListener's names that the modules split out of it (F9) read and set; getters and setters keep them live.
   const outer = { get AGENTS_FETCH_MS() { return AGENTS_FETCH_MS; }, get AGENT_COMMANDS() { return AGENT_COMMANDS; },
     get STARTER_AGENTS() { return STARTER_AGENTS; }, get STARTER_SETTINGS() { return STARTER_SETTINGS; },
@@ -520,10 +520,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const usageNow = async () => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
-    const limits = await planLimits({ home: os.homedir(), claudeLive, claudePolled: claudeUsage?.look(), codexPolled: codexUsage?.look() }), signedOut = (await signedIn()).codex ? [] : ['codex'];
-    return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } };
+    const limits = await planLimits({ home: os.homedir(), polled: Object.fromEntries(Object.entries(polls).map(([id, poll]) => [id, poll.look()])), live: { claude: claudeLive } });
+    const on = await signedIn(), signedOut = CATALOG.filter((a) => a.usage.hideSignedOut && !on[a.id]).map((a) => a.id);
+    return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut } };
   };
   api.get('/usage', async (c) => c.json(await usageNow()));
+  api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));
   api.get('/chat/:id/folder', async (c) => reply(c, await chat.folder(c.req.param('id'))));
