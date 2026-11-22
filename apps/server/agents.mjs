@@ -4,6 +4,9 @@
 // modes: name -> { value: what the agent is sent, tier: 0 reads only, 1 asks before each action, 2 edits files, 3 acts with
 // a reviewer, 4 acts unasked }. start: the mode value a chat starts in; auto: the mode name a sprint worker starts in;
 // narrow: the no-write mode value (the agent lock's, and a turn answering another chat's question).
+// acp: the ACP version P9 asks the agent for (chat.mjs ACP_ASK says why each is what it is). tellStart: the start mode P9
+// sets on a new or resumed session is shown at once; false, it is set quietly and the window's mode comes with the first
+// prompt (Claude's, as its adapter's own start was).
 const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes) });
 export const CATALOG = Object.freeze([
   entry({ id: 'claude', name: 'Claude Code', adapter: 'claude-agent-acp', cliPass: ' --cli',
@@ -11,6 +14,7 @@ export const CATALOG = Object.freeze([
     signIn: { dir: 'claudeDir', file: '.credentials.json' },
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
       'Accept edits': { value: 'acceptEdits', tier: 2 }, 'Bypass permissions': { value: 'bypassPermissions', tier: 4 } },
+    acp: 1, tellStart: false,
     start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: 'claude-json',
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
     why: 'Claude Code, for Claude chats and a terminal.' }),
@@ -19,6 +23,7 @@ export const CATALOG = Object.freeze([
     signIn: { dir: 'codexHome', file: 'auth.json' },
     modes: { 'Read-only': { value: 'read-only', tier: 0 }, 'Workspace access': { value: 'workspace-write', tier: 2 },
       'Auto review': { value: 'agent', tier: 3 }, 'Full access': { value: 'agent-full-access', tier: 4 } },
+    acp: 2, tellStart: true,
     start: 'agent', auto: 'Auto review', narrow: 'read-only', models: 'session', usage: 'codex-files',
     signedOut: 'Codex is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal and run codex login. Then start a new chat.',
     why: 'Codex, for Codex chats and a terminal.' }),
@@ -39,6 +44,8 @@ export const SIGNED_OUT = each((a) => a.signedOut);
 export const WHY = each((a) => a.why);
 export const ADAPTER = each((a) => a.adapter);
 export const SIGN_IN = each((a) => a.signIn);
+export const ACP = each((a) => a.acp);
+export const TELL_START = each((a) => a.tellStart);
 // GET /agents: what a window may know about each agent. No paths, no commands, no adapter package.
 export const publicAgents = () => ({ agents: CATALOG.map((a) => ({ id: a.id, name: a.name,
   modes: Object.entries(a.modes).map(([name, m]) => ({ name, tier: m.tier })), start: Object.keys(a.modes).find((k) => a.modes[k].value === a.start),
