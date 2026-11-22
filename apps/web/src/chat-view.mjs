@@ -887,13 +887,13 @@ function reply(s, text) {
 }
 const dataNote = () => { outer.$('#dataNote').textContent = [outer.live.on && !outer.serverInfo?.slim && 'Mission Control live', outer.liveChat.on && 'Chat live', !outer.liveChat.on && (outer.sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), outer.sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
-// CAT-1f: GET /agents replaces the agents' names, modes and chat model (controller names, helpers modes, chatModel) once it
-// answers, so the pickers offer every catalog agent; until then, and in the sample view, they hold the two built in.
-// A failed read (the daemon still starting) asks again every 10 s and redraws once it answers; 404 is an older P9, none.
-const loadAgents = async () => { if (loadAgents.done) return; const r = await window.p9.chat('agents', {}).catch(() => null);
-  if (r?.status !== 200) { if (r?.status !== 404 && !outer.lifetime.signal.aborted) outer.setTimeout(() => loadAgents().then(ok => ok && (refreshPill(), renderChats())), 1e4); return; } loadAgents.done = 1;
-  for (const t of [outer.names, modes, chatModel]) for (const k in t) delete t[k];
-  for (const a of r.body.agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; return 1; };
+// CAT-1f: GET /agents fills the agents' names, modes and chat model (controller names, helpers modes, chatModel) once it
+// answers, so the pickers offer every catalog agent; until then, and in the sample view, they hold the two built in. Called
+// once, from list(); a failed read (the daemon still starting) asks again every 10 s and redraws. The window and its daemon
+// ship together, so the catalog only adds agents and the two built in are never taken out.
+const loadAgents = async () => { const r = await window.p9.chat('agents', {}).catch(() => 0);
+  if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats())), 1e4);
+  for (const a of r.body.agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP'; };
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
