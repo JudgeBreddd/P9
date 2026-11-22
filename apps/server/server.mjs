@@ -28,10 +28,12 @@ import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
 import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
+import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createPhoneErrors } from './phone-errors.mjs';
 import { createIcons } from './icons.mjs';
+import { AGENT_IDS } from './agents.mjs'; // CAT-1d: away from the agents.mjs line above, which CAT-1a and CAT-1b edit
 import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
 import { AGENTS, adminCommand, wizardDependencies, found as onPath, placeAgents } from './deps.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -441,7 +443,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // MC-1: mode, the start mode the window shows on its pill, so the build runs in what the pill says. Without one (an older
     // window, the phone) the agent's default runs and the chat's mode event says which (chat.mjs tellMode).
     const { provider, space, mode, ...rest } = (await json(c)) ?? {};
-    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider) || (space !== undefined && !draftAt(drafts, space))
+    if (Object.keys(rest).length || !AGENT_IDS.includes(provider) || (space !== undefined && !draftAt(drafts, space))
       || (mode !== undefined && !chat.modeNames(provider).includes(mode))) return reply(c, { status: 400, error: 'request-refused' });
     if (space !== undefined && (await draftNames(drafts)).includes(space)) return reply(c, { status: 409, error: 'space-exists' });
     const made = await chat.create({ provider, title: 'Build Mission Control' });
@@ -1012,7 +1014,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       const state = chat.login.state(), on = await signedIn();
       c.header('cache-control', 'no-store');
       return c.json(Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map((agent) => { const l = state[agent]; return [agent, { signedIn: on[agent],
-        running: l.running, url: typeof l.url === 'string' ? signInUrl(agent, l.url) : null, code: agent === 'codex' && DEVICE_CODE.test(l.code ?? '') ? l.code : null,
+        running: l.running, url: typeof l.url === 'string' ? signInUrl(agent, l.url) : null, code: SIGN_IN_KIND[agent] === 'device-code' && DEVICE_CODE.test(l.code ?? '') ? l.code : null,
         unsupported: l.unsupported, exit: l.exit }]; })));
     });
     remoteApp.post('/phone/sign-in', async (c) => reply(c, await chat.login.start(await json(c))));

@@ -159,12 +159,14 @@ export function setupRoutes(outer) {
     const made = await outer.terminals.create({}, { cwd: outer.workspace, typed: command });
     return outer.reply(c, made.terminal ? { status: 201, terminal: made.terminal, command } : { ...made, command });
   });
-  // Item 15: the wizard's Install for the agents the owner picked, {claude, codex} as booleans: a launcher in P9's bin folder
+  // CAT-1d: the body names every catalog agent, each true or false, at least one true; no other key.
+  const picked = (body) => !!body && typeof body === 'object' && Object.keys(body).sort().join() === [...AGENTS].sort().join()
+    && AGENTS.every((agent) => typeof body[agent] === 'boolean') && AGENTS.some((agent) => body[agent]);
+  // Item 15: the wizard's Install for the agents the owner picked, one boolean per catalog agent: a launcher in P9's bin folder
   // for each true one, pointing at the CLI P9 ships. Nothing is downloaded and nothing needs the admin password.
   outer.app.post('/setup/agents', async (c) => {
     const body = await outer.json(c);
-    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'claude,codex' || typeof body.claude !== 'boolean' || typeof body.codex !== 'boolean'
-        || !(body.claude || body.codex)) return outer.reply(c, { status: 400, error: 'request-refused' });
+    if (!picked(body)) return outer.reply(c, { status: 400, error: 'request-refused' });
     try { return outer.reply(c, { status: 200, installed: await placeAgents(AGENTS.filter((agent) => body[agent])) }); }
     catch (error) { return outer.reply(c, { status: 500, error: 'agents-not-installed', detail: error.code ?? error.message }); }
   });
@@ -173,8 +175,7 @@ export function setupRoutes(outer) {
   // their sha512, an agent already there skipped). Only a folder with agents.json (a daemon bundle) fetches; a checkout says so.
   outer.app.post('/setup/agents-fetch', async (c) => {
     const body = await outer.json(c);
-    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'claude,codex' || typeof body.claude !== 'boolean' || typeof body.codex !== 'boolean'
-        || !(body.claude || body.codex)) return outer.reply(c, { status: 400, error: 'request-refused' });
+    if (!picked(body)) return outer.reply(c, { status: 400, error: 'request-refused' });
     const script = fileURLToPath(new URL('../../scripts/agents.mjs', import.meta.url));
     if (!existsSync(fileURLToPath(new URL('../../agents.json', import.meta.url)))) return outer.reply(c, { status: 409, error: 'not-a-bundle' });
     const names = AGENTS.filter((agent) => body[agent]);
@@ -211,7 +212,7 @@ export function setupRoutes(outer) {
   outer.app.post('/delegation', async (c) => {
     const body = await outer.json(c), str = (x) => typeof x === 'string' && x.length <= 200;
     const one = (x) => x && typeof x === 'object' && Object.keys(x).sort().join() === 'agent,effort,model' && str(x.model) && str(x.effort)
-      && (['', 'claude', 'codex'].includes(x.agent) || (typeof x.agent === 'string' && /^profile:[\w-]{1,80}$/.test(x.agent)));
+      && (['', ...AGENTS].includes(x.agent) || (typeof x.agent === 'string' && /^profile:[\w-]{1,80}$/.test(x.agent)));
     // O226: setup is still taken from an older window (and never read), so its save is not refused.
     if (!body || typeof body !== 'object' || !['max,start,workers', 'max,setup,start,workers'].includes(Object.keys(body).sort().join()) || (body.setup !== undefined && (typeof body.setup !== 'string' || body.setup.length > 2000)) || !['off', 'ask', 'agent'].includes(body.start)
         || !Number.isInteger(body.max) || body.max < 1 || body.max > 20 || !Array.isArray(body.workers) || body.workers.length > 20 || !body.workers.every(one)) return c.json({ error: 'request-refused' }, 400);

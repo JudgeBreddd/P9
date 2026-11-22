@@ -1,5 +1,4 @@
-// CAT-1: the agent catalog, one entry per agent P9 can run. The server's per-agent tables are read from here; behaviour
-// that differs per agent beyond data (Codex's device-code sign-in) stays where it is for now.
+// CAT-1: the agent catalog, one entry per agent P9 can run. The server's per-agent tables are read from here.
 // No imports: scripts/deps.mjs (install.sh's check) loads deps.mjs, which reads this, before the daemon's modules are built.
 // modes: name -> { value: what the agent is sent, tier: 0 reads only, 1 asks before each action, 2 edits files, 3 acts with
 // a reviewer, 4 acts unasked }. start: the mode value a chat starts in; auto: the mode name a sprint worker starts in;
@@ -12,7 +11,7 @@ const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.mo
 export const CATALOG = Object.freeze([
   entry({ id: 'claude', name: 'Claude Code', adapter: 'claude-agent-acp', cliPass: ' --cli',
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], command: 'claude auth login' },
-    signIn: { dir: 'claudeDir', file: '.credentials.json' },
+    signIn: { kind: 'browser', dir: 'claudeDir', file: '.credentials.json' },
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
       'Accept edits': { value: 'acceptEdits', tier: 2 }, 'Bypass permissions': { value: 'bypassPermissions', tier: 4 } },
     start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', staleMs: STALE, pool: 'claude', hideSignedOut: false },
@@ -20,7 +19,7 @@ export const CATALOG = Object.freeze([
     why: 'Claude Code, for Claude chats and a terminal.' }),
   entry({ id: 'codex', name: 'Codex', adapter: 'codex-acp', cliPass: '',
     login: { args: ['cli', 'login', '--device-auth'], command: 'codex login' },
-    signIn: { dir: 'codexHome', file: 'auth.json' },
+    signIn: { kind: 'device-code', flag: '--device-auth', dir: 'codexHome', file: 'auth.json' },
     modes: { 'Read-only': { value: 'read-only', tier: 0 }, 'Workspace access': { value: 'workspace-write', tier: 2 },
       'Auto review': { value: 'agent', tier: 3 }, 'Full access': { value: 'agent-full-access', tier: 4 } },
     start: 'agent', auto: 'Auto review', narrow: 'read-only', models: 'session', usage: { reader: 'codex-files', staleMs: STALE, pool: 'codex', hideSignedOut: true },
@@ -43,6 +42,11 @@ export const SIGNED_OUT = each((a) => a.signedOut);
 export const WHY = each((a) => a.why);
 export const ADAPTER = each((a) => a.adapter);
 export const SIGN_IN = each((a) => a.signIn);
+// CAT-1b: 'browser', the CLI opens a page and the paste box takes a code; 'device-code', it prints a page and a one-time
+// code, listens on no port, and so works when the daemon runs on another computer.
+export const SIGN_IN_KIND = each((a) => a.signIn.kind);
+// flag: a device-code agent's login argument; a CLI too old for it names the flag when it refuses it (unsupported).
+export const SIGN_IN_FLAG = each((a) => a.signIn.flag ?? null);
 // GET /agents: what a window may know about each agent. No paths, no commands, no adapter package.
 export const publicAgents = () => ({ agents: CATALOG.map((a) => ({ id: a.id, name: a.name,
   modes: Object.entries(a.modes).map(([name, m]) => ({ name, tier: m.tier })), start: Object.keys(a.modes).find((k) => a.modes[k].value === a.start),

@@ -25,7 +25,7 @@ import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted } from './ledger.mjs';
-import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN } from './agents.mjs';
+import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG } from './agents.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(AGENT_IDS);
@@ -95,6 +95,13 @@ const refused = (status, error) => ({ status, error });
 const SIGN_IN = SIGNED_OUT; // CAT-1: each agent's line, from the catalog
 // O48: a chat start that failed before the agent was asked anything. None of these holds a key or a command's output.
 const PROFILE_ERRORS = { 'profile-no-key': 'This chat\'s provider profile has no key. Add one in Settings.', 'profile-command-failed': 'The key command of this chat\'s provider profile failed or printed nothing. Check it in Settings.', 'profile-gone': 'This chat\'s provider profile was removed in Settings. It can be read, not continued.' };
+// CAT-1b: what a sign-in's output gives so far: its first https:// URL and, for a device-code sign-in, the one-time code:
+// the first code-shaped word after the page, nothing else of the output.
+export function loginRead(kind, output) {
+  const text = output.replace(/\x1b\[[0-9;]*m/g, ''), url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(text)?.[0] ?? null;
+  const code = kind === 'device-code' && url ? /(?<![\w-])[A-Z0-9]{4,8}-[A-Z0-9]{4,8}(?![\w-])/.exec(text.slice(text.indexOf(url) + url.length))?.[0] ?? null : null;
+  return { url, code };
+}
 const agentError = (error, provider) => (error?.code === -32000 ? SIGN_IN[provider] : String(error?.message ?? error).slice(0, 500));
 
 // The form P9 can show for an ACP elicitation schema (council 2026-10-16-013039-tier2): flat fields of string, number,
@@ -983,7 +990,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // The paste box's code goes to its stdin only. One login per agent; ended after 10 minutes, on Stop or at shutdown.
   // ponytail: Stop ends the CLI's whole process group (Windows: its job), so a browser the CLI started itself, not
   // handed to one already running, closes with it.
-  // D8: Codex signs in with its device code (a hidden flag in the codex P9 ships, pinned in the lockfile): it prints a
+  // D8: a device-code agent (the catalog's signIn.kind; Codex today) signs in with its device code (a hidden flag in the codex P9 ships, pinned in the lockfile): it prints a
   // page and a one-time code and listens on no port, so it works when the daemon runs on another computer.
   // LOGIN: each agent's sign-in arguments, from the catalog.
   const logins = new Map(); // agent -> { tree, url, code, unsupported, exit, timer }
@@ -1012,12 +1019,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       logins.set(agent, login);
       let seen = '';
       const read = (chunk) => {
-        if ((login.url && (agent !== 'codex' || login.code)) || seen.length > 65536) return;
+        if ((login.url && (SIGN_IN_KIND[agent] !== 'device-code' || login.code)) || seen.length > 65536) return;
         seen += chunk;
-        const text = seen.replace(/\x1b\[[0-9;]*m/g, '');
-        login.url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(text)?.[0] ?? null;
-        // Codex's one-time code: the first code-shaped word after its page, nothing else of the output.
-        if (agent === 'codex' && login.url) login.code = /(?<![\w-])[A-Z0-9]{4,8}-[A-Z0-9]{4,8}(?![\w-])/.exec(text.slice(text.indexOf(login.url) + login.url.length))?.[0] ?? null;
+        Object.assign(login, loginRead(SIGN_IN_KIND[agent], seen));
       };
       tree.child.stdout.on('data', read);
       tree.child.stderr.on('data', read);
@@ -1025,8 +1029,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       tree.child.on('error', () => { login.exit = -1; clearTimeout(login.timer); });
       tree.child.on('exit', (code) => {
         login.exit = code ?? -1; clearTimeout(login.timer);
-        // A later codex without the flag: named, so the wizard says why and offers its terminal sign-in.
-        login.unsupported = agent === 'codex' && code !== 0 && !login.url && seen.includes('--device-auth');
+        // A CLI without its device-code flag: named, so the wizard says why and offers its terminal sign-in.
+        login.unsupported = SIGN_IN_KIND[agent] === 'device-code' && code !== 0 && !login.url && !!SIGN_IN_FLAG[agent] && seen.includes(SIGN_IN_FLAG[agent]);
       });
       return { status: 202, started: agent };
     },
