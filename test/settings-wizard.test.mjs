@@ -398,6 +398,28 @@ test('Setup wizard: the agents read again on refresh after a failed first read, 
   console.log('PASS wizard agents: read again on refresh after a failed first read; an older answer shows full names');
 });
 
+// CAT-1e review: on a computer whose setup is done, the refresh would stop at once even with the agents unread, so a failed
+// first read left the pick step empty for good. The reads fail until released; the step fills without reopening.
+test('Setup wizard: a done setup keeps reading the agents until one answers (CAT-1e)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  const instance = await missionDaemon(t, true, ['--terminal-platform', 'darwin']);
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-agents-done-')), 'profile');
+  const { app, page } = await launchOn(t, instance, profile);
+  await app.evaluate(({ ipcMain }) => {
+    const handler = ipcMain._invokeHandlers.get('p9:chat');
+    ipcMain._invokeHandlers.set('p9:chat', (event, action, ...rest) => action === 'agents' && !globalThis.agentsUp ? { status: 503, body: { error: 'daemon-unavailable' } } : handler(event, action, ...rest));
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await page.click('#setBtn'); await page.click('#setWel');
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(1000); // the opening read and refresh have failed
+  await app.evaluate(() => { globalThis.agentsUp = true; });
+  await page.waitForTimeout(12000); // one 10 s refresh
+  for (let i = 0; i < 4 && await page.locator('#welT').innerText() !== 'Claude, Codex or both?'; i++) await page.locator('#welFoot [data-act="next"]').click();
+  assert.equal(await page.locator('#welT').innerText(), 'Claude, Codex or both?');
+  await page.locator('#welBody').getByText('Claude Code, by Anthropic.').waitFor({ timeout: 2000 });
+  console.log('PASS wizard agents: a done setup read them again after the first reads failed');
+});
+
 const MISSION_FILES = { primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' };
 const missionDaemon = (t, signedIn, args = []) => daemon(t, undefined, false, async ({ directory, workspace }) => {
   const file = path.join(directory, '.config', 'p9', 'settings.json');
