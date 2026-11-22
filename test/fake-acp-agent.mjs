@@ -65,7 +65,7 @@ const sprintRules = (prompt) => { for (const block of prompt) if (block.type ===
 // O171: a start block with no rules block before it (a lead started from the Setup page gets it with P9's message).
 const START = ['[P9: your instructions', '[P9: you lead this sprint', '[P9: your notes file'];
 const LINES = ['[P9: from the user, in this chat.]\n\n', '[P9: a line from P9 itself, not from the user.]\n\n']; // a sender line as its own block (O109)
-const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || (block.text.startsWith('[p9] ') && block.text.includes(' ended its turn: ') && block.text.endsWith('\n\n')) || START.some((s) => block.text.startsWith(s)) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
+const textOf = (prompt) => prompt.filter((block) => !(block.type === 'text' && (block.text.startsWith(SPRINT) || block.text.startsWith(FROM) || block.text.startsWith(NOTE) || (block.text.startsWith('[p9] ') && block.text.includes(' ended its turn: ') && block.text.endsWith('\n\n')) || START.some((s) => block.text.startsWith(s)) || LINES.includes(block.text)))).map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : block.type === 'resource_link' ? '[file ' + block.name + ' ' + block.uri + ']' : '')).join('');
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.
 const png = (w, h) => {
   const chunk = (type, data) => { const head = Buffer.alloc(4), tail = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
@@ -109,6 +109,7 @@ const custom = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION;
 let rawAsked = false;
 const rawWanted = (message) => rawAsked === true || (Array.isArray(rawAsked) && rawAsked.some((f) => f.type === message.type && (f.subtype === undefined || f.subtype === message.subtype) && (f.origin === undefined || f.origin === message.origin?.kind)));
 const provider = (what, params) => {
+  if (existsSync('dirs.log')) appendFileSync('dirs.log', JSON.stringify({ what, dirs: params.additionalDirectories ?? null }) + '\n'); // A2 step 1
   rawAsked = params._meta?.claudeCode?.emitRawSDKMessages ?? false;
   const env = params._meta?.claudeCode?.options?.env, key = env?.ANTHROPIC_AUTH_TOKEN;
   if (existsSync('profile.log')) appendFileSync('profile.log', JSON.stringify({ agent: process.argv[2], what, model: process.env.ANTHROPIC_MODEL ?? null, custom: custom ?? null,
