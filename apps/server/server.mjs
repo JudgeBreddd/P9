@@ -27,6 +27,7 @@ import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
+import { COMMANDS, publicAgents } from './agents.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createPhoneErrors } from './phone-errors.mjs';
@@ -102,7 +103,7 @@ export function authorizeRemote(headers, method, route, auth, remote) {
 
 // D7/D8: the agents' sign-in commands. Item 15: no install command; both CLIs ship with P9 (deps.mjs puts them on the
 // terminals' PATH), so the wizard's Install writes a launcher instead of downloading anything.
-const AGENT_COMMANDS = { claude: { login: 'claude auth login' }, codex: { login: 'codex login' } };
+const AGENT_COMMANDS = COMMANDS;
 
 // Review 3 L4: one agents fetch at a time per daemon; a second (another window, a retry) is 409 until the first ends, so two
 // agents.mjs never write the same node_modules folders. Its limit outlasts both downloads (agents.mjs: 600 s each) plus slack.
@@ -499,6 +500,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));
   api.post('/pages/:id/launch', async (c) => reply(c, await mission.launch('pages', c.req.param('id'), await json(c))));
   api.get('/agent-lock', (c) => reply(c, chat.lock()));
+  api.get('/agents', (c) => c.json(publicAgents())); // CAT-1: the agent catalog, no paths or commands
   // Settings > Security (c18, threat model rows 15, 4, 49 and 66): the phone changes the agent lock, File protection and
   // Mission Control files too, through the desktop's own handlers, behind its session, CSRF and the op ledger.
   api.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));

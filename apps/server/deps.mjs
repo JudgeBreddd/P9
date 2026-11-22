@@ -11,14 +11,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { windowsStateRoot } from './windows.mjs';
+import { AGENT_IDS, PASS, WHY } from './agents.mjs';
 
-export const AGENTS = ['claude', 'codex'];
+export const AGENTS = AGENT_IDS; // CAT-1: the catalog's agents
 // What each launcher runs with node. Claude: the adapter, whose --cli hands everything else to the CLI it ships. Codex:
 // the CLI the adapter ships, directly, resolved the way the adapter resolves it (from its real path, as node runs it:
 // pnpm keeps @openai/codex beside the real folder, not under the node_modules link): codex-acp 2.1.1 answers --version
 // anywhere in its arguments with its own name before it reads "cli", so through it "codex --version" (or a prompt
 // holding those words) never reached Codex.
-const PASS = { claude: ' --cli', codex: '' };
+// (PASS, the catalog's cliPass.)
 const cliEntry = (agent, adapter) => agent === 'codex' ? createRequire(realpathSync(adapter)).resolve('@openai/codex/bin/codex.js') : adapter;
 
 // P9's bin folder: the user's own, never on a system path.
@@ -154,7 +155,7 @@ export async function sandboxDependency({ electron = cloneElectron(), read = (fi
 // desktop: also what the window needs (install.sh without --headless; by default, when this clone has an Electron).
 export async function dependencies({ platform = process.platform, env = process.env, home = os.homedir(), manager, desktop, electron = cloneElectron() } = {}) {
   const agents = await Promise.all(AGENTS.map(async (id) => ({ id, ok: await found(id, { platform, env, home }), admin: false, command: null,
-    why: id === 'claude' ? 'Claude Code, for Claude chats and a terminal.' : 'Codex, for Codex chats and a terminal.' })));
+    why: WHY[id] })));
   if (platform !== 'linux') return agents;
   if (manager === undefined) manager = await packageManager(); // null: no known package manager, so no command
   const system = await Promise.all(LINUX.map(async ({ id, program, why, packages }) => {
