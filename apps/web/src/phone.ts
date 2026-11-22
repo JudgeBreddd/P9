@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLine, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -16,7 +16,7 @@ import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] }; profiles?: { id: string; name: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; turns: number }[] };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: Record<string, Limits | null> & { signedOut?: string[] }; profiles?: { id: string; name: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; turns: number }[] };
 type Window = { usedPercent: number; resetsAt: number | null; windowMins?: number };
 type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Window & { name: string })[]; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
@@ -2157,9 +2157,10 @@ async function loadUsage() {
   try {
     const data = await request('/usage') as Usage;
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one card each: its age, then a row per window with the pace tick (helpers.mjs paceRow).
-    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`; };
-    const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
+    // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
+    // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
+    const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
+    const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id])).join('')}</div>` : '';
     if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
     // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before

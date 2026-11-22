@@ -322,6 +322,26 @@ test('CAT-1f: the Agent pill lists every agent from GET /agents, a new one too',
   console.log('PASS CAT-1f: the Agent pill lists Claude, Codex and a third agent from GET /agents');
 });
 
+// USE-1 web: the Usage window lists each agent in /usage limits (an agent GET /agents has not named shows its id), and a
+// row is stale by the daemon's mark (its agent's own staleMs), not a 1 h rule: a 20 min old reading marked stale is muted.
+test('USE-1 web: the Usage window lists every agent in the usage limits, stale by the daemon mark', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-use1w-')), 'profile');
+  const { app, page } = await launch(t, instance, profile);
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:usage'); ipcMain.removeHandler('p9:usage');
+    ipcMain.handle('p9:usage', async (e, ...args) => { const r = await h(e, ...args), now = Date.now(), w = (p) => ({ usedPercent: p, resetsAt: now + 3600000, windowMins: 300 });
+      return { status: 200, body: { ...(r.status === 200 ? r.body : {}), limits: { claude: { asOf: now - 20 * 60000, fiveHour: w(40), sevenDay: null, stale: true, pool: 'claude' },
+        codex: null, ospr: { asOf: now, fiveHour: w(10), sevenDay: null, stale: false, pool: 'ospr' }, signedOut: [] } } }; });
+  });
+  await page.reload(); await page.locator('#rChat').waitFor();
+  await page.click('#rUsage');
+  await page.locator('#mdl .uagent').first().waitFor({ timeout: 15000 });
+  const rows = await page.locator('#mdl .uagent').evaluateAll((all) => all.map((s) => [s.dataset.agent, s.querySelector('h5').firstChild.textContent, s.hasAttribute('data-stale')]));
+  assert.deepEqual(rows, [['claude', 'Claude', true], ['ospr', 'ospr', false]]);
+  console.log('PASS USE-1 web: the Usage window lists every agent in the usage limits, stale by the daemon mark');
+});
+
 // CAT-1f: a first read of GET /agents that fails (the daemon still starting) is asked again; without that the pickers kept
 // the two built-in agents for the window's whole life. Forced: main answers 503 until the test lets it through.
 test('CAT-1f: a failed first agents read is asked again; the third agent shows without a reload', { timeout: 120000 }, async (t) => {

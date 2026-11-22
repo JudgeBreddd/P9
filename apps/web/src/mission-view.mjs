@@ -32,7 +32,7 @@ async function loadUsage() {
   const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
   // O190/O191 FIX1: each answer replaces the last one whole, so a field an older daemon does not send (tokens, profiles,
   // limits) or a failed read leaves nothing of the previous answer behind. A failed read keeps only the plan limits: they
-  // carry their own age (limitLine: "N min old", muted after 1 h), and dropping them would blank every chat's meter on a blip.
+  // carry their own age (limitLine: "N min old", muted by the daemon's stale mark), and dropping them would blank every chat's meter on a blip.
   const kept = result.status === 200 ? result.body : { limits: usage.limits };
   for (const key of Object.keys(usage)) delete usage[key];
   Object.assign(usage, noUsage(), kept);
