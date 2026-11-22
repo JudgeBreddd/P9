@@ -359,7 +359,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // A2 step 1: a chat's own folder for files (0700), made at its start so the agent is given it (additionalDirectories).
   // A folder since swapped for a link is refused, as the chat folder is (threat model row 24).
   const attachDir = ownership && path.join(ownership, 'attachments');
+  // FIX1 (Reviewer): the attachments folder itself is checked too, on save, start and delete: one swapped for a link
+  // would take the chat's folder, its files and a delete outside ownership.
+  const rootOk = () => lstatSync(attachDir, { throwIfNoEntry: false })?.isDirectory() === true;
   const filesOf = (id) => {
+    mkdirSync(attachDir, { recursive: true, mode: 0o700 });
+    if (!rootOk()) throw new Error('attachments-not-a-folder');
     const dir = path.join(attachDir, id);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (!lstatSync(dir).isDirectory()) throw new Error('attachments-not-a-folder');
@@ -1550,7 +1555,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const { usage, unused } = ledger.remove(id);
       db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id); // O48, A7, daemon-5, O214
       gauges.delete(id); parked.delete(id);
-      if (attachDir && ID.test(id)) rmSync(path.join(attachDir, id), { recursive: true, force: true }); // A2 step 1: this chat's folder only
+      if (attachDir && ID.test(id) && rootOk()) rmSync(path.join(attachDir, id), { recursive: true, force: true }); // A2 step 1: this chat's folder only
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
     } });

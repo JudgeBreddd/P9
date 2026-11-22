@@ -539,6 +539,27 @@ test('files: any file is saved in the chat folder and reaches the agent as a lin
   console.log('PASS files: saved 0600 in a 0700 chat folder, sent as links, clash and link renamed, 13 bad shapes 400, 8 MiB+ 413 plainly, delete took only its chat folder, resume carried the folder');
 });
 
+test('files: an attachments folder swapped for a link is never written through or deleted through, on save, start or delete (A2 step 1 FIX1)', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance), other = await create(instance);
+  const home = path.join(instance.directory, '.local', 'state', 'p9-foundation'), elsewhere = path.join(instance.directory, 'elsewhere');
+  await mkdir(path.join(elsewhere, other), { recursive: true }); await writeFile(path.join(elsewhere, other, 'keep.txt'), 'keep');
+  await mkdir(home, { recursive: true }); await rm(path.join(home, 'attachments'), { recursive: true, force: true });
+  await symlink(elsewhere, path.join(home, 'attachments'));
+  // Save: refused, nothing written outside.
+  const saved = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: '', files: [{ name: 'x.txt', data: Buffer.from('evil').toString('base64') }] }));
+  assert.deepEqual([saved.status, saved.body.error], [500, 'file-not-saved']);
+  assert.equal(existsSync(path.join(elsewhere, id)), false, 'save made nothing outside');
+  // Start: the chat does not start through the link, and makes no folder outside.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' });
+  await until(instance, (event) => event.conversation === id && (event.type === 'error' || event.type === 'turn-end' || event.type === 'state'));
+  assert.equal(existsSync(path.join(elsewhere, id)), false, 'start made nothing outside');
+  // Delete: the chat goes, the folder behind the link stays.
+  assert.equal((await call(instance, `/chat/${other}/delete`, 'POST', {})).status, 200);
+  assert.equal(await readFile(path.join(elsewhere, other, 'keep.txt'), 'utf8'), 'keep', 'delete took nothing outside');
+  console.log('PASS files FIX1: a linked attachments folder refused on save (500), start made nothing, delete left the outside folder');
+});
+
 test('images: a photo reaches the agent as an image block; bad types, encodings, counts, sizes and image-free agents refused (threat model row 20)', async (t) => {
   const instance = await start(t);
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', bytes = Buffer.from(png, 'base64').length;
