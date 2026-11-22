@@ -1298,7 +1298,7 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   const st = await status();
   assert.deepEqual([st.status, st.closed?.by, st.workers.map((w) => [w.key, w.state])], [200, 'owner', [['lead', 'stopped']]], JSON.stringify(st).slice(0, 600));
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Closed sprint');
-  assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record/);
+  assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record.+its files stay, and so do the worker folders Close kept/); // Close removes the finished ones (part a)
   assert.deepEqual([await close.count(), await page.locator('[data-pj="spstart"]').count()], [0, 0], 'a closed sprint has no Close and no Start');
   // A sprint never ends (nightly 11): under the record, no editable roles or Add worker, no Sprint scripts, no scripts or
   // "press Start again"; Clean up stays (folders Close kept) and its files stay listed, read only.
