@@ -211,6 +211,8 @@ export const limitLine = (name, limits, now = Date.now(), signedOut = false) => 
 // CAT-1g: /usage limits hold one key per catalog agent (an older daemon: claude, codex) and signedOut; names is GET /agents'.
 export const limitAgents = (limits) => Object.keys(limits ?? {}).filter((a) => a !== 'signedOut');
 export const limitLines = (limits, names) => limitAgents(limits).map((a) => ({ ...limitLine(names[a] || a, limits[a], undefined, !!limits.signedOut?.includes(a)), id: a }));
+// Mission Control's Usage list items; an agent's name and text are the daemon's, so both are escaped here.
+export const limitItems = (limits, names) => limitLines(limits, names).map((l) => `<li class="sm${l.stale ? ' muted' : ''}"><b>${esc(l.name)}</b> ${esc(l.text)}</li>`).join('');
 // The Usage card's one line: the first agent with a reading, else the first agent's line.
 export const limitCard = (limits, names) => { const lines = limitLines(limits, names); return lines.find((l) => limits[l.id]) ?? lines[0]; };
 
