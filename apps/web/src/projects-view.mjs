@@ -356,7 +356,8 @@ export function installProjects(o, api) {
     // The same button kind closes one of the owner's own v lines (O164 part (3)); closePress tells them apart.
     // The page is read again after, so the sprint shows as closed everywhere; a refusal is said beside the button.
     if (k === 'spclose') { const lead = b.dataset.lead, id = cur.id; if (svClosing || !svMod) return;
-      const said = await svMod.closePress(b, confirmIt, call, () => { svClosing = lead; svSaid = ''; renderPage(); });
+      const said = await svMod.closePress(b, confirmIt, call, () => { svClosing = lead; svSaid = ''; renderPage(); },
+        r => { const c = r.body?.cleaned; if (c) cleaned.set(lead, c.skipped ?? cleanText({ status: 200, body: c })); }); // what Close cleaned up, as Clean up says it
       svClosing = ''; if (said === null) return; svSaid = said;
       await back(id, lead); o.loadProjects(); renderPage(); if (spPage === lead) loadView(); return; }
     if (k === 'spscripts') return openScripts(b.dataset.lead);

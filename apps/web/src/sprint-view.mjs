@@ -45,12 +45,13 @@ const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.s
 export const closedAbout = 'This sprint is closed. Its record is first: what it built and its numbers, as they stood at Close; an agent reads the same with sprint_status. Its files are below, read only.';
 // b: the pressed button. One with data-item is the Close on one of the owner's own lines (O164 part (3)): it closes only
 // that line, with no confirm (nothing stops) and no out(); P9 records the click, no merge or review is involved.
-export async function closePress(b, confirmIt, call, out) {
+export async function closePress(b, confirmIt, call, out, got) { // got(answer): Close's answer, which says what it cleaned up
   const lead = b.dataset.lead, item = b.dataset.item, said = r => r.status === 200 ? '' : 'Not closed: ' + (r.body?.detail || r.body?.error || r.status || 'no answer');
   if (item) return said(await call('ownerDone', { sprint: lead, item }, { quiet: true }).catch(() => ({})));
-  if (!await confirmIt({ title: 'Close this sprint?', body: 'Every chat of this sprint is stopped, its record is kept and its scripts are turned off. Nothing is deleted. A closed sprint is not started again.', ok: 'Close sprint', danger: true })) return null;
+  if (!await confirmIt({ title: 'Close this sprint?', body: 'Every chat of this sprint is stopped, its record is kept and its scripts are turned off. Worker folders with nothing unsaved whose work is merged are removed; the rest and the sprint\'s files stay. A closed sprint is not started again.', ok: 'Close sprint', danger: true })) return null;
   out();
-  return said(await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})));
+  const r = await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})); got?.(r);
+  return said(r);
 }
 export function statusHtml(s, esc, opts = {}) {
   // O164 part (3) FIX1: owner lines leave the worker counts and the Plan list only where the record has its owner
@@ -75,8 +76,8 @@ export function statusHtml(s, esc, opts = {}) {
       <div class="sv-say"><b data-sv-done>${d.total ? `${dn} of ${n(d.total, 'item', 'items')} ${doneWord}` : 'The plan has no items yet'}</b>
         <span class="muted">${d.total ? (legacy ? `This record was saved before done meant merged: these counts are its reviews, not merge evidence.${open.length ? ` ${n(open.length, 'item', 'items')} never passed review.` : ''}` : (open.length ? `${n(open.length, 'item', 'items')} to go. An item counts when its work reaches the main line, not when its box is ticked or its review passes.` : 'Every item\'s work is in the main line.')) : 'An item is a line "- [ ] id: what; role key" in sprint.md.'}${d.unproven ? ` ${n(d.unproven, 'item', 'items')} cannot be proven merged: P9 holds no clone or copy of this repo.` : ''}</span>${phaseLine(s, esc)}</div>
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
-    ${end ? `<p class="hint" data-sv-closed>Closed ${esc(when)} by ${end.by === 'owner' ? 'you' : 'a chat\'s agent, on your yes'}. This is its record: everything here is as it stood at Close and no longer changes. Its chats are stopped; its files and worker folders are kept.</p>`
-      : `<div class="sv-ctl"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}"${opts.closing ? ' disabled' : ''} title="Stops every chat of this sprint, keeps its record and turns its scripts off. Nothing is deleted. An agent does the same with close_sprint, after asking you.">${opts.closing ? 'Closing…' : 'Close sprint'}</button>${opts.said ? `<span class="hint" data-sv-said role="status">${esc(opts.said)}</span>` : ''}</div>`}
+    ${end ? `<p class="hint" data-sv-closed>Closed ${esc(when)} by ${end.by === 'owner' ? 'you' : 'a chat\'s agent, on your yes'}. This is its record: everything here is as it stood at Close and no longer changes. Its chats are stopped; its files stay, and so do the worker folders Close kept (work not saved or not yet in the main line).</p>`
+      : `<div class="sv-ctl"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}"${opts.closing ? ' disabled' : ''} title="Stops every chat of this sprint, keeps its record, turns its scripts off and removes its finished worker folders (merged, nothing unsaved). An agent does the same with close_sprint, after asking you.">${opts.closing ? 'Closing…' : 'Close sprint'}</button>${opts.said ? `<span class="hint" data-sv-said role="status">${esc(opts.said)}</span>` : ''}</div>`}
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}

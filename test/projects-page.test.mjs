@@ -1283,7 +1283,7 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   assert.deepEqual(await drawn(), [true, 1, 1, true, true, true], 'the open sprint\'s page');
   // The press asks first; Cancel closes nothing.
   await close.click();
-  assert.match(await ask.textContent(), /Close this sprint\?.*Nothing is deleted/s);
+  assert.match(await ask.textContent(), /Close this sprint\?.*whose work is merged are removed; the rest and the sprint's files stay/s);
   await ask.locator('[value="no"]').click();
   assert.deepEqual([(await status()).closed ?? null, await view.getAttribute('data-sv')], [null, 'open']);
   // A before-close script that exits 1 refuses the close: said beside the button, the sprint stays open.
@@ -1298,7 +1298,7 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   const st = await status();
   assert.deepEqual([st.status, st.closed?.by, st.workers.map((w) => [w.key, w.state])], [200, 'owner', [['lead', 'stopped']]], JSON.stringify(st).slice(0, 600));
   assert.equal(await page.locator('[data-sp-title]').textContent(), 'Closed sprint');
-  assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record/);
+  assert.match(await page.locator('[data-sv-closed]').textContent(), /^Closed .+ by you\. This is its record.+its files stay, and so do the worker folders Close kept/); // Close removes the finished ones (part a)
   assert.deepEqual([await close.count(), await page.locator('[data-pj="spstart"]').count()], [0, 0], 'a closed sprint has no Close and no Start');
   // A sprint never ends (nightly 11): under the record, no editable roles or Add worker, no Sprint scripts, no scripts or
   // "press Start again"; Clean up stays (folders Close kept) and its files stay listed, read only.
@@ -1307,6 +1307,8 @@ test('projects: Close sprint on the Sprint View asks first, says a refusal, then
   await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
   assert.equal(await page.locator('[data-sp-box]').getAttribute('readonly'), '', 'a closed sprint\'s file reads only');
   await spSec.locator('[data-pj="spfile"]', { hasText: 'sprint.md' }).click();
+  // A sprint never ends (a): Close cleaned up the worker folders and the page says what went, as Clean up does (this one had none).
+  assert.equal(await page.locator(`[data-sprint="${run.sprint}"] [data-sp-clean]`).textContent(), 'No worker folders to clean up.');
   assert.deepEqual([await page.locator('.sv-facts dt').first().textContent(), await page.locator('[data-sv-fact="ticked"]').textContent(), await page.locator('[data-sv-worker="lead"] [data-sv-state]').textContent()],
     ['Ran', `${st.done.ticked} of ${st.done.total}`, 'Stopped']);
   // The record no longer changes: a box ticked after Close is not counted, on the page or by the route.
