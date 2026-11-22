@@ -1199,6 +1199,17 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await pv.evaluate((v) => { v.dataset.old = '1'; });
   await until(async () => (await page.locator('[data-sv-planview][data-old]').count()) === 0, 'the Sprint View never redrew', 12000);
   assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['true', true, false], 'the redraw closed the plan view');
+  // WALL-SV-FOCUS: each Sprint View button keeps the keyboard focus through the 5 s redraw (the same element, still in the page).
+  const kept = [];
+  for (const sel of ['[data-sv-plan]', '.sv [data-pj="spclose"]', '.sv .sv-row']) {
+    const n = await page.locator(sel).count(); if (!n) { kept.push([sel, 'none']); continue; }
+    await page.locator(sel).first().focus();
+    await page.evaluate((s) => { window.p9focus = document.querySelector(s); document.querySelector('.sv').dataset.old = '1'; }, sel);
+    await until(async () => (await page.locator('.sv[data-old]').count()) === 0, 'the Sprint View never redrew', 12000);
+    kept.push([sel, await page.evaluate(() => window.p9focus.isConnected && document.activeElement === window.p9focus ? 'kept' : 'lost to ' + (document.activeElement?.outerHTML.slice(0, 80) ?? 'none'))]);
+  }
+  console.log('WALL-SV-FOCUS ' + JSON.stringify(kept));
+  assert.deepEqual(kept.map(([, k]) => k), ['kept', 'kept', 'kept'], 'a Sprint View button lost the focus at the redraw: ' + JSON.stringify(kept));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view-plan ' + (await page.screenshot({ type: 'png', fullPage: true })).toString('base64'));
   await line.click();
   assert.deepEqual([await line.getAttribute('aria-expanded'), await pv.isVisible(), await flat.isVisible()], ['false', false, true], 'a second press did not close it');
