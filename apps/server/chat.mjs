@@ -25,7 +25,7 @@ import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted } from './ledger.mjs';
-import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND } from './agents.mjs';
+import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG } from './agents.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(AGENT_IDS);
@@ -1029,8 +1029,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       tree.child.on('error', () => { login.exit = -1; clearTimeout(login.timer); });
       tree.child.on('exit', (code) => {
         login.exit = code ?? -1; clearTimeout(login.timer);
-        // A later codex without the flag: named, so the wizard says why and offers its terminal sign-in.
-        login.unsupported = SIGN_IN_KIND[agent] === 'device-code' && code !== 0 && !login.url && seen.includes('--device-auth');
+        // A CLI without its device-code flag: named, so the wizard says why and offers its terminal sign-in.
+        login.unsupported = SIGN_IN_KIND[agent] === 'device-code' && code !== 0 && !login.url && !!SIGN_IN_FLAG[agent] && seen.includes(SIGN_IN_FLAG[agent]);
       });
       return { status: 202, started: agent };
     },

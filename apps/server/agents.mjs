@@ -16,7 +16,7 @@ export const CATALOG = Object.freeze([
     why: 'Claude Code, for Claude chats and a terminal.' }),
   entry({ id: 'codex', name: 'Codex', adapter: 'codex-acp', cliPass: '',
     login: { args: ['cli', 'login', '--device-auth'], command: 'codex login' },
-    signIn: { kind: 'device-code', dir: 'codexHome', file: 'auth.json' },
+    signIn: { kind: 'device-code', flag: '--device-auth', dir: 'codexHome', file: 'auth.json' },
     modes: { 'Read-only': { value: 'read-only', tier: 0 }, 'Workspace access': { value: 'workspace-write', tier: 2 },
       'Auto review': { value: 'agent', tier: 3 }, 'Full access': { value: 'agent-full-access', tier: 4 } },
     start: 'agent', auto: 'Auto review', narrow: 'read-only', models: 'session', usage: 'codex-files',
@@ -42,6 +42,8 @@ export const SIGN_IN = each((a) => a.signIn);
 // CAT-1b: 'browser', the CLI opens a page and the paste box takes a code; 'device-code', it prints a page and a one-time
 // code, listens on no port, and so works when the daemon runs on another computer.
 export const SIGN_IN_KIND = each((a) => a.signIn.kind);
+// flag: a device-code agent's login argument; a CLI too old for it names the flag when it refuses it (unsupported).
+export const SIGN_IN_FLAG = each((a) => a.signIn.flag ?? null);
 // GET /agents: what a window may know about each agent. No paths, no commands, no adapter package.
 export const publicAgents = () => ({ agents: CATALOG.map((a) => ({ id: a.id, name: a.name,
   modes: Object.entries(a.modes).map(([name, m]) => ({ name, tier: m.tier })), start: Object.keys(a.modes).find((k) => a.modes[k].value === a.start),

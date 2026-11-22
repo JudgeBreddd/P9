@@ -6,13 +6,16 @@ import * as agents from '../apps/server/agents.mjs';
 import * as chat from '../apps/server/chat.mjs';
 
 // Namespace imports, so the asserts (not a missing export) are what fail on code without these.
-const KIND = agents.SIGN_IN_KIND ?? {}, loginRead = chat.loginRead ?? (() => ({ url: null, code: null }));
+const KIND = agents.SIGN_IN_KIND ?? {}, FLAG = agents.SIGN_IN_FLAG ?? {}, loginRead = chat.loginRead ?? (() => ({ url: null, code: null }));
 const PAGE = 'https://auth.example.test/codex/device';
 const output = '\x1b[1mWelcome\x1b[0m\nOpen this page: ' + PAGE + '\nand enter the code \x1b[94mWXYZ-12345\x1b[0m (it expires in 15 minutes)\n';
 
 test('sign-in kind: the catalog says browser for claude and device-code for codex', () => {
   assert.deepEqual(agents.CATALOG.map((a) => [a.id, KIND[a.id]]), [['claude', 'browser'], ['codex', 'device-code']]);
   assert.ok(Object.isFrozen(KIND));
+  // The flag the unsupported check looks for is the one the login is started with.
+  assert.deepEqual(agents.CATALOG.map((a) => [a.id, FLAG[a.id]]), [['claude', null], ['codex', '--device-auth']]);
+  for (const a of agents.CATALOG) if (FLAG[a.id]) assert.ok(agents.LOGIN[a.id].includes(FLAG[a.id]), a.id);
 });
 
 test('sign-in kind: the one-time code is read by kind, for any agent of that kind', () => {
