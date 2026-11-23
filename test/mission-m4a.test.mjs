@@ -333,6 +333,7 @@ test('MC-17: a build from a template adds it to a new space and the prompt names
   const told = await until(instance, (event) => event.conversation === built.body.conversation && event.data?.content?.text?.startsWith('echo:'));
   assert.equal(told.data.content.text, 'echo:' + buildPrompt('lab', homelab));
   assert.ok(told.data.content.text.includes('starts from the template ' + homelab.title + ' (' + homelab.about + ')'), told.data.content.text.slice(-400));
+  assert.match(told.data.content.text, /add it with allow_folder/, 'a template that reads a folder (Obsidian) is set up from the chat, not a picker');
   assert.equal((await call(instance, '/mission/space', 'POST', { name: 'lab' })).status, 200);
   assert.deepEqual((await call(instance, '/mission')).body.space.map((section) => section.id), homelab.space.sections.map((section) => section.id), 'the space holds the template');
   assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab', template: 'homelab', confirm: true })).status, 409, 'an existing space is never the target');
