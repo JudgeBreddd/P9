@@ -941,7 +941,7 @@ function history(s, until = outer.liveChat.cursor) {
   return s.loading ||= (async () => {
     for (let after = 0; !outer.lifetime.signal.aborted;) {
       // A call that throws (the window's bridge dropped it) is retried like a refused one; a load that rejected would stay stuck.
-      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) }).catch(() => ({ status: 0 }));
+      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) }).catch(() => ({}));
       // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
@@ -1078,11 +1078,14 @@ async function loadChat() {
   let sprintStale = false, sprintAt = 0;
   // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
   // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.
+  // A chat from the daemon's list, not loaded yet (its events read when opened). O251: the launch and jump() both make them.
+  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived });
+  const lastTwo = () => { if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id); };
   const caughtUp = (listed) => {
     // Tabs keep the order the chats were made in; History sorts by last used.
     const all = [...listed].sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
     // 712: a stub carries its archive too; without it, after a restart an archived chat came back to the card and the sidebar.
-    outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+    outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...stubOf(c), ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
     // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out). O126: so does a
     // name the user gave (its renamed event may be out of the tail, and the agent's title in it), through sprintFields.
     for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
@@ -1094,7 +1097,7 @@ async function loadChat() {
     // running (the phone may have resumed it) and gets its tab back.
     for (const s of outer.S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (outer.closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; outer.liveChat.stop(s, true); } }
     outer.closedChats.clear(); localStorage.removeItem('eh-closed-chats');
-    if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
+    lastTwo();
     // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
     for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
   };
@@ -1116,12 +1119,12 @@ async function loadChat() {
     for (const s of outer.S.sessions) {
       const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
-      Object.assign(s, liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), { state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived }, keep);
+      Object.assign(s, stubOf(c), keep);
     }
     outer.liveChat.cursor = head.body.cursor; outer.keepUnseen();
     // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
     caughtUp(listed); outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
-    if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
+    lastTwo();
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
     return true;
   };
