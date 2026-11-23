@@ -1,7 +1,7 @@
 {
  "provider": "codex",
  "package": "@agentclientprotocol/codex-acp",
- "version": "2.6.0",
+ "version": "2.9.0",
  "lines": [
   {
    "dir": "in",
@@ -47,10 +47,12 @@
      "info": {
       "name": "@agentclientprotocol/codex-acp",
       "title": "Codex",
-      "version": "2.6.0"
+      "version": "2.9.0"
      },
      "capabilities": {
-      "auth": {},
+      "auth": {
+       "status": {}
+      },
       "providers": {},
       "session": {
        "prompt": {
@@ -59,7 +61,8 @@
        },
        "mcp": {
         "stdio": {},
-        "http": {}
+        "http": {},
+        "acp": {}
        },
        "delete": {},
        "additionalDirectories": {},
@@ -107,11 +110,14 @@
         },
         {
          "name": "P9_MCP_TOKEN",
-         "value": "a9a9d38a310f626c8791504eea1446a131fa5a3f111e3508015e74903fc504d4"
+         "value": "07d8c18a50f157a3fa5e104322737b401f2833accf6240cb612bd9887eb43219"
         }
        ],
        "type": "stdio"
       }
+     ],
+     "additionalDirectories": [
+      "/scratch/.local/state/p9-foundation/attachments/31a6dc36-54a6-48fc-a466-15981a4b1932"
      ]
     }
    }
@@ -122,8 +128,116 @@
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "configOptions": [
+      {
+       "configId": "model",
+       "name": "Model",
+       "description": "Model Codex uses for the session",
+       "category": "model",
+       "type": "select",
+       "currentValue": "gpt-6.2-sol",
+       "options": [
+        {
+         "value": "gpt-6.2-sol",
+         "name": "6.2 Sol",
+         "description": "Fast, go-to model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6.2-astra",
+         "name": "6.2 Astra",
+         "description": "Our most capable model for complex coding and professional work."
+        },
+        {
+         "value": "gpt-6.1-terra",
+         "name": "6.1 Terra",
+         "description": "Efficient model that excels at visual understanding and computer use."
+        },
+        {
+         "value": "gpt-6.1-sol",
+         "name": "6.1 Sol",
+         "description": "Previous generation model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6-astra",
+         "name": "6 Astra",
+         "description": "Previous generation model for complex coding and professional work."
+        },
+        {
+         "value": "gpt-6-sol",
+         "name": "6 Sol",
+         "description": "Legacy model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6-luna",
+         "name": "6 Luna",
+         "description": "Fast and affordable model for easier tasks."
+        },
+        {
+         "value": "gpt-5.6-sol",
+         "name": "5.6 Sol",
+         "description": "Legacy model for coding and everyday work."
+        },
+        {
+         "value": "gpt-5.6-terra",
+         "name": "5.6 Terra",
+         "description": "Legacy balanced model for agentic coding."
+        },
+        {
+         "value": "gpt-5.6-luna",
+         "name": "5.6 Luna",
+         "description": "Legacy fast model for simpler tasks."
+        }
+       ]
+      },
+      {
+       "configId": "reasoning_effort",
+       "name": "Reasoning effort",
+       "description": "How much reasoning effort the model should use",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "low",
+         "name": "Low",
+         "description": "Fast responses with lighter reasoning"
+        },
+        {
+         "value": "medium",
+         "name": "Medium",
+         "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+         "value": "high",
+         "name": "High",
+         "description": "Greater reasoning depth for complex problems"
+        },
+        {
+         "value": "xhigh",
+         "name": "Xhigh",
+         "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+         "value": "max",
+         "name": "Max",
+         "description": "Maximum reasoning depth for the hardest problems"
+        },
+        {
+         "value": "ultra",
+         "name": "Ultra",
+         "description": "Maximum reasoning with automatic task delegation"
+        }
+       ]
+      },
+      {
+       "configId": "fast-mode",
+       "name": "Fast mode",
+       "description": "1.5x speed, increased usage",
+       "category": "speed",
+       "type": "boolean",
+       "currentValue": false
+      },
       {
        "configId": "mode",
        "name": "Mode",
@@ -172,104 +286,6 @@
          "description": "Plan before making changes"
         }
        ]
-      },
-      {
-       "configId": "model",
-       "name": "Model",
-       "description": "Model Codex uses for the session",
-       "category": "model",
-       "type": "select",
-       "currentValue": "gpt-6.1-sol",
-       "options": [
-        {
-         "value": "gpt-6.1-sol",
-         "name": "6.1 Sol",
-         "description": "Latest workhorse model for coding and everyday work."
-        },
-        {
-         "value": "gpt-6-astra",
-         "name": "6 Astra",
-         "description": "Frontier intelligence for the most demanding work."
-        },
-        {
-         "value": "gpt-6.1-terra",
-         "name": "6.1 Terra",
-         "description": "GPT-6.1 Terra Codex model."
-        },
-        {
-         "value": "gpt-6-sol",
-         "name": "6 Sol",
-         "description": "Previous generation workhorse model."
-        },
-        {
-         "value": "gpt-6-luna",
-         "name": "6 Luna",
-         "description": "Fast and affordable model for easier tasks."
-        },
-        {
-         "value": "gpt-5.6-sol",
-         "name": "5.6 Sol",
-         "description": "Older generation workhorse model."
-        },
-        {
-         "value": "gpt-5.6-terra",
-         "name": "5.6 Terra",
-         "description": "Older balanced model for straightforward work."
-        },
-        {
-         "value": "gpt-5.6-luna",
-         "name": "5.6 Luna",
-         "description": "Older fast and efficient model."
-        }
-       ]
-      },
-      {
-       "configId": "reasoning_effort",
-       "name": "Reasoning effort",
-       "description": "How much reasoning effort the model should use",
-       "category": "thought_level",
-       "type": "select",
-       "currentValue": "low",
-       "options": [
-        {
-         "value": "low",
-         "name": "Low",
-         "description": "Fast responses with lighter reasoning"
-        },
-        {
-         "value": "medium",
-         "name": "Medium",
-         "description": "Balances speed and reasoning depth for everyday tasks"
-        },
-        {
-         "value": "high",
-         "name": "High",
-         "description": "Greater reasoning depth for complex problems"
-        },
-        {
-         "value": "xhigh",
-         "name": "Xhigh",
-         "description": "Extra high reasoning depth for complex problems"
-        },
-        {
-         "value": "max",
-         "name": "Max",
-         "description": "Maximum reasoning depth for the hardest problems"
-        },
-        {
-         "value": "ultra",
-         "name": "Ultra",
-         "description": "Maximum reasoning with automatic task delegation"
-        }
-       ]
-      },
-      {
-       "configId": "fast-mode",
-       "name": "Fast mode",
-       "description": "1.5x speed, increased usage",
-       "category": "model_config",
-       "type": "boolean",
-       "currentValue": false
       }
      ],
      "availableCommands": [
@@ -289,7 +305,7 @@
     "id": 2,
     "method": "session/set_config_option",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "configId": "mode",
      "value": "agent",
      "type": "id"
@@ -303,6 +319,114 @@
     "id": 2,
     "result": {
      "configOptions": [
+      {
+       "configId": "model",
+       "name": "Model",
+       "description": "Model Codex uses for the session",
+       "category": "model",
+       "type": "select",
+       "currentValue": "gpt-6.2-sol",
+       "options": [
+        {
+         "value": "gpt-6.2-sol",
+         "name": "6.2 Sol",
+         "description": "Fast, go-to model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6.2-astra",
+         "name": "6.2 Astra",
+         "description": "Our most capable model for complex coding and professional work."
+        },
+        {
+         "value": "gpt-6.1-terra",
+         "name": "6.1 Terra",
+         "description": "Efficient model that excels at visual understanding and computer use."
+        },
+        {
+         "value": "gpt-6.1-sol",
+         "name": "6.1 Sol",
+         "description": "Previous generation model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6-astra",
+         "name": "6 Astra",
+         "description": "Previous generation model for complex coding and professional work."
+        },
+        {
+         "value": "gpt-6-sol",
+         "name": "6 Sol",
+         "description": "Legacy model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6-luna",
+         "name": "6 Luna",
+         "description": "Fast and affordable model for easier tasks."
+        },
+        {
+         "value": "gpt-5.6-sol",
+         "name": "5.6 Sol",
+         "description": "Legacy model for coding and everyday work."
+        },
+        {
+         "value": "gpt-5.6-terra",
+         "name": "5.6 Terra",
+         "description": "Legacy balanced model for agentic coding."
+        },
+        {
+         "value": "gpt-5.6-luna",
+         "name": "5.6 Luna",
+         "description": "Legacy fast model for simpler tasks."
+        }
+       ]
+      },
+      {
+       "configId": "reasoning_effort",
+       "name": "Reasoning effort",
+       "description": "How much reasoning effort the model should use",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "low",
+         "name": "Low",
+         "description": "Fast responses with lighter reasoning"
+        },
+        {
+         "value": "medium",
+         "name": "Medium",
+         "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+         "value": "high",
+         "name": "High",
+         "description": "Greater reasoning depth for complex problems"
+        },
+        {
+         "value": "xhigh",
+         "name": "Xhigh",
+         "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+         "value": "max",
+         "name": "Max",
+         "description": "Maximum reasoning depth for the hardest problems"
+        },
+        {
+         "value": "ultra",
+         "name": "Ultra",
+         "description": "Maximum reasoning with automatic task delegation"
+        }
+       ]
+      },
+      {
+       "configId": "fast-mode",
+       "name": "Fast mode",
+       "description": "1.5x speed, increased usage",
+       "category": "speed",
+       "type": "boolean",
+       "currentValue": false
+      },
       {
        "configId": "mode",
        "name": "Mode",
@@ -351,104 +475,6 @@
          "description": "Plan before making changes"
         }
        ]
-      },
-      {
-       "configId": "model",
-       "name": "Model",
-       "description": "Model Codex uses for the session",
-       "category": "model",
-       "type": "select",
-       "currentValue": "gpt-6.1-sol",
-       "options": [
-        {
-         "value": "gpt-6.1-sol",
-         "name": "6.1 Sol",
-         "description": "Latest workhorse model for coding and everyday work."
-        },
-        {
-         "value": "gpt-6-astra",
-         "name": "6 Astra",
-         "description": "Frontier intelligence for the most demanding work."
-        },
-        {
-         "value": "gpt-6.1-terra",
-         "name": "6.1 Terra",
-         "description": "GPT-6.1 Terra Codex model."
-        },
-        {
-         "value": "gpt-6-sol",
-         "name": "6 Sol",
-         "description": "Previous generation workhorse model."
-        },
-        {
-         "value": "gpt-6-luna",
-         "name": "6 Luna",
-         "description": "Fast and affordable model for easier tasks."
-        },
-        {
-         "value": "gpt-5.6-sol",
-         "name": "5.6 Sol",
-         "description": "Older generation workhorse model."
-        },
-        {
-         "value": "gpt-5.6-terra",
-         "name": "5.6 Terra",
-         "description": "Older balanced model for straightforward work."
-        },
-        {
-         "value": "gpt-5.6-luna",
-         "name": "5.6 Luna",
-         "description": "Older fast and efficient model."
-        }
-       ]
-      },
-      {
-       "configId": "reasoning_effort",
-       "name": "Reasoning effort",
-       "description": "How much reasoning effort the model should use",
-       "category": "thought_level",
-       "type": "select",
-       "currentValue": "low",
-       "options": [
-        {
-         "value": "low",
-         "name": "Low",
-         "description": "Fast responses with lighter reasoning"
-        },
-        {
-         "value": "medium",
-         "name": "Medium",
-         "description": "Balances speed and reasoning depth for everyday tasks"
-        },
-        {
-         "value": "high",
-         "name": "High",
-         "description": "Greater reasoning depth for complex problems"
-        },
-        {
-         "value": "xhigh",
-         "name": "Xhigh",
-         "description": "Extra high reasoning depth for complex problems"
-        },
-        {
-         "value": "max",
-         "name": "Max",
-         "description": "Maximum reasoning depth for the hardest problems"
-        },
-        {
-         "value": "ultra",
-         "name": "Ultra",
-         "description": "Maximum reasoning with automatic task delegation"
-        }
-       ]
-      },
-      {
-       "configId": "fast-mode",
-       "name": "Fast mode",
-       "description": "1.5x speed, increased usage",
-       "category": "model_config",
-       "type": "boolean",
-       "currentValue": false
       }
      ]
     }
@@ -461,7 +487,7 @@
     "id": 3,
     "method": "session/set_config_option",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "configId": "mode",
      "value": "read-only",
      "type": "id"
@@ -474,10 +500,118 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "config_option_update",
       "configOptions": [
+       {
+        "configId": "model",
+        "name": "Model",
+        "description": "Model Codex uses for the session",
+        "category": "model",
+        "type": "select",
+        "currentValue": "gpt-6.2-sol",
+        "options": [
+         {
+          "value": "gpt-6.2-sol",
+          "name": "6.2 Sol",
+          "description": "Fast, go-to model for coding and everyday work."
+         },
+         {
+          "value": "gpt-6.2-astra",
+          "name": "6.2 Astra",
+          "description": "Our most capable model for complex coding and professional work."
+         },
+         {
+          "value": "gpt-6.1-terra",
+          "name": "6.1 Terra",
+          "description": "Efficient model that excels at visual understanding and computer use."
+         },
+         {
+          "value": "gpt-6.1-sol",
+          "name": "6.1 Sol",
+          "description": "Previous generation model for coding and everyday work."
+         },
+         {
+          "value": "gpt-6-astra",
+          "name": "6 Astra",
+          "description": "Previous generation model for complex coding and professional work."
+         },
+         {
+          "value": "gpt-6-sol",
+          "name": "6 Sol",
+          "description": "Legacy model for coding and everyday work."
+         },
+         {
+          "value": "gpt-6-luna",
+          "name": "6 Luna",
+          "description": "Fast and affordable model for easier tasks."
+         },
+         {
+          "value": "gpt-5.6-sol",
+          "name": "5.6 Sol",
+          "description": "Legacy model for coding and everyday work."
+         },
+         {
+          "value": "gpt-5.6-terra",
+          "name": "5.6 Terra",
+          "description": "Legacy balanced model for agentic coding."
+         },
+         {
+          "value": "gpt-5.6-luna",
+          "name": "5.6 Luna",
+          "description": "Legacy fast model for simpler tasks."
+         }
+        ]
+       },
+       {
+        "configId": "reasoning_effort",
+        "name": "Reasoning effort",
+        "description": "How much reasoning effort the model should use",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": "low",
+        "options": [
+         {
+          "value": "low",
+          "name": "Low",
+          "description": "Fast responses with lighter reasoning"
+         },
+         {
+          "value": "medium",
+          "name": "Medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+         },
+         {
+          "value": "high",
+          "name": "High",
+          "description": "Greater reasoning depth for complex problems"
+         },
+         {
+          "value": "xhigh",
+          "name": "Xhigh",
+          "description": "Extra high reasoning depth for complex problems"
+         },
+         {
+          "value": "max",
+          "name": "Max",
+          "description": "Maximum reasoning depth for the hardest problems"
+         },
+         {
+          "value": "ultra",
+          "name": "Ultra",
+          "description": "Maximum reasoning with automatic task delegation"
+         }
+        ]
+       },
+       {
+        "configId": "fast-mode",
+        "name": "Fast mode",
+        "description": "1.5x speed, increased usage",
+        "category": "speed",
+        "type": "boolean",
+        "currentValue": false
+       },
        {
         "configId": "mode",
         "name": "Mode",
@@ -526,104 +660,6 @@
           "description": "Plan before making changes"
          }
         ]
-       },
-       {
-        "configId": "model",
-        "name": "Model",
-        "description": "Model Codex uses for the session",
-        "category": "model",
-        "type": "select",
-        "currentValue": "gpt-6.1-sol",
-        "options": [
-         {
-          "value": "gpt-6.1-sol",
-          "name": "6.1 Sol",
-          "description": "Latest workhorse model for coding and everyday work."
-         },
-         {
-          "value": "gpt-6-astra",
-          "name": "6 Astra",
-          "description": "Frontier intelligence for the most demanding work."
-         },
-         {
-          "value": "gpt-6.1-terra",
-          "name": "6.1 Terra",
-          "description": "GPT-6.1 Terra Codex model."
-         },
-         {
-          "value": "gpt-6-sol",
-          "name": "6 Sol",
-          "description": "Previous generation workhorse model."
-         },
-         {
-          "value": "gpt-6-luna",
-          "name": "6 Luna",
-          "description": "Fast and affordable model for easier tasks."
-         },
-         {
-          "value": "gpt-5.6-sol",
-          "name": "5.6 Sol",
-          "description": "Older generation workhorse model."
-         },
-         {
-          "value": "gpt-5.6-terra",
-          "name": "5.6 Terra",
-          "description": "Older balanced model for straightforward work."
-         },
-         {
-          "value": "gpt-5.6-luna",
-          "name": "5.6 Luna",
-          "description": "Older fast and efficient model."
-         }
-        ]
-       },
-       {
-        "configId": "reasoning_effort",
-        "name": "Reasoning effort",
-        "description": "How much reasoning effort the model should use",
-        "category": "thought_level",
-        "type": "select",
-        "currentValue": "low",
-        "options": [
-         {
-          "value": "low",
-          "name": "Low",
-          "description": "Fast responses with lighter reasoning"
-         },
-         {
-          "value": "medium",
-          "name": "Medium",
-          "description": "Balances speed and reasoning depth for everyday tasks"
-         },
-         {
-          "value": "high",
-          "name": "High",
-          "description": "Greater reasoning depth for complex problems"
-         },
-         {
-          "value": "xhigh",
-          "name": "Xhigh",
-          "description": "Extra high reasoning depth for complex problems"
-         },
-         {
-          "value": "max",
-          "name": "Max",
-          "description": "Maximum reasoning depth for the hardest problems"
-         },
-         {
-          "value": "ultra",
-          "name": "Ultra",
-          "description": "Maximum reasoning with automatic task delegation"
-         }
-        ]
-       },
-       {
-        "configId": "fast-mode",
-        "name": "Fast mode",
-        "description": "1.5x speed, increased usage",
-        "category": "model_config",
-        "type": "boolean",
-        "currentValue": false
        }
       ]
      }
@@ -637,6 +673,114 @@
     "id": 3,
     "result": {
      "configOptions": [
+      {
+       "configId": "model",
+       "name": "Model",
+       "description": "Model Codex uses for the session",
+       "category": "model",
+       "type": "select",
+       "currentValue": "gpt-6.2-sol",
+       "options": [
+        {
+         "value": "gpt-6.2-sol",
+         "name": "6.2 Sol",
+         "description": "Fast, go-to model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6.2-astra",
+         "name": "6.2 Astra",
+         "description": "Our most capable model for complex coding and professional work."
+        },
+        {
+         "value": "gpt-6.1-terra",
+         "name": "6.1 Terra",
+         "description": "Efficient model that excels at visual understanding and computer use."
+        },
+        {
+         "value": "gpt-6.1-sol",
+         "name": "6.1 Sol",
+         "description": "Previous generation model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6-astra",
+         "name": "6 Astra",
+         "description": "Previous generation model for complex coding and professional work."
+        },
+        {
+         "value": "gpt-6-sol",
+         "name": "6 Sol",
+         "description": "Legacy model for coding and everyday work."
+        },
+        {
+         "value": "gpt-6-luna",
+         "name": "6 Luna",
+         "description": "Fast and affordable model for easier tasks."
+        },
+        {
+         "value": "gpt-5.6-sol",
+         "name": "5.6 Sol",
+         "description": "Legacy model for coding and everyday work."
+        },
+        {
+         "value": "gpt-5.6-terra",
+         "name": "5.6 Terra",
+         "description": "Legacy balanced model for agentic coding."
+        },
+        {
+         "value": "gpt-5.6-luna",
+         "name": "5.6 Luna",
+         "description": "Legacy fast model for simpler tasks."
+        }
+       ]
+      },
+      {
+       "configId": "reasoning_effort",
+       "name": "Reasoning effort",
+       "description": "How much reasoning effort the model should use",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "low",
+         "name": "Low",
+         "description": "Fast responses with lighter reasoning"
+        },
+        {
+         "value": "medium",
+         "name": "Medium",
+         "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+         "value": "high",
+         "name": "High",
+         "description": "Greater reasoning depth for complex problems"
+        },
+        {
+         "value": "xhigh",
+         "name": "Xhigh",
+         "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+         "value": "max",
+         "name": "Max",
+         "description": "Maximum reasoning depth for the hardest problems"
+        },
+        {
+         "value": "ultra",
+         "name": "Ultra",
+         "description": "Maximum reasoning with automatic task delegation"
+        }
+       ]
+      },
+      {
+       "configId": "fast-mode",
+       "name": "Fast mode",
+       "description": "1.5x speed, increased usage",
+       "category": "speed",
+       "type": "boolean",
+       "currentValue": false
+      },
       {
        "configId": "mode",
        "name": "Mode",
@@ -685,104 +829,6 @@
          "description": "Plan before making changes"
         }
        ]
-      },
-      {
-       "configId": "model",
-       "name": "Model",
-       "description": "Model Codex uses for the session",
-       "category": "model",
-       "type": "select",
-       "currentValue": "gpt-6.1-sol",
-       "options": [
-        {
-         "value": "gpt-6.1-sol",
-         "name": "6.1 Sol",
-         "description": "Latest workhorse model for coding and everyday work."
-        },
-        {
-         "value": "gpt-6-astra",
-         "name": "6 Astra",
-         "description": "Frontier intelligence for the most demanding work."
-        },
-        {
-         "value": "gpt-6.1-terra",
-         "name": "6.1 Terra",
-         "description": "GPT-6.1 Terra Codex model."
-        },
-        {
-         "value": "gpt-6-sol",
-         "name": "6 Sol",
-         "description": "Previous generation workhorse model."
-        },
-        {
-         "value": "gpt-6-luna",
-         "name": "6 Luna",
-         "description": "Fast and affordable model for easier tasks."
-        },
-        {
-         "value": "gpt-5.6-sol",
-         "name": "5.6 Sol",
-         "description": "Older generation workhorse model."
-        },
-        {
-         "value": "gpt-5.6-terra",
-         "name": "5.6 Terra",
-         "description": "Older balanced model for straightforward work."
-        },
-        {
-         "value": "gpt-5.6-luna",
-         "name": "5.6 Luna",
-         "description": "Older fast and efficient model."
-        }
-       ]
-      },
-      {
-       "configId": "reasoning_effort",
-       "name": "Reasoning effort",
-       "description": "How much reasoning effort the model should use",
-       "category": "thought_level",
-       "type": "select",
-       "currentValue": "low",
-       "options": [
-        {
-         "value": "low",
-         "name": "Low",
-         "description": "Fast responses with lighter reasoning"
-        },
-        {
-         "value": "medium",
-         "name": "Medium",
-         "description": "Balances speed and reasoning depth for everyday tasks"
-        },
-        {
-         "value": "high",
-         "name": "High",
-         "description": "Greater reasoning depth for complex problems"
-        },
-        {
-         "value": "xhigh",
-         "name": "Xhigh",
-         "description": "Extra high reasoning depth for complex problems"
-        },
-        {
-         "value": "max",
-         "name": "Max",
-         "description": "Maximum reasoning depth for the hardest problems"
-        },
-        {
-         "value": "ultra",
-         "name": "Ultra",
-         "description": "Maximum reasoning with automatic task delegation"
-        }
-       ]
-      },
-      {
-       "configId": "fast-mode",
-       "name": "Fast mode",
-       "description": "1.5x speed, increased usage",
-       "category": "model_config",
-       "type": "boolean",
-       "currentValue": false
       }
      ]
     }
@@ -795,7 +841,7 @@
     "id": 4,
     "method": "session/prompt",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "prompt": [
       {
        "type": "text",
@@ -811,10 +857,11 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "state_update",
-      "state": "running"
+      "state": "running",
+      "background": []
      }
     }
    }
@@ -825,7 +872,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "session_info_update"
      }
@@ -838,10 +885,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "user_message_chunk",
-      "messageId": "c54ef6d0-53e7-47a7-9989-aa368b56ea8b",
+      "messageId": "5801e282-3226-4670-9d58-7ae75bc25d6a",
       "content": {
        "text": "Run `curl -sI https://example.com` and tell me the HTTP status line in one short sentence.",
        "type": "text"
@@ -856,7 +903,7 @@
     "jsonrpc": "2.0",
     "id": 4,
     "result": {
-     "messageId": "c54ef6d0-53e7-47a7-9989-aa368b56ea8b"
+     "messageId": "5801e282-3226-4670-9d58-7ae75bc25d6a"
     }
    }
   },
@@ -866,10 +913,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": "I"
@@ -884,10 +931,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": "’ll"
@@ -902,10 +949,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " run"
@@ -920,10 +967,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " the"
@@ -938,13 +985,13 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
-       "text": " header"
+       "text": " command"
       }
      }
     }
@@ -956,28 +1003,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
-      "content": {
-       "type": "text",
-       "text": " request"
-      }
-     }
-    }
-   }
-  },
-  {
-   "dir": "out",
-   "msg": {
-    "jsonrpc": "2.0",
-    "method": "session/update",
-    "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
-     "update": {
-      "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " and"
@@ -992,10 +1021,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " check"
@@ -1010,10 +1039,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " the"
@@ -1028,10 +1057,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " status"
@@ -1046,10 +1075,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": " line"
@@ -1064,10 +1093,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed62452487d2874409365239751d",
+      "messageId": "msg_0a6a4b322018b25b016b03824dc46087d19a02a85948d4a7c3",
       "content": {
        "type": "text",
        "text": "."
@@ -1082,38 +1111,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
-     "update": {
-      "sessionUpdate": "usage_update",
-      "used": 26900,
-      "size": 475000
-     }
-    }
-   }
-  },
-  {
-   "dir": "out",
-   "msg": {
-    "jsonrpc": "2.0",
-    "method": "session/update",
-    "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
-     "update": {
-      "sessionUpdate": "session_info_update"
-     }
-    }
-   }
-  },
-  {
-   "dir": "out",
-   "msg": {
-    "jsonrpc": "2.0",
-    "method": "session/update",
-    "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "terminal_update",
-      "terminalId": "exec-469c2a82-e0d0-468b-82dc-b19a577d3dc1",
+      "terminalId": "exec-b5e6ca03-a05c-45ba-9369-3a255a6f1315",
       "command": "curl -sI https://example.com",
       "cwd": "/workspace"
      }
@@ -1126,10 +1127,11 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "tool_call_update",
-      "toolCallId": "exec-469c2a82-e0d0-468b-82dc-b19a577d3dc1",
+      "toolCallId": "exec-b5e6ca03-a05c-45ba-9369-3a255a6f1315",
+      "name": "exec_command",
       "kind": "execute",
       "title": "curl -sI https://example.com",
       "status": "in_progress",
@@ -1140,7 +1142,7 @@
       "content": [
        {
         "type": "terminal",
-        "terminalId": "exec-469c2a82-e0d0-468b-82dc-b19a577d3dc1"
+        "terminalId": "exec-b5e6ca03-a05c-45ba-9369-3a255a6f1315"
        }
       ]
      }
@@ -1153,10 +1155,115 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "terminal_update",
+      "terminalId": "exec-b5e6ca03-a05c-45ba-9369-3a255a6f1315",
+      "exitStatus": {
+       "exitCode": 6,
+       "signal": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "exec-b5e6ca03-a05c-45ba-9369-3a255a6f1315",
+      "status": "failed"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "usage_update",
+      "used": 29447,
+      "size": 475000
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "session_info_update"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "terminal_update",
+      "terminalId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec",
+      "command": "curl -sI https://example.com",
+      "cwd": "/workspace"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec",
+      "kind": "execute",
+      "title": "curl -sI https://example.com",
+      "status": "in_progress",
+      "rawInput": {
+       "command": "curl -sI https://example.com",
+       "cwd": "/workspace"
+      },
+      "content": [
+       {
+        "type": "terminal",
+        "terminalId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "state_update",
-      "state": "requires_action"
+      "state": "requires_action",
+      "background": []
      }
     }
    }
@@ -1168,20 +1275,19 @@
     "id": 0,
     "method": "session/request_permission",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "title": "Run command?",
-     "description": "May I run the requested curl command outside the sandbox after its network setup failed?",
+     "description": "Do you want to allow curl to reach example.com and read its HTTP status line?",
      "subject": {
       "type": "tool_call",
       "toolCall": {
-       "toolCallId": "exec-469c2a82-e0d0-468b-82dc-b19a577d3dc1",
+       "toolCallId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec",
        "title": "curl -sI https://example.com",
        "rawInput": {
         "command": "curl -sI https://example.com",
         "cwd": "/workspace"
        },
-       "kind": "execute",
-       "status": "pending"
+       "kind": "execute"
       }
      },
      "options": [
@@ -1192,7 +1298,7 @@
       },
       {
        "optionId": "accept_execpolicy_amendment",
-       "name": "Yes, and don't ask again for commands that start with `curl -sI https://example.com`",
+       "name": "Yes, and don't ask again for commands that start with `curl -sI`",
        "kind": "allow_always"
       },
       {
@@ -1223,10 +1329,11 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "state_update",
-      "state": "running"
+      "state": "running",
+      "background": []
      }
     }
    }
@@ -1237,7 +1344,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "session_info_update"
      }
@@ -1250,13 +1357,25 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
+     "update": {
+      "sessionUpdate": "terminal_output_chunk",
+      "terminalId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec",
+      "data": "SFRUUC8yIDIwMCANCmRhdGU6IE1vbiwgMjMgTm92IDIwMjYgMDA6MDE6MjEgR01UDQpjb250ZW50LXR5cGU6IHRleHQvaHRtbDsgY2hhcnNldD11dGYtOA0Kc2VydmVyOiBjbG91ZGZsYXJlDQpsYXN0LW1vZGlmaWVkOiBUaHUsIDE5IE5vdiAyMDI2IDIyOjExOjUyIEdNVA0KYWxsb3c6IEdFVCwgSEVBRA0KYWNjZXB0LXJhbmdlczogYnl0ZXMNCmFnZTogNA0KY2YtY2FjaGUtc3RhdHVzOiBISVQNCmNmLXJheTogYTVlYmU2MWZkYjBlYWNkYS1BVEwNCmFsdC1zdmM6IGgzPSI6NDQzIjsgbWE9ODY0MDANCg0K"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "terminal_update",
-      "terminalId": "exec-469c2a82-e0d0-468b-82dc-b19a577d3dc1",
-      "output": {
-       "data": "SFRUUC8yIDIwMCANCmRhdGU6IFdlZCwgMTEgTm92IDIwMjYgMDQ6MjE6NTcgR01UDQpjb250ZW50LXR5cGU6IHRleHQvaHRtbDsgY2hhcnNldD11dGYtOA0Kc2VydmVyOiBjbG91ZGZsYXJlDQpsYXN0LW1vZGlmaWVkOiBTdW4sIDA4IE5vdiAyMDI2IDE4OjA1OjM0IEdNVA0KYWxsb3c6IEdFVCwgSEVBRA0KYWNjZXB0LXJhbmdlczogYnl0ZXMNCmFnZTogNzM3OQ0KY2YtY2FjaGUtc3RhdHVzOiBISVQNCmNmLXJheTogYTU4YTgzNWMzOWRlYWVmYi1BVEwNCmFsdC1zdmM6IGgzPSI6NDQzIjsgbWE9ODY0MDANCg0K"
-      },
+      "terminalId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec",
       "exitStatus": {
        "exitCode": 0,
        "signal": null
@@ -1271,10 +1390,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "tool_call_update",
-      "toolCallId": "exec-469c2a82-e0d0-468b-82dc-b19a577d3dc1",
+      "toolCallId": "exec-0c751d51-900c-4cb2-991d-d3e3b8a1ebec",
       "name": "exec_command",
       "status": "completed"
      }
@@ -1287,10 +1406,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 27027,
+      "used": 29569,
       "size": 475000
      }
     }
@@ -1302,10 +1421,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": "The"
@@ -1320,10 +1439,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": " HTTP"
@@ -1338,10 +1457,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": " status"
@@ -1356,10 +1475,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": " line"
@@ -1374,13 +1493,13 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
-       "text": " is"
+       "text": " was"
       }
      }
     }
@@ -1392,10 +1511,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": " "
@@ -1410,10 +1529,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": "`HTTP"
@@ -1428,10 +1547,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": "/"
@@ -1446,10 +1565,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": "2"
@@ -1464,10 +1583,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": " "
@@ -1482,10 +1601,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": "200"
@@ -1500,10 +1619,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "agent_message_chunk",
-      "messageId": "msg_0418d3533927f4d5016af3ed672ba487d290b7a00c4d5948e4",
+      "messageId": "msg_0a6a4b322018b25b016b0382538ab887d18330e07dd8411b3d",
       "content": {
        "type": "text",
        "text": "`."
@@ -1518,10 +1637,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 27227,
+      "used": 29769,
       "size": 475000
      }
     }
@@ -1533,7 +1652,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "session_info_update"
      }
@@ -1546,7 +1665,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "session_info_update",
       "title": "Run `curl -sI https://example.com` and tell me the HTTP status line in one short sentence."
@@ -1560,11 +1679,12 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305",
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d",
      "update": {
       "sessionUpdate": "state_update",
       "state": "idle",
-      "stopReason": "end_turn"
+      "stopReason": "end_turn",
+      "background": []
      }
     }
    }
@@ -1576,7 +1696,7 @@
     "id": 5,
     "method": "session/close",
     "params": {
-     "sessionId": "01a1c8d7-3c87-7a01-855c-ce19e6bbd305"
+     "sessionId": "01a205b4-ed37-7bd0-85fc-9bc333b2863d"
     }
    }
   },

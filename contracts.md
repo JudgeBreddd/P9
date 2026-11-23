@@ -10,7 +10,7 @@ re-checked in P9 on 2026-10-16 by the recorded turns in `test/fixtures/acp/`.
 |---|---|---|---|
 | `@agentclientprotocol/sdk` | 2.6.0 | Apache-2.0 | The connection (`apps/server/acp.mjs` wraps it), `ndJsonStream`, schema types for ACP 1 and 2 |
 | `@agentclientprotocol/claude-agent-acp` | 0.109.1 | Apache-2.0 | Claude adapter; brings `@anthropic-ai/claude-agent-sdk` 0.3.330 and its bundled Claude Code binary |
-| `@agentclientprotocol/codex-acp` | 2.6.0 | Apache-2.0 | Codex adapter; brings `@openai/codex` 0.166.0 |
+| `@agentclientprotocol/codex-acp` | 2.9.0 | Apache-2.0 | Codex adapter; brings `@openai/codex` 0.171.0 |
 
 All three are exact pins in `package.json`. Upgrading one is a deliberate change: record new fixtures
 (below), then update this table. `test/acp-contract.test.mjs` fails while a fixture, this table and the
