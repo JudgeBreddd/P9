@@ -32,3 +32,43 @@ test('I3 worker window: a closed sprint\'s record, and a caller with no lists, d
   assert.doesNotMatch(statusHtml(s([w('a')], { at: 1, by: 'owner' }), esc, {}, o), /data-sv-pick/);
   assert.doesNotMatch(statusHtml(s([w('a')]), esc), /data-sv-pick/);
 });
+
+// Review fix 1: the page's listeners, driven with a stand-in document and a held prompt answer. A second copy of the module
+// (its own picks) so the tests above see none of this.
+const on = {}, sent = []; let answer;
+const live = async () => {
+  globalThis.document = { addEventListener: (t, f) => { (on[t] ??= []).push(f); } };
+  globalThis.window = { p9: { chat: (what, body) => { sent.push([what, body]); return new Promise((r) => { answer = r; }); } } };
+  return import('../apps/web/src/sprint-view.mjs?fix1');
+};
+const page = (chat, now) => {
+  const said = { textContent: '' }, sel = { dataset: { svR: 'effort', now, id: 'effort' }, value: now || 'low', disabled: false };
+  const f = { hidden: false, querySelector: (q) => (q === '[data-sv-said]' ? said : q === '[data-sv-r="effort"]' ? sel : null), querySelectorAll: () => [sel] };
+  const li = { dataset: { key: chat }, querySelector: () => f };
+  const b = { dataset: {}, disabled: false, closest: (q) => (q === 'li[data-key]' ? li : q.includes('data-sv-apply') ? b : null) };
+  sel.closest = (q) => (q === '[data-sv-r]' ? sel : li);
+  return { said, sel, b, pick: (x) => { sel.value = x; on.change.forEach((h) => h({ target: sel })); }, send: () => on.click.forEach((h) => h({ target: b })) };
+};
+test('I3 worker window: with no current value known, Send without a pick sends nothing (not the first option)', async () => {
+  await live();
+  try {
+    const u = page('u', '');
+    u.send();
+    assert.deepEqual([sent.length, u.said.textContent], [0, 'Pick another model or effort first.']);
+  } finally { sent.length = 0; }
+});
+
+test('I3 worker window: picks are locked while a send is out and kept locked through the redraw, so the 202 loses no newer pick', async () => {
+  const v = await live();
+  const draw = (chat, effort) => row(v.statusHtml(s([w(chat, { effort })]), esc, {}, o), chat);
+  try {
+    const a = page('a', 'medium');
+    a.pick('high'); a.send();
+    assert.equal(sent.length, 1); assert.deepEqual(sent[0][1].config, { effort: 'high' });
+    assert.deepEqual([a.sel.disabled, a.b.disabled], [true, true], 'a pick changed while its send is out would be lost by the 202');
+    assert.match(draw('a', 'medium'), /data-sv-r="effort" data-now="medium" data-id="effort" disabled[^]*value="high" selected[^]*data-sv-apply disabled/);
+    answer({ status: 202 }); await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual([a.sel.disabled, a.b.disabled, a.said.textContent], [false, false, 'Sent: high from its next turn.']);
+    assert.match(draw('a', 'high'), /data-now="high" data-id="effort" aria-label[^]*value="high" selected/);
+  } finally { delete globalThis.document; delete globalThis.window; }
+});

@@ -48,7 +48,7 @@ const picks = new Map(), pk = id => picks.get(id) ?? (picks.set(id, {}), picks.g
 const flat = xs => xs.flatMap(x => Array.isArray(x.options) ? flat(x.options) : [[x.value, x.name]]);
 function repick(w, o, esc) {
   const k = pk(w.chat), a = w.profile ? 'claude' : w.provider, ep = o.lastPickers[a]?.find(p => o.pickerKind(p) === 'effort');
-  const sel = (kind, opts, now, pick = now, more = '') => opts.length ? `<label class="set-pick">${kind[0].toUpperCase() + kind.slice(1)}<select data-slot="input" data-sv-r="${kind}" data-now="${esc(now ?? '')}"${more} aria-label="${esc(`${w.key ?? w.title} ${kind}`)}">${(now && !opts.some(([v]) => v === now) ? [[now, now], ...opts] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === pick ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '';
+  const sel = (kind, opts, now, pick = now, more = '') => opts.length ? `<label class="set-pick">${kind[0].toUpperCase() + kind.slice(1)}<select data-slot="input" data-sv-r="${kind}" data-now="${esc(now ?? '')}"${more}${k.busy ? ' disabled' : ''} aria-label="${esc(`${w.key ?? w.title} ${kind}`)}">${(now && !opts.some(([v]) => v === now) ? [[now, now], ...opts] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === pick ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '';
   // data-now: what it runs on, so Send compares against that, not against a pick kept across a redraw.
   // A provider profile chat keeps the model it started on (SECURITY.md § Delegate, I3): effort only.
   const body = (w.profile ? '' : sel('model', flat(o.lastModels[a]?.options ?? []), w.model, k.model ?? w.model))
@@ -61,15 +61,17 @@ globalThis.document?.addEventListener('click', e => {
   const b = e.target.closest?.('[data-sv-pick], [data-sv-apply]'), li = b?.closest('li[data-key]'); if (!li) return;
   const k = pk(li.dataset.key), f = li.querySelector('[data-sv-repick]'), said = t => { k.said = t; f.querySelector('[data-sv-said]').textContent = t; };
   if (b.dataset.svPick !== undefined) { k.open = f.hidden; f.hidden = !k.open; return b.setAttribute('aria-expanded', k.open); }
-  // Only what was changed is sent: a select showing what the chat runs on (or, with none known, its first option) sends nothing.
-  const got = x => x && x.value !== x.dataset.now ? x.value : '', mx = f.querySelector('[data-sv-r="model"]'), ef = f.querySelector('[data-sv-r="effort"]'), m = got(mx), e2 = got(ef);
+  // Only what you picked and changed is sent: a select showing what the chat runs on, or with none known only its first option,
+  // sends nothing. While a send is out the picks are disabled (kept through the redraw by busy), so the 202's clear loses no newer pick.
+  const got = x => x && k[x.dataset.svR] !== undefined && x.value !== x.dataset.now ? x.value : '', mx = f.querySelector('[data-sv-r="model"]'), ef = f.querySelector('[data-sv-r="effort"]'), m = got(mx), e2 = got(ef);
   if (!m && !e2) return said('Pick another model or effort first.');
   const to = [mx?.value, ef?.value].filter(Boolean).join(' · ');
-  b.disabled = k.busy = true; said('Sending…');
+  const lock = on => { b.disabled = k.busy = on; f.querySelectorAll('[data-sv-r]').forEach(x => { x.disabled = on; }); };
+  lock(true); said('Sending…');
   window.p9.chat('prompt', { id: li.dataset.key, when: 'queue', text: `You now run on ${to} (changed by the owner in the Sprint View), from this turn on. Carry on with your work.`,
     ...(m && { model: m }), ...(e2 && { config: { [ef.dataset.id]: e2 } }) })
     .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
-    .then(t => { said(t); b.disabled = k.busy = false; });
+    .then(t => { said(t); lock(false); });
 });
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
