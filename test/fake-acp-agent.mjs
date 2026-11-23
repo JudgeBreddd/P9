@@ -139,14 +139,16 @@ const commands = (sessionId) => connection.sessionUpdate({ sessionId, update: { 
 let steering = true;
 // O194: like claude-agent-acp 0.106.0, it marks a run it starts with no prompt only for a client that advertises asyncTasks.
 let asyncTasks = false;
+let air = false; // A2 step 5: the client declared the _meta extension (claude-agent-acp's isAirClient)
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 const connection = acp.connectAgent(stream, {
   async initialize(params) {
     // As Claude asked for ACP 2 it offers no steering, like claude-agent-acp 0.106.0 (test/real-adapter-steering.test.mjs).
     // ponytail: it still answers protocol 1 and speaks v1; only the steering offer follows the version P9 asked for.
     steering = !existsSync('no-steering') && !(process.argv[2] === 'claude' && params?.protocolVersion >= 2);
-    const air = params?.clientCapabilities?._meta?.jetbrains?.air;
-    asyncTasks = air?.version >= 1 && Array.isArray(air.capabilities) && air.capabilities.includes('asyncTasks');
+    const declared = params?.clientCapabilities?._meta?.jetbrains?.air;
+    air = Boolean(declared && typeof declared === 'object' && !Array.isArray(declared));
+    asyncTasks = declared?.version >= 1 && Array.isArray(declared.capabilities) && declared.capabilities.includes('asyncTasks');
     if (existsSync('hang-init')) await new Promise(() => {});
     if (existsSync('slow-init')) await new Promise((resolve) => setTimeout(resolve, 10000));
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: !existsSync('no-images') }, sessionCapabilities: { resume: {}, close: {} } },
@@ -314,6 +316,15 @@ const connection = acp.connectAgent(stream, {
       return { stopReason: 'end_turn' };
     }
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
+    // A2 step 5: like claude-agent-acp's publishGoal, a goal snapshot (JSON, or null) in session_info_update _meta, only
+    // to a client that declares the _meta extension; 'goal-raw <json>' sends the _meta as given.
+    // 'goal-pad <json>' sends the goal with 70 KB of other _meta, so the update is over P9's stored-event size.
+    if (text.startsWith('goal ') || text.startsWith('goal-raw ') || text.startsWith('goal-pad ')) {
+      const raw = text.startsWith('goal-raw '), pad = text.startsWith('goal-pad '), value = JSON.parse(text.slice(text.indexOf(' ') + 1));
+      const meta = raw ? value : { jetbrains: { air: { version: 1, goal: value } }, ...(pad ? { pad: 'x'.repeat(70000) } : {}) };
+      if (air) await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', _meta: meta } });
+      await say('goal sent'); return { stopReason: 'end_turn' };
+    }
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }
     if (text === 'cwd') { await say('cwd:' + cwd); return { stopReason: 'end_turn' }; }
     // A chat's notes kept for its next message go in front of it (chat.mjs parked): 'mcp' as the last block still answers.
