@@ -11,7 +11,7 @@
 // own (startedNewTurn) that answers "got:<text>" and reports no end. "limits <n>" ends the turn, then reports context and plan use at n% a second later.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -669,6 +669,29 @@ const connection = acp.connectAgent(stream, {
         { type: 'diff', path: 'moved.md', newText: '', _meta: { added: false, from: 'was.md', hunks: [{ old: 1, new: 1, rows: [['del', 'a'], ['add', 'b']] }] } },
         { type: 'diff', path: 'gone.md', newText: '', _meta: { added: false, deleted: true, hunks: [{ old: 1, new: 0, rows: [['del', 'x']] }] } }] } });
       await say('v2 kinds done');
+      return { stopReason: 'end_turn' };
+    }
+    // MC-15 (shell-edits.test.mjs): files changed with no edit call (as a shell would), next to ones the agent's own
+    // edit calls name: tool.md through a finished Edit (left out of Shell edits), failed.md through a failed one (still counted).
+    if (text === 'shell writes' || text === 'shell many' || text === 'shell big') {
+      const at = (f) => path.join(folder, f);
+      if (text === 'shell many') for (let i = 0; i < 45; i++) writeFileSync(at('many-' + String(i).padStart(2, '0') + '.txt'), 'n' + i + '\n');
+      else if (text === 'shell big') writeFileSync(at('big.txt'), Array.from({ length: 6000 }, (_, i) => 'line ' + i + ' ' + 'x'.repeat(20)).join('\n') + '\n');
+      else {
+        writeFileSync(at('a.txt'), 'one\nTWO\nthree\n');
+        writeFileSync(at('new.md'), 'fresh\n');
+        rmSync(at('gone.txt'));
+        renameSync(at('old.txt'), at('moved.txt'));
+        writeFileSync(at('bin.dat'), Buffer.from([0, 1, 2, 3, 0, 255]));
+        writeFileSync(at('sp ace.txt'), 'spaced again\n');
+        writeFileSync(at('predirty.txt'), 'before turn\nin turn\n');
+        writeFileSync(at('tool.md'), 'by the tool\n');
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'shell-edit-ok', title: 'Write tool.md', kind: 'edit', status: 'in_progress', locations: [{ path: at('tool.md') }] } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'shell-edit-ok', status: 'completed', content: [{ type: 'diff', path: at('tool.md'), oldText: null, newText: 'by the tool\n' }] } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'shell-edit-failed', title: 'Edit failed.md', kind: 'edit', status: 'failed', rawInput: { file_path: 'failed.md' } } });
+        writeFileSync(at('failed.md'), 'by the shell after all\n');
+      }
+      await say('shell done');
       return { stopReason: 'end_turn' };
     }
     if (text === 'v2 diff') {

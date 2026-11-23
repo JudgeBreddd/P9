@@ -72,8 +72,9 @@ export function diffs(item) {
     if (!file) continue;
     const at = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (at) { file.hunks.push(hunk = { old: +at[1], new: +at[3], rows: [] }); left = at[2] === undefined ? 1 : +at[2]; right = at[4] === undefined ? 1 : +at[4]; }
-    else if (line.startsWith('--- ')) { if (line.slice(4) === '/dev/null') file.added = true; else file.path = line.slice(4); }
-    else if (line.startsWith('+++ ')) { if (line.slice(4) === '/dev/null') file.deleted = true; else file.path = line.slice(4); }
+    // A path with a space ends its ---/+++ line with a tab (git's own diff), never part of the name.
+    else if (line.startsWith('--- ')) { if (line.slice(4) === '/dev/null') file.added = true; else file.path = line.slice(4).replace(/\t$/, ''); }
+    else if (line.startsWith('+++ ')) { if (line.slice(4) === '/dev/null') file.deleted = true; else file.path = line.slice(4).replace(/\t$/, ''); }
     else if (/^(rename|copy) to /.test(line)) file.path = line.slice(line.indexOf(' to ') + 4);
     else if (/^(rename|copy) from /.test(line)) file.from = line.slice(line.indexOf(' from ') + 6);
     else if (line.startsWith('new file mode ')) file.added = true;

@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -340,10 +341,11 @@ test('artifacts: with an artifact panel open the notification cards sit below it
 // is clicked near its left end, where a user would see it.
 const pick = row => row.click({ position: { x: 24, y: 12 }, timeout: 10000 });
 
-async function chatDesktop(t, prompts) {
+async function chatDesktop(t, prompts, prepare) {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {
     await mkdir(path.join(workspace, 'proj'));
+    await prepare?.(path.join(workspace, 'proj'));
     return { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] };
   });
   const call = (route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -457,6 +459,30 @@ test('O222: the Changes tab tells a v2 edited file from a created one, and shows
   const f = await frame();
   assert.deepEqual(await f.locator('.del').allTextContents(), ['- old line']);
   assert.deepEqual(await f.locator('.add').allTextContents(), ['+ new line']);
+});
+
+// MC-15: a file the agent changed through the shell (no edit call) is in the Changes tab, with its diff (shell-edits.mjs).
+test('MC-15 the Changes tab lists files a turn changed through the shell', { timeout: 120000 }, async (t) => {
+  const repo = async (proj) => {
+    const git = (...args) => execFileSync('git', ['-C', proj, ...args]);
+    git('init', '-q'); git('config', 'user.email', 't@example.invalid'); git('config', 'user.name', 't');
+    for (const [f, text] of [['a.txt', 'one\ntwo\nthree\n'], ['gone.txt', 'bye\n'], ['old.txt', 'moving\nunchanged\nlines\n'], ['sp ace.txt', 'spaced\n'], ['predirty.txt', 'committed\n']]) await writeFile(path.join(proj, f), text);
+    git('add', '-A'); git('commit', '-qm', 'start');
+  };
+  const { page, show, frame } = await chatDesktop(t, [['shell writes', 'shell done']], repo);
+  const { button } = await show();
+  await button.click();
+  const items = page.locator('#side .cf-item'), tabs = page.locator('#side .cf-tabs [role=tab]');
+  await tabs.nth(1).click();
+  await page.locator('#side .cf-item[data-cf-file]', { hasText: 'a.txt' }).waitFor({ timeout: 8000 });
+  const texts = await items.allTextContents();
+  assert.equal(texts.length, 9, 'eight shell-changed files and tool.md from its own Write: ' + texts.join(' | '));
+  for (const want of ['Diffa.txtEdited · proj', 'Diffnew.mdCreated · proj', 'Diffgone.txtDeleted · proj', 'Difftool.mdCreated · proj']) assert.ok(texts.includes(want), want + ' in ' + texts.join(' | '));
+  await pick(items.filter({ hasText: 'a.txt' }));
+  await page.locator('#side .art-bar .art-title', { hasText: 'proj/a.txt' }).waitFor({ timeout: 8000 });
+  const f = await frame();
+  assert.deepEqual(await f.locator('.del').allTextContents(), ['- two']);
+  assert.deepEqual(await f.locator('.add').allTextContents(), ['+ TWO']);
 });
 
 // O121 part 4b: a deleted file says Deleted in the Changes tab, and a moved one says where it came from in its diff.
