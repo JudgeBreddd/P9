@@ -654,3 +654,37 @@ test('O239 a section window draws its card and its data list, the list wider tha
   await list.locator('li').last().scrollIntoViewIfNeeded(); assert.ok(await list.locator('li').last().isVisible(), 'its last row can be reached');
   console.log('PASS O239: the section window draws its card and its list across the window');
 });
+
+// MC-12: a placed section's card fills its panel. mountCard sets an inline height from the card's own (60 to 720 px), and it beat
+// shell.css's panel rule, so a short card, or any card in a panel over 790 px, left a blank block under it.
+test('MC-12 a placed card fills its panel: a short card and a tall panel leave no blank block under it', { timeout: 120000 }, async (t) => {
+  const placed = { sections: [{ id: 'short', title: 'Short', place: 'col1', buttons: [{ id: 'short-feed', title: 'Feed', cmd: print({ count: 1 }) }],
+    cards: [{ id: 'short-card', title: 'Short card', html: 'cards/inbox.html', script: 'short-feed' }] },
+    { id: 'tall', title: 'Tall', place: 'col2', buttons: [{ id: 'tall-feed', title: 'Feed', cmd: print({ count: 2 }) }],
+      cards: [{ id: 'tall-card', title: 'Tall card', html: 'cards/tall.html', script: 'tall-feed' }] }] };
+  const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9); await writeFile(path.join(paths.workspace, SETTINGS.space), JSON.stringify(placed)); return r; } });
+  for (const id of ['short-card', 'tall-card']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.click('#rMission');
+  for (const id of ['short-card', 'tall-card']) await page.locator(`.mpanel[data-sec] [data-tile="${id}"] iframe`).waitFor({ timeout: 20000 });
+  // The card reports its own height after it draws; wait past that so the inline height has been set.
+  await page.frameLocator('.mpanel[data-sec] [data-tile="short-card"] iframe').locator('#count', { hasText: '1' }).waitFor({ timeout: 20000 });
+  await sleep(1500);
+  shot('mc12-placed', await page.screenshot());
+  const sizes = await page.evaluate(() => [...document.querySelectorAll('.mpanel[data-sec]')].map((p) => {
+    const f = p.querySelector('.art-frame'); return { panel: Math.round(p.getBoundingClientRect().height), frame: Math.round(f.getBoundingClientRect().height), inline: f.style.height }; }));
+  assert.equal(sizes.length, 2, JSON.stringify(sizes));
+  for (const s of sizes) {
+    assert.ok(s.inline, 'the card reported its height (the inline style is set): ' + JSON.stringify(s));
+    assert.ok(s.panel > 790, 'the panel is taller than the old 720 px cap allowed: ' + JSON.stringify(s));
+    assert.ok(Math.abs(s.frame - (s.panel - 72)) <= 24, 'the card takes the panel less its heading, no blank block: ' + JSON.stringify(sizes));
+  }
+  console.log('PASS MC-12: placed cards fill their panels ' + JSON.stringify(sizes));
+});
