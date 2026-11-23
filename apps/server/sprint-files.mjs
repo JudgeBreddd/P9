@@ -16,7 +16,10 @@ const KEY = '[a-z0-9][a-z0-9._-]{0,63}'; // open_chat's key rule
 const TRAIL = 'review-trail.md', LOG = 'hooks.log', LOG_LINES = 100;
 const NAME = new RegExp(`^(?:sprint\\.md|rules\\.md|roles\\.json|review-trail\\.md|hooks\\.json|hooks\\.log|roles/${KEY}\\.(?:instructions|rules|work)\\.md|notes/${KEY}\\.md)$`);
 export const MAX_FILE = 32000; // as project instructions
-const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ... -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
+const TESTS = '; Tests: <file>::<title words> | <file>::<title words> (last clause; each title matches exactly one passed test in CI)';
+// The Tests clause is the agreed tests the before-merge green check (scripts/green-check.mjs) holds an item to.
+const PLAN = '# Plan\n\nGoal:\n\n## Items\n<!-- one per line: - [ ] <item>: done means ...; checks ...; role ...; depends on ...' + TESTS + ' -->\n\n## What I will need from you\n<!-- every action only the owner can take, listed before work starts -->\n';
+const PLAN_0_1_8 = PLAN.replace(TESTS, ''); // the template before the Tests clause, written into older sprints
 // What the project page opened: a save names it, and a file changed since (a worker, the lead) is not replaced.
 export const hashOf = (text) => createHash('sha256').update(text).digest('hex');
 // O171 (framing): the Setup files whose text P9 sends to chats. Start sprint keeps each one's hash in its record (the
@@ -28,7 +31,7 @@ export const writerKey = (sprint, name) => `setup-writer:${sprint}:${name}`;
 // and the hash the owner has seen (seenKey); one whose text the owner has not seen is marked "Written by ... · not seen".
 export const MARKED = /^(?:sprint\.md|rules\.md|roles\.json|hooks\.json|roles\/[^/]+\.(?:rules|instructions|work)\.md)$/;
 export const seenKey = (sprint, name) => `setup-seen:${sprint}:${name}`;
-export const isPlan = (text) => text === PLAN; // P9's own empty plan: nobody wrote it
+export const isPlan = (text) => text === PLAN || text === PLAN_0_1_8; // P9's own empty plan: nobody wrote it
 // What a worker is told about its notes file, at its start and again after each compaction.
 export const notesLine = (file) => `[P9: your notes file is ${file}. Keep its Now block current (doing, next, blocked on, not yet checked) and add one Log line for each decision, finding and result. After a compaction, read it first.]\n\n`;
 // The work queue (sprint method rule 4: the item list is the chunks assigned to the worker): the
