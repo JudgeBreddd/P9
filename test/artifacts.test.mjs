@@ -489,7 +489,7 @@ test('MC-15 the Changes tab says files changed through the shell are listed only
   const tabs = page.locator('#side .cf-tabs [role=tab]'), foot = page.locator('#side .cf-foot');
   await tabs.nth(1).click();
   await page.locator('#side .cf-item[data-cf-file]').first().waitFor({ timeout: 8000 });
-  assert.equal(await foot.textContent(), 'Files changed through the shell are listed only when this chat\'s folder is in a git repository.');
+  assert.equal(await foot.textContent(), 'Files changed through the shell are listed only when this chat\'s folder is in a normal git repository, not a linked worktree or submodule.');
   assert.ok(await foot.isVisible(), 'shown under the list');
   await tabs.nth(0).click();
   await page.locator('#side .cf-tabs [aria-selected=true]', { hasText: 'Artifacts' }).waitFor({ timeout: 8000 });
