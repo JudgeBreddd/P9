@@ -283,8 +283,11 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   // O237: each script's last run (when it started, exit code, seconds, the output's end), so a button's window shows it after a
   // poll, on another device and after a restart. Written whole and renamed into place, one save at a time; memory first, so a
   // failed save still shows the run until the daemon stops. ponytail: a removed script's record stays in the file (a few hundred bytes).
-  let last = lastRuns ? null : {}, lastSaves = Promise.resolve();
-  const lastOf = async () => (last ??= await fsReadFile(lastRuns, 'utf8').then(JSON.parse).then((v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}), () => ({})));
+  // The file is read once, by the first caller; every other caller waits on that same read, so a slow first read can never put
+  // an old copy over a run recorded meanwhile (#489 fix 1).
+  let last = lastRuns ? null : {}, lastLoad = null, lastSaves = Promise.resolve();
+  const lastOf = () => (last ? Promise.resolve(last) : (lastLoad ??= fsReadFile(lastRuns, 'utf8').then(JSON.parse)
+    .then((v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}), () => ({})).then((v) => (last ??= v))));
   const remember = (script, record) => { lastSaves = lastSaves.then(async () => {
     last = { ...(await lastOf()), [script]: record };
     if (lastRuns) { await fsWriteFile(lastRuns + '.tmp', JSON.stringify(last) + '\n', { mode: 0o600 }); await fsRename(lastRuns + '.tmp', lastRuns); }

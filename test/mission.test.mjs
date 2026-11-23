@@ -528,3 +528,39 @@ test('O237 each script\'s last run is in the overview and survives a daemon rest
   assert.equal(JSON.parse(await readFile(path.join(instance.directory, 'mission-runs.json'), 'utf8')).echo.code, 0);
   console.log('PASS O237: last run per script in the overview, kept across a restart, broken file = none');
 });
+
+// #489 fix 1: the file is read once. Two first reads used to race: a slow first read finishing after a run was recorded put the
+// old copy back, so the new run left the overview (and the next save). The reads are held here and let go newest first.
+test('O237 fix 1: a slow first read of the last-runs file never puts an old copy over a run recorded meanwhile', { timeout: 30000 }, async (t) => {
+  const fsp = (await import('node:fs/promises')).default, { syncBuiltinESMExports } = await import('node:module');
+  const os = (await import('node:os')).default, { mkdtemp } = await import('node:fs/promises');
+  const { createMission } = await import('../apps/server/mission.mjs'), { createLifecycle } = await import('../apps/server/lifecycle.mjs');
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-o237-')), workspace = path.join(dir, 'ws');
+  for (const folder of ['hub', '_waiting', 'projects/event-horizon', 'rec']) await mkdir(path.join(folder === 'rec' ? dir : workspace, folder), { recursive: true });
+  await writeFile(path.join(workspace, 'hub/registry.json'), JSON.stringify({ scripts: [{ id: 'echo', title: 'Echo', cmd: [node, '-e', 'console.log("hi")'] }], apps: [], pages: [] }));
+  await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
+  const lastRuns = path.join(dir, 'mission-runs.json');
+  await writeFile(lastRuns, JSON.stringify({ old: { at: 1, code: 0, secs: 0, tail: '' } }));
+  const real = fsp.readFile, held = [];
+  // The read happens when asked (so it sees the file as it was then); only its answer is held.
+  fsp.readFile = (file, ...rest) => { const read = real(file, ...rest); return file === lastRuns ? new Promise((resolve) => held.push(() => resolve(read))) : read; };
+  syncBuiltinESMExports();
+  t.after(() => { fsp.readFile = real; syncBuiltinESMExports(); });
+  const mission = createMission({ workspace, recovery: path.join(dir, 'rec'), settings: { registry: 'hub/registry.json', waiting: '_waiting', primary: 'projects/AGENTS.md' },
+    instance: 'o237-' + process.pid, lifecycle: createLifecycle(), lastRuns });
+  const first = mission.overview(); // its read of the file is held
+  for (let i = 0; i < 100 && !held.length; i += 1) await sleep(20);
+  assert.equal(held.length, 1, 'the overview asked for the file');
+  const started = await mission.run('echo', {});
+  assert.equal(started.status, 202, JSON.stringify(started));
+  for (let i = 0; i < 200 && !mission.output(started.run).done; i += 1) await sleep(25);
+  await sleep(100); // the finished run has asked for the file too
+  while (held.length) { held.pop()(); await sleep(100); } // newest read first: an old first read lands last
+  await first;
+  const now = await mission.overview();
+  assert.equal(now.scripts.find((x) => x.id === 'echo').last?.code, 0, 'the run recorded meanwhile is still the last run');
+  await mission.stopAll();
+  assert.deepEqual(Object.keys(JSON.parse(await real(lastRuns, 'utf8'))).sort(), ['echo', 'old'], 'and the file has it beside the old record');
+  console.log('PASS O237 fix 1: one read of the file; a held first read does not drop a run recorded meanwhile');
+});

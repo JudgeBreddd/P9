@@ -144,7 +144,7 @@ async function refreshMission() {
   const key = JSON.stringify(r.body); if (key === outer.lastOverview) return; outer.lastOverview = key;
   applyOverview(r.body); outer.renderMission(); outer.renderTabs();
   if (outer.S.modal?.kind === 'scripts' && !outer.M.scripts[outer.S.modal.g]) outer.closeModal(); // its group is gone
-  else if (['scripts', 'win', 'reviews', 'center'].includes(outer.S.modal?.kind)) outer.renderModal();
+  else if (['scripts', 'script', 'win', 'reviews', 'center'].includes(outer.S.modal?.kind)) outer.renderModal(); // script: a run another device finished (O237)
 }
 const pollMission = () => { refreshMission(); outer.setTimeout(pollMission, 20000); };
 const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(async () => { const r = window.p9?.mission ? await overview().catch(() => null) : null; if (outer.live.on && r?.status === 200) { outer.lastOverview = JSON.stringify(r.body); applyOverview(r.body); outer.renderMission(); outer.renderTabs(); if (['reviews', 'center', 'script'].includes(outer.S.modal?.kind)) outer.renderModal(); } }, 500); };
@@ -864,11 +864,13 @@ function missionModal(m, body, row) {
     };
   } else if (m.kind === 'script') {
     if (m.s[6]?.live) m.s = scriptById(m.s[0]) ?? m.s; // the overview's row now: its last run (O237)
+    const f = document.activeElement, typing = body.contains(f) && f.dataset.arg ? [f.dataset.arg, f.selectionStart, f.selectionEnd] : null;
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
     m.args ||= (x.args || []).map(() => '');
     outer.$('#mdlT').textContent = name;
     body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : x.tail ? `<pre class="out" data-last-tail>${esc(x.tail)}</pre>` : ''}</div>`;
     body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = inp.onchange = () => { m.args[+inp.dataset.arg] = inp.value; });
+    if (typing) { const inp = body.querySelector(`[data-arg="${typing[0]}"]`); inp?.focus(); try { inp?.setSelectionRange(typing[1], typing[2]); } catch {} } // a poll's redraw keeps the field being typed in
     outer.$('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${m.out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
     outer.$('#mdlFoot [data-run]').onclick = () => {
       if (x.confirm && !m.armed) { m.armed = true; return outer.renderModal(); }

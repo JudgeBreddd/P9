@@ -546,3 +546,36 @@ test('O237 a button window shows its last run after a reopen and a redraw', { ti
   assert.match(await kind.innerText(), /, exit 0 · /i, 'after the overview is read again');
   console.log('PASS O237 screen: the button window keeps its last run across a reopen and a redraw');
 });
+
+// #489 fix 1 (screen): a window already open while another device runs the script shows that run on the regular poll, and keeps
+// the argument being typed and its focus.
+test('O237 fix 1 an open button window shows a run another client finished, keeping the typed argument', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9);
+    await writeFile(path.join(paths.workspace, SETTINGS.registry), JSON.stringify({ scripts: [...SCRIPTS,
+      { id: 'say', title: 'Say words', group: 'Tools', cmd: [node, '-e', 'console.log(process.argv.slice(1).join(" "))'], args: ['Words'] }], apps: [], pages: [] }));
+    return r; } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  await page.locator('#fMission [data-group]', { hasText: 'Tools' }).first().click();
+  const row = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Say words' });
+  await row.waitFor({ timeout: 10000 }); await row.click();
+  const kind = page.locator('#mdlBody .review .kind'), input = page.locator('#mdlBody input[data-arg="0"]');
+  await input.waitFor({ timeout: 10000 });
+  assert.match(await kind.innerText(), /not run here yet/i);
+  await input.fill('kept words');
+  // Another client runs it.
+  const run = (await call(server, '/scripts/say/run', 'POST', { args: ['from elsewhere'] })).body.run;
+  for (let i = 0; i < 200 && !(await call(server, '/runs/' + run)).body.done; i += 1) await sleep(25);
+  await kind.filter({ hasText: 'exit 0' }).waitFor({ timeout: 35000 }); // the regular poll is every 20 s
+  assert.match(await page.locator('#mdlBody [data-last-tail]').innerText(), /from elsewhere/);
+  assert.equal(await input.inputValue(), 'kept words', 'the typed argument is kept');
+  assert.equal(await input.evaluate((el) => el === document.activeElement), true, 'and the field keeps its focus');
+  console.log('PASS O237 fix 1 screen: an open window shows another client\'s run on the poll, argument and focus kept');
+});
