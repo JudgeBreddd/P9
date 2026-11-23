@@ -123,7 +123,7 @@ function applyOverview(o) {
   const named = {}; for (const s of o.space || []) { named[s.title] ??= s.id; outer.M.title[s.id] = s.title; }
   // O237: the daemon keeps each script's last run, so every poll, device and restart shows the same one.
   for (const x of o.scripts) { const L = x.last, row = [x.id, x.title, x.desc, !L ? 'idle' : L.terminal || L.code === 0 ? 'ok' : 'bad',
-    L ? new Date(L.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + (L.terminal ? ', opened in a terminal' : ', exit ' + L.code) : 'not run here yet',
+    L ? new Date(L.at).toLocaleString() + (L.terminal ? ', opened in a terminal' : ', exit ' + L.code) : 'not run here yet',
     L && !L.terminal ? L.secs + ' s' : '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true, tail: L?.tail, at: L?.at }];
     const name = x.group || 'Other', key = x.section ?? named[name] ?? 'g:' + name; outer.M.title[key] ??= name;
     if (x.hidden) outer.M.cardScripts[x.id] = row; else (outer.M.scripts[key] ||= []).push(row); }
@@ -136,8 +136,9 @@ function applyOverview(o) {
   for (const s of outer.M.space) if (!s.widget) outer.M.scripts[s.id] ||= []; // a widget section is its panel or built-in tile, not a group tile
   applyQueue(o);
 }
-async function refreshMission() {
-  if (!outer.live.on || document.hidden || outer.S.focus !== 'mission' || outer.lifetime.signal.aborted) return;
+// now: read it whatever is in front (a finished turn or run, queueSoon); the regular poll reads only while Mission is shown.
+async function refreshMission(now) {
+  if (!outer.live.on || !now && (document.hidden || outer.S.focus !== 'mission') || outer.lifetime.signal.aborted) return;
   const r = await overview().catch(() => null);
   if (r?.status !== 200 || outer.lifetime.signal.aborted) return;
   loadArt(); // a site's icon can arrive or age out with no change to the overview
@@ -147,7 +148,7 @@ async function refreshMission() {
   else if (['scripts', 'script', 'win', 'reviews', 'center'].includes(outer.S.modal?.kind)) outer.renderModal(); // script: a run another device finished (O237)
 }
 const pollMission = () => { refreshMission(); outer.setTimeout(pollMission, 20000); };
-const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(async () => { const r = window.p9?.mission ? await overview().catch(() => null) : null; if (outer.live.on && r?.status === 200) { outer.lastOverview = JSON.stringify(r.body); applyOverview(r.body); outer.renderMission(); outer.renderTabs(); if (['reviews', 'center', 'script'].includes(outer.S.modal?.kind)) outer.renderModal(); } }, 500); };
+const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(() => refreshMission(1), 500); }; // #489: the poll's own read, once (bytes)
 function applyQueue(o) {
   const drafts = Object.fromEntries(outer.S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = outer.S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
