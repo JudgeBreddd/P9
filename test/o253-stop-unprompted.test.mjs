@@ -21,3 +21,16 @@ test('O253: Stop on a run nobody prompted cancels it and ends it once', { timeou
   assert.ok(await steps() <= before + 1, 'the agent kept working after Stop');
   assert.equal((await call(instance, `/chat/${chat}/cancel`, 'POST', {})).status, 409, 'a second Stop found a run still open');
 });
+
+// O253 review round 2: a run nobody prompted can ask a question. Stop declines it, so the agent's wait ends and nothing is
+// left open on the daemon; before, the turn-end hid the card while the agent waited on it.
+test('O253: Stop on a run nobody prompted that asked a question declines the question', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Unprompted question' })).body.conversation;
+  assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'background' })).status, 202);
+  await until(instance, (e) => e.conversation === chat && e.type === 'question');
+  assert.equal((await call(instance, `/chat/${chat}/cancel`, 'POST', {})).status, 200);
+  await until(instance, (e) => e.conversation === chat && e.type === 'update' && e.data.content?.text === 'bg-ask:{"action":"cancel"}');
+  const ends = (await events(instance, chat)).filter((e) => e.type === 'turn-end' && e.data.unprompted && e.data.stopReason === 'cancelled');
+  assert.equal(ends.length, 1, 'the unprompted run did not end once at Stop');
+});

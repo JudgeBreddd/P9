@@ -820,7 +820,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.quiet.unref?.();
   };
   const unprompted = (session, id, update) => {
-    if (session.turn || session.solo || session.stopping || session.compacting) return;
+    if (session.turn || session.solo || session.stopping || session.compacting || session.unstop) return;
     if (!session.quiet && !['tool_call', 'tool_call_update', 'agent_message_chunk'].includes(update?.sessionUpdate)) return;
     quiet(session, id);
   };
@@ -1985,16 +1985,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     async cancel(id, by) {
       const session = ID.test(id) && live.get(id);
       if (!session?.turn && !session?.quiet && !session?.ghost) return refused(409, 'no-turn');
+      // A question or approval still open is declined, prompted turn or not, so the agent's wait on it ends.
+      for (const pending of session.pending.values()) pending.resolve(null);
       if (!session.turn) {
         // O253: Stop on a run nobody prompted (open quiet or ghost timer: O192, O194, CP8). The agent is told to cancel
         // and that run ends here, once, so the phone and desktop stop showing Working and the end hooks run.
-        clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null;
-        await session.agent.cancel({ sessionId: session.sessionId });
+        // session.unstop: output arriving while the cancel is pending opens no new quiet timer (unprompted() skips it).
+        const off = () => { clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null; };
+        off(); session.unstop = true;
+        try { await session.agent.cancel({ sessionId: session.sessionId }); } finally { session.unstop = false; }
+        // A prompt that started while the cancel was pending owns the chat now: the old run's end is not sent over it.
+        if (live.get(id) !== session || session.turn) return { status: 200, ok: true };
+        off();
         emit(id, 'turn-end', { stopReason: 'cancelled', unprompted: true });
         unpromptedEnd(session, id);
         return { status: 200, ok: true };
       }
-      for (const pending of session.pending.values()) pending.resolve(null);
       if (typeof by === 'string') cutBy(id, by);
       session.cut = session.turn; // MC-15: a Stop while the turn's start snapshot runs sends no prompt
       await session.agent.cancel({ sessionId: session.sessionId });
