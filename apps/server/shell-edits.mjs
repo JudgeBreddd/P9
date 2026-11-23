@@ -37,10 +37,11 @@ const run = promisify(execFile);
 // past it is listed with no line rows if that fits, else left out.
 export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 
-const git = (cwd, args, deadline, env) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
+// p: the box's paths, built here (the private folder, the repo folder, its objects folder); every name below is fixed.
+const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
   '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
-  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', ...env },
+  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
 }).then((r) => r.stdout);
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
@@ -63,8 +64,8 @@ async function box(cwd, deadline) {
     if (at) await copyFile(ix, path.join(dir, 'index')).then(() => utimes(path.join(dir, 'index'), at.atime, at.mtime)).catch(keep);
     await copyFile(path.join(dot, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const env = { GIT_DIR: dir, GIT_WORK_TREE: top, GIT_OBJECT_DIRECTORY: path.join(dot, 'objects'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
-  return { here, git: (args) => git(here, args, deadline, env), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
+  const p = { dir, top, objects: path.join(dot, 'objects') };
+  return { here, git: (args) => git(here, args, deadline, p), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
 }
 
 // The working tree under cwd as a git tree, through the box's index.
