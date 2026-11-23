@@ -21,6 +21,14 @@ test('O251: the tail read keeps a message still held from early in a long turn',
   const result = ledger.tail([BIG], undefined, 5);
   assert.ok(result.more[BIG] > 0, 'the held events are older than the kept blocks');
   assert.deepEqual(result.events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1']);
+  // A read up to an earlier cursor sees h1 still held though it is taken later, and a message that only mentions the id takes nothing.
+  const at = result.cursor; add('user', { text: 'about h1' });
+  for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 'u' + i, title: 'step' });
+  assert.deepEqual(ledger.tail([BIG], undefined, 5).events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1'], 'text naming the id is not a release');
+  add('user', { text: 'still waiting', held: ['h1'] });
+  for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 'v' + i, title: 'step' });
+  assert.deepEqual(ledger.tail([BIG], undefined, 5).events.filter((event) => event.type === 'held'), [], 'taken now');
+  assert.deepEqual(ledger.tail([BIG], at, 5).events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1'], 'held at the earlier cursor');
 });
 
 // P20: the tail read counts blocks as the phone draws them: a run of streamed chunks is one block, bookkeeping

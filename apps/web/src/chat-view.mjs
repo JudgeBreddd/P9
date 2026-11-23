@@ -1104,8 +1104,11 @@ async function loadChat() {
   const jump = async () => {
     const head = await window.p9.chat('events', { after: 0, only: [], tail: TAIL }), l = await window.p9.chat('list', {});
     if (head.status !== 200 || l.status !== 200) return false;
-    // A chat's load still in flight ends first: it marks its chat loaded when done, which would land on the emptied stub.
-    await Promise.all(outer.S.sessions.map(s => s.loading).filter(Boolean).map(p => p.catch(() => {})));
+    // A chat's load still in flight ends first: it marks its chat loaded when done, which would land on the emptied stub. One
+    // asked for meanwhile (a chat opened) gets the gate instead, so none reads up to the old cursor; the reset clears it.
+    let open; const gate = new Promise(res => { open = res; }), flying = outer.S.sessions.map(s => s.loading).filter(Boolean);
+    for (const s of outer.S.sessions) s.loading = gate;
+    try { await Promise.all(flying.map(p => p.catch(() => {}))); } finally { outer.setTimeout(open, 0); }
     const listed = l.body.conversations || [], by = new Map(listed.map(c => [c.id, c])), shown = new Set(outer.S.open);
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));

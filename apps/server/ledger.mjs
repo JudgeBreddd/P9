@@ -149,8 +149,11 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       + " CASE WHEN json_valid(data) THEN json_extract(data, '$.stopReason') END AS r FROM events WHERE conversation = ? AND cursor <= ? ORDER BY cursor DESC LIMIT ?"),
     span: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor >= ? AND cursor <= ? ORDER BY cursor'),
     kept: db.prepare("SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type IN ('card', 'unpin', 'config')"),
-    // O251: a message still held (no later user event took it, no unheld named it); the chat's queue is drawn from these.
-    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type = 'held' AND NOT EXISTS (SELECT 1 FROM events x WHERE x.conversation = h.conversation AND x.cursor > h.cursor AND x.type IN ('user', 'unheld') AND instr(x.data, CASE WHEN json_valid(h.data) THEN json_extract(h.data, '$.id') END) > 0)"),
+    // O251: a message still held at the read's cursor (no user event up to it took it, no unheld named it); the queue is drawn from these.
+    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type = 'held' AND NOT EXISTS ("
+      + "SELECT 1 FROM events x WHERE x.conversation = h.conversation AND x.cursor > h.cursor AND x.cursor <= ? AND x.type IN ('user', 'unheld') AND ("
+      + "x.type = 'unheld' AND json_extract(CASE WHEN json_valid(x.data) THEN x.data END, '$.id') = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id') OR "
+      + "x.type = 'user' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(x.data) THEN x.data ELSE '{}' END, '$.held') AS j WHERE j.value = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id'))))"),
     latest: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1'),
     operation: db.prepare('SELECT * FROM operations WHERE id = ?'),
     recent: db.prepare('SELECT COUNT(*) AS n FROM operations WHERE login = ? AND at > ?'),
@@ -261,7 +264,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         events.push(...statements.span.all(id, from, top));
         if (cut) {
           more[id] = from;
-          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ['update', '"sessionUpdate":"available_commands_update"'], ...(user ? [] : [['user', '']])]
+          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ['update', '"sessionUpdate":"available_commands_update"'], ...(user ? [] : [['user', '']])]
             .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean));
         }
       }
