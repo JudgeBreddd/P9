@@ -11,8 +11,8 @@ const BIG = '00000000-0000-4000-8000-0000000000d1', TURNS = 450;
 const shot = async (page, name) => { const png = await page.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 
 // P20: the tail read counts blocks as the phone draws them: a run of streamed chunks is one block, bookkeeping
-// updates are none, and it always reaches back to the latest message from the user.
-test('P20: the tail read counts a chunk run as one block and reaches back to the latest message', () => {
+// updates are none, and the latest message from the user comes along when the kept blocks hold none (O251).
+test('P20: the tail read counts a chunk run as one block and carries the latest message', () => {
   const ledger = openLedger(':memory:'), add = (type, data) => ledger.append(BIG, type, data);
   const chunk = (sessionUpdate, text) => add('update', { sessionUpdate, content: { type: 'text', text } });
   add('card', { id: 'c', kind: 'note', text: 'Pinned early' });
@@ -23,7 +23,8 @@ test('P20: the tail read counts a chunk run as one block and reaches back to the
   const three = ledger.tail([BIG], undefined, 3);
   assert.deepEqual(texts(three), ['Pinned early', undefined, 'two', 't', undefined, 'b', 'b', 'b', undefined], 'three blocks: two, the thought, the three b chunks as one; the early card comes along');
   assert.ok(three.more[BIG] > 0, 'older events are left out, so more says where the kept ones start');
-  assert.deepEqual(texts(ledger.tail([BIG], undefined, 1)), texts(three), 'one block still reaches back to the latest message');
+  // O251: one block is the last block, and the latest message comes along with the early events, so the turn reads as its own.
+  assert.deepEqual(texts(ledger.tail([BIG], undefined, 1)), ['Pinned early', 'two', undefined, 'b', 'b', 'b', undefined], 'one block: the usage update and the b run, with the message it answers');
   const all = ledger.tail([BIG], undefined, 10);
   assert.equal(all.events.length, 12); assert.equal(all.more[BIG], undefined);
   assert.equal(all.cursor, 12);

@@ -263,16 +263,20 @@ function perChat<T>(read: (events: Json[], id: string) => T) {
     const value = read(list, id); kept.set(id, { list, n: list.length, value }); return value;
   };
 }
-async function pull(extra: string, wait = 0) {
+// O251: true when a live read (live) came back full, so this phone fell behind (a sleep, a dropped link); the caller reads the
+// current state again (behind, below) instead of every page of the gap.
+async function pull(extra: string, wait = 0, live = false): Promise<boolean> {
   let batch: Json[];
   do {
     const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
     batch = result.events as Json[] ?? [];
+    if (live && batch.length === 500) return true;
     // The live loop and a refresh can overlap; an event already held is skipped.
     for (const event of batch) if (Number(event.cursor) > state.cursor) { keepEvent(event); state.cursor = Number(event.cursor); }
     // A narrowed read reports how far it scanned, matching or not.
     if (extra && batch.length < 500) state.cursor = Math.max(state.cursor, Number(result.cursor));
   } while (batch.length === 500);
+  return false;
 }
 // A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
 const gapAfter = (next?: Json) => { if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false; };
@@ -301,7 +305,11 @@ async function replay() {
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }
   else {
-    await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
+    // O251: behind, the held events go and the first read runs again: the shown chat's newest blocks, the others stubs. The
+    // gap's ends are not played one by one; the list's states say which chats moved.
+    // A stub's load still in flight ends first: it would put events up to the old base back and clear the new stub.
+    if (await pull('', wait, true)) { await Promise.all([...loading.values()].map((p) => p.catch(() => {}))); state.events = []; byChat.clear(); older.clear(); state.cursor = 0; await replay(); }
+    else gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
     for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled')
       putBack(String(event.conversation), String((event.data as Json).text)); // O61: into its own chat's text, open or not

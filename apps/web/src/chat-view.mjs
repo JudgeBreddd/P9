@@ -940,7 +940,8 @@ const liveSession = (id, provider, title, folder, created, project = null, profi
 function history(s, until = outer.liveChat.cursor) {
   return s.loading ||= (async () => {
     for (let after = 0; !outer.lifetime.signal.aborted;) {
-      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) });
+      // A call that throws (the window's bridge dropped it) is retried like a refused one; a load that rejected would stay stuck.
+      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) }).catch(() => ({ status: 0 }));
       // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
@@ -1074,6 +1075,27 @@ async function loadChat() {
   };
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
   let sprintStale = false, sprintAt = 0;
+  // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
+  // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
+  // the box, the queue, a closed tab, an unseen mark. The gap's finishes are summed: a chat not shown that was used in the
+  // gap gets one unseen mark, not a notice per turn. False when the daemon did not answer, so the page is drawn as before.
+  const jump = async () => {
+    const head = await window.p9.chat('events', { after: 0, only: [], tail: TAIL }), l = await window.p9.chat('list', {});
+    if (head.status !== 200 || l.status !== 200) return false;
+    // A chat's load still in flight ends first: it marks its chat loaded when done, which would land on the emptied stub.
+    await Promise.all(outer.S.sessions.map(s => s.loading).filter(Boolean).map(p => p.catch(() => {})));
+    const by = new Map((l.body.conversations || []).map(c => [c.id, c])), shown = new Set(outer.S.open);
+    for (const s of outer.S.sessions) {
+      const c = by.get(s.id); if (!c || s.stub) continue;
+      const keep = { queue: s.queue, draft: s.draft, hidden: s.hidden, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
+      for (const k of Object.keys(s)) delete s[k];
+      Object.assign(s, liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), { state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived }, keep);
+      sprintFields(s, c);
+    }
+    outer.liveChat.cursor = head.body.cursor; outer.keepUnseen();
+    try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
+    return true;
+  };
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
     const l = scope ? null : await window.p9.chat('list', {});
@@ -1085,6 +1107,9 @@ async function loadChat() {
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
     if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; await new Promise(res => outer.setTimeout(res, outer.liveChat.on ? 2000 : 5000)); continue; }
     if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); if (waitingNew) { const a = waitingNew; waitingNew = null; newSession(...a); } }
+    // O251: a full page while live means this window fell behind (a sleep, a dropped link), and drawing every update since,
+    // 500 at a time, took minutes over a remote. Jump instead, as a fresh launch would (jump, below).
+    if (!replaying && r.body.events.length >= 500 && await jump()) continue;
     // A tail can leave out a chat's created event, so its tab comes from the list.
     if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), archived: c.archived, parent: c.parent ?? null });
     const ended = [], answered_ = [];
