@@ -81,3 +81,14 @@ test('Sprint copy wiring: a sprint has one copy; a folder other than the one it 
   assert.equal(other.error, 'other-repository', 'a different folder is refused for this sprint');
   assert.equal(fs.existsSync(path.join(home, ID, 'workers', 'item-e')), false, 'no worker folder was made from it');
 });
+
+test('Sprint copy wiring: a malformed copy record reads as none: the folder is refused with the reason, not a parse error', { timeout: 60000 }, async (t) => {
+  const dir = scratch(t), source = path.join(dir, 'solo'), home = path.join(dir, 'state', 'sprints');
+  g(dir, 'init', '-q', '-b', 'main', source);
+  write(path.join(source, 'f.txt'), 'f\n'); g(source, 'add', 'f.txt'); g(source, 'commit', '-qm', 'f');
+  assert.equal((await createWorkerFolders({ home }).make(ID, 'item-f', source, '')).error, undefined);
+  fs.writeFileSync(path.join(home, ID, 'copy-record.json'), '{"source": ');
+  const again = await createWorkerFolders({ home }).make(ID, 'item-g', source, '');
+  assert.equal(again.error, 'other-repository', 'a record that does not parse is no record: ' + again.detail);
+  assert.equal(fs.existsSync(path.join(home, ID, 'workers', 'item-g')), false, 'no worker folder was made');
+});
