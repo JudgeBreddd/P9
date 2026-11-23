@@ -205,17 +205,21 @@ const defaultModel = a => starts?.[a]?.model || '', defaultEffort = a => starts?
 async function loadStarts() {
   const n = ++startsSeq, r = await window.p9?.chat?.('newChatDefaults', {}).catch(() => null); if (r?.status !== 200 || !r.body || typeof r.body !== 'object') return;
   const keys = a => ({ model: 'p9-model-default:' + a, effort: 'p9-effort-default:' + a });
-  const set = Object.fromEntries(Object.keys(r.body).map(a => [a, Object.fromEntries(Object.entries(keys(a)).filter(([k, key]) => !r.body[a][k] && localStorage.getItem(key)).map(([k, key]) => [k, localStorage.getItem(key)]))]).filter(([, f]) => Object.keys(f).length));
-  if (!startsOut) takeStarts(n, r.body);
+  const set = Object.fromEntries(Object.keys(r.body).filter(a => a !== 'rev').map(a => [a, Object.fromEntries(Object.entries(keys(a)).filter(([k, key]) => !r.body[a][k] && localStorage.getItem(key)).map(([k, key]) => [k, localStorage.getItem(key)]))]).filter(([, f]) => Object.keys(f).length));
+  if (!startsOut || Number.isSafeInteger(r.body.rev)) takeStarts(n, r.body); // with rev a read is kept by what the daemon applied
   if (Object.keys(set).length) { const m = ++startsSeq; startsOut++; const w = await window.p9.chat('newChatDefaults', { set, onlyEmpty: true }).catch(() => null).finally(() => startsOut--); if (w?.status !== 200) return; takeStarts(m, w.body); }
-  for (const a of Object.keys(r.body)) Object.values(keys(a)).forEach(k => localStorage.removeItem(k));
+  for (const a of Object.keys(r.body).filter(a => a !== 'rev')) Object.values(keys(a)).forEach(k => localStorage.removeItem(k));
 }
 // Sends only the field picked; the daemon merges it. O133 FIX1: every read and save of them is numbered when it goes out, and an
 // answer is kept only if no later one was kept first, so an older answer arriving late (a held boot read after Settings read
 // another window's change, or a save's) never puts back a value the daemon has already replaced. A read answered while a save of
 // this window's is still out is not kept: the daemon may have served it first, and the save answers with the whole set anyway.
 let startsSeq = 0, startsTook = 0, startsOut = 0;
-const takeStarts = (n, body) => { if (n < startsTook) return false; startsTook = n; starts = body; return true; };
+// N6-2b: the daemon reads each save's body on its own time, so two saves can be applied in another order than sent. Its answers
+// carry rev (counted up by each save it applies): the highest one is what it kept. Send order is only for a daemon without rev.
+let startsRev = -1;
+const takeStarts = (n, body) => { const rev = Number.isSafeInteger(body?.rev) ? body.rev : null;
+  if (rev !== null ? rev < startsRev : n < startsTook) return false; if (rev !== null) startsRev = rev; startsTook = Math.max(startsTook, n); starts = body; return true; };
 async function saveStarts(a, kind, v) { const n = ++startsSeq; startsOut++; const r = await window.p9?.chat?.('newChatDefaults', { set: { [a]: { [kind]: v } } }).catch(() => null).finally(() => startsOut--); if (r?.status === 200 && takeStarts(n, r.body)) renderChats(); return r?.status === 200; } // O131: the open chats' "(Default)" pills follow at once
 const fresh = [];
 // O48 provider profiles (threat model "Provider profiles"): what the daemon lists, never a key: { id, name, baseUrl, models,

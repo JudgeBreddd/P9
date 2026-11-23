@@ -220,14 +220,14 @@ export function setupRoutes(outer) {
   });
   // Desktop only, Settings > New chats start in (O133): each agent's Default model and Default effort; O137: and Default mode
   // ('' clears it; else one of that agent's own mode names), which a worker started under Unrestricted starts in.
-  outer.app.get('/start-defaults', (c) => c.json(outer.chat.newChatDefaults()));
+  outer.app.get('/start-defaults', (c) => c.json({ ...outer.chat.newChatDefaults(), rev: outer.chat.startDefaultsRev() })); // N6-2b: rev, the count of saves
   // Body { set: { <agent>: { model?, effort? } }, onlyEmpty?: true }: only the fields named change (see setNewChatDefaults).
   outer.app.post('/start-defaults', async (c) => {
     const body = await outer.json(c), agents = Object.keys(outer.chat.newChatDefaults()), str = (x) => typeof x === 'string' && x.length <= 200, set = body?.set;
     if (!body || typeof body !== 'object' || Object.keys(body).some((k) => k !== 'set' && k !== 'onlyEmpty') || (body.onlyEmpty !== undefined && body.onlyEmpty !== true)
         || !set || typeof set !== 'object' || Array.isArray(set) || !Object.keys(set).length
         || !Object.entries(set).every(([a, f]) => agents.includes(a) && f && typeof f === 'object' && Object.keys(f).length && Object.entries(f).every(([k, x]) => (k === 'model' || k === 'effort' ? str(x) : k === 'mode' && (x === '' || outer.chat.modeNames?.(a)?.includes(x)))))) return c.json({ error: 'request-refused' }, 400);
-    return c.json(outer.chat.setNewChatDefaults(set, body.onlyEmpty === true));
+    return c.json({ ...outer.chat.setNewChatDefaults(set, body.onlyEmpty === true), rev: outer.chat.startDefaultsRev() });
   });
   // Desktop only, Settings > Notices (O197): how each kind of P9 notice reaches a parent chat, 'note' or 'message'.
   outer.app.get('/notices', (c) => c.json(outer.chat.notices()));

@@ -548,6 +548,37 @@ test('O133 Settings: the Default model and effort show as kept after a failed fi
   const reply3 = pane3.locator('.hist', { hasText: 'config:model=' }).first();
   await reply3.waitFor({ timeout: 20000 });
   assert.match(await reply3.innerText(), /effort=high,/, '(6) a New chat starts on the held save, not the read served before it');
+  // (7) N6-2b: two saves applied out of send order. High is picked and held 3 s on its way; Low is picked after it and goes at once,
+  // so the daemon applies Low, then High, and keeps High. The page must keep what the daemon kept (its revision), not the
+  // newest send (Low).
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.held7 = 0; globalThis.held7Done = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && args[1]?.set?.claude?.effort === 'high' && !globalThis.held7++
+      ? new Promise((res) => setTimeout(res, 3000)).then(() => h(e, ...args)).then((r) => { globalThis.held7Done = true; return r; }) : h(e, ...args));
+  });
+  await open();
+  await page.selectOption('[data-default-effort="claude"]', 'medium');
+  await until(async () => (await call(instance, '/start-defaults')).claude.effort === 'medium', 'Medium saved');
+  await page.selectOption('[data-default-effort="claude"]', 'high');
+  await until(async () => await app.evaluate(() => globalThis.held7) >= 1, 'the High save was sent (and held)');
+  await page.selectOption('[data-default-effort="claude"]', 'low');
+  await until(async () => (await call(instance, '/start-defaults')).claude.effort === 'low', 'the Low save, sent second, applied first');
+  await page.focus('[data-default-effort="claude"]'); // a focused row is not drawn again, so the select itself must follow
+  await until(async () => await app.evaluate(() => globalThis.held7Done), 'the High save answered', 10000);
+  await until(async () => await page.evaluate(() => document.activeElement?.dataset?.defaultEffort === 'claude' && document.activeElement.value === 'high'),
+    '(7) the focused Settings select shows what the daemon kept (High), not the last pick (Low)');
+  await close();
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', '(7) the daemon applied High last');
+  const before4 = await ids();
+  await page.click('#newBtn');
+  let id4;
+  await until(async () => (id4 = (await ids()).find((x) => !before4.includes(x))), 'the fourth New chat listed');
+  await page.locator('#nav .row[data-chat="' + id4 + '"]').click();
+  const pane4 = page.locator('#chats .pane[data-id="' + id4 + '"]');
+  await pane4.locator('.composer textarea').fill('config'); await pane4.locator('.composer textarea').press('Enter');
+  const reply4 = pane4.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply4.waitFor({ timeout: 20000 });
+  assert.match(await reply4.innerText(), /effort=high,/, '(7) a New chat starts on what the daemon kept (High), not the newest send (Low)');
   assert.deepEqual(errors, []);
   console.log('PASS O133 Settings: Defaults shown as kept; a late read never puts back an older one');
 });
@@ -603,12 +634,13 @@ test('N6-2: a Default effort row drawn again while its save is out shows the sav
   await until(async () => (await call(instance, '/start-defaults')).claude.model === 'haiku', 'the model saved');
   await app.evaluate(({ ipcMain }) => {
     const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
-    ipcMain.handle('p9:chat', async (e, ...args) => { const r = await h(e, ...args); if (args[0] !== 'newChatDefaults' || !args[1]?.set?.claude?.effort) return r;
-      await new Promise((resolve) => { globalThis.n62release = resolve; }); return r; });
+    // N6-2b review: held before the daemon applies it, so no read can show it early (with rev a read made meanwhile is kept).
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] === 'newChatDefaults' && args[1]?.set?.claude?.effort) await new Promise((resolve) => { globalThis.n62release = resolve; });
+      return h(e, ...args); });
   });
   await page.selectOption('[data-default-effort="claude"]', 'high');
   await until(async () => app.evaluate(() => !!globalThis.n62release), 'the effort save held in main');
-  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', 'the daemon has it; only its answer is held');
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, '', 'the save is held before the daemon has it');
   await page.click('#setClose'); await open();
   assert.equal(await page.locator('[data-default-effort="claude"]').inputValue(), '', 'drawn from what was kept before the save');
   // The page's lists loop (chat-view.mjs lists) redraws the rows once more when it ends, which would hide the bug: wait until the
