@@ -1206,6 +1206,19 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.deepEqual(await seen(), ['false', false], 'a second press did not shut Details');
   await redraw();
   assert.deepEqual(await seen(), ['false', false], 'the redraw opened Details again');
+  // I3 part B: from Details, a note goes out through the page's own route list (the desktop's note line) and starts no
+  // message; Restart from notes stops its turn and queues "read notes/lead.md".
+  await lookBtn.click();
+  const asaid = li.locator('[data-sv-asaid]'), ev = async () => (await call(instance, '/chat/events?after=0&only=' + run.sprint)).events;
+  await li.locator('[data-sv-msg]').fill('from the page: B1 waits');
+  await li.locator('[data-sv-act="note"]').click();
+  await until(async () => /^Noted/.test(await asaid.textContent()), async () => 'said: ' + await asaid.textContent());
+  assert.equal(await li.locator('[data-sv-msg]').inputValue(), '', 'the sent note stayed in the box');
+  assert.ok((await ev()).some((e) => (e.type === 'note' || (e.type === 'user' && e.data.info)) && e.data.text === 'from the page: B1 waits' && e.data.from === 'user'), 'the note never reached the chat as the owner\'s note');
+  await li.locator('[data-sv-act="restart"]').click();
+  await until(async () => (await asaid.textContent()) === 'Restarted: its turn stopped and it reads its notes next.', async () => 'said: ' + await asaid.textContent());
+  await until(async () => (await ev()).some((e) => e.type === 'user' && /read notes\/lead\.md in the sprint folder first/.test(e.data?.text ?? '')), 'the restart message never reached the chat', 12000);
+  await lookBtn.click();
   // The Setup parts are still below: the roles and the files.
   assert.deepEqual([await page.locator('[data-role-row]').count() > 0, await page.locator('[data-pj="spfile"]').count() > 0, (await page.locator('[data-pj="spstart"]').textContent()).trim()], [true, true, 'Start again']);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view ' + (await page.screenshot({ type: 'png' })).toString('base64'));

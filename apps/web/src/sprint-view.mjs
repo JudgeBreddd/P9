@@ -2,7 +2,7 @@
 // code is not parsed at startup (test/shell-bundle.test.mjs).
 // It draws one answer: the body of GET /sprints/<id>/status, which is what the sprint_status tool gives an agent
 // (apps/server/sprint-hooks.mjs, view). Nothing here counts on its own: every number on the page is in that answer.
-import { svg, runnerPicks, modes, LOOSE } from './helpers.mjs';
+import { svg, runnerPicks, modes, LOOSE, copy } from './helpers.mjs';
 const R = 16, C = +(2 * Math.PI * R).toFixed(2);
 const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" role="img" aria-label="${label}"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="t" cx="20" cy="20" r="${R}"/>${done && total ? `<circle class="a" cx="20" cy="20" r="${R}" stroke-dasharray="${+(C * Math.min(1, done / total)).toFixed(2)} ${C}"/>` : ''}</svg><b>${done}/${total}</b></span>`;
 // 3 725 000 ms reads "1 h 2 min".
@@ -45,6 +45,8 @@ const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.s
 // o: the shell's agent lists (projects-view.mjs). picks: per chat, open or not, the values picked and what came back, kept
 // across the 5 s redraws; this module's own listeners, so the startup JS carries none of it.
 const picks = new Map(), pk = id => picks.get(id) ?? (picks.set(id, {}), picks.get(id));
+// #493: what P9 answers a press (placed) on a chat stopped since the last poll drew it; the daemon refuses it (chat.mjs prompt).
+const STALE = 'Not sent: it was stopped since this page last read it, so it holds no worker place. Its lead\'s send_chat starts it under the limit.';
 const flat = xs => xs.flatMap(x => Array.isArray(x.options) ? flat(x.options) : [[x.value, x.name]]);
 function repick(w, o, esc) {
   const k = pk(w.chat), a = w.profile ? 'claude' : w.provider, ep = o.lastPickers[a]?.find(p => o.pickerKind(p) === 'effort');
@@ -68,16 +70,16 @@ globalThis.document?.addEventListener('click', e => {
   const to = [mx?.value, ef?.value].filter(Boolean).join(' · ');
   const lock = on => { b.disabled = k.busy = on; f.querySelectorAll('[data-sv-r]').forEach(x => { x.disabled = on; }); };
   lock(true); said('Sending…');
-  window.p9.chat('prompt', { id: li.dataset.key, when: 'queue', text: `You now run on ${to} (changed by the owner in the Sprint View), from this turn on. Carry on with your work.`,
+  window.p9.chat('prompt', { id: li.dataset.key, placed: true, when: 'queue', text: `You now run on ${to} (changed by the owner in the Sprint View), from this turn on. Carry on with your work.`,
     ...(m && { model: m }), ...(e2 && { config: { [ef.dataset.id]: e2 } }) })
-    .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
+    .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : r.body?.error === 'chat-stopped' ? STALE : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
     .then(t => { said(t); lock(false); });
 });
 // I3 worker window, what it reads (look: sprint-hooks.mjs view, kept 15 s per chat): Details under a chat's row opens
 // its role, folder, branch, head and changed files, its items with each review, ready and verdict, a question waiting,
 // its notes file's last lines and its last reply. Open or shut is kept per chat across the 5 s redraws (looking).
 const looking = new Set();
-const lookHtml = (w, s, esc) => {
+const lookHtml = (w, s, esc, acts) => {
   const L = w.look, g = L?.git, mine = s.items.filter(i => i.role && i.role === w.key), p = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
   const where = !w.folder ? 'No folder' : !L ? 'Not read for this record' : !g ? 'Not a git folder, or git did not answer in time'
     : `${g.branch === null ? 'No branch (detached)' : esc(g.branch)} · ${g.head ? esc(g.head.slice(0, 8)) : 'no commit yet'}`;
@@ -89,8 +91,50 @@ const lookHtml = (w, s, esc) => {
     + (w.waiting ? p('Question', 'It is waiting for you: open its chat to answer.') : '') + '</dl>'
     + `<h4>Its items</h4>${mine.length ? `<ul class="sv-items">${mine.map(i => `<li data-sv-litem="${esc(i.id)}"><span class="sv-text">${esc(i.text)}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.merged ? ', merged' : '') + (i.review.fixes ? ` · ${i.review.fixes} fix${i.review.fixes === 1 ? '' : 'es'}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : '<p class="muted sm">No items in the plan for this role.</p>'}`
     + `<h4>Notes${L?.notes ? ` <span class="muted sm mono">${esc(L.notes.file)}</span>` : ''}</h4>${L?.notes?.tail.length ? `<pre class="sv-pre" data-sv-notes>${esc(L.notes.tail.join('\n'))}</pre>` : `<p class="muted sm">${L?.notes ? 'The notes file is empty.' : 'No notes file.'}</p>`}`
-    + `<h4>Last reply</h4>${L?.reply ? `<pre class="sv-pre" data-sv-reply>${esc(L.reply)}</pre>` : '<p class="muted sm">No reply yet.</p>'}</div>`;
+    + `<h4>Last reply</h4>${L?.reply ? `<pre class="sv-pre" data-sv-reply>${esc(L.reply)}</pre>` : '<p class="muted sm">No reply yet.</p>'}`
+    + (acts ? actsHtml(w, esc) : '') + '</div>';
 };
+// I3 worker window, part B: what the owner can do to one chat from its Details, with no lead in between. Each press is a
+// route the chat window already uses (prompt with when steer or queue, cancel), or the owner's note (POST /chat/:id/note).
+// A stopped chat holds no worker place: a message from here would start it again past the sprint's place limit, which
+// only send_chat checks (delegate.mjs take), so it gets none of them. The text, a send going out and what it answered
+// are kept per chat across the 5 s redraws (acting).
+const acting = new Map(), ak = id => acting.get(id) ?? (acting.set(id, {}), acting.get(id));
+const ACTS = [['steer', 'Steer now', 'Into its running turn now'], ['queue', 'Send after its turn', 'Waits for its running turn to end'], ['note', 'Note', 'Information only: starts no turn; it reads it in its running turn or with its next message'],
+  ['stop', 'Stop turn', 'Stops its running turn; it keeps its folder and its place'], ['restart', 'Restart from notes', 'Stops its running turn, then tells it to read its notes file and carry on'],
+  ['review', 'Send for review', 'Tells it to send its work for review with ready (ready checks it as always)']];
+function actsHtml(w, esc) {
+  const k = ak(w.chat), dis = k.busy ? ' disabled' : '', b = (act, label, title, more = '') => `<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-sv-act="${act}" title="${title}"${more}${act === 'copy' ? '' : dis}>${label}</button>`;
+  const cp = w.folder ? b('copy', 'Copy path', 'Copies its folder\'s path, to open it in your editor', ` data-path="${esc(w.folder)}"`) : '';
+  return `<h4>Do</h4><div class="sv-acts" data-sv-acts>` + (w.state === 'stopped'
+    ? `<p class="hint" data-sv-stopped>Stopped: it holds no worker place, so nothing here starts it again (that would pass the sprint's place limit). Its lead's send_chat starts it under the limit; or open its chat.</p><div class="sv-btns">${cp}</div>`
+    : `<textarea data-slot="input" data-sv-msg rows="2" maxlength="20000"${dis} aria-label="${esc(`Message or note to ${w.key ?? w.title ?? 'this chat'}`)}" placeholder="A message or a note for this chat">${esc(k.text ?? '')}</textarea>`
+      + `<div class="sv-btns">${ACTS.map(([a, l, ti]) => b(a, l, ti, a === 'restart' ? ` data-notes="notes/${esc(w.key ?? w.chat)}.md"` : '')).join('')}${cp}</div>`)
+    + `<p class="hint">Moving an item to another chat is not here: P9 has no route for it. Change the item's role in the plan, or ask the lead.</p><span class="hint" data-sv-asaid role="status">${esc(k.said ?? '')}</span></div>`;
+}
+const answerSaid = (act, r) => r.status === 202 || r.status === 200 ? (act === 'stop' ? 'Stopped its turn.' : act === 'note' ? (r.body?.steered ? 'Noted, into its running turn.' : 'Noted: it reads it with its next message.')
+  : r.body?.held ? 'Sent: it gets it when its running turn ends.' : r.body?.steered ? 'Sent into its running turn.' : 'Sent: it started a turn.')
+  : act === 'stop' && r.body?.error === 'no-turn' ? 'It has no turn running.'
+  : r.body?.error === 'chat-stopped' ? STALE : `Not sent: ${r.body?.error || r.status}.`;
+globalThis.document?.addEventListener('input', e => { const x = e.target.closest?.('[data-sv-msg]'), id = x?.closest('li[data-key]')?.dataset.key; if (id) ak(id).text = x.value; });
+globalThis.document?.addEventListener('click', e => {
+  const b = e.target.closest?.('[data-sv-act]'), li = b?.closest('li[data-key]'); if (!li) return;
+  const act = b.dataset.svAct, id = li.dataset.key, k = ak(id), box = li.querySelector('[data-sv-acts]'), ta = box.querySelector('[data-sv-msg]');
+  const said = t => { k.said = t; box.querySelector('[data-sv-asaid]').textContent = t; };
+  if (act === 'copy') return copy(b.dataset.path, b);
+  if (k.busy) return;
+  const text = (ta?.value ?? '').trim(), go = (what, body) => window.p9.chat(what, { id, ...body }).catch(e => ({ status: 0, body: { error: e?.message || String(e) } }));
+  if (['steer', 'queue', 'note'].includes(act) && !text) return said('Write a message first.');
+  const lock = on => { k.busy = on; box.querySelectorAll('[data-sv-act]:not([data-sv-act="copy"]), [data-sv-msg]').forEach(x => { x.disabled = on; }); };
+  lock(true); said('Sending…');
+  const out = act === 'note' ? go('note', { text }) : act === 'stop' ? go('cancel', {})
+    : act === 'review' ? go('prompt', { placed: true, when: 'queue', text: 'The owner asks you, from the Sprint View, to send your work for review now: call ready with your row id, the commit and each check. If it is not finished, say what is left instead.' })
+    // Restart: its turn stops (none running is fine), then a message waits for the turn's end and starts the next one.
+    : act === 'restart' ? go('cancel', {}).then(r => r.status === 200 || r.body?.error === 'no-turn' ? go('prompt', { placed: true, when: 'queue', text: `The owner restarted you from the Sprint View: read ${b.dataset.notes} in the sprint folder first, then carry on with your work.` }) : r)
+    : go('prompt', { placed: true, text, when: act });
+  out.then(r => { const ok = r.status === 202 || r.status === 200; if (ok && ['steer', 'queue', 'note'].includes(act)) { k.text = ''; const t2 = li.querySelector('[data-sv-msg]'); if (t2) t2.value = ''; }
+    said(act === 'restart' && ok ? 'Restarted: its turn stopped and it reads its notes next.' : answerSaid(act, r)); lock(false); });
+});
 globalThis.document?.addEventListener('click', e => {
   const b = e.target.closest?.('[data-sv-lookbtn]'), li = b?.closest('li[data-key]'); if (!li) return;
   const f = li.querySelector('[data-sv-look]'), open = f.hidden; f.hidden = !open; b.setAttribute('aria-expanded', open);
@@ -141,7 +185,7 @@ export function statusHtml(s, esc, opts = {}, o = null) {
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
         <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}${w.spent ? ' · ' + usedText(w.spent) : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? (q.next ? 'Next: ' + q.next : q.next === null ? 'All its items passed review' : 'No item taken yet') : 'No items in the plan for this role'))}</span>
-        <span class="tag" data-sv-state>${esc(word)}</span></button><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-sv-lookbtn aria-expanded="${looking.has(w.chat)}" title="Everything about this chat: role, folder, branch, items, notes, last reply">Details</button>${!end && o ? repick(w, o, esc) : ''}${lookHtml(w, s, esc)}</li>`; }).join('')}</ul>
+        <span class="tag" data-sv-state>${esc(word)}</span></button><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-sv-lookbtn aria-expanded="${looking.has(w.chat)}" title="Everything about this chat: role, folder, branch, items, notes, last reply">Details</button>${!end && o ? repick(w, o, esc) : ''}${lookHtml(w, s, esc, !end)}</li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
       <ul class="sv-items">${s.owner.items.map(i => `<li data-sv-item="${esc(i.id)}" data-owner="${i.done ? 'closed' : 'open'}"><span class="sv-text">${esc(i.text)}</span>${i.done ? '<span class="tag">Closed by you</span>' : end ? '<span class="tag">Open at Close</span>' : `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}" data-item="${esc(i.id)}" title="Closes this item. It is yours: no review and no merge is involved, and the plan's box stays as it is.">Close</button>`}</li>`).join('')}</ul></li></ul>` : ''}
     ${plan.length ? `<div data-sv-flat${byPhase(s) && planOpen.has(s.sprint.id) ? ' hidden' : ''}><h3>Plan items</h3><ul class="sv-items">${plan.map(i => row(i)).join('')}</ul></div>${byPhase(s) ? planView(s, plan, row, esc) : ''}` : ''}
