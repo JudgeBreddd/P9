@@ -108,7 +108,7 @@ export const DELEGATE_TOOLS = (input) => {
     ['rename_chat', 'Rename a chat you started, or your own chat (no chat), so the list and the sprint card name the work it does now. The user can rename it again; P9 no longer names it from its first message.',
       input({ chat, title: { type: 'string', maxLength: 120, description: 'The new name: 1 to 120 characters, one line.' } }, ['title'])],
     ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview, and goal ({ objective, status }) when its agent keeps one.', input({})],
-    ['list_providers', 'What can be named as provider, in open_chat and in a sprint\'s roles.json: claude and codex with the models and efforts each offers (null until P9 has read that agent\'s list), and each provider profile the user made in Settings as profile:<id> with its name and models. '
+    ['list_providers', 'What can be named as provider, in open_chat and in a sprint\'s roles.json: ' + AGENT_IDS.join(', ') + ' with the models and efforts each offers (null until P9 has read that agent\'s list), and each provider profile the user made in Settings as profile:<id> with its name and models. '
       + 'A profile takes Claude\'s efforts. It says what exists, not what you may start: open_chat still starts only what a free Settings > Delegation row starts.', input({})],
     ['plan_usage', 'Every provider\'s plan use, from the same source as the user\'s Usage page: providers has one key per provider P9 runs, null when nothing is recorded or it is signed out (signedOut lists those). '
       + 'Each reading has its windows (fiveHour, sevenDay, and models: a week window per model family when the plan has them), each with usedPercent, resetsAt (ms), windowMins and pace (ahead: at this rate it runs out before the reset; on; headroom: room to use more; null with no reset ahead), '
@@ -126,7 +126,7 @@ export const DELEGATE_TOOLS = (input) => {
         answer: { type: 'object', description: 'An approval: { "optionId": one of waiting.options[].optionId }. A question: { "action": "accept", "content": { field: value } } with the fields of waiting.form, or { "action": "decline" }.' } }, ['chat', 'request', 'answer'])],
     ['new_sprint', 'Make a sprint to prepare, in your project: returns its id and its folder. Fill in the folder\'s files before start_sprint: sprint.md the plan; roles.json one row per chat, '
       + '{ "folder"?: repo to clone, relative to the workspace, "roles": [ { "key": "lead", "provider", "model", "effort", "mode"?, "owns"? }, { "key": "review", ... }, { "key": "<worker>", ... } ] } '
-      + '(provider claude, codex or profile:<id>; model and effort values that agent lists); roles/<key>.instructions.md, .rules.md and .work.md (its first message) for each role.',
+      + '(provider ' + AGENT_IDS.join(', ') + ' or profile:<id>; model and effort values that agent lists); roles/<key>.instructions.md, .rules.md and .work.md (its first message) for each role.',
     input({ title: { type: 'string', maxLength: 120 } }, ['title'])],
     ['start_sprint', 'Start a prepared sprint on the user\'s word: P9 asks the user first, in every mode, and that answer is the approval of its plan. It makes the lead\'s chat and, one by one, each chat under it with exactly its row\'s provider, model and effort; '
       + 'a row P9 cannot start is refused by name before any chat is made. Safe to call again after a failure halfway: what was made is kept. '
@@ -445,7 +445,7 @@ export function createDelegate({ chat, allowed, usage }) {
         || Object.keys(row).some((k) => !ROW_KEYS.includes(k))) return no('key', `a row is { key, provider, model, effort } and may add mode and owns (what it owns, at most ${OWNS_MAX} characters); nothing else.`);
     const profile = row.provider.startsWith('profile:') ? profiles.find((p) => p.id === row.provider.slice(8)) : null;
     const provider = profile ? 'claude' : row.provider;
-    if (!Object.hasOwn(TIER, provider)) return no('provider', row.provider ? `P9 cannot start "${row.provider}" (claude, codex or profile:<id> of a provider profile in Settings).` : 'not set.');
+    if (!Object.hasOwn(TIER, provider)) return no('provider', row.provider ? `P9 cannot start "${row.provider}" (${AGENT_IDS.join(', ')} or profile:<id> of a provider profile in Settings).` : 'not set.');
     const known = chat.lists()[provider], picker = known?.pickers?.find((o) => o.category === 'thought_level');
     if (!row.model) return no('model', 'not set.');
     if (profile ? !profile.models.includes(row.model) : !known?.model?.options) return no('model', profile ? `the profile ${profile.name} does not list "${row.model}".` : `P9 has not read ${provider}'s model list yet; open Settings > Delegation once, then start again.`);

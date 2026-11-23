@@ -383,7 +383,7 @@ async function chatDesktop(t, prompts) {
     assert.equal(await page.locator('#side .art').getAttribute('data-rendered'), 'rendered');
     return (await page.locator('#side .art-frame').elementHandle()).contentFrame();
   };
-  return { id, turn, page, shot, show, frame };
+  return { id, turn, page, shot, show, frame, app };
 }
 
 test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an edited file shows its diff, read-only', { timeout: 120000 }, async (t) => {
@@ -413,7 +413,7 @@ test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an
   assert.equal(await tabs.nth(1).getAttribute('aria-selected'), 'true');
   await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Created · proj' }).waitFor({ timeout: 8000 }); // once the workspace path is known
   assert.equal(await items.count(), 2);
-  assert.match(await items.nth(0).textContent(), /^Diffnotes\.mdEdited · proj$/);
+  assert.match(await items.nth(0).textContent(), /^Diffnotes\.md\+1 −1Edited · proj$/);
   assert.match(await items.nth(1).textContent(), /^Diffmade\.mdCreated · proj$/);
   assert.equal(await page.evaluate(id => localStorage.getItem('p9-chat-files:' + id), id), 'changes', 'the tab is remembered');
   await shot('chat-files-changes-tab');
@@ -451,12 +451,59 @@ test('O222: the Changes tab tells a v2 edited file from a created one, and shows
   const items = page.locator('#side .cf-item'), tabs = page.locator('#side .cf-tabs [role=tab]');
   await tabs.nth(1).click();
   await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Created · proj' }).waitFor({ timeout: 8000 });
-  assert.deepEqual((await items.allTextContents()).sort(), ['Difffresh.mdCreated · proj', 'Diffkept.mdEdited · proj']);
+  assert.deepEqual((await items.allTextContents()).sort(), ['Difffresh.md+1 −0Created · proj', 'Diffkept.md+1 −1Edited · proj']);
   await pick(items.filter({ hasText: 'kept.md' }));
   await page.locator('#side .art-bar .art-title', { hasText: 'proj/kept.md' }).waitFor({ timeout: 8000 });
   const f = await frame();
   assert.deepEqual(await f.locator('.del').allTextContents(), ['- old line']);
   assert.deepEqual(await f.locator('.add').allTextContents(), ['+ new line']);
+});
+
+// MC-13, MC-14: each changed file shows its lines added and removed over all its writes in the chat, and what its newest write
+// did: a file the chat created and then edited no longer reads "Created"; a file edited twice says so. Main showed no counts and
+// kept "Created" for good. The diff view still steps through every write.
+test('MC-13 MC-14 the Changes tab counts lines over a file\'s writes and says Created, edited after a later edit', { timeout: 120000 }, async (t) => {
+  const { page, show, frame, shot } = await chatDesktop(t, [['mc13 writes', 'mc13 done']]);
+  const { button } = await show();
+  await button.click();
+  await shot('mc13-first-open-at-click'); // the first open, before the list's chunk has loaded
+  const items = page.locator('#side .cf-item'), tabs = page.locator('#side .cf-tabs [role=tab]');
+  await tabs.nth(1).click();
+  await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: '· proj' }).first().waitFor({ timeout: 8000 });
+  await shot('mc13-changes-tab');
+  assert.deepEqual(await items.allTextContents(), ['Diffredo.md+4 −2Created, edited ×1 · proj', 'Diffnotes.md+2 −1Edited ×2 · proj', 'Diffnew.md+4 −1Created, edited ×1 · proj'],
+    'newest first; counts summed over the finished writes (the failed one is left out); redo.md, deleted and written again, counts its edits from the new file');
+  assert.equal(await items.filter({ hasText: 'new.md' }).locator('.cf-lines').getAttribute('title'), '4 lines added, 1 removed, over 2 writes in this chat');
+  assert.equal(await items.filter({ hasText: 'notes.md' }).locator('.cf-add').evaluate(e => getComputedStyle(e).color) !== await items.filter({ hasText: 'notes.md' }).locator('.cf-del').evaluate(e => getComputedStyle(e).color), true, 'added and removed in different colours');
+  await pick(items.filter({ hasText: 'new.md' }));
+  await page.locator('#side .art-bar .art-title', { hasText: 'proj/new.md' }).waitFor({ timeout: 8000 });
+  assert.match(await (await frame()).locator('pre').textContent(), /@@ Edit 1 of 2 @@[\s\S]*@@ Edit 2 of 2 @@/, 'the diff view steps through both writes');
+});
+
+// MC-13: the list is a chunk loaded on the panel's first open. A load that fails after another panel took the side leaves
+// that panel alone (Reviewer, #495); one that fails while the list is shown says so, and the next open loads it.
+test('MC-13 a Changes list that failed to load comes back on the next open', { timeout: 120000 }, async (t) => {
+  const { page, show, app } = await chatDesktop(t, [['mc13 writes', 'mc13 done'], [`Here:\n${F}markdown artifact Held one\n# Kept\n${F}`, 'echo:Here']]);
+  // The window loads over p9://, which page.route does not see; the main process's session can hold or cancel the chunk.
+  const block = mode => app.evaluate(({ session }, mode) => { globalThis.mc13Held = null; session.defaultSession.webRequest.onBeforeRequest(mode ? (d, cb) => !/\/chat-files[^/]*\.js(\?|$)/.test(d.url) ? cb({}) : mode === 'hold' ? globalThis.mc13Held = cb : cb({ cancel: true }) : null); }, mode);
+  const { button } = await show();
+  await block('hold');
+  await button.click();
+  await app.evaluate(() => new Promise(r => { const t0 = Date.now(), go = () => globalThis.mc13Held || Date.now() - t0 > 8000 ? r() : setTimeout(go, 50); go(); }));
+  await page.locator('#chats .artifact-chip[data-title="Held one"]').first().click();
+  await page.locator('#side .art-bar .art-title', { hasText: 'Held one' }).waitFor({ timeout: 8000 });
+  assert.equal(await app.evaluate(() => { const cb = globalThis.mc13Held; if (cb) cb({ cancel: true }); return Boolean(cb); }), true, 'the chunk was held until the artifact took the side');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#side', { hasText: 'could not be loaded' }).count(), 0, 'the failed load leaves the artifact panel alone');
+  await page.locator('#side .art-bar .art-title', { hasText: 'Held one' }).waitFor({ timeout: 2000 });
+  await block('fail');
+  await button.click();
+  await page.locator('#side', { hasText: 'The list could not be loaded. Open it again to retry.' }).waitFor({ timeout: 8000 });
+  await block(null);
+  await page.locator('#side [data-side-close]').click();
+  await button.click();
+  await page.locator('#side .cf-tabs [role=tab]').first().waitFor({ timeout: 8000 });
+  assert.equal(await page.locator('#side', { hasText: 'could not be loaded' }).count(), 0);
 });
 
 // O121 part 4b: a deleted file says Deleted in the Changes tab, and a moved one says where it came from in its diff.
@@ -467,7 +514,7 @@ test('O121 part 4b: the Changes tab marks a v2 deleted file and a v2 renamed fil
   const items = page.locator('#side .cf-item'), tabs = page.locator('#side .cf-tabs [role=tab]');
   await tabs.nth(1).click();
   await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Deleted · proj' }).waitFor({ timeout: 8000 });
-  assert.deepEqual((await items.allTextContents()).sort(), ['Diffgone.mdDeleted · proj', 'Diffmoved.mdEdited · proj']);
+  assert.deepEqual((await items.allTextContents()).sort(), ['Diffgone.md+0 −1Deleted · proj', 'Diffmoved.md+1 −1Edited · proj']);
   await pick(items.filter({ hasText: 'moved.md' }));
   await page.locator('#side .art-bar .art-title', { hasText: 'proj/moved.md' }).waitFor({ timeout: 8000 });
   const f = await frame();
@@ -482,7 +529,7 @@ test('O121 part 4b: a v2 deleted file stays Deleted after a status-only completi
   const items = page.locator('#side .cf-item');
   await page.locator('#side .cf-tabs [role=tab]').nth(1).click();
   await page.locator('#side .cf-item[data-cf-file]', { hasText: 'other.md' }).waitFor({ timeout: 8000 });
-  assert.deepEqual((await items.allTextContents()).sort(), ['Diffgone.mdDeleted · proj', 'Diffother.mdEdited · proj']);
+  assert.deepEqual((await items.allTextContents()).sort(), ['Diffgone.md+0 −1Deleted · proj', 'Diffother.md+1 −1Edited · proj']);
 });
 
 test('artifacts: a chat\'s artifact is still listed after it compacts and the window reloads', { timeout: 120000 }, async (t) => {
