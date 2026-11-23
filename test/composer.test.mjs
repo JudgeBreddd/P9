@@ -213,6 +213,34 @@ test('CP12: at the narrowest split pane, mid-turn, Steer, Queue, Interrupt and C
   console.log('PASS CP12: at ' + fit.width + ' px all four chip buttons showed whole and Interrupt stopped the turn and sent');
 });
 
+// O234: in a ~1270 px window, mid-turn, the send arrow wrapped to its own line under the pills. The chip gives way (its
+// buttons wrap among themselves) so the arrow stays on the pills' row at every width; each button stays whole.
+test('CP13: mid-turn, the send arrow stays on the pills row from a 1270 px window down to 800 px', { timeout: 150000 }, async (t) => {
+  const { app, instance, id, page, pane, send } = await setup(t, 'cp13', { files: ['slow-tools'] });
+  await send('tools 1');
+  await started(instance, id, 'tool-1');
+  await pane.locator('.hint [data-when="now"]').waitFor({ timeout: 5000 });
+  const seen = [];
+  for (const width of [1270, 1100, 960, 800]) {
+    await app.evaluate(({ BrowserWindow }, w) => { const win = BrowserWindow.getAllWindows()[0]; win.unmaximize(); win.setContentSize(w, 800); }, width);
+    await page.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 });
+    await page.waitForTimeout(300); // one frame for the layout after the resize
+    seen.push(await pane.evaluate((p, w) => {
+      const pr = p.getBoundingClientRect(), r = (s) => p.querySelector(s).getBoundingClientRect(), mid = (b) => b.top + b.height / 2;
+      const inside = (b) => b.width > 0 && b.left >= pr.left - 0.5 && b.right <= pr.right + 0.5;
+      const pill = r('.composer .bar .pill'), arrow = r('.composer .send');
+      return { width: w, sameRow: Math.abs(mid(arrow) - mid(pill)) <= 1, top: [Math.round(pill.top), Math.round(arrow.top)],
+        whole: [...p.querySelectorAll('.composer .hint button, .composer .send')].every((b) => inside(b.getBoundingClientRect())) };
+    }, width));
+    if (width === 1270 || width === 800) {
+      const png = await page.screenshot({ type: 'png' });
+      if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'cp13-' + width + '.png'), png); else console.log('P9_SHOT cp13-' + width + ' ' + png.toString('base64'));
+    }
+  }
+  assert.deepEqual(seen.map(({ width, sameRow, whole }) => ({ width, sameRow, whole })), [1270, 1100, 960, 800].map((width) => ({ width, sameRow: true, whole: true })), JSON.stringify(seen));
+  console.log('PASS CP13: the send arrow stayed on the pills row and every chip button stayed whole: ' + JSON.stringify(seen));
+});
+
 // CP2, CP4, CP5: each check gathers what it saw into one object, so a failure shows every part that broke.
 const height = (l) => l.evaluate((n) => n.getBoundingClientRect().height);
 test('CP2: the box grows with its text to twice its height, then scrolls', { timeout: 90000 }, async (t) => {
