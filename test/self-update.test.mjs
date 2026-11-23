@@ -541,6 +541,36 @@ test('update: a swap that fails before any restart gives new starts back, and th
   assert.equal(prompt.status, 202, JSON.stringify(prompt));
 });
 
+// A file the update reads that does not parse (a broken tarball, a disk fault) reads as none, never as a thrown error:
+// a package.json that does not parse is version-mismatch; a result.json being replaced is read again on the next poll, and
+// /update/status answers without it.
+test('update: a pushed package.json that does not parse is version-mismatch, and nothing is built', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  const pushed = await push(instance, await archive(NEXT, { 'package.json': '{"version": ' }), NEXT);
+  assert.equal(pushed.status, 202, JSON.stringify(pushed));
+  const failed = await until(async () => { const j = await job(instance); return j?.phase === 'failed' && j; }, 'refused');
+  assert.deepEqual([failed.error, failed.found], ['version-mismatch', null]);
+  assert.deepEqual(await lines(instance.log.pnpm), [], 'nothing built');
+});
+
+test('update: a swap result that does not parse yet is read again; the swap\'s real result then ends the job', { skip, timeout: 60000 }, async (t) => {
+  // systemd-run leaves a half-written result.json, then the swap's real one 2 s later.
+  const instance = await server(t, { systemdRun: 'r=; i=; p=; for a in "$@"; do [ "$p" = --result ] && r=$a; [ "$p" = --id ] && i=$a; p=$a; done\n'
+    + 'printf \'{"id": "%s", "ok": fa\' "$i" > "$r"\n( sleep 2; printf \'{"id": "%s", "ok": false, "reason": "swap-failed"}\' "$i" > "$r" ) </dev/null >/dev/null 2>&1 &\n' });
+  const pushed = await push(instance, await archive(NEXT), NEXT);
+  assert.equal(pushed.status, 202, JSON.stringify(pushed));
+  const failed = await until(async () => { const j = await job(instance); return j?.phase === 'failed' && j; }, 'the job ended with the swap');
+  assert.equal(failed.error, 'swap-failed', 'the real result, not update-failed from the half-written one');
+});
+
+test('update: /update/status answers when result.json does not parse, with no result', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  await until(() => existsSync(updateFolder(instance)), 'the update folder');
+  await writeFile(path.join(updateFolder(instance), 'result.json'), '{"id": ');
+  const status = await call(instance, '/update/status');
+  assert.deepEqual([status.status, status.result], [200, undefined], JSON.stringify(status));
+});
+
 // K1: a server before 0.1.6 has no /update routes. The laptop says it is too old (the window shows the steps), not nothing.
 test('update, laptop: a server with no /update routes (before 0.1.6) is too-old, with its version', { skip, timeout: 30000 }, async (t) => {
   const state = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-old-')), socketPath = path.join(state, 'daemon.sock');
