@@ -1739,6 +1739,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
       if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }
       if (body.replaces !== undefined && (typeof body.replaces !== 'string' || body.replaces.length > 64)) { release(); return refused(400, 'request-refused'); }
+      if (body.placed !== undefined && body.placed !== true) { release(); return refused(400, 'request-refused'); }
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
@@ -1747,6 +1748,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try { images = body.images = [...images, ...save(id, files)]; } catch { release(); return refused(500, 'file-not-saved'); }
         delete body.files;
       }
+      // #493 (Reviewer): a Sprint View worker button's message says placed: it goes only to a chat that still holds its worker
+      // place. The page draws no button for a stopped chat, but it draws from its last poll: stopped (and its place refilled)
+      // since, the press would start it past the place limit, which only send_chat checks. Read here, in the step that starts
+      // the turn, so no stop lands between this check and setState below.
+      if (body.placed && ['stopped', 'stopping', 'moving', 'moved'].includes(conversation.state)) { release(); return refused(409, 'chat-stopped'); }
       // S13: a paused sprint's worker starts no turn and takes nothing into a running one for what an agent or P9 sends
       // (a lead's send_chat, a reviewer wake, the messages that waited for a turn's end): each is kept, in order, for
       // Resume. The owner's own message goes through (holding it would look like a dead chat),
@@ -2087,8 +2093,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.
     answering: (id) => !!live.get(id)?.solo,
     // A note for chat id from the chat `from` (notes, above). A running turn that cannot take it now leaves it parked.
-    async note(id, text, from) {
+    // title: the sender's name shown in the chat window, for a sender that is not a chat (the owner's note, server.mjs).
+    async note(id, text, from, title) {
       const body = { text };
+      if (title) titles.set(body, title);
       waitingFor(id); // FIX1 (#241): notes kept over a restart are numbered first, so a new one sorts after them
       notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);

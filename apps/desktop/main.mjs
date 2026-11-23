@@ -777,6 +777,7 @@ export async function createDesktop({ state, open } = {}) {
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
+    note: ({ id: chat, text, ...rest }) => uuid(chat) && typeof text === 'string' && text.length <= 20000 && !Object.keys(rest).length && ['POST', `/chat/${chat}/note`, { text }], // I3: the Sprint View's Note
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],

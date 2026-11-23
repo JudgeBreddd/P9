@@ -83,7 +83,7 @@ function chatItems(s) {
   s.events.forEach((e, i) => {
     if (e.t === 'agent' && e.text?.includes('artifact')) { if (e.artText !== e.text) { e.artText = e.text; e.arts = artifactsIn(e.text); } for (const art of e.arts) { out.push({ type: 'artifact', at: i, art }); loaded.add(artSig(art)); } }
     else if (e.t === 'tool' && e.files && e.status === 'completed') for (const f of e.files) {
-      const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created || !!was?.created, deleted: !!f.deleted };
+      const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created, deleted: !!f.deleted };
       if (was) out.splice(out.indexOf(was), 1); // one row per file, at its newest write
       seen.set(f.path, item); out.push(item);
     }
@@ -99,15 +99,6 @@ function chatItems(s) {
   const versions = new Map();
   for (const it of out) if (it.type === 'artifact') versions.set(it.art.title, [...(versions.get(it.art.title) ?? []).filter(a => artSig(a) !== artSig(it.art)), it.art]);
   return out.filter(it => it.type !== 'artifact' || versions.get(it.art.title).at(-1) === it.art).map(it => it.type === 'artifact' ? { ...it, versions: versions.get(it.art.title) } : it).reverse();
-}
-const fwd = p => String(p).replace(/\\/g, '/');
-// An agent's file path as a workspace path ('proj/notes.md'), or null outside the workspace (or while its path is not known
-// yet). A relative path is from the chat's folder.
-function wsPath(p, folder) {
-  p = fwd(p); const ws = CF.ws && fwd(CF.ws).replace(/\/$/, '');
-  const rel = /^(\/|[A-Za-z]:\/)/.test(p) ? (ws && p.startsWith(ws + '/') ? p.slice(ws.length + 1) : null) : (folder ? folder + '/' : '') + p;
-  const parts = rel?.split('/').filter(x => x && x !== '.');
-  return !parts?.length || parts.includes('..') ? null : parts.join('/');
 }
 // The daemon's workspace folder, once, from the setup read the welcome screen uses (the agents' paths are absolute under it).
 const loadWs = () => { if (CF.asked) return; CF.asked = true; outer.loadSetup().then(b => { CF.ws = b?.workspace ?? null; if (!CF.ws) CF.asked = false; renderChatFiles(); }, () => { CF.asked = false; }); };
@@ -130,33 +121,14 @@ function openNotes(s) {
     onClose: () => queueMicrotask(() => renderChats()) });
   renderChats();
 }
+// The list itself (its rows, line counts and diffs: MC-13, MC-14) is chat-files.mjs, loaded when the panel first opens, so the
+// shell's startup JS stays in its budget (shell-bundle.test.mjs).
+const CFM = {};
 function renderChatFiles() {
-  const b = outer.side.body; if (outer.side.current()?.slot !== 'chat-files') return;
-  const s = outer.S.sessions.find(x => x.id === CF.sid), all = s ? chatItems(s) : [], changes = CF.tab === 'changes';
-  const arts = all.filter(it => it.type === 'artifact'), files = all.filter(it => it.type === 'file'), items = changes ? files : arts;
-  const row = (it, i) => {
-    if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact${it.versions.length > 1 ? ` · ${it.versions.length} versions` : ''}</span></button></li>`;
-    const rel = wsPath(it.path, s.folder), shown = rel ?? fwd(it.path), cut = shown.lastIndexOf('/');
-    const where = rel === null ? (CF.ws ? 'outside the workspace, ' : '') + (shown.slice(0, cut) || '/') : cut < 0 ? 'workspace' : shown.slice(0, cut);
-    return `<li><button type="button" data-cf="${i}" title="Show the changes to ${esc(shown)} (read-only)" class="cf-item" data-cf-file><span class="art-kind">Diff</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.deleted ? 'Deleted' : it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></button>`
-      + `<button type="button" ${GH} data-cf-copy="${i}" title="Copy ${esc(fwd(it.path))}">Copy path</button></li>`;
-  };
-  const tab = (id, label, n) => `<button type="button" role="tab" ${GH} data-cf-tab="${id}" aria-selected="${CF.tab === id}">${label} <span class="cf-n">${n}</span></button>`;
-  const html = `<div class="cf-tabs" role="tablist">${tab('artifacts', 'Artifacts', arts.length)}${tab('changes', 'Changes', files.length)}</div>`
-    + (items.length ? `<ul class="cf-list" role="tabpanel">${items.map(row).join('')}</ul>` : `<p class="empty" role="tabpanel">${changes ? 'No changes yet. The files this chat edits show here; click one to read its diff.' : 'No artifacts yet. The artifacts this chat posts show here.'}</p>`);
-  if (CF.html === html) return; // called on every chat change: the DOM is left alone when nothing in it changed
-  CF.html = html; b.innerHTML = html;
-  b.querySelectorAll('[data-cf-tab]').forEach(el => el.onclick = () => { CF.tab = el.dataset.cfTab; localStorage.setItem(cfKey(CF.sid), CF.tab); renderChatFiles(); });
-  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true, versions: it.versions.map(v => ({ ...v, sid: s.id })) }); else openChange(s, it); });
-  b.querySelectorAll('[data-cf-copy]').forEach(el => el.onclick = () => copy(fwd(items[+el.dataset.cfCopy].path), el));
-}
-// A changed file's diffs, read-only, in the artifact view as plain text (artifact.mjs frameDoc 'diff'): every finished edit call
-// of the loaded chat that wrote it, oldest first, each as the line diff the chat shows (editFiles keeps one per file).
-function openChange(s, it) {
-  const edits = s.events.filter(e => e.t === 'tool' && e.status === 'completed' && e.files?.some(f => f.path === it.path)).map(e => e.files.find(f => f.path === it.path).diff);
-  const src = edits.map((rows, i) => (edits.length > 1 ? `@@ Edit ${i + 1} of ${edits.length} @@\n` : '')
-    + (rows?.length ? rows.map(([k, l]) => (k === 'file' || k === 'hunk' ? '' : k === 'add' ? '+ ' : k === 'del' ? '- ' : '  ') + l).join('\n') : 'No diff was recorded for this edit.')).join('\n\n');
-  openArtifact({ kind: 'diff', lang: 'diff', mode: 'panel', title: wsPath(it.path, s.folder) ?? fwd(it.path), src, sid: s.id, list: true });
+  if (outer.side.current()?.slot !== 'chat-files') return;
+  if (!CFM.render) { CFM.load ??= import('./chat-files.mjs').then(m => { CFM.render = m.render; renderChatFiles(); }, () => { CFM.load = null; if (outer.side.current()?.slot === 'chat-files') outer.side.body.textContent = 'The list could not be loaded. Open it again to retry.'; }); return; }
+  const s = outer.S.sessions.find(x => x.id === CF.sid);
+  CFM.render({ outer, CF, s, all: s ? chatItems(s) : [], GH, cfKey, openArtifact, again: renderChatFiles });
 }
 // From renderChats, in Chat Focus: the open list follows its chat (another chat shown hides it, still remembered), and a
 // remembered one comes back when its chat is shown and the panel is free.

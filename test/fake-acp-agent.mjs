@@ -700,6 +700,21 @@ const connection = acp.connectAgent(stream, {
         writeFileSync(at('failed.md'), 'by the shell after all\n');
       }
       await say('shell done');
+    }
+    // MC-13, MC-14: one file created then edited, one edited twice, one created, deleted and written again.
+    if (text === 'mc13 writes') {
+      const edit = (id, title, content) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: id, title, kind: 'edit', status: 'completed', content } });
+      await edit('mc-1', 'Write new.md', [{ type: 'diff', path: 'new.md', oldText: '', newText: 'a\nb\nc\n' }]);
+      await edit('mc-2', 'Edit new.md', [{ type: 'diff', path: 'new.md', oldText: 'a\nb\nc\n', newText: 'a\nB\nc\n' }]);
+      await edit('mc-3', 'Write redo.md', [{ type: 'diff', path: 'redo.md', newText: '', _meta: { added: true, hunks: [{ old: 0, new: 1, rows: [['add', 'x']] }] } }]);
+      await edit('mc-4', 'Delete redo.md', [{ type: 'diff', path: 'redo.md', newText: '', _meta: { added: false, deleted: true, hunks: [{ old: 1, new: 0, rows: [['del', 'x']] }] } }]);
+      await edit('mc-5', 'Write redo.md', [{ type: 'diff', path: 'redo.md', newText: '', _meta: { added: true, hunks: [{ old: 0, new: 2, rows: [['add', 'y'], ['add', 'z']] }] } }]);
+      await edit('mc-6', 'Edit notes.md', [{ type: 'diff', path: 'notes.md', oldText: 'x\ny\n', newText: 'x\nY\n' }]);
+      await edit('mc-7', 'Edit notes.md', [{ type: 'diff', path: 'notes.md', oldText: 'x\nY\n', newText: 'x\nY\nz\n' }]);
+      await edit('mc-8', 'Edit redo.md', [{ type: 'diff', path: 'redo.md', newText: '', _meta: { added: false, hunks: [{ old: 2, new: 2, rows: [['del', 'y'], ['add', 'Y'], ['ctx', 'z']] }] } }]);
+      // A failed write is not a change: it adds no lines and no edit to notes.md.
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'mc-9', title: 'Edit notes.md', kind: 'edit', status: 'failed', content: [{ type: 'diff', path: 'notes.md', oldText: 'x\nY\nz\n', newText: 'q\n' }] } });
+      await say('mc13 done');
       return { stopReason: 'end_turn' };
     }
     if (text === 'v2 diff') {
