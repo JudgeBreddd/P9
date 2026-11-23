@@ -3,8 +3,10 @@
 // be green"). A plan item names its agreed tests in a last clause, `Tests: <file>::<title words> | <file>::<title words>`
 // (the format is in the plan template, apps/server/sprint-files.mjs). Before a merge this script checks, for the item's
 // commit, that CI is complete and green and that each named test has exactly one passed (✔) line and no failed (✖) line
-// in the CI job logs. Anything it cannot read (no item, no Tests clause, gh failing, a missing log, a title matching no line
-// or more than one) refuses: exit 1, and the last line names what is missing. It never passes by default.
+// in the CI job logs, in a job whose "shard N:" line lists its file, and that its title words are in that file at the
+// commit (spec lines carry no file). Anything it cannot read (no item, no Tests clause, a selector not "file::title", gh
+// failing, more runs or jobs than one page, a missing log, a title matching no line or more than one) refuses: exit 1, and
+// the last line names what is missing. It never passes by default.
 //
 // As a sprint script (hooks.json: point before-merge, blocking: true): P9 gives the sprint's state on stdin and runs it in
 // the sprint folder; the item and commit come from the lead's sprint_event subject (subject.item, subject.commit; without a
@@ -17,23 +19,31 @@ import path from 'node:path';
 const refuse = (why) => { console.log('green check refused: ' + why); process.exit(1); };
 const arg = (name) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : undefined; };
 // ponytail: gh does the GitHub calls (its own sign-in); a host without gh refuses, which is the safe side.
-const gh = (route) => { try { return execFileSync('gh', ['api', route], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
+const gh = (route, ...flags) => { try { return execFileSync('gh', ['api', ...flags, route], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
   catch (e) { refuse(`gh api ${route.split('?')[0]} failed (${String(e.stderr || e.message).trim().split('\n').at(-1) || 'no output'})`); } };
 const json = (route) => { const text = gh(route); try { return JSON.parse(text); } catch { refuse(`gh api ${route.split('?')[0]} gave no JSON`); } };
 
-// The named tests: the text after the item's last "Tests:", split on " | ", each "file::title words".
+// The named tests: the text after the item's last "Tests:", split on " | ", each "file::title words". A selector that is
+// not a test file path and a title (empty, no "::", an empty side) comes back as { bad } for the caller to refuse.
 export function namedTests(row) {
   const at = row.lastIndexOf('Tests:');
   if (at < 0) return null;
-  return row.slice(at + 'Tests:'.length).split(' | ').map((t) => t.trim()).filter(Boolean).map((t) => {
-    const k = t.indexOf('::'); return k > 0 ? { file: t.slice(0, k).trim(), title: t.slice(k + 2).trim() } : { file: null, title: t };
-  });
+  const all = row.slice(at + 'Tests:'.length).trim();
+  return all ? all.split(' | ').map((t) => {
+    const k = t.indexOf('::'), file = t.slice(0, k).trim(), title = t.slice(k + 2).trim();
+    return k > 0 && /^[\w./-]+\.test\.[cm]?js$/.test(file) && title ? { file, title } : { bad: t.trim() };
+  }) : [];
 }
 // The plan line of an item: "- [ ] <id>: ...", the id as planItems reads it (its text before the first colon).
 export function rowOf(plan, item) {
   return plan.split('\n').map((l) => /^\s*- \[[ xX]\] (.+)$/.exec(l)?.[1].trim()).find((t) => t && t.split(':')[0].trim() === item) ?? null;
 }
 // ✔ / ✖ lines of the spec reporter, the title without its "(12.3ms)" and the log's timestamp.
+// The files a CI job ran, from its "shard N: a b, then alone: c" line (the Tests step of test.yaml).
+export function jobFiles(log) {
+  const m = /^(?:\S+Z )?shard \d+: (.*)$/m.exec(log);
+  return m ? m[1].replace(', then alone:', ' ').split(/\s+/).filter(Boolean) : [];
+}
 export function results(log) {
   const out = [];
   for (const line of log.split('\n')) {
@@ -62,25 +72,37 @@ async function main() {
   if (!row) refuse(`item ${item}: not in the plan`);
   const tests = namedTests(row);
   if (!tests?.length) refuse(`item ${item}: names no agreed tests (add a last clause "Tests: <file>::<title words> | ..." to its plan line)`);
+  const bad = tests.find((t) => t.bad !== undefined);
+  if (bad) refuse(`item ${item}: Tests selector "${bad.bad}" is not <test file>::<title words>`);
 
-  const runs = json(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`).workflow_runs ?? [];
+  // ponytail: one page of 100; more refuses rather than reading part of CI.
+  const page = (route, key) => { const r = json(route), list = r[key] ?? [];
+    if ((r.total_count ?? 0) > list.length) refuse(`item ${item}: ${route.split('?')[0]} has ${r.total_count} ${key}, more than one page of ${list.length}`);
+    return list; };
+  const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs');
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
   if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})`);
   const seen = [];
-  for (const r of runs) for (const j of json(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`).jobs ?? []) {
+  for (const r of runs) for (const j of page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')) {
     if (j.conclusion === 'skipped') continue;
     const log = gh(`repos/${repo}/actions/jobs/${j.id}/logs`);
     if (!log.trim()) refuse(`item ${item}: the log of CI job "${j.name}" is empty`);
-    seen.push(...results(log));
+    const files = jobFiles(log);
+    seen.push(...results(log).map((s) => ({ ...s, files })));
   }
   for (const t of tests) {
+    const name = t.file + '::' + t.title;
+    // ponytail: a job lists its files but its spec lines do not say which file each came from; the title words must also be
+    // in the named file at the commit, and a title two files in one job share matches two lines and refuses.
     const hits = seen.filter((s) => s.title.includes(t.title)), ok = hits.filter((s) => s.ok), bad = hits.filter((s) => !s.ok);
-    const name = (t.file ? t.file + '::' : '') + t.title;
     if (bad.length) refuse(`item ${item}: ${name} failed in CI (${bad.length} ✖ line${bad.length > 1 ? 's' : ''})`);
     if (!ok.length) refuse(`item ${item}: ${name} has no passed line in CI on ${commit.slice(0, 8)}`);
     if (ok.length > 1) refuse(`item ${item}: ${name} matches ${ok.length} passed lines; name it so it matches exactly one`);
+    if (!ok[0].files.includes(t.file)) refuse(`item ${item}: ${name} passed in a CI job that did not run ${t.file}`);
+    const source = gh(`repos/${repo}/contents/${t.file}?ref=${commit}`, '-H', 'Accept: application/vnd.github.raw');
+    if (!source.includes(t.title)) refuse(`item ${item}: ${name}: "${t.title}" is not in ${t.file} at ${commit.slice(0, 8)}`);
   }
   console.log(`green: item ${item}, ${tests.length} named test${tests.length > 1 ? 's' : ''} passed in CI on ${commit.slice(0, 8)}`);
 }
