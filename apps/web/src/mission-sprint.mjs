@@ -16,7 +16,9 @@ export function sprintBody(outer, m, body) {
 // failed call are not both blank; each button names its folder. Each copy opens its review (SECURITY.md "Applying to your folder is a yes").
 function copiesBox(outer, m, body) {
   const where = outer.serverInfo?.host || 'this computer', folder = c => (c.source || '').split(/[\\/]/).filter(Boolean).pop() || c.id;
-  return window.p9.mission('sprintCopies').catch(e => ({ status: 0, body: { error: e?.message || String(e) } })).then(r => { const box = body.querySelector('[data-copies]'); if (!box) return;
+  // This draw's own box: a later draw replaces it, so a late answer to an earlier open finds it gone and draws nothing.
+  const box = body.querySelector('[data-copies]');
+  return window.p9.mission('sprintCopies').catch(e => ({ status: 0, body: { error: e?.message || String(e) } })).then(r => { if (!box?.isConnected) return;
     box.innerHTML = r.status !== 200 || !Array.isArray(r.body?.copies) ? `<p class="sm" role="status" data-copies-error>P9 could not list the folder sprints on ${esc(where)} (${esc(r.body?.error || r.status)}).</p>`
       : r.body.copies.length ? `<h3>Folder sprints</h3>${r.body.copies.map(c => `<button data-slot="button" data-variant="outline" data-copy="${esc(c.id)}">${c.applied ? 'Applied' : 'Review change'}: ${esc(folder(c))}</button>`).join(' ')}`
       : `<p class="sm muted" data-copies-none>No folder sprints on ${esc(where)}.</p>`;

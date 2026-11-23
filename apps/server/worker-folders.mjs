@@ -387,7 +387,7 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
       if (!await lstat(path.join(dir, 'copy-record.json')).then(() => true, () => false)) continue;
       // The record's source names the owner's folder, so the list can say which folder a change is for (O233); a record
       // that does not read still lists its copy, with no source.
-      const record = await readFile(path.join(dir, 'copy-record.json'), 'utf8').then((t) => JSON.parse(t), () => null);
+      const record = await readFile(path.join(dir, 'copy-record.json'), 'utf8').then(JSON.parse).catch(() => null);
       out.push({ id, source: typeof record?.source === 'string' ? record.source : '', applied: await lstat(path.join(dir, 'apply-result.json')).then(() => true, () => false) });
     }
     return { copies: out };
