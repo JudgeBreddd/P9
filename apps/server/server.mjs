@@ -533,6 +533,11 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/chat/:id/folder', async (c) => reply(c, await chat.folder(c.req.param('id'))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
+  // I3 worker window (the Sprint View's Note): the owner's note to a chat, as send_chat's note: it starts no turn, a
+  // running turn takes it when it can, else it waits for the next message. Text only, at most 20000 characters.
+  api.post('/chat/:id/note', async (c) => { const body = await json(c);
+    return reply(c, body && typeof body === 'object' && Object.keys(body).join() === 'text' && typeof body.text === 'string' && body.text.trim() && body.text.length <= 20000
+      ? await chat.note(c.req.param('id'), body.text, 'user', 'You, from the Sprint View') : { status: 400, error: 'request-refused' }); });
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/unhold', async (c) => reply(c, chat.unhold(c.req.param('id'), await json(c))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'), c.req.header('content-type') ? await json(c) : {})));
