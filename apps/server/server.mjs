@@ -445,6 +445,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const unstartedFile = settingsFile && path.join(path.dirname(settingsFile), 'build-unstarted.json');
   const unstartedRead = () => (unstartedFile ? readAsset(unstartedFile, 'utf8').then(JSON.parse).then((v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}), () => ({})) : {});
   const unstartedSave = async (v) => { if (unstartedFile) { await writeFile(unstartedFile + '.tmp', JSON.stringify(v) + '\n', { mode: 0o600 }); await rename(unstartedFile + '.tmp', unstartedFile); } };
+  // Fix 3: every change runs in one chain and re-reads the file inside it, so overlapping builds never write a stale copy or share the .tmp.
+  let unstartedQueue = Promise.resolve();
+  const unstartedChange = (change) => { const run = unstartedQueue.then(async () => { const next = change(await unstartedRead()); if (next) await unstartedSave(next); }); unstartedQueue = run.catch(() => {}); return run; };
   api.post('/mission/build', async (c) => {
     // space (threat model row 72): + Add builds into a new scratch space; one that exists is never named, so never rewritten.
     // MC-1: mode, the start mode the window shows on its pill, so the build runs in what the pill says. Without one (an older
@@ -464,17 +467,17 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       if (!base) return reply(c, { status: 404, error: 'unknown-template' });
       const { error, ...result } = await mcp.install(template, space, confirm);
       if (error) return reply(c, { status: error === 'registry-read-only' ? 403 : 400, error, ...result });
-      await unstartedSave({ ...unstarted, [space]: template });
+      await unstartedChange((now) => ({ ...now, [space]: template }));
     }
     const kept = template !== undefined;
     const failed = (error) => { if (!kept) throw error; return { status: 500, error: 'chat-not-started' }; };
-    // Test home only (test/helpers.mjs sets P9_TEST_HOME, so a shipped daemon never takes it): a build-chat-fails file there makes
-    // the next build's chat not start, once, so a test can fail it after the template is in.
-    const testFail = !!process.env.P9_TEST_HOME && await unlink(path.join(process.env.P9_TEST_HOME, 'build-chat-fails')).then(() => true, () => false);
+    // Test home only (test/helpers.mjs sets P9_TEST_HOME, so a shipped daemon never takes it): while a build-chat-fails file is
+    // there (empty, or listing this build's space), its chat does not start, so a test can fail it after the template is in.
+    const testFail = !!process.env.P9_TEST_HOME && await readAsset(path.join(process.env.P9_TEST_HOME, 'build-chat-fails'), 'utf8').then((v) => !v.trim() || v.split('\n').includes(space), () => false);
     const made = testFail ? { status: 500, error: 'chat-not-started' } : await chat.create({ provider, title: 'Build Mission Control' }).catch(failed);
     const sent = made.status === 201 ? await chat.prompt(made.conversation, { text: buildPrompt(space, base), ...(mode && { mode }) }).catch(failed) : made;
     if (sent.status !== 202) return reply(c, kept ? { ...sent, space, kept: true } : sent);
-    if (kept) { const { [space]: done, ...rest } = await unstartedRead(); if (done !== undefined) await unstartedSave(rest); }
+    if (kept) await unstartedChange(({ [space]: done, ...rest }) => (done === undefined ? null : rest));
     return reply(c, { status: 201, conversation: made.conversation, ...(space === undefined ? {} : { space }) });
   });
   // The space picker (threat model row 71): Main (null) or a scratch space that is there, recorded as settings.space_name.

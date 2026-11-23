@@ -342,6 +342,7 @@ test('MC-17: a build from a template adds it to a new space and the prompt names
   // named, and a retry with the same template starts the chat there instead of answering 409 forever.
   await writeFile(path.join(instance.directory, 'build-chat-fails'), '');
   const failed = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab', confirm: true });
+  await rm(path.join(instance.directory, 'build-chat-fails'));
   assert.equal(failed.status, 500, JSON.stringify(failed.body)); assert.equal(failed.body.error, 'chat-not-started'); assert.equal(failed.body.space, 'lab2'); assert.equal(failed.body.kept, true);
   assert.ok((await call(instance, '/mission')).body.spaces.includes('lab2'), 'the added space is kept');
   // Fix 2: the daemon restarts with the page open: the kept space is still retried in place, not answered 409.
@@ -354,5 +355,22 @@ test('MC-17: a build from a template adds it to a new space and the prompt names
   assert.equal((await until(instance, (event) => event.conversation === again.body.conversation && event.data?.content?.text?.startsWith('echo:'))).data.content.text, 'echo:' + buildPrompt('lab2', homelab));
   assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab', confirm: true })).status, 409, 'once its chat started, the space is never the target again');
   assert.deepEqual(JSON.parse(await readFile(path.join(instance.directory, '.config/p9/build-unstarted.json'), 'utf8')), {}, 'a started space is no longer held');
+  // Fix 3: two builds fail at once into different spaces: both records are kept (one chain, re-read inside it), both survive a
+  // restart, and each completion leaves the other's record.
+  const held = path.join(instance.directory, '.config/p9/build-unstarted.json'), record = async () => JSON.parse(await readFile(held, 'utf8'));
+  await writeFile(path.join(instance.directory, 'build-chat-fails'), '');
+  const pair = await Promise.all(['lab3', 'lab4'].map((space) => call(instance, '/mission/build', 'POST', { provider: 'claude', space, template: 'homelab', confirm: true })));
+  await rm(path.join(instance.directory, 'build-chat-fails'));
+  assert.deepEqual(pair.map((r) => [r.status, r.body.space, r.body.kept]), [[500, 'lab3', true], [500, 'lab4', true]], JSON.stringify(pair.map((r) => r.body)));
+  assert.deepEqual(await record(), { lab3: 'homelab', lab4: 'homelab' }, 'both overlapping failures are held');
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit'); instance = await restart(t, instance, 'state-3');
+  assert.deepEqual(await record(), { lab3: 'homelab', lab4: 'homelab' }, 'and both survive a restart');
+  assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab3', template: 'homelab' })).status, 201);
+  assert.deepEqual(await record(), { lab4: 'homelab' }, 'lab3 starting leaves lab4 held');
+  await writeFile(path.join(instance.directory, 'build-chat-fails'), 'lab5\n');
+  const both = await Promise.all([call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab5', template: 'homelab', confirm: true }), call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab4', template: 'homelab' })]);
+  await rm(path.join(instance.directory, 'build-chat-fails'));
+  assert.deepEqual(both.map((r) => [r.status, r.body.space]), [[500, 'lab5'], [201, 'lab4']], JSON.stringify(both.map((r) => r.body)));
+  assert.deepEqual(await record(), { lab5: 'homelab' }, 'lab4 completing at the same time as lab5 failing keeps lab5 and drops lab4');
   console.log('PASS MC-17 server: template build installs, then the prompt names it');
 });

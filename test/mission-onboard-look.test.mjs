@@ -182,11 +182,12 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await page.locator('#fMission [data-onboard-note]:has-text("File protection is on")').waitFor({ timeout: 10000 });
   assert.equal(await page.locator('#mdl[open]').count(), 0, 'the first click under File protection opens no chat');
   assert.ok(!(await server.desk('/mission')).body.spaces.includes('homelab-2'), 'and writes no space');
-  // Fix 1: the template goes in but the chat does not start (the test home's build-chat-fails file, once): the toast says so,
+  // Fix 1: the template goes in but the chat does not start (while the test home has a build-chat-fails file): the toast says so,
   // the space is kept (an immediate retry starts its chat there: the daemon test).
   await writeFile(path.join(server.directory, 'build-chat-fails'), '');
   await page.click('#fMission [data-preview] [data-build="claude"]');
   await page.locator('#toasts :text("homelab-2 added, but its chat did not start")').waitFor({ timeout: 15000 });
+  await rm(path.join(server.directory, 'build-chat-fails'));
   assert.equal(await page.locator('#mdl[open]').count(), 0, 'a failed start opens no chat');
   assert.ok((await server.desk('/mission')).body.spaces.includes('homelab-2'), 'the added space is kept');
   // Fix 2: the daemon no longer holds homelab-2 for a retry (its record is gone, as after a lost file): the 409 drops the page's
