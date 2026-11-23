@@ -48,7 +48,7 @@ export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
   '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
-  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, ...(args[0] === 'diff' && { GIT_ALTERNATE_OBJECT_DIRECTORIES: p.repoObjects }), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
+  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, ...(args.at(0) === 'diff' ? { GIT_ALTERNATE_OBJECT_DIRECTORIES: p.repoObjects } : {}), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
 }).then((r) => r.stdout);
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
