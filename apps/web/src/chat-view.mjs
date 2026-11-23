@@ -964,8 +964,9 @@ function tailed(s, body) {
   s.early = new Set([...(s.early ?? []), ...(from === undefined ? [] : body.events.filter(e => e.conversation === s.id && e.cursor < from).map(e => e.cursor))]);
 }
 async function earlier(s) {
-  const r = await window.p9.chat('events', { after: 0, only: [s.id], until: s.more - 1, tail: TAIL });
-  if (r.status !== 200) return;
+  const from = s.more, r = await window.p9.chat('events', { after: 0, only: [s.id], until: from - 1, tail: TAIL });
+  // O251: a jump meanwhile made the chat a stub and read it again from its newest blocks; this page would skip what lies between.
+  if (r.status !== 200 || s.more !== from) return;
   const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
   for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
   s.events = [...old.events, ...s.events];
