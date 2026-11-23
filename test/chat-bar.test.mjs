@@ -589,6 +589,38 @@ test('O133 FIX1: overlapping Default saves keep both fields: a held save, then a
   console.log('PASS O133 FIX1: overlapping and two-window Default saves keep every field');
 });
 
+// N6-2: the O133 FIX1 test above failed once on CI (run 45090530956, linux (6)): the daemon held haiku and high, but window one's
+// effort box read '' (:572). Its picks were both held; after SIGCONT the agents' lists arrived between the two answers and
+// refreshDefaults drew the rows from the model save's answer, and nothing drew them again once the effort save landed. Forced
+// here: main holds the effort save's answer while Settings is closed and opened again (it draws the rows from what is kept).
+test('N6-2: a Default effort row drawn again while its save is out shows the saved value once the save answers', { timeout: 120000, skip: process.platform === 'win32' }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { app, page } = await launch(t, instance, path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-n62-')), 'profile'));
+  const open = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]');
+    await page.locator('[data-default-effort="claude"] option[value="high"]').waitFor({ state: 'attached', timeout: 15000 }); };
+  await open();
+  await page.selectOption('[data-default-model="claude"]', 'haiku');
+  await until(async () => (await call(instance, '/start-defaults')).claude.model === 'haiku', 'the model saved');
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (e, ...args) => { const r = await h(e, ...args); if (args[0] !== 'newChatDefaults' || !args[1]?.set?.claude?.effort) return r;
+      await new Promise((resolve) => { globalThis.n62release = resolve; }); return r; });
+  });
+  await page.selectOption('[data-default-effort="claude"]', 'high');
+  await until(async () => app.evaluate(() => !!globalThis.n62release), 'the effort save held in main');
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', 'the daemon has it; only its answer is held');
+  await page.click('#setClose'); await open();
+  assert.equal(await page.locator('[data-default-effort="claude"]').inputValue(), '', 'drawn from what was kept before the save');
+  // The page's lists loop (chat-view.mjs lists) redraws the rows once more when it ends, which would hide the bug: wait until the
+  // daemon reads none of them, then wait out the loop's 1.5 s pause and its last ask, so only the save's answer can draw the row.
+  await until(async () => !Object.values((await call(instance, '/chat?lists=fresh')).lists || {}).some(l => l?.state === 'loading'), 'the lists read', 30000);
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await app.evaluate(() => globalThis.n62release());
+  await until(async () => await page.locator('[data-default-effort="claude"]').inputValue() === 'high', 'the row shows the save once it answered', 5000);
+  assert.equal(await page.locator('[data-default-model="claude"]').inputValue(), 'haiku');
+  console.log('PASS N6-2: a Defaults row drawn while its save was out shows the save once it answers');
+});
+
 // O32: a chat on Opus, High and Plan is still on them after the daemon restarts and the app restarts (an update does both):
 // the pills show the chat's own, and the next message runs on them. Since then another chat was last put in Manual, so a
 // new chat would start in Manual: this one does not.

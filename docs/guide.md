@@ -151,7 +151,7 @@ The registry is what makes Mission Control fit your system. Each entry has an `i
 }
 ```
 
-A button's output opens in a window you can copy from. Add `"terminal": true` to run a button in its own terminal window instead. Clicking a button runs that command as you, so read the registry before you use it. Your agent can write it for you: describe the scripts you use and where they live.
+A button's output opens in a window you can copy from. Add `"terminal": true` to run a button in its own terminal window instead: konsole on Linux, a console window on Windows. Without konsole the button says it did not start. Clicking a button runs that command as you, so read the registry before you use it. Your agent can write it for you: describe the scripts you use and where they live.
 
 ### Your own sections
 
@@ -167,7 +167,9 @@ The `space` file adds sections to Mission Control. Each section can have text, b
 
 Edits to this file show up the next time the page loads, with no restart.
 
-A section's `place` (`col1` to `col6`) draws it open in a column of the page instead of as a tile, and `span` (1 to 6) makes its column wider than the others. Your agent's `describe_mission` tool lists every field; its `preview_card` tool shows how a card looks before you place it.
+A section's `place` (`col1` to `col6`) draws it open in a column of the page instead of as a tile, and `span` (1 to 6) makes its column wider than the others. A section with no `place` is a tile in the top row that shows its items only in its window, so a space of tiles leaves the page empty: put cards, data tiles and lists in columns, and keep tiles for groups of buttons.
+
+Data tiles and cards run their scripts on this computer, at most every 30 s while the page is open, and each run is stopped at 10 s. A section's `refresh` (30 to 3600 seconds) makes its tiles and cards run less often. For another machine, make the script run `ssh` with the command there and print the JSON. For a slower check, have a timer or cron job write the result to a file and make the tile's script print that file. Your agent's `describe_mission` tool lists every field; its `preview_card` tool shows how a card looks before you place it.
 
 ### Sprint tracker
 

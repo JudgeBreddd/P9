@@ -92,12 +92,12 @@ export const DELEGATE_TOOLS = (input) => {
       model: { type: 'string', description: 'A worker you started runs on this model from this message on: one a Settings > Delegation row (in a sprint, a roles.json row) starts. Not while it works, not with a note, not for a profile chat.' },
       effort: { type: 'string', description: 'The same for its effort.' } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
-      + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again. '
+      + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut, last (the end of its newest reply) and goal ({ objective, status }) when its agent keeps one. A timeout stops nothing: call it again. '
       + 'Not waiting, a worker\'s turn end reaches you from P9 as a note, which starts no turn (unless Settings > Notices makes it a message); one still stopped 10 minutes later starts your turn once, and a failed turn at once. '
       + 'A worker that starts waiting on an approval or a question tells you at once, by default as a message that starts your turn (a note when Settings > Notices says so); it names the request and the answer answer_chat takes.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
-      + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
+      + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line. goal: the goal its agent keeps ({ objective, status }), when it has one.',
     input({ chat, after: { type: 'integer', minimum: 0 }, view: { type: 'string', enum: ['messages', 'activity'] } }, ['chat'])],
     ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether, which frees their places, and archived (archive_chat with archived: false brings one back). A chat the user stops takes the chats it started with it.',
       input({ chat, close: { type: 'boolean' } }, ['chat'])],
@@ -107,7 +107,7 @@ export const DELEGATE_TOOLS = (input) => {
       input({ chat }, ['chat'])],
     ['rename_chat', 'Rename a chat you started, or your own chat (no chat), so the list and the sprint card name the work it does now. The user can rename it again; P9 no longer names it from its first message.',
       input({ chat, title: { type: 'string', maxLength: 120, description: 'The new name: 1 to 120 characters, one line.' } }, ['title'])],
-    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview.', input({})],
+    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview, and goal ({ objective, status }) when its agent keeps one.', input({})],
     ['list_providers', 'What can be named as provider, in open_chat and in a sprint\'s roles.json: ' + AGENT_IDS.join(', ') + ' with the models and efforts each offers (null until P9 has read that agent\'s list), and each provider profile the user made in Settings as profile:<id> with its name and models. '
       + 'A profile takes Claude\'s efforts. It says what exists, not what you may start: open_chat still starts only what a free Settings > Delegation row starts.', input({})],
     ['plan_usage', 'Every provider\'s plan use, from the same source as the user\'s Usage page: providers has one key per provider P9 runs, null when nothing is recorded or it is signed out (signedOut lists those). '
@@ -1082,7 +1082,7 @@ export function createDelegate({ chat, allowed, usage }) {
         if (!info) return { error: 'chat-not-found' };
         const ask = info.asks[0] ?? null, state = stateOf(info), left = until - Date.now();
         if (ask || state !== 'working' || left <= 0 || signal?.aborted) {
-          return { guidance: CROSS_CHAT, chat: args.chat, state, ended: state !== 'working', waiting: ask, timedOut: state === 'working' && !ask, ...(info.compacting && { compacting: true }), last: chat.reply(args.chat).slice(-400) };
+          return { guidance: CROSS_CHAT, chat: args.chat, state, ended: state !== 'working', waiting: ask, timedOut: state === 'working' && !ask, ...(info.compacting && { compacting: true }), ...(info.goal && { goal: info.goal }), last: chat.reply(args.chat).slice(-400) };
         }
         await Promise.race([chat.changed(Math.min(left, 8000), args.chat), aborted]);
       }
@@ -1116,7 +1116,8 @@ export function createDelegate({ chat, allowed, usage }) {
       next = event.cursor;
     }
     if (!more && page.events.length < 500) next = Math.max(next, page.cursor);
-    return { guidance: CROSS_CHAT, chat: args.chat, messages: messages.filter((m) => m.role !== 'break'), next, more: more || page.events.length >= 500 };
+    const goal = chat.goal?.(args.chat); // a chat object without goal() (a stand-in) has none
+    return { guidance: CROSS_CHAT, chat: args.chat, ...(goal && { goal }), messages: messages.filter((m) => m.role !== 'break'), next, more: more || page.events.length >= 500 };
   }
 
   // archive_chat's state rule: a chat that is working, waiting on an answer, still stopping or moving, or whose stop P9
@@ -1270,7 +1271,7 @@ export function createDelegate({ chat, allowed, usage }) {
     return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
       ...chat.gauge(c.id), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
-      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview })), ...(rows.length > 200 && { more: rows.length - 200 }) };
+      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
   }
 
   async function answerChat(caller, args, signal) {
