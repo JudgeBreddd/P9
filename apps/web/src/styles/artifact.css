@@ -37,6 +37,9 @@ button.cf-item:hover{border-color:var(--primary,var(--cyan))}
 .cf-item .art-kind{grid-row:span 2;align-self:center;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted-foreground,var(--muted))}
 .cf-item .cf-name,.cf-item .cf-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cf-item .cf-sub{font-size:11.5px;color:var(--muted-foreground,var(--muted))}
+/* MC-13: a changed file's +added and −removed lines, at the right of its name; name and kind stay in the middle column. */
+.cf-item .cf-name,.cf-item .cf-sub{grid-column:2}.cf-item .cf-lines{grid-column:3;grid-row:1;font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.cf-lines .cf-add{color:var(--ok,#3fb950)}.cf-lines .cf-del{color:var(--destructive,#f85149)}
 .sbody>.empty{margin:0;padding:16px;color:var(--muted-foreground,var(--muted));font-size:13px}
 /* Its two tabs (2026-11-02): Artifacts and Changes, above the list. */
 .sbody:has(>.cf-tabs){grid-template-rows:auto minmax(0,1fr);align-content:start}
