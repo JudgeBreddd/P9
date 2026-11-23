@@ -63,6 +63,7 @@ test('phone-close: a worker its lead closes leaves the phone\'s pinned report an
     // the report's own row in the chat is drawn once the chat has loaded (hidden while pinned, shown once it is not)
     await page.locator('#events article[data-kind="report"]').first().waitFor({ state: 'attached', timeout: 30000 }); };
   const before = await listed();
+  assert.equal(before, 1, 'before the close the worker is not in the phone\'s Chats list, so its leaving proves nothing');
   await openLead();
   assert.equal(await pinned(), 1, 'before the close the worker\'s report is pinned on the phone');
   await shot(page, 'phone-close-before');
