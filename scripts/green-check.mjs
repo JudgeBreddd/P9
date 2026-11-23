@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The mechanical green check (Tyler, 2026-11-13: "Whatever tests the user and the agent agree on are the tests that have to
+// The mechanical green check (the owner, 2026-11-13: "Whatever tests the user and the agent agree on are the tests that have to
 // be green"). A plan item names its agreed tests in a last clause, `Tests: <file>::<title words> | <file>::<title words>`
 // (the format is in the plan template, apps/server/sprint-files.mjs). Before a merge this script checks, for the item's
 // commit, that CI is complete and green and that each named test has exactly one passed line from its own file and no
