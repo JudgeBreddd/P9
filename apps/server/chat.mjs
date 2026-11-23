@@ -1479,10 +1479,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     emit(id, 'user', user());
     // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
     // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
-    if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(() => {
+    if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(function ended() {
+      // O253: during a Stop's pending cancel the run stays open; the cancel sends its one end, or a failed cancel leaves
+      // it open for a retry (checked again in 1 s).
+      if (session.unstop) { session.ghost = setTimeout(ended, 1000); return; }
       session.ghost = null;
-      // O253: during a Stop's pending cancel the cancel sends this run's one end, not the timer.
-      if (!session.turn && !session.unstop && live.get(id) === session) emit(id, 'turn-end', { stopReason: 'end_turn', unprompted: true });
+      if (!session.turn && live.get(id) === session) emit(id, 'turn-end', { stopReason: 'end_turn', unprompted: true });
     }, 10000);
     return { status: 202, steered: true };
   }
