@@ -85,6 +85,8 @@ const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop th
 export function chatFailed(action, body, ms) {
   // The daemon refuses a new chat's folder only (chat.mjs create): say what a folder needs.
   if (action === 'create' && body?.error === 'request-refused') return 'Could not start the chat in that folder. It must exist on the server; a full path works only in Unrestricted mode.';
+  // A send over the size limits (chat.mjs file-too-large, server.mjs body-too-large): the daemon's message says which.
+  if (action === 'prompt' && /too-large$/.test(body?.error)) return body.message ?? null;
   if (body?.error === 'profile-gone') return 'This chat\'s provider profile was removed in Settings. The chat can be read, not continued.';
   if (body?.error !== 'daemon-unavailable') return null;
   const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);
@@ -180,22 +182,6 @@ export const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
 export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 export const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
-// An image a person attaches (threat model row 20; the daemon checks the same limits): desktop paperclip, paste and drop,
-// and the phone's + (P8). Over 1568 px or near 2 MB it is scaled to a JPEG; still over 2 MB, refused with the reason.
-export const MAX_IMAGES = 4, MAX_IMAGE = 2 * 1024 * 1024;
-const base64 = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
-export async function readImage(file) {
-  if (!IMG_OK.includes(file.type)) throw new Error('PNG, JPEG, GIF or WebP only');
-  let blob = file, mimeType = file.type;
-  const bmp = await createImageBitmap(file), k = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
-  if (k < 1 || file.size > MAX_IMAGE * 3 / 4) {
-    const c = new OffscreenCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k)); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); mimeType = 'image/jpeg';
-  }
-  const data = await base64(blob);
-  if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
-  return { mimeType, data, name: file.name };
-}
 // O191: a provider profile's chats (/usage profiles), outside the Claude totals; its cost is the adapter's estimate, never a
 // Claude bill. Drawn whatever /usage's state: state counts Claude records only. Old daemon (no profiles): nothing.
 export const profileLines = (usage, cls = 'sm') => (usage.profiles ?? []).map(p => `<p class="${cls}" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');

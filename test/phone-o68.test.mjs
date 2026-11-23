@@ -42,26 +42,20 @@ test('O68 a: a sheet sits in the visible height, above a keyboard', { timeout: 1
   console.log('PASS O68 a: sheet bottom 460 of a 400-tall visible part starting at 60; full sheet 60 to 460');
 });
 
-test('O68 b: one tap to attach, and a file that cannot be attached says why', { timeout: 120000 }, async (t) => {
+test('O68 b: one tap to attach, any file can be picked, and a file that cannot be attached says why', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server);
   const { page } = await phone(t, server);
-  const open = async () => { await page.click(`#chatList [data-chat="${A}"]`); await page.waitForSelector('#attach', { state: 'visible', timeout: 10000 }); };
-  await open();
+  await page.click(`#chatList [data-chat="${A}"]`); await page.waitForSelector('#attach', { state: 'visible', timeout: 10000 });
   const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 5000 }), page.click('#attach')]);
   assert.equal(await page.$eval('#sheet', (sheet) => sheet.open), false, 'P9 asked before the phone did');
-  assert.equal(await page.$eval('#attachInput', (input) => input.accept), 'image/*');
-  await chooser.setFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]);
-  await page.waitForFunction(() => document.querySelector('#composerNote')?.textContent.includes('Not attached: notes.txt: PNG, JPEG, GIF or WebP only.'), null, { timeout: 10000 });
+  // A2 step 1: any file attaches, so the chooser has no filter and greys nothing out (an iPhone could not say why it did).
+  assert.equal(await page.$eval('#attachInput', (input) => input.accept), '');
+  await chooser.setFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }, { name: 'big.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(6 * 1024 * 1024 + 1) }]);
+  await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#composerNote')?.textContent.includes('Not attached: big.bin: over 6 MiB, the most a file can be.'), null, { timeout: 10000 });
   await shot(page, 'phone-o68-attach-reason');
-  // An iPhone greys out what a filter leaves out, with no reason: there P9 sets no filter, so the file can be picked and the line above says why.
-  await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X)' }));
-  await page.reload();
-  await page.waitForSelector(`#chatList [data-chat="${A}"], #attach`, { timeout: 15000 });
-  if (!await page.isVisible('#attach')) await open();
-  await Promise.all([page.waitForEvent('filechooser', { timeout: 5000 }), page.click('#attach')]);
-  assert.equal(await page.$eval('#attachInput', (input) => input.accept), '', 'an iPhone still gets the filter that greys files out');
-  console.log('PASS O68 b: + opened the chooser with no sheet; notes.txt refused with its reason; no filter on an iPhone');
+  console.log('PASS O68 b: + opened the chooser with no sheet and no filter; notes.txt attached; big.bin refused with its reason');
 });
 
 test('O68 c: a signed-in account is one line under the plan bars', { timeout: 120000 }, async (t) => {
