@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, readdir, stat, symlink, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
+import { once } from 'node:events';
 import { parseSettings } from '../apps/server/mission.mjs';
 import { TEMPLATES } from '../apps/server/mission-fields.mjs';
 import { BUILD_PROMPT, buildPrompt, GUIDE } from '../apps/server/templates/guide.mjs';
@@ -316,7 +317,7 @@ test('MC-1: a build names its start mode and runs in it; a wrong name makes no c
 // MC-17: a build can start from a template. The daemon adds the template to the new space first (File protection asks for the
 // user's confirm, as Choose does), then the first prompt names the template, so the chat starts knowing what it is for.
 test('MC-17: a build from a template adds it to a new space and the prompt names it; protection, a bad name or no space make no chat', { timeout: 90000 }, async (t) => {
-  const instance = await start(t);
+  let instance = await start(t);
   const homelab = TEMPLATES.find((entry) => entry.name === 'homelab');
   const chats = async () => (await call(instance, '/chat')).body.conversations.length;
   const before = await chats();
@@ -343,6 +344,8 @@ test('MC-17: a build from a template adds it to a new space and the prompt names
   const failed = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab', confirm: true });
   assert.equal(failed.status, 500, JSON.stringify(failed.body)); assert.equal(failed.body.error, 'chat-not-started'); assert.equal(failed.body.space, 'lab2'); assert.equal(failed.body.kept, true);
   assert.ok((await call(instance, '/mission')).body.spaces.includes('lab2'), 'the added space is kept');
+  // Fix 2: the daemon restarts with the page open: the kept space is still retried in place, not answered 409.
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit'); instance = await restart(t, instance, 'state-2');
   const chatsBefore = await chats();
   assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'blank', confirm: true })).status, 409, 'only the same template retries');
   const again = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab' });
@@ -350,5 +353,6 @@ test('MC-17: a build from a template adds it to a new space and the prompt names
   assert.equal(await chats(), chatsBefore + 1, 'the retry makes one chat');
   assert.equal((await until(instance, (event) => event.conversation === again.body.conversation && event.data?.content?.text?.startsWith('echo:'))).data.content.text, 'echo:' + buildPrompt('lab2', homelab));
   assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab', confirm: true })).status, 409, 'once its chat started, the space is never the target again');
+  assert.deepEqual(JSON.parse(await readFile(path.join(instance.directory, '.config/p9/build-unstarted.json'), 'utf8')), {}, 'a started space is no longer held');
   console.log('PASS MC-17 server: template build installs, then the prompt names it');
 });

@@ -409,6 +409,8 @@ function bindOnboard(root) {
     b.disabled = false;
     if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; root.querySelector('[data-onboard-note]').textContent = 'File protection is on. Click again to add the template.'; return; }
     // MC-17 fix 1: the space was added but its chat did not start: it shows in the Space menu, and a retry starts the chat there.
+    // Fix 2: the daemon no longer holds that space for a retry (or it was deleted): a 409 drops it, so the next click builds anew.
+    if (kept && r.status === 409) { outer.live.kept = null; outer.toast({ kind: 'chat', txt: 'Space ' + space + ' is kept as it is. Click ' + b.textContent + ' again to build into a new space.', level: 'bad' }, true); return; }
     if (r.body?.kept) { outer.live.kept = { from, space }; refreshMission(1); outer.toast({ kind: 'chat', txt: 'Space ' + space + ' added, but its chat did not start (' + (r.body.error || r.status) + '). Click ' + b.textContent + ' again to retry.', level: 'bad' }, true); return; }
     if (from && r.status === 201) { outer.live.kept = null; await window.p9.mission('space', { name: space }); }
     if (r.status === 201 && r.body.space) {
