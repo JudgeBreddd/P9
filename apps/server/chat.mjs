@@ -798,6 +798,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // and no tool call open, it has ended and the turn's end hooks run (delegate.mjs: the parent's end note and late wake).
   // ponytail: a tool call that never completes keeps the run open; a run that pauses longer than the quiet time ends twice.
   const UNPROMPTED_QUIET_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_QUIET_MS) > 0 ? Number(process.env.P9_UNPROMPTED_QUIET_MS) : 60000;
+  const unpromptedOn = (id) => { const session = live.get(id); return !!session && !session.turn && !!(session.quiet || session.ghost); };
   const unpromptedEnd = (session, id) => {
     if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true, 'unprompted'); } catch {} }
   };
@@ -1711,9 +1712,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
             AND json_extract(b.data, '$.request') = json_extract(a.data, '$.request'))) AS waiting
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // named: the title stays over the agent's (the user's rename, or O172 a sprint chat's role name, as the title update above).
+      // unprompted (O253): a run nobody prompted is open (its state stays 'idle'), so a list row not loaded yet says Working.
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1 || !!key || sprintFiles.exists(c.id), waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(closedOf(c.id) && { sprintClosed: true }), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1 || !!key || sprintFiles.exists(c.id), waiting: c.waiting === 1, ...(unpromptedOn(c.id) && { unprompted: true }), preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(closedOf(c.id) && { sprintClosed: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1982,7 +1984,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // by: what cut it when not the user (stop_chat names the chat), said with the chat's next prompt (O231).
     async cancel(id, by) {
       const session = ID.test(id) && live.get(id);
-      if (!session?.turn) return refused(409, 'no-turn');
+      if (!session?.turn && !session?.quiet && !session?.ghost) return refused(409, 'no-turn');
+      if (!session.turn) {
+        // O253: Stop on a run nobody prompted (open quiet or ghost timer: O192, O194, CP8). The agent is told to cancel
+        // and that run ends here, once, so the phone and desktop stop showing Working and the end hooks run.
+        clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null;
+        await session.agent.cancel({ sessionId: session.sessionId });
+        emit(id, 'turn-end', { stopReason: 'cancelled', unprompted: true });
+        unpromptedEnd(session, id);
+        return { status: 200, ok: true };
+      }
       for (const pending of session.pending.values()) pending.resolve(null);
       if (typeof by === 'string') cutBy(id, by);
       session.cut = session.turn; // MC-15: a Stop while the turn's start snapshot runs sends no prompt

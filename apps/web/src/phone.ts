@@ -590,10 +590,10 @@ const plain = (line: string) => line.replace(/^\s*(`{3,}|~{3,}).*$/, '').replace
 let read: Record<string, string> = {};
 try { read = JSON.parse(localStorage.getItem('p9-read') ?? '{}') ?? {}; } catch {}
 const keepRead = () => { try { localStorage.setItem('p9-read', JSON.stringify(Object.fromEntries(state.conversations.map((item) => String(item.id)).filter((id) => id in read).map((id) => [id, read[id]])))); } catch {} };
-// A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
+// A stub's events are not read yet: its state is the daemon's (a turn running, a run nobody prompted, a question open), from GET /chat.
 function rowInfo(item: Json, found = digest()): Digest {
   const id = String(item.id);
-  return state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id) ?? { run: 'idle', last: '' };
+  return state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' || item.unprompted ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id) ?? { run: 'idle', last: '' };
 }
 function markRead(id: string) {
   const item = state.conversations.find((entry) => entry.id === id); if (!item) return;

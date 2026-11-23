@@ -571,8 +571,9 @@ const connection = acp.connectAgent(stream, {
     }
     if (text === 'background' || text === 'background quiet') {
       background.add(sessionId);
+      cancelled.delete(sessionId);
       setTimeout(async () => {
-        for (let i = 1; ; i++) {
+        for (let i = 1; !cancelled.has(sessionId); i++) { // O253: a Stop ends the unprompted run
           await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'bg-' + i, title: 'Background task ' + i, kind: 'execute', status: 'completed' } });
           await take(sessionId, say);
           if (i === 10 && text === 'background') await say('bg-ask:' + JSON.stringify(await connection.createElicitation({ sessionId, mode: 'form', message: 'Keep going?',
