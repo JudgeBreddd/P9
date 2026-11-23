@@ -9,7 +9,7 @@
 // The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git (O241: a file too).
 // Every git call (add, write-tree, diff) runs with GIT_DIR set to a private folder made for that snapshot: HEAD, refs and
 // a config of our own (constant), with system and global config off. From the repo it gets only paths built here (its
-// working tree, and .git/objects as an alternate, read, its found objects' times refreshed as git always does; writes go to the private store) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
+// working tree, and .git/objects as an alternate for diff only, which only reads; writes go to the private store) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
 // as ignore patterns). So no filter, hook, fsmonitor, textconv or diff driver is configured where git reads config,
 // whatever the repo's config says, even while a snapshot runs. On top: hooks and fsmonitor off, diffs with no textconv or
 // external diff, no missing object fetched. File names git lists reach the diff's pathspec only after "--", literal.
@@ -42,13 +42,13 @@ export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 // p: the box's paths, built here (the private folder, the repo folder, the turn's private object store, the repo's objects
 // folder); every name below is fixed. O241 review: git writes objects only to the private store; the repo's objects are
 // only read, as an alternate, so no link inside a repo's object folders can lead a write anywhere.
-// ponytail: git still refreshes the time of an object it finds there (utime, object-file.c freshen), as the user's own
-// git add in that repo does: through a planted link that touches the time of a file already named as that object, never
-// its bytes, and never a file of any other name.
+// Review round 5: git refreshes the time of an object it would write but finds (object-file.c freshen), and a link there
+// would lead that anywhere; so add and write-tree (which write) never see the repo's objects (write-tree --missing-ok: the
+// index names blobs only the repo has), and only diff (which only reads) gets them, as an alternate.
 const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
   '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
-  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: p.repoObjects, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
+  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, ...(args[0] === 'diff' && { GIT_ALTERNATE_OBJECT_DIRECTORIES: p.repoObjects }), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
 }).then((r) => r.stdout);
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
@@ -134,7 +134,7 @@ async function box(cwd, deadline, store) {
 }
 
 // The working tree under cwd as a git tree, through the box's index.
-const tree = async (b) => { await b.git(['add', '-A', '--', '.']); return (await b.git(['write-tree'])).trim(); };
+const tree = async (b) => { await b.git(['add', '-A', '--', '.']); return (await b.git(['write-tree', '--missing-ok'])).trim(); };
 // The start's private object store lives until the turn's end (shellEnd removes it; chat.mjs calls it on every path).
 // ponytail: a daemon killed mid-turn leaves that store in the temp folder.
 async function snap(cwd, deadline) {

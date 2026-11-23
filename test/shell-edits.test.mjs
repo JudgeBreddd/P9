@@ -310,5 +310,14 @@ test('O241 a linked worktree and a submodule list shell edits; a bad .git file a
   assert.deepEqual(await listed(wt, 'a.txt', 'one\nround3\n'), ['a.txt'], 'a worktree with linked object folders still lists its edit');
   assert.deepEqual(await readdir(outside), [], 'nothing was written through a linked object folder');
   assert.equal(loose(), before, 'the repo\'s objects gained no file');
+  // Review round 5: an object file that is itself a link: git would refresh its time (utime) when it finds the object
+  // while writing one with the same content; the snapshot's writes never look in the repo's objects, so the outside file keeps its time.
+  const blob = execFileSync(realGit, ['-C', main, 'hash-object', '-w', '--stdin'], { encoding: 'utf8', input: 'shared\n' }).trim();
+  const victim = path.join(base, 'victim'); await writeFile(victim, 'x'); await utimes(victim, 1000, 1000);
+  const objFile = path.join(objs, blob.slice(0, 2), blob.slice(2));
+  await rm(objFile); await symlink(victim, objFile);
+  const shared = await listed(wt, 'shared.txt', 'shared\n');
+  assert.equal((await stat(victim)).mtimeMs, 1000000, 'the linked object\'s target kept its time');
+  assert.deepEqual(shared, ['shared.txt'], 'a file whose content the repo already has is listed');
   await assert.rejects(stat(marker), 'nothing ran for any of them');
 });
