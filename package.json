@@ -42,7 +42,7 @@
     "package:win": "node scripts/package-windows.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.106.0",
+    "@agentclientprotocol/claude-agent-acp": "0.109.1",
     "@agentclientprotocol/codex-acp": "2.9.0",
     "@agentclientprotocol/sdk": "2.6.0",
     "@hono/node-server": "2.1.4",
