@@ -70,7 +70,7 @@ const TOOLS = [
     input({ record: jsonSchema(RECORD, {}, true), section: sectionField, space: spaceField, hash: hashField }, ['record'])],
   ['add_app', 'Add an app to the registry.', input({ record: jsonSchema(RECORD, {}, true), hash: hashField }, ['record'])],
   ['add_page', 'Add a link to the registry.', input({ record: jsonSchema(PAGE, {}, true), hash: hashField }, ['record'])],
-  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, id: { type: 'string', description: SECTION.id.doc }, text: { type: 'string' }, place: placeField, order: orderField, widgets: widgetsField, space: spaceField, hash: hashField }, ['title'])],
+  ['add_section', 'Add a section to the space. set (as patch_section takes it) gives it any other fields in the same write: icon, widget, buttons, cards, data and the rest, so a section is one write.', input({ title: { type: 'string' }, id: { type: 'string', description: SECTION.id.doc }, text: { type: 'string' }, place: placeField, order: orderField, widgets: widgetsField, set: { ...setField, description: 'Optional: any other fields of the section, checked as patch_section checks them (MC-6).' }, space: spaceField, hash: hashField }, ['title'])],
   ['update_button', 'Change a script button\'s title or icon in the registry, or in a space section. icon "" removes the icon.',
     input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField,
       move_to: { type: 'string', description: 'Move the button (with section, its current section) into this space section (its id, or a title only one section has), in one write, so nothing points at a missing ID in between.' },
@@ -461,7 +461,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   // (an unknown one is kept and named, W-F), and its item lists whole, each item checked as set_section_items checks it. A button, app
   // or page takes only its table's fields, as add_* does; an unknown key the record already has stays. The same rules as the specific
   // tools hold: the field tables, picture from the desktop form only, unique ids, and Mission Control's own merge keeping the result.
-  function patch(kind, { key, section: where, set, base, hash }, by) {
+  function patch(kind, { key, section: where, set, base, hash, make }, by) { // make: add_section's, which adds the section patched (MC-6)
     const fields = FIELDS[kind];
     if (!fields || !words(key) || (where !== undefined && (kind !== 'scripts' || !words(where))) || !object(set) || !Object.keys(set).length || ('picture' in set && !by?.user)
       || (base !== undefined && (!object(base) || hash === undefined))) {
@@ -472,7 +472,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     // With base, the hash is checked field by field below instead of whole (the save itself still refuses a file changed after this read).
     return edit(kind === 'sections' || where !== undefined ? 'space' : 'registry', base ? undefined : hash, (data) => {
       let entry, others;
-      if (kind === 'sections') { const found = section(data, key); if (found.error) return found; entry = found.entry; others = found.sections; }
+      if (kind === 'sections') { const found = make ? make(data) : section(data, key); if (found.error) return found; entry = found.entry; others = found.sections; }
       else {
         let target;
         if (where === undefined) target = list(data, kind);
@@ -500,7 +500,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
           if (name !== 'buttons') unknown.push(...unknownFields(item, SECTION[name].fields, 'this record').map((detail) => ({ kind: name, index, detail })));
         }
       }
-      return { changed: { action: 'patched', kind, [kind === 'sections' ? 'section' : 'id']: entry.id, record: entry, was: before, ...(unknown.length ? { unknown } : {}) },
+      return { changed: { action: make ? 'added' : 'patched', kind: make ? 'section' : kind, [kind === 'sections' ? 'section' : 'id']: entry.id, record: entry, ...(make ? {} : { was: before }), ...(unknown.length ? { unknown } : {}) },
         accepted: (all) => {
           if (kind !== 'sections') return all[kind].some((item) => item.id === entry.id);
           const kept = all.space.find((item) => item.id === entry.id);
@@ -617,11 +617,11 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     add_app: (args) => add('apps', args.record, undefined, args.hash),
     add_page: (args) => add('pages', args.record, undefined, args.hash),
     // A title may repeat (W-C): the new section gets its own id, given or made from the title.
-    add_section: ({ title, id, text, place, order, widgets, hash }) => {
+    add_section: ({ title, id, text, place, order, widgets, set, hash }) => {
       const record = { ...(id !== undefined ? { id } : {}), title, ...(text !== undefined ? { text } : {}), ...(place !== undefined ? { place } : {}), ...(order !== undefined ? { order } : {}), ...(widgets !== undefined ? { widgets } : {}) };
       const wrong = problem(record, SECTION);
       if (wrong) return { error: 'invalid-section', detail: wrong };
-      return edit('space', hash, (data) => {
+      const make = (data) => {
         const sections = list(data, 'sections');
         if (!sections) return { error: 'invalid-space' };
         // ids are unique among sections (M1); every section has one by now (edit() added any missing).
@@ -629,8 +629,12 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         if (id !== undefined && taken.has(id)) return { error: 'duplicate-section', id, detail: 'Another section already has the id ' + id + '.' };
         const entry = { id: id ?? sectionId(record.title.trim(), taken), ...record };
         sections.push(entry);
-        return { changed: { action: 'added', kind: 'section', record: entry }, accepted: (all) => all.space.some((item) => item.id === entry.id) };
-      });
+        return { entry, sections };
+      };
+      // MC-6: with set, the new section gets the rest of its fields in this one write, checked as patch_section checks them.
+      if (set !== undefined) return patch('sections', { key: title, set, hash, make });
+      return edit('space', hash, (data) => { const made = make(data); if (made.error) return made;
+        return { changed: { action: 'added', kind: 'section', record: made.entry }, accepted: (all) => all.space.some((item) => item.id === made.entry.id) }; });
     },
     set_section_items: ({ title, kind, items, hash }) => {
       if (!words(title) || !ITEM_KINDS.includes(kind) || !Array.isArray(items)) {

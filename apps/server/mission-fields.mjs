@@ -253,6 +253,10 @@ export const SECTION = {
     doc: 'Where the section draws on the desktop Mission page: tile (the default) is a tile in the top row that opens the section\'s window; col1 to col6 draws it open in that column, '
       + 'its items shown in place (a widget section draws its panel there), in file order. Once any section has a column, the columns hold only the sections placed in them; '
       + 'a column nothing is placed in is left out and the others share its width. The phone ignores it.', example: 'col2' },
+  // MC-20 / MC-8: the daemon keeps a tile's answer this long, so the page's ask every 30 s runs a remote or slow script less often.
+  refresh: { type: 'integer', check: (value) => Number.isSafeInteger(value) && value >= 30 && value <= 3600,
+    doc: 'How often, in seconds (30 to 3600, default 30), this section\'s data tiles and cards run their scripts. The page asks every 30 s and gets the last answer until it is older than this, '
+      + 'so a script that opens an ssh connection or reads something slow runs less often.', example: 300 },
   span: { type: 'integer', check: (value) => Number.isSafeInteger(value) && value >= 1 && value <= 6,
     doc: 'How wide the section\'s column is, 1 to 6, against the other columns (2 is twice as wide as 1). A column takes the largest span of the sections placed in it, 1 when none has one. '
       + 'Only for a placed section (col1 to col6). While no section has span and only col1 to col3 are used, the columns keep P9\'s own widths. The phone ignores it.', example: 2 },
@@ -349,7 +353,7 @@ export const SCHEMAS = {
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
 export function describeMission() {
-  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place' && key !== 'order' && key !== 'widgets' && key !== 'span').map(([key, field]) => ({
+  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place' && key !== 'order' && key !== 'widgets' && key !== 'span' && key !== 'refresh').map(([key, field]) => ({
     item: key, about: field.doc, ...(field.fields ? { fields: jsonSchema(field.fields).properties } : {}),
     example: { id: 'example-' + key, title: 'Example ' + key, [key]: field.example } }));
   return {
@@ -358,6 +362,11 @@ export function describeMission() {
       + 'patch_section, patch_item, move_section and move_button set any field and reorder. A section is named by its id (or by its title while only one section has it); '
       + 'a second section with the same id is refused, titles may repeat. An unknown field is named by validate_space but kept, never dropped. A button runs only when the user clicks it; a data tile only after the user answers Allow on it. '
       + 'Layout (schema.space has each field): place puts a section open in a column, col1 to col6, span sets its column\'s width; a card or data tile with frame false draws without its own box. '
+      + 'A section with no place is a tile: a top-row tile whose items show only in its window, so a space of tiles leaves the page body empty. Put the sections meant to be seen at a glance '
+      + '(cards, data tiles, lists, folders) in col1 to col6, and keep tiles for groups of buttons (MC-11). '
+      + 'Scripts run on this machine, and folders, notes and quick_note read only its paths: for another machine, make the script run ssh <host> <command> and print the JSON (MC-7). '
+      + 'A data tile\'s or card\'s script is stopped at 10 s; refresh (seconds) on its section runs it less often. For a slower check, have a timer or cron job write its result to a file, '
+      + 'and make the tile\'s script print that file (MC-8). A button with terminal true opens konsole on Linux and a console window on Windows; without konsole the button says it did not start (MC-10). '
       + 'preview_card returns a card\'s page with sample data as one HTML document: show it to the user as an html artifact to see how it looks before placing it. '
       + 'add_button and patch_item refuse a field a button does not have (a misspelt confirm would run it without asking); a section and its other items keep one.',
     file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', place: SECTION.place.example, buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example.slice(0, 1) }] },

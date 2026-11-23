@@ -159,7 +159,7 @@ export function parseSpace(text) {
       for (const extra of unknownFields(record, CHECKLIST, 'a checklist')) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'unknown-field', detail: extra });
       const detail = problem(record, CHECKLIST) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
       if (detail) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'malformed-record', detail }); else checklists.push({ ...record }); });
-    result.sections.push({ ...extras(section, SECTION), id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.place ? { place: section.place } : {}), ...(section.span ? { span: section.span } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}),
+    result.sections.push({ ...extras(section, SECTION), id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.place ? { place: section.place } : {}), ...(section.span ? { span: section.span } : {}), ...(section.refresh ? { refresh: section.refresh } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}),
       ...(section.order ? { order: section.order } : {}), ...(section.widgets?.length ? { widgets: section.widgets } : {}) });
   });
   return result;
@@ -864,7 +864,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (typeof id !== 'string' || !ID.test(id)) return { status: 400, error: 'request-refused' };
     const reg = await registry();
     // A card (M5) runs its script by the same rules; its answer is any JSON. A tile and a card share one ID space.
-    const item = reg.space.flatMap((section) => [...(section.data ?? []), ...(section.cards ?? [])]).find((record) => record.id === id);
+    const home = reg.space.find((section) => [...(section.data ?? []), ...(section.cards ?? [])].some((record) => record.id === id)), item = home && [...(home.data ?? []), ...(home.cards ?? [])].find((record) => record.id === id);
     if (!item) return { status: 404, error: 'unknown-id' };
     const script = reg.scripts.find((record) => record.id === item.script);
     if (!script) return { status: 404, error: 'unknown-script', detail: 'No registry script or space button has the ID ' + item.script + '.' };
@@ -874,7 +874,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const target = await resolve('scripts', script.id, {}, [], reg);
     if (target.error) return target;
     const key = createHash('sha256').update(JSON.stringify([id, target.argv, target.cwd])).digest('hex');
-    return { ...target, script, key, card: 'html' in item };
+    return { ...target, script, key, card: 'html' in item, everyMs: home.refresh ? home.refresh * 1000 : DATA_LIMITS.everyMs }; // MC-20: its section's refresh
   }
   async function allow(body) {
     if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'id') return { status: 400, error: 'request-refused' };
@@ -901,14 +901,14 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (Buffer.byteLength(file.content) > CARD_BYTES) return { status: 413, error: 'too-big', detail: 'The card file ' + item.html + ' is over 256 KiB.' };
     return { status: 200, html: file.content };
   }
-  // The last run per tile: a second ask within 30 s, or while it runs, gets the same answer, so a tile never runs more often.
+  // The last run per tile: a second ask within its section's refresh (30 s unless set), or while it runs, gets the same answer, so a tile never runs more often.
   const tileRuns = new Map();
   async function data(id) {
     const target = await tile(id);
     if (target.error) return target;
     if ((await answered())[id] !== target.key) return { status: 409, error: 'allow-required', script: target.script.title };
     const last = tileRuns.get(id);
-    if (last?.key === target.key && Date.now() - last.at < DATA_LIMITS.everyMs) return { status: 200, ...(await last.result) };
+    if (last?.key === target.key && Date.now() - last.at < target.everyMs) return { status: 200, ...(await last.result) };
     const result = runTile(target);
     tileRuns.set(id, { key: target.key, at: Date.now(), result });
     return { status: 200, ...(await result) };
