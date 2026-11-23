@@ -24,7 +24,8 @@
 // ponytail: the repo's own core settings (filemode, ignorecase, autocrlf) and a global core.excludesFile are not used;
 // git's defaults are, and its default global ignore file (~/.config/git/ignore).
 import { execFile } from 'node:child_process';
-import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -47,14 +48,21 @@ const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quote
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
 // O241: the folders a .git FILE leads to, each checked, or the throw (the repo then adds nothing, as before). The file and
-// commondir: a regular file (not a link) of at most 1 KB, one line, no control characters. Each folder: real path, a folder
-// owned by this user. A linked worktree's folder must name this .git file back (its gitdir file, git's own back-link) and
-// names the common folder in commondir; a submodule's has no commondir and sits under a superproject's .git/modules/.
+// commondir: a regular file (not a link, read through the handle its checks ran on) of at most 1 KB, one line, no control
+// characters. Each folder: real path, a folder owned by this user. A linked worktree: its folder is <common>/worktrees/<name>
+// and names this .git file back (its gitdir file, git's own back-link), so a pointer reaches another repo only through that
+// repo's own entry for this folder. A submodule: no commondir, and its folder sits in <superproject>/.git/modules/, the
+// superproject being the nearest folder above with a .git folder.
+// ponytail: Windows has no owner id, so the owner check is skipped there; a submodule of a submodule adds nothing.
 const ONE_LINE = /^([^\x00-\x1f\x7f]+)\n?$/;
-async function line(file, st, prefix = '') {
-  st ??= await lstat(file);
-  if (!st.isFile() || st.size > 1024) throw new Error('not a small file');
-  const m = ONE_LINE.exec(await readFile(file, 'utf8'));
+// A regular file's bytes, read through one handle that refuses a link (O_NOFOLLOW where the system has it), checked on it.
+async function bytes(file, max = Infinity) {
+  const fh = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try { const st = await fh.stat(); if (!st.isFile() || st.size > max) throw new Error('not a small file'); return { st, data: await fh.readFile() }; } finally { await fh.close(); }
+}
+async function line(file, prefix = '') {
+  if (!(await lstat(file)).isFile()) throw new Error('not a file'); // O_NOFOLLOW is 0 on Windows
+  const m = ONE_LINE.exec((await bytes(file, 1024)).data.toString('utf8'));
   if (!m || !m[1].startsWith(prefix) || !m[1].slice(prefix.length)) throw new Error('not one line');
   return m[1].slice(prefix.length);
 }
@@ -63,16 +71,25 @@ async function folder(from, rel) {
   if (!st.isDirectory() || (uid !== undefined && st.uid !== uid)) throw new Error('not our folder');
   return at;
 }
-async function pointed(file, st) {
-  const dot = await folder(path.dirname(file), await line(file, st, 'gitdir: '));
+async function pointed(file, top) {
+  const dot = await folder(path.dirname(file), await line(file, 'gitdir: '));
   const back = await line(path.join(dot, 'gitdir')).catch(keep), cd = await line(path.join(dot, 'commondir')).catch(keep);
   if (cd !== undefined) {
+    const common = await folder(dot, cd);
+    if (path.join(common, 'worktrees', path.basename(dot)) !== dot) throw new Error('not its worktree entry');
     if (back === undefined || await realpath(path.resolve(dot, back)).catch(() => null) !== await realpath(file)) throw new Error('no back-link');
-    return { dot, common: await folder(dot, cd) };
+    return { dot, common };
   }
-  const parts = dot.split(path.sep);
-  if (!parts.some((x, i) => x === 'modules' && parts[i - 1] === '.git')) throw new Error('not a submodule');
-  return { dot, common: dot };
+  for (let up = path.dirname(top); ; up = path.dirname(up)) {
+    const st = await lstat(path.join(up, '.git')).catch(keep);
+    if (st) {
+      if (!st.isDirectory()) throw new Error('a submodule of a submodule');
+      const modules = await realpath(path.join(up, '.git', 'modules'));
+      if (!dot.startsWith(modules + path.sep)) throw new Error('not this superproject\'s submodule');
+      return { dot, common: dot };
+    }
+    if (path.dirname(up) === up) throw new Error('no superproject');
+  }
 }
 
 // The private git folder for the repo the chat's folder is in (the throw: none, or a .git file that fails pointed's checks). git(args)
@@ -81,7 +98,7 @@ async function box(cwd, deadline) {
   const here = await realpath(cwd);
   let top = here, st;
   while (!(st = await lstat(path.join(top, '.git')).catch(keep))) { if (path.dirname(top) === top) throw new Error('not in git'); top = path.dirname(top); }
-  const { dot, common } = st.isDirectory() ? { dot: path.join(top, '.git'), common: path.join(top, '.git') } : await pointed(path.join(top, '.git'), st);
+  const { dot, common } = st.isDirectory() ? { dot: path.join(top, '.git'), common: path.join(top, '.git') } : await pointed(path.join(top, '.git'), top);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
   try {
     await mkdir(path.join(dir, 'refs')); await mkdir(path.join(dir, 'info'));
@@ -90,9 +107,12 @@ async function box(cwd, deadline) {
     // The copy keeps the index's own time (read first, so a newer index makes entries look racier, never surer): git trusts an
     // entry whose file is older than its index and checks again one that is not, so a file changed in the same second as the
     // index, at the same size, is still read (with the copy's later time it was taken as unchanged).
-    const ix = path.join(dot, 'index'), at = await stat(ix).catch(keep); // a fresh repo has none yet
-    if (at) await copyFile(ix, path.join(dir, 'index')).then(() => utimes(path.join(dir, 'index'), at.atime, at.mtime)).catch(keep);
-    await copyFile(path.join(common, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
+    // O241 review: both copies are read through a handle that refuses a link, and objects must be a folder, not a link.
+    const ix = await bytes(path.join(dot, 'index')).catch(keep); // a fresh repo has none yet
+    if (ix) { await writeFile(path.join(dir, 'index'), ix.data); await utimes(path.join(dir, 'index'), ix.st.atime, ix.st.mtime); }
+    const ex = await bytes(path.join(common, 'info', 'exclude')).catch(keep);
+    if (ex) await writeFile(path.join(dir, 'info', 'exclude'), ex.data);
+    if (!(await lstat(path.join(common, 'objects'))).isDirectory()) throw new Error('objects is not a folder');
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const p = { dir, top, objects: path.join(common, 'objects') };
   return { here, git: (args) => git(here, args, deadline, p), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };

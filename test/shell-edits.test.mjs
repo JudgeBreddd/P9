@@ -3,7 +3,7 @@
 // are in fake-acp-agent.mjs ('shell writes', 'shell many', 'shell big').
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -281,5 +281,19 @@ test('O241 a linked worktree and a submodule list shell edits; a bad .git file a
   await bad('missing', `gitdir: ${path.join(base, 'nowhere')}\n`);
   await bad('no-backlink', `gitdir: ${wtGit}\n`); // the worktree folder's gitdir names wt/.git, not this file
   await bad('not-modules', async (dir) => { await mkdir(path.join(dir, 'g')); await writeFile(path.join(dir, 'g', 'HEAD'), 'ref: refs/heads/x\n'); return 'gitdir: g\n'; });
+  // Review round 1: a self-made worktree folder whose commondir names another repo; a submodule pointer into another
+  // superproject's modules; a worktree whose index is a link.
+  await mkdir(path.join(base, 'fake', 'wt1'), { recursive: true });
+  await bad('foreign-common', `gitdir: ${path.join(base, 'fake', 'wt1')}\n`, async (dir) => {
+    await writeFile(path.join(base, 'fake', 'wt1', 'gitdir'), path.join(dir, '.git') + '\n');
+    await writeFile(path.join(base, 'fake', 'wt1', 'commondir'), path.join(main, '.git') + '\n');
+  });
+  await mkdir(path.join(main, 'inner'));
+  const inner = path.join(main, 'inner'); await writeFile(path.join(inner, '.git'), `gitdir: ${path.join(sup, '.git', 'modules', 'sub')}\n`);
+  assert.equal(await shellStart(inner), null, 'a submodule pointer into another superproject adds nothing');
+  const wt2 = path.join(base, 'wt2'); sh(main, 'worktree', 'add', '-q', wt2);
+  const wt2Index = path.join(main, '.git', 'worktrees', 'wt2', 'index');
+  await rm(wt2Index); await symlink(path.join(main, '.git', 'index'), wt2Index);
+  assert.equal(await shellStart(wt2), null, 'an index that is a link adds nothing');
   await assert.rejects(stat(marker), 'nothing ran for any of them');
 });
