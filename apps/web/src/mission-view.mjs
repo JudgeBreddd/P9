@@ -401,11 +401,15 @@ function bindSpaceForm(pop) {
 function bindOnboard(root) {
   root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72).
-    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(outer.live.adding ? { space: freeName('new-space', outer.live.spaces || []) } : {}) });
+    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72). MC-17: from a
+    // template preview the daemon adds the template to a new space first; File protection asks for a second click, as Choose does.
+    const from = b.dataset.from, space = from || outer.live.adding ? freeName(from || 'new-space', outer.live.spaces || []) : 0;
+    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(space ? { space } : {}), ...(from ? { template: from, confirm: !!b.dataset.armed } : {}) });
     b.disabled = false;
+    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; root.querySelector('[data-onboard-note]').textContent = 'File protection is on. Click again to add the template.'; return; }
+    if (from && r.status === 201) await window.p9.mission('space', { name: space });
     if (r.status === 201 && r.body.space) {
-      outer.live.adding = false; outer.renderMission();
+      outer.live.adding = false; outer.live.preview = null; from ? refreshMission() : outer.renderMission();
       outer.toast({ kind: 'chat', txt: (outer.names[b.dataset.build] ?? b.dataset.build) + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
     }
     if (r.status === 201) outer.openModal({ kind: 'chat', id: r.body.conversation });

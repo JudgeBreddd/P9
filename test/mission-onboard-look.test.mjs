@@ -107,6 +107,7 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.click('#mission [data-template="homelab"]');
   await phone.locator('#mission [data-preview] [data-choose="homelab"]').waitFor({ timeout: 10000 });
   await phone.locator('#mission [data-preview] [data-preview-back]').waitFor();
+  assert.equal(await phone.locator('#mission [data-preview] [data-build]').count(), 0, 'MC-17: the phone preview offers no agent build');
   await settled(phone); shot('f4-preview-phone', await phone.screenshot());
   assert.deepEqual(await spaces(), [], 'a phone preview writes no file');
   await phone.click('#mission [data-preview-back]');
@@ -166,4 +167,27 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await page.click('#fMission [data-choose="blank"]');
   await page.locator('#fMission [data-group="Start here"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-onboard]').count(), 0);
+
+  // MC-17: a template preview leads into the build. Each agent's button there adds the template to a new space (File protection
+  // asks with a second click, as Choose does), opens the build chat and shows the space, so the user steers from its sections.
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space=""]').click();
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 15000 });
+  const builds = await page.locator('#fMission [data-onboard] [data-build]').count();
+  await page.click('#fMission [data-template="homelab"]');
+  await page.locator('#fMission [data-preview] [data-build="claude"][data-from="homelab"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#fMission [data-preview] [data-build]').count(), builds, 'one build button per agent, as on the card');
+  await settled(page); shot('mc17-preview-desktop', await page.screenshot());
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#fMission [data-onboard-note]:has-text("File protection is on")').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdl[open]').count(), 0, 'the first click under File protection opens no chat');
+  assert.ok(!(await server.desk('/mission')).body.spaces.includes('homelab-2'), 'and writes no space');
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#mdlBody[data-kind="chat"]').waitFor({ timeout: 15000 });
+  await page.keyboard.press('Escape');
+  await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab-2', null, { timeout: 15000 });
+  await page.locator('#fMission [data-group="Services"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-preview], #fMission [data-onboard]').count(), 0);
+  console.log('PASS MC-17: the preview builds from the template into homelab-2 and shows it');
 });

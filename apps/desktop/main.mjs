@@ -653,7 +653,9 @@ export async function createDesktop({ state, open } = {}) {
     // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
     guide: () => ['GET', '/mission/guide'],
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
-    build: ({ provider, space, mode }) => AGENT_IDS.includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}), ...(typeof mode === 'string' ? { mode } : {}) }],
+    // MC-17: template, the template a new space starts from; confirm, the user's second click under File protection.
+    build: ({ provider, space, mode, template, confirm }) => AGENT_IDS.includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}), ...(typeof mode === 'string' ? { mode } : {}),
+      ...(typeof template === 'string' ? { template } : {}), ...(confirm === true ? { confirm } : {}) }],
     space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
     deleteSpace: ({ name, confirm }) => typeof name === 'string' && ['POST', '/mission/space/delete', { name, ...(confirm !== undefined ? { confirm } : {}) }],
     saveTemplate: ({ name, about, replace }) => typeof name === 'string' && ['POST', '/mission/template/save', { name, ...(about !== undefined ? { about } : {}), ...(replace !== undefined ? { replace } : {}) }],

@@ -312,3 +312,29 @@ test('MC-1: a build names its start mode and runs in it; a wrong name makes no c
   await call(instance, '/agent-lock', 'POST', { on: false });
   console.log('PASS MC-1: builds ran in Bypass permissions, Plan and Read-only; 5 wrong names refused with no chat; no mode told Manual; under the agent lock a Bypass build ran in Plan');
 });
+
+// MC-17: a build can start from a template. The daemon adds the template to the new space first (File protection asks for the
+// user's confirm, as Choose does), then the first prompt names the template, so the chat starts knowing what it is for.
+test('MC-17: a build from a template adds it to a new space and the prompt names it; protection, a bad name or no space make no chat', { timeout: 90000 }, async (t) => {
+  const instance = await start(t);
+  const homelab = TEMPLATES.find((entry) => entry.name === 'homelab');
+  const chats = async () => (await call(instance, '/chat')).body.conversations.length;
+  const before = await chats();
+  for (const body of [{ provider: 'claude', template: 'homelab' }, { provider: 'claude', space: 'a', template: 7 }, { provider: 'claude', space: 'a', template: 'homelab', confirm: 'yes' }]) {
+    assert.equal((await call(instance, '/mission/build', 'POST', body)).status, 400, JSON.stringify(body));
+  }
+  assert.deepEqual(await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'a', template: 'nope', confirm: true }), { status: 404, body: { error: 'unknown-template' } });
+  const asked = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab', template: 'homelab' });
+  assert.equal(asked.status, 403, 'File protection is on: no confirm, no write');
+  assert.deepEqual((await call(instance, '/mission')).body.spaces, [], 'no space written');
+  assert.equal(await chats(), before, 'and no chat made');
+  const built = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab', template: 'homelab', confirm: true });
+  assert.equal(built.status, 201); assert.equal(built.body.space, 'lab');
+  const told = await until(instance, (event) => event.conversation === built.body.conversation && event.data?.content?.text?.startsWith('echo:'));
+  assert.equal(told.data.content.text, 'echo:' + buildPrompt('lab', homelab));
+  assert.ok(told.data.content.text.includes('starts from the template ' + homelab.title + ' (' + homelab.about + ')'), told.data.content.text.slice(-400));
+  assert.equal((await call(instance, '/mission/space', 'POST', { name: 'lab' })).status, 200);
+  assert.deepEqual((await call(instance, '/mission')).body.space.map((section) => section.id), homelab.space.sections.map((section) => section.id), 'the space holds the template');
+  assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab', template: 'homelab', confirm: true })).status, 409, 'an existing space is never the target');
+  console.log('PASS MC-17 server: template build installs, then the prompt names it');
+});

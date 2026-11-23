@@ -444,12 +444,20 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // space (threat model row 72): + Add builds into a new scratch space; one that exists is never named, so never rewritten.
     // MC-1: mode, the start mode the window shows on its pill, so the build runs in what the pill says. Without one (an older
     // window, the phone) the agent's default runs and the chat's mode event says which (chat.mjs tellMode).
-    const { provider, space, mode, ...rest } = (await json(c)) ?? {};
+    // MC-17: template, a template the new space starts from (space required); confirm, the user's second click under File protection.
+    const { provider, space, mode, template, confirm, ...rest } = (await json(c)) ?? {};
     if (Object.keys(rest).length || !AGENT_IDS.includes(provider) || (space !== undefined && !draftAt(drafts, space))
-      || (mode !== undefined && !chat.modeNames(provider).includes(mode))) return reply(c, { status: 400, error: 'request-refused' });
+      || (mode !== undefined && !chat.modeNames(provider).includes(mode)) || (template !== undefined && (typeof template !== 'string' || space === undefined))
+      || (confirm !== undefined && typeof confirm !== 'boolean')) return reply(c, { status: 400, error: 'request-refused' });
     if (space !== undefined && (await draftNames(drafts)).includes(space)) return reply(c, { status: 409, error: 'space-exists' });
+    const base = template === undefined ? undefined : [...TEMPLATES, ...await mcp.userTemplates()].find((entry) => entry.name === template);
+    if (template !== undefined) {
+      if (!base) return reply(c, { status: 404, error: 'unknown-template' });
+      const { error, ...result } = await mcp.install(template, space, confirm);
+      if (error) return reply(c, { status: error === 'registry-read-only' ? 403 : 400, error, ...result });
+    }
     const made = await chat.create({ provider, title: 'Build Mission Control' });
-    const sent = await chat.prompt(made.conversation, { text: buildPrompt(space), ...(mode && { mode }) });
+    const sent = await chat.prompt(made.conversation, { text: buildPrompt(space, base), ...(mode && { mode }) });
     return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation, ...(space === undefined ? {} : { space }) } : sent);
   });
   // The space picker (threat model row 71): Main (null) or a scratch space that is there, recorded as settings.space_name.
