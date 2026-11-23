@@ -3,8 +3,9 @@
 // so P9 never runs it: the owner's Start stores the parsed scripts in the approval record (P9's database), and only
 // that copy runs. Each run gets the sprint's state as JSON on stdin (state() below is the contract, field by field) and
 // leaves one line in hooks.log.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { devNull } from 'node:os';
 import { childEnv } from './child-env.mjs';
 import { hashOf, phasesOf, planItems } from './sprint-files.mjs';
 
@@ -33,6 +34,29 @@ export const EVERY_MIN = 10, EVERY_MAX = 120;
 export const MAX_SCRIPTS = 12, MAX_LIBRARY = 100, MAX_NAME = 60, MAX_COMMAND = 200, LINE = 300;
 const TIMEOUT = { blocking: 60_000, notice: 300_000 }; // ponytail: fixed, no per-script setting; add one when a real script needs longer
 const KEEP = 64 * 1024;
+// I3 worker window (look): how long one look at a chat is kept, the git timeout, how many changed files and notes lines
+// it names, and the last reply's length.
+const LOOK_MS = 15_000, GIT_MS = 5_000, CHANGED_MAX = 20, NOTES_TAIL = 15, REPLY_MAX = 600;
+// One `git status --porcelain=v2 --branch -z` read: branch (null when detached), head (null on a branch with no commit
+// yet), changed: the count and the first CHANGED_MAX paths. null when the folder is not a git checkout or git fails.
+export function parseStatus(out) {
+  let branch = null, head = null; const paths = [], recs = out.split('\0');
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i], f = r.split(' ');
+    if (r.startsWith('# branch.oid ')) head = /^[0-9a-f]{7,64}$/.test(f[2]) ? f[2] : null;
+    else if (r.startsWith('# branch.head ')) branch = f[2] === '(detached)' ? null : f.slice(2).join(' ');
+    else if (f[0] === '1') paths.push(f.slice(8).join(' '));
+    else if (f[0] === '2') { paths.push(f.slice(9).join(' ')); i++; } // the next record is the path it was renamed from
+    else if (f[0] === 'u') paths.push(f.slice(10).join(' '));
+    else if (f[0] === '?') paths.push(r.slice(2));
+  }
+  return { branch, head, changed: { count: paths.length, files: paths.slice(0, CHANGED_MAX) } };
+}
+const gitLook = (folder) => new Promise((resolve) => {
+  execFile('git', ['-c', 'core.hooksPath=' + devNull, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v2', '--branch', '-z'],
+    { cwd: folder, timeout: GIT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } },
+    (err, stdout) => resolve(err ? null : parseStatus(stdout)));
+});
 // O189: what one script run may send its sprint's chats through POST /script (say, below): calls per run, characters per text.
 const SAY_CALLS = 20, SAY_MAX = 20_000;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
@@ -163,6 +187,25 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
   }
   const logLines = (sprint, n = 20) => (chat.sprintFiles.read(sprint, 'hooks.log') ?? '').split('\n').filter(Boolean).slice(-n);
   const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+  // I3 worker window: what the Sprint View shows under a chat's row (look, in view() below): its folder's branch, head
+  // commit and changed files, the last lines of its notes file and its last reply. The page reads the status every 5 s
+  // while it is open (projects-view.mjs loadView) and agents call sprint_status too, so one look per chat is kept LOOK_MS
+  // and shared by every read meanwhile (a read during the look waits for it); git is one status call with a timeout,
+  // read-only (no optional locks, no hooks, no fsmonitor). A closed sprint answers with its record, so it runs no git.
+  const looks = new Map();
+  const look = (sprint, w) => {
+    const had = looks.get(w.chat);
+    if (had && Date.now() - had.at < LOOK_MS) return had.value;
+    const value = lookNow(sprint, w);
+    looks.set(w.chat, { at: Date.now(), value });
+    return value;
+  };
+  async function lookNow(sprint, w) {
+    const notes = chat.sprintFiles.read(sprint, `notes/${w.key ?? w.chat}.md`);
+    return { git: w.folder ? await gitLook(w.folder) : null,
+      notes: notes === null ? null : { file: `notes/${w.key ?? w.chat}.md`, tail: notes.split('\n').map((l) => l.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trimEnd()).filter((l) => l.trim()).slice(-NOTES_TAIL).map((l) => l.slice(0, LINE)) },
+      reply: String(chat.reply?.(w.chat) ?? '').replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim().slice(-REPLY_MAX) || null };
+  }
 
   // The data contract, version 1 (SECURITY.md § Sprint scripts, "What a script is told"). Every field is always there;
   // one P9 has nothing for is null or empty, never missing. Nothing here is more than the project page and list_chats
@@ -403,6 +446,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
     const plan = chat.sprintFiles.read(sprint, 'sprint.md');
     const { contract, point, blocking, script, subject, phase, pr, ...s } = await state(sprint, 'status', undefined, plan);
     const st = standing(sprint), start = chat.projects.started(sprint);
+    const seen = await Promise.all(s.workers.map((w) => look(sprint, w)));
     // O164 part (3): a v line (Role: owner) never merges — it closes on the owner's click — so it is counted nowhere a
     // merge is counted: not in done.total, not in a phase's steps. It belongs to the owner's own queue and ring (owner).
     const mine = s.items.filter((i) => i.role !== 'owner'), owned = s.items.filter((i) => i.role === 'owner'),
@@ -429,9 +473,9 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       // work: the items of the plan with this chat's role key. The lead has no queue of its own (chat.queue is a started chat's), so its items are counted here the same way.
       // next (Work Queue row): the first item not passed, the one ready reports (delegate.mjs ready, chat-view itemLine): a merge
       // without a pass (mergedNow records any review commit that landed) leaves it next. null when every item passed.
-      workers: s.workers.map((w) => { const q = chat.queue?.(w.chat), own = q ? [] : mine.filter((i) => i.role && i.role === w.key);
+      workers: s.workers.map((w, at) => { const q = chat.queue?.(w.chat), own = q ? [] : mine.filter((i) => i.role && i.role === w.key);
         const rows = q ? q.items ?? [] : own.map((i) => ({ text: i.text, state: i.review?.state, merged: i.review?.merged === true })), next = rows.find((r) => r.state !== 'passed')?.text ?? null;
-        return { ...w, work: q ? { done: q.done, total: q.total, next } : own.length ? { done: own.filter((i) => i.review?.merged === true).length, total: own.length, next } : null }; }),
+        return { ...w, look: seen[at], work: q ? { done: q.done, total: q.total, next } : own.length ? { done: own.filter((i) => i.review?.merged === true).length, total: own.length, next } : null }; }),
       scripts: { running: st.running.length, additional: st.additional.length, waiting: st.waiting.length } };
   }
   async function status(caller, named) { const { sprint, ...no } = where(caller, named); return no.error ? no : view(sprint); }
