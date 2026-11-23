@@ -148,6 +148,69 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   console.log('PASS Worker folders A6');
 });
 
+// Close bundles (the owner, 2026-11-22, "Bundle"): at Close, a worker branch whose work is not in the main line is kept as a
+// git bundle beside the sprint's notes, and its folder goes. Unsaved work and a folder off its branch are still kept as
+// folders (a bundle holds only commits). Clean up without bundle: true is unchanged.
+test('Worker folders close bundles: at Close an unmerged branch survives as a bundle beside the notes and its folder goes; unsaved or off-branch folders stay', { timeout: 60000 }, async (t) => {
+  const { dir, remote, owner, home } = repos(t);
+  const folders = createWorkerFolders({ home });
+  const work = async (item, file) => { const { folder } = await folders.make(ID, item, owner); write(path.join(folder, file), item + '\n'); g(folder, 'add', file); g(folder, 'commit', '-qm', item); return folder; };
+  const merged = await work('merged', 'm.txt'), open = await work('open', 'o.txt'), dirty = await work('dirty', 'd.txt'), moved = await work('moved', 'v.txt');
+  write(path.join(dirty, 'later.txt'), 'not saved\n');
+  g(moved, 'checkout', '-qb', 'elsewhere', 'origin/main');
+  g(merged, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
+  const tip = g(open, 'rev-parse', 'HEAD');
+  write(path.join(home, ID, 'notes', 'open.md'), 'notes\n'); // the sprint's own files share the folder and stay
+  const result = await folders.clean(ID, { bundle: true });
+  assert.deepEqual(result.removed, ['merged', 'open (kept as bundles/open.bundle)'], 'the page lists it with where it went');
+  assert.deepEqual(result.bundled?.map((b) => [b.item, b.branch, b.commit]), [['open', 'sprint/0123abcd/open', tip]]);
+  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['dirty', 'unsaved changes'], ['moved', 'not on its sprint branch']]);
+  const bundle = path.join(home, ID, 'bundles', 'open.bundle');
+  assert.equal(result.bundled[0].bundle, bundle);
+  assert.equal(fs.existsSync(open), false, 'the bundled folder is gone');
+  assert.equal(g(path.join(home, ID, 'clone'), 'branch', '--list', 'sprint/0123abcd/open'), '', 'its branch left the clone');
+  const back = path.join(dir, 'back');
+  g(dir, 'clone', '-q', '-b', 'sprint/0123abcd/open', bundle, back);
+  assert.equal(g(back, 'rev-parse', 'HEAD'), tip, 'cloned from the bundle: the same head');
+  assert.equal(fs.readFileSync(path.join(back, 'o.txt'), 'utf8'), 'open\n');
+  assert.equal(fs.readFileSync(path.join(home, ID, 'notes', 'open.md'), 'utf8'), 'notes\n');
+  // A second Close for the same key (a worker made again under it) never writes over the first bundle.
+  const again = await work('open', 'o2.txt'), tip2 = g(again, 'rev-parse', 'HEAD');
+  const second = await folders.clean(ID, { bundle: true });
+  assert.deepEqual(second.bundled.map((b) => [b.item, path.basename(b.bundle), b.commit]), [['open', 'open~1.bundle', tip2]]);
+  assert.equal(g(back, 'bundle', 'list-heads', bundle).split(' ')[0], tip, 'the first bundle is unchanged');
+  // Once the rest is saved and settled, the clone goes; the bundles and notes stay.
+  fs.rmSync(path.join(dirty, 'later.txt')); g(dirty, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/dirty', 'dirty');
+  g(path.join(home, ID, 'clone'), 'worktree', 'remove', '--force', moved); g(path.join(home, ID, 'clone'), 'branch', '-D', 'sprint/0123abcd/moved', 'elsewhere');
+  assert.deepEqual(await folders.clean(ID, { bundle: true }), { removed: ['dirty'], kept: [], bundled: [] });
+  assert.deepEqual(fs.readdirSync(path.join(home, ID)).sort(), ['bundles', 'notes']);
+  assert.deepEqual(fs.readdirSync(path.join(home, ID, 'bundles')).sort(), ['open.bundle', 'open~1.bundle']);
+  // A bundle that cannot be written keeps the folder and its branch; one git will not remove keeps them and drops the bundle.
+  const locked = await work('locked', 'l.txt'), blocked = await work('blocked', 'b.txt');
+  g(path.join(home, ID, 'clone'), 'worktree', 'lock', locked);
+  const real = path.join(home, ID, 'bundles'); fs.renameSync(real, real + '.away'); write(real, 'not a folder\n');
+  const failed = await folders.clean(ID, { bundle: true });
+  assert.deepEqual([failed.bundled, failed.kept.map((k) => [k.item, k.why])], [[], [['blocked', 'not in the main line; its bundle could not be written'], ['locked', 'not in the main line; its bundle could not be written']]]);
+  fs.rmSync(real);
+  // #473 FIX1: a bundles folder that is a link (here to a folder outside the sprint) is refused the same way; nothing is
+  // written through it and the folders and branches stay.
+  const outside = path.join(dir, 'outside'); fs.mkdirSync(outside);
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(outside, real);
+    const linked = await folders.clean(ID, { bundle: true });
+    assert.deepEqual([linked.bundled, linked.kept.map((k) => k.item), fs.readdirSync(outside)], [[], ['blocked', 'locked'], []], 'nothing written through the link');
+    assert.ok(fs.existsSync(blocked) && fs.existsSync(locked));
+    fs.rmSync(real);
+  }
+  fs.renameSync(real + '.away', real);
+  const third = await folders.clean(ID, { bundle: true });
+  assert.deepEqual([third.bundled.map((b) => b.item), third.kept.map((k) => [k.item, k.why])], [['blocked'], [['locked', 'git would not remove it']]]);
+  assert.deepEqual([fs.existsSync(blocked), fs.existsSync(locked), fs.readdirSync(real).sort()], [false, true, ['blocked.bundle', 'open.bundle', 'open~1.bundle']], 'no bundle left for the folder git kept');
+  assert.equal(g(path.join(home, ID, 'clone'), 'branch', '--list', 'sprint/0123abcd/locked', '--format=%(refname:short)'), 'sprint/0123abcd/locked');
+  g(path.join(home, ID, 'clone'), 'worktree', 'unlock', locked); g(path.join(home, ID, 'clone'), 'worktree', 'remove', '--force', locked); g(path.join(home, ID, 'clone'), 'branch', '-D', 'sprint/0123abcd/locked');
+  console.log('PASS Worker folders close bundles');
+});
+
 // A sprint never ends (3): the agent's scratch folder for a worker folder (<tmp>/claude-<uid>/<the folder, each character
 // other than a letter or digit as ->) goes with the folder clean-up removes; a kept folder keeps its own. Two folders
 // whose names differ only in . _ - share one scratch folder, so a kept one keeps it.
@@ -453,9 +516,9 @@ test('Worker folders A6: the desktop\'s clean-up route refuses while the sprint 
 // folder); a worker stopped or moved to another computer counts as finished, any other state refuses.
 test('Worker folders A6: the clean-up route refuses while the lead has a message waiting or a worker runs; stopped and moved workers are finished', { timeout: 10000 }, async () => {
   const routes = {}, record = { get() {}, post(route, handler) { routes[route] = handler; } };
-  const ask = async (lead, workers) => {
+  const ask = async (lead, workers, closed = null) => {
     let cleaned = false;
-    const chat = { info: () => lead, family: () => workers.map((state, i) => ({ id: 'w' + i, title: 'w' + i, parent: ID, state })), workers: { clean: async () => { cleaned = true; return { removed: [], kept: [] }; } } };
+    const chat = { info: () => lead, family: () => workers.map((state, i) => ({ id: 'w' + i, title: 'w' + i, parent: ID, state })), projects: { closed: () => closed }, workers: { clean: async (_, how) => { cleaned = how?.bundle ? 'bundle' : true; return { removed: [], kept: [] }; } } };
     setupRoutes({ app: record, api: record, chat });
     let status;
     const body = await routes['/sprints/:id/clean']({ req: { param: () => ID }, json: (value, code = 200) => { status = code; return value; } });
@@ -467,6 +530,8 @@ test('Worker folders A6: the clean-up route refuses while the lead has a message
   assert.deepEqual(await ask({ state: 'turn', busy: false }, []), [409, 'sprint-running', false], 'the lead is in a turn');
   for (const state of ['running', 'turn', 'idle', 'stopping', 'moving']) assert.deepEqual(await ask(idle, ['stopped', state]), [409, 'sprint-running', false], 'a worker ' + state);
   assert.deepEqual(await ask(null, []), [200, null, true], 'a deleted lead starts no worker');
+  // Close bundles: a closed sprint's Clean up (a chat of it closed it, so Close cleaned nothing) bundles as Close does.
+  assert.deepEqual(await ask(idle, ['stopped'], { at: 1, by: 'w0' }), [200, null, 'bundle'], 'a closed sprint bundles');
 });
 
 test('Worker folders A1: a sprint clones from an address the owner set, without reading a folder; only https and ssh forms pass, and git is held to the same transports', { timeout: 60000 }, async (t) => {

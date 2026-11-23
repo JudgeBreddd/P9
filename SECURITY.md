@@ -1036,7 +1036,7 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
   to call it, and P9 never runs it on its own. It refuses while any worker the sprint's lead started is still running
   (anything but stopped, or moved to another computer), and while the lead is in a turn or has a message waiting, since it may be making a worker
   folder that moment (a new folder has nothing of its own yet, so it would read as merged). It removes only what the
-  rule above allows, and answers with each folder removed and each folder kept, with why and its size. Written before
+  rule above allows (on a closed sprint, unmerged saved work too, once bundled: § Close sprint), and answers with each folder removed and each folder kept, with why and its size. Written before
   the code (sprint spec A6). What remains: you can restart a stopped worker while clean-up runs; its folder is then
   removed only if it still has nothing unsaved and its work is in the main line, so nothing git tracks or would track is lost, and its next start
   is refused because the folder is gone.
@@ -1270,8 +1270,12 @@ before the tests (sprint spec S16; 0.1.9 phase 4.5).
   one. The two `after-close` runs use the list that stood just before the close. `start_sprint` and the Start press
   refuse a closed sprint (`sprint-closed`). The sprint's files stay editable as § Sprint files says; they are no
   longer part of the record's numbers.
-- **What close does not do.** It does not remove worker folders (that stays its own button, § Worker folders), does
-  not archive the chats, and does not stop you from typing in one of them again. A chat of a closed sprint that you
+- **Worker folders at close.** The owner's Close runs Clean up's rule (§ Worker folders); a close by a chat of the
+  sprint does not, and the page's Clean up does it later. At a close, a worker branch whose saved work is not in the
+  main line is written as a git bundle beside the sprint's notes (`bundles/<item>.bundle`, never over an earlier one;
+  `git clone -b <branch> <bundle>` brings it back), and only then are its folder and branch removed. A folder with
+  unsaved changes, or one not on its sprint branch, stays as it is: a bundle holds only commits.
+- **What close does not do.** It does not archive the chats, and does not stop you from typing in one of them again. A chat of a closed sprint that you
   start again is an ordinary chat: Delegate's rules still apply to it, the sprint's scripts do not run for it.
 - **Your own items (O164).** A plan line whose id ends in `v` after its number (`O159v`) is yours, whatever role it
   names: it is in no worker's queue or ring and in no merged count. It closes only with your Close on that line in the
@@ -1503,6 +1507,25 @@ PNG, JPEG, GIF or WebP, at most 4 a message and 2 MiB of base64 each. The daemon
 that chat's own history names that hash; the file name is built from the hash, never from the request. Deleting a chat
 deletes each of its photos that no other chat's history names; a photo another chat also sent stays. The phone does not
 show sent photos.
+
+## Files you send in a chat
+
+Since v0.1.9 (A2 step 1) a file of any type sent with a chat message is saved on your computer, in
+`<ownership>/attachments/<chat id>/` (folder 0700, file 0600; never the state folder, which is RAM on Linux), and the
+agent is sent a link to that path, not the bytes. The daemon and that chat's agent can write the folder: the agent is
+given it as an extra folder (`additionalDirectories`) on every start and resume, so its own tools can open, edit and save
+the file. The agent lock still wins: under it the agent writes nothing there either. File protection does not cover this
+folder; it covers the registry and space only. A file name is a base name only: one with `/`, `\`, `..`, a control
+character, a character Windows refuses, a trailing dot or space (Windows would trim it to another name), or a Windows
+device name (`CON`, `NUL`, `COM1`, `LPT1`, `CONIN$` and the rest, any case, with or without an extension) is refused (400); a
+`:` (a Windows stream) is one of the refused characters. A name is at most 200 bytes, and a taken name's tag is fitted inside the same 200 (the name is cut, whole characters only). A chat id is checked before anything is written, so
+nothing lands outside that chat's folder. Each file is created new: a name already taken, by an earlier file or by a link
+the agent made, is never written through; the file gets a short random tag before its extension instead. At most 4 files
+a message in all, counting files the message already names (below), and 8 MiB of base64 (6 MiB) each; a bigger one is refused with a plain message (413 `file-too-large`), and the
+whole request stays under the server's body limit (12 MiB). A message that names a saved file again (held, paused or
+joined) names it by its name in that same chat's folder only. Deleting a chat deletes its folder; no other chat's files. The attachments folder itself must be a real folder: if
+it is a link, nothing is saved (500 `file-not-saved`), a chat start makes no folder through it, and a delete removes nothing.
+Photos still go as photos (§ Photos you send).
 
 ## Files sent to the server
 
