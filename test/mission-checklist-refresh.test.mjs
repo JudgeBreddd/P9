@@ -28,7 +28,7 @@ async function setup({ workspace, directory }) {
   return { args: ['--settings', path.join(directory, 'settings.json')] };
 }
 
-test('O238 a checklist write refreshes the page column and its tile, from the window and from the page, without a reload', { timeout: 150000 }, async (t) => {
+async function launch(t, before = async () => {}) {
   const server = await remoteDaemon(t, { setup });
   assert.equal((await server.desk('/mission/data/allow', 'POST', { id: 'tile-review' })).status, 200);
   const profile = path.join(server.directory, 'electron-profile');
@@ -39,8 +39,13 @@ test('O238 a checklist write refreshes the page column and its tile, from the wi
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
   await page.setViewportSize({ width: 1440, height: 900 });
+  await before(app);
   await page.click('#rMission');
-  const wiki = page.locator('#fMission [data-sec="Wiki"]');
+  return { app, page, wiki: page.locator('#fMission [data-sec="Wiki"]') };
+}
+
+test('O238 a checklist write refreshes the page column and its tile, from the window and from the page, without a reload', { timeout: 150000 }, async (t) => {
+  const { page, wiki } = await launch(t);
   await wiki.locator('[data-ck="inbox"] [data-ck-review]', { hasText: 'review: pending' }).waitFor({ timeout: 20000 });
   await wiki.locator('[data-tile="tile-review"]', { hasText: 'pending' }).waitFor({ timeout: 15000 });
   // 8 s, well inside the 30 s pull and the daemon's 30 s answer: only the write's own refresh can draw the new state.
@@ -61,4 +66,36 @@ test('O238 a checklist write refreshes the page column and its tile, from the wi
   await wiki.locator('[data-ck="inbox"] [data-ck-review]', { hasText: 'review: pending' }).waitFor(soon);
   await wiki.locator('[data-tile="tile-review"]', { hasText: 'pending' }).waitFor(soon);
   console.log('PASS O238: a write in the window and one on the page each refresh the page column and its tile within 8 s');
+});
+
+// Fix 1 (review): an answer asked before the write and arriving after it must not draw the old state over the new. The main
+// process holds the page column's first checklist read and first tile answer (both read pending), the write goes in from
+// the window, then the held answers are let go; before the fix they put the column back to pending until the next 30 s pull.
+test('O238 an answer asked before the write cannot draw the old review line or tile over the new one', { timeout: 150000 }, async (t) => {
+  const { app, page, wiki } = await launch(t, (app) => app.evaluate(({ ipcMain }) => {
+    const handler = ipcMain._invokeHandlers.get('p9:mission'), hold = new Set(['checklist inbox', 'data tile-review']);
+    let release; const gate = new Promise((resolve) => { release = resolve; });
+    globalThis.o238 = { held: 0, release };
+    ipcMain.removeHandler('p9:mission');
+    ipcMain.handle('p9:mission', async (event, action, payload) => {
+      const answer = await handler(event, action, payload);
+      if (hold.delete(action + ' ' + payload?.id)) { globalThis.o238.held++; await gate; }
+      return answer;
+    });
+  }));
+  const held = async (n) => { for (let i = 0; i < 100 && await app.evaluate(() => globalThis.o238.held) < n; i++) await page.waitForTimeout(100); };
+  await held(2);
+  assert.equal(await app.evaluate(() => globalThis.o238.held), 2, 'the column asked its checklist and tile and both answers are held');
+  await wiki.locator('.phead').click();
+  const box = page.locator('#mdl[open] #mdlBody');
+  await box.locator('[data-ck="inbox"] [data-ck-word="merge"]').click();
+  await box.locator('[data-tile="tile-review"]', { hasText: 'merge' }).waitFor({ timeout: 8000 });
+  await page.keyboard.press('Escape');
+  await wiki.locator('[data-ck="inbox"] [data-ck-review]', { hasText: 'review: merge' }).waitFor({ timeout: 8000 });
+  await wiki.locator('[data-tile="tile-review"]', { hasText: 'merge' }).waitFor({ timeout: 8000 });
+  await app.evaluate(() => globalThis.o238.release());
+  await page.waitForTimeout(1500); // the held answers arrive and are handled within this; a redraw from them would show here
+  assert.match(await wiki.locator('[data-ck="inbox"] [data-ck-review]').innerText(), /review: merge/);
+  assert.match(await wiki.locator('[data-tile="tile-review"]').innerText(), /merge/);
+  console.log('PASS O238 fix 1: the column keeps merge after the answers asked before the write arrive');
 });
