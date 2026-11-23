@@ -323,7 +323,7 @@ function ask(s, own) {
 // but whether it is folded.
 // ponytail: folded per chat for this window only (a Set), and a chat opens folded where the card would cover the text (narrow window, Split).
 const SPRINT = { folded: new Map() };
-const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null, work: c.queue ?? null, paused: !!c.paused }, c.named && { named: true, title: c.title }); // O172: a name that stays (the user's, or a sprint chat's role) also on a chat started while the window is open. The contract's optional fields: a chat without them looks as it does today. work: the daemon's work queue {done, total, items} (its queue; s.queue here is the composer's)
+const sprintFields = (s, c) => Object.assign(s, { task: c.task ?? null, ready: c.ready ?? null, verdict: c.verdict ?? null, idleSince: c.idleSince ?? null, work: c.queue ?? null, paused: !!c.paused, sprintClosed: !!c.sprintClosed }, c.named && { named: true, title: c.title }); // O172: a name that stays (the user's, or a sprint chat's role) also on a chat started while the window is open. The contract's optional fields: a chat without them looks as it does today. work: the daemon's work queue {done, total, items} (its queue; s.queue here is the composer's)
 // Row 722 (the work queue): a worker holding a role works its role's plan items in order, so its row says Work Queue and
 // names the first item not yet passed, even over an open_chat task (nightly 11: a start task hid the queue's item).
 // Its text is the plan line as planItems reads it, id included ("O7: do thing. Role w"), so the id is not added again.
@@ -363,7 +363,7 @@ function sprintCard(s) {
   const count = st => rows.filter(r => r.st === st).length, bits = [workers.length + (workers.length === 1 ? ' worker' : ' workers'), asks.length && asks.length + ' need you', count('ready') && count('ready') + ' ready'].filter(Boolean);
   return `<aside class="sprint" data-sprint data-folded="${folded}" data-auto="${choice === undefined}" data-open-asks="${asks.length}" aria-label="Sprint">
     <div class="sp-headbar"><button type="button" class="sp-head" data-sprint-fold aria-expanded="${!folded}"><span class="eyebrow">Sprint</span><span class="sp-sum">${bits.join(' · ')}</span>${svg.chev}</button><button type="button" class="sp-files" data-sprint-files ${project ? 'title="Open sprint files"' : 'disabled title="This chat has no project"'}>Files</button></div>
-    <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>${workers.filter(clearable).length > 1 ? `<button type="button" class="sp-files sp-clearall" data-sprint-clear="*" title="Archive every stopped worker">Clear ${workers.filter(clearable).length} stopped</button>` : ''}
+    <div class="sp-body"><ul class="sp-rows">${rows.map(r => r.html).join('')}</ul>${workers.filter(clearable).length > (s.sprintClosed ? 0 : 1) ? `<button type="button" class="sp-files sp-clearall" data-sprint-clear="*" title="Archive every stopped worker${s.sprintClosed ? ', then this lead chat: the sprint is closed' : ''}">Clear ${workers.filter(clearable).length} stopped${s.sprintClosed ? ' and this chat' : ''}</button>` : ''}
     ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
   </aside>`;
 }
@@ -395,9 +395,9 @@ function placeSprints() {
 }
 // The live fields (task, ready, verdict, idleSince, work) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
 // Until then a batch of events marks the list stale and it is read again, a field the list no longer has cleared.
-const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.title, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent]));
+const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.title, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent, s.sprintClosed]));
   for (const c of conversations) { const s = outer.S.sessions.find(x => x.id === c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
-  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.title, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent])); };
+  return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.title, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent, s.sprintClosed])); };
 setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
 const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));
@@ -777,6 +777,8 @@ function paint(root, ss, only) {
       const ws = b.dataset.sprintClear === '*' ? kin(s.id).filter(k => !k.archived && clearable(k)) : outer.S.sessions.filter(k => k.id === b.dataset.sprintClear);
       // 712: a cleared worker's report closes with it (SHUT, as its own x does); another worker's report stays.
       for (const k of ws) { const r = await outer.liveChat.call('archiveChat', { id: k.id, archived: true }); if (r.status !== 200) continue; k.archived = true; const c = s.cards?.get('ready-' + k.id); if (c) SHUT.add(reportKey(s, c)); }
+      // O235: Close stopped every chat of the sprint, so once no worker is left on the card its lead clears too.
+      if (b.dataset.sprintClear === '*' && s.sprintClosed && !kin(s.id).some(k => !k.archived) && (await outer.liveChat.call('archiveChat', { id: s.id, archived: true })).status === 200) s.archived = true;
       outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-open]').forEach(b => b.onclick = () => { show(b.dataset.sprintOpen); outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-ask]').forEach(b => b.onclick = () => p.querySelector(`[data-ask="${CSS.escape(b.dataset.sprintAsk)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
