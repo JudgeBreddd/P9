@@ -455,10 +455,12 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 .composer .bar .pill:hover,.composer .bar .pill[aria-expanded="true"]{background:var(--accent);color:var(--foreground)}
 .composer .bar .pill:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
 .composer .bar .pill .truncate{min-width:1.6em}
-/* O-702: the working chip (Steer / Queue / Interrupt / Cancel) never clips, as each is an action: while it shows, a row too
-   narrow for it wraps, and the chip's own buttons wrap at the narrowest pane. The idle row still never wraps. */
+/* O-702: the working chip (Steer / Queue / Interrupt / Cancel) never clips, as each is an action: while it shows the row
+   wraps, and the chip's own buttons wrap at the narrowest pane. O234: the chip, not the send arrow, gives way: it takes a
+   row of its own under the pills (order after the arrow, full width), so the arrow stays on the pills row at every width
+   and the bar's height does not move when a pill's text grows mid-turn (O133). The idle row still never wraps. */
 .composer .bar:has(.hint){flex-wrap:wrap;row-gap:4px}
-.composer .bar .hint{display:inline-flex;flex-wrap:wrap;align-items:center;gap:2px;flex:none;max-width:100%;white-space:nowrap}
+.composer .bar .hint{display:inline-flex;flex-wrap:wrap;align-items:center;gap:2px;flex:none;order:1;width:100%;white-space:nowrap}
 .composer .bar [data-attach],.composer .bar .send{flex:none}
 .composer{container-type:inline-size}
 @container (max-width:440px){.composer .bar .pill{padding:0 6px}.composer .bar .pill .truncate{max-width:5ch}.composer .bar .hint kbd,.composer .bar .pill .mode-q{display:none}}
