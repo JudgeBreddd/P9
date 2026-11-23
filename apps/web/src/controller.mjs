@@ -97,7 +97,7 @@ const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], histo
   apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 // The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
-const SP = { on: false, data: null, error: '', timer: 0 };
+const SP = { on: false, data: null, error: '', waiting: 0, timer: 0 };
 const addEventListener = (type, listener) => window.addEventListener(type, listener, { signal: lifetime.signal });
 const removeEventListener = (type, listener) => window.removeEventListener(type, listener);
 const setTimeout = (fn, delay) => { const id = window.setTimeout(() => { timers.delete(id); fn(); }, delay); timers.add(id); return id; };
