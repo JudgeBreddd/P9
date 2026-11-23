@@ -641,7 +641,8 @@ test('N6-2: a Default effort row drawn again while its save is out shows the sav
   await until(async () => app.evaluate(() => !!globalThis.n62release), 'the effort save held in main');
   assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', 'the daemon has it; only its answer is held');
   await page.click('#setClose'); await open();
-  assert.equal(await page.locator('[data-default-effort="claude"]').inputValue(), '', 'drawn from what was kept before the save');
+  // N6-2b: a read answered while the save is out is kept by the daemon's rev, so the reopened row may already show the save.
+  assert.ok(['', 'high'].includes(await page.locator('[data-default-effort="claude"]').inputValue()), 'drawn from what was kept, before or with the save');
   // The page's lists loop (chat-view.mjs lists) redraws the rows once more when it ends, which would hide the bug: wait until the
   // daemon reads none of them, then wait out the loop's 1.5 s pause and its last ask, so only the save's answer can draw the row.
   await until(async () => !Object.values((await call(instance, '/chat?lists=fresh')).lists || {}).some(l => l?.state === 'loading'), 'the lists read', 30000);
