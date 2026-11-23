@@ -237,7 +237,14 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
           return [...log, `now: #dock hidden ${dock.hidden}, class ${JSON.stringify(dock.className)}, style ${JSON.stringify(dock.getAttribute('style'))}, S.focus ${shell.dataset.focus}`].join('\n'); } };
     });
     assert.deepEqual(await record.evaluate(r => r.selfCheck()), [false, true, false], 'a drag is redone only on a real hide: none on a no-op removal, one on a batched hide and restore, none on a restore alone');
-    const dragBy = async (gw, gh) => { const b = await dockBox(); await page.mouse.move(b.x + b.width - 3, b.y + b.height - 3); await page.mouse.down(); await page.mouse.move(b.x + b.width + gw - 3, b.y + b.height + gh - 3, { steps: 6 }); await page.mouse.up(); return await dockBox(); };
+    // O242: CI cut the drag at 5 of 6 steps (+100/+66) with no hide and no focus change in the record: the button went up
+    // before the last move was applied. A hand keeps moving, the test's last move is its only one, so the test lets go only
+    // once the dock has the size the pointer asks for, sending that last move once more if it was not applied.
+    const reached = (w, h, timeout) => page.waitForFunction(([w, h]) => { const r = document.querySelector('#dock').getBoundingClientRect(); return Math.round(r.width) === w && Math.round(r.height) === h; }, [w, h], { timeout }).then(() => true, () => false);
+    const dragBy = async (gw, gh) => { const b = await dockBox(), to = [b.x + b.width + gw - 3, b.y + b.height + gh - 3], size = [Math.round(b.width + gw), Math.round(b.height + gh)];
+      await page.mouse.move(b.x + b.width - 3, b.y + b.height - 3); await page.mouse.down(); await page.mouse.move(...to, { steps: 6 });
+      if (!(await reached(...size, 1000))) { await page.mouse.move(to[0] + 1, to[1] + 1); await page.mouse.move(...to); await reached(...size, 2000); }
+      await page.mouse.up(); return await dockBox(); };
     let d2 = await dragBy(120, 80), drags = 1, why = '';
     while (drags < 3 && (Math.round(d2.width - d1.width) !== 120 || Math.round(d2.height - d1.height) !== 80)) {
       if (!(await record.evaluate(r => r.hidSince())) || await page.evaluate(() => document.querySelector('#dock').hidden)) break;
