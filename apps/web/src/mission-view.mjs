@@ -749,7 +749,7 @@ function sectionBody(m, body, g, o) {
   body.querySelectorAll('[data-cbtn]').forEach(b => b.onclick = () => outer.openModal({ kind: 'script', s: scriptById(b.dataset.cbtn), back: o.back }));
   if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
     m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => o.shown() && o.redraw()); }
-  const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });
+  const ckLoad = (id) => { const n = m.gen; return window.p9.mission('checklist', { id }).then(r => { if (m.gen === n) m.ck[id] = checklistAnswer(r.status, r.body); }); };
   if (sp?.checklists?.length && !m.ckRead) { m.ckRead = true; Promise.all(sp.checklists.map(c => ckLoad(c.id))).then(() => o.shown() && o.redraw()); }
   body.querySelectorAll('[data-ck] button').forEach(b => b.onclick = async () => {
     const id = b.closest('[data-ck]').dataset.ck, act = checklistAction(b, m.ck[id], m.armed);
@@ -757,17 +757,22 @@ function sectionBody(m, body, g, o) {
     m.armed = act.arm || '';
     if (act.arm) return o.redraw();
     b.disabled = true;
-    const r = await window.p9.mission('checklistSet', act.body);
+    const r = await window.p9.mission('checklistSet', act.body), w = outer.S.modal?.g === g && outer.S.modal;
+    // O238: the page column and the window each keep their own copy of this section; both read its checklists and tiles again,
+    // and an answer asked before the write (gen) is dropped, so it cannot draw the old state over the new.
+    for (const x of [inlineSec[g], w]) if (x) { if (x !== m) x.ckRead = false; x.pulled = false; x.gen = (x.gen || 0) + 1; }
     await ckLoad(id);
     if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
     if (o.shown()) o.redraw();
+    if (inlineSec[g] !== m) secInline(g);
+    if (w && w !== m) outer.renderModal();
   });
   const lv = ['bad', 'warn'].find(l => runs.some(r => tileLevel(m.tiles[r.id]) === l)) || '';
   if ((secLv[g] || '') !== lv) { secLv[g] = lv; outer.setTimeout(outer.renderMission); }
   // O45: the 30 s pull redrew on every answer, and the window draws whole, so each card's frame was made
   // again six times a tick with nothing new; a click in a card at that moment was lost. Only a changed answer draws again.
-  const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { const a = tileAnswer(r.status, r.body);
-    if (JSON.stringify(a) === JSON.stringify(m.tiles[d.id])) return; m.tiles[d.id] = a; if (o.shown()) o.redraw(); });
+  const pull = (d) => { const n = m.gen; return window.p9.mission('data', { id: d.id }).then(r => { const a = tileAnswer(r.status, r.body); if (m.gen !== n) return;
+    if (JSON.stringify(a) === JSON.stringify(m.tiles[d.id])) return; m.tiles[d.id] = a; if (o.shown()) o.redraw(); }); };
   if (runs.length && !m.pulled && o.seen()) { m.pulled = true; runs.forEach(pull); }
   if (runs.length && !m.pulling) m.pulling = setInterval(() => { if (!o.shown()) { clearInterval(m.pulling); m.pulling = 0; return; } if (o.seen()) { m.pulled = true; runs.forEach(pull); } }, 30000);
   body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);

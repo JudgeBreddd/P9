@@ -573,6 +573,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     stillAuthorized();
     const saved = await guardedSave(list.root, file.path, body.hash, content, recovery);
     if (saved.kind !== 'saved') return { status: saved.kind === 'conflict' ? 409 : 500, ...saved };
+    // O238: the write changed files the section's tiles and cards may read, so their next ask runs again, past the 30 s answer.
+    for (const section of (await registry()).space) if ((section.checklists ?? []).some((record) => record.id === body.id)) for (const record of [...(section.data ?? []), ...(section.cards ?? [])]) tileRuns.delete(record.id);
     if (kind !== 'apply') return { status: 200, hash: saved.hash };
     stillAuthorized();
     const started = await run(item.apply, { args: [file.name], confirm: true });
