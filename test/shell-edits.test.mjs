@@ -3,7 +3,7 @@
 // are in fake-acp-agent.mjs ('shell writes', 'shell many', 'shell big').
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -299,5 +299,16 @@ test('O241 a linked worktree and a submodule list shell edits; a bad .git file a
   const sup2 = path.join(base, 'sup2'); await mkdir(sup2); init(sup2); await symlink(path.join(sup, '.git', 'modules'), path.join(sup2, '.git', 'modules'));
   const sub2 = path.join(sup2, 'sub'); await mkdir(sub2); await writeFile(path.join(sub2, '.git'), `gitdir: ${path.join(sup2, '.git', 'modules', 'sub')}\n`);
   assert.equal(await shellStart(sub2), null, 'a modules folder that is a link adds nothing');
+  // Review round 3: a link at a two-character folder under the repo's objects would lead git's loose-object write
+  // outside. The snapshot writes into its own store and only reads the repo's objects: nothing lands outside, and the
+  // repo's own objects gain no file.
+  const outside = path.join(base, 'outside'); await mkdir(outside);
+  const objs = path.join(main, '.git', 'objects'), hex = [...'0123456789abcdef'];
+  for (const a of hex) for (const b of hex) await symlink(outside, path.join(objs, a + b)).catch(() => {}); // the folders not there yet
+  const loose = () => execFileSync('find', [objs, '-type', 'f'], { encoding: 'utf8' });
+  const before = loose();
+  assert.deepEqual(await listed(wt, 'a.txt', 'one\nround3\n'), ['a.txt'], 'a worktree with linked object folders still lists its edit');
+  assert.deepEqual(await readdir(outside), [], 'nothing was written through a linked object folder');
+  assert.equal(loose(), before, 'the repo\'s objects gained no file');
   await assert.rejects(stat(marker), 'nothing ran for any of them');
 });

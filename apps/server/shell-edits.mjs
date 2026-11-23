@@ -1,7 +1,7 @@
 // MC-15: edits made through the shell (sed, heredocs, a script) reach no Write or Edit tool call, so the chat's Changes list
 // missed them. When the chat's folder is in a git repo, its working tree is written as a git tree at a prompted turn's start
-// and again at its end, each through a spare index (the repo's own index and files are not touched; the new blobs are loose
-// objects git prunes as unreachable). The files that differ, less those the agent's own finished edit calls named, come back
+// and again at its end, each through a spare index (the repo's own index, files and objects are not touched: the new
+// blobs and trees go to a private object store kept from the start to the end of the turn). The files that differ, less those the agent's own finished edit calls named, come back
 // as diffs (acp-v2.mjs diffs: hunks, added, deleted, from, binary), for one completed edit call "Shell edits" (chat.mjs).
 // A folder outside git, git missing, or a step past its time gives null: nothing is added and the turn ends as before.
 // Only the chat's folder is read and listed (add -- ., diff --relative), never the rest of a larger repo it sits in.
@@ -9,7 +9,7 @@
 // The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git (O241: a file too).
 // Every git call (add, write-tree, diff) runs with GIT_DIR set to a private folder made for that snapshot: HEAD, refs and
 // a config of our own (constant), with system and global config off. From the repo it gets only paths built here (its
-// working tree, .git/objects) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
+// working tree, and .git/objects as a read-only alternate; writes go to the private store) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
 // as ignore patterns). So no filter, hook, fsmonitor, textconv or diff driver is configured where git reads config,
 // whatever the repo's config says, even while a snapshot runs. On top: hooks and fsmonitor off, diffs with no textconv or
 // external diff, no missing object fetched. File names git lists reach the diff's pathspec only after "--", literal.
@@ -39,11 +39,13 @@ const run = promisify(execFile);
 // past it is listed with no line rows if that fits, else left out.
 export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 
-// p: the box's paths, built here (the private folder, the repo folder, its objects folder); every name below is fixed.
+// p: the box's paths, built here (the private folder, the repo folder, the turn's private object store, the repo's objects
+// folder); every name below is fixed. O241 review: git writes objects only to the private store; the repo's objects are
+// only read, as an alternate, so no link inside a repo's object folders can lead a write anywhere.
 const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
   '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
-  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
+  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: p.repoObjects, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
 }).then((r) => r.stdout);
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
@@ -55,7 +57,7 @@ const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 // superproject being the nearest folder above with a .git folder.
 // ponytail: Windows has no owner id, so the owner check is skipped there; a submodule of a submodule adds nothing.
 // ponytail: the checks guard against what a repo's files say, not a process of this user swapping folders while a snapshot
-// runs (objects is checked, then named to git): such a process can already write anywhere this user can.
+// runs: such a process can already write anywhere this user can. git writes only into the private store either way.
 const ONE_LINE = /^([^\x00-\x1f\x7f]+)\n?$/;
 // A regular file's bytes, read through one handle that refuses a link (O_NOFOLLOW where the system has it), checked on it.
 async function bytes(file, max = Infinity) {
@@ -103,7 +105,7 @@ async function pointed(file, top) {
 
 // The private git folder for the repo the chat's folder is in (the throw: none, or a .git file that fails pointed's checks). git(args)
 // runs there from the chat's folder; here: that folder's real path; done() removes the private folder.
-async function box(cwd, deadline) {
+async function box(cwd, deadline, store) {
   const here = await realpath(cwd);
   let top = here, st;
   while (!(st = await lstat(path.join(top, '.git')).catch(keep))) { if (path.dirname(top) === top) throw new Error('not in git'); top = path.dirname(top); }
@@ -122,16 +124,20 @@ async function box(cwd, deadline) {
     const ex = await bytes(path.join(common, 'info', 'exclude')).catch(keep);
     if (ex) await writeFile(path.join(dir, 'info', 'exclude'), ex.data);
     if (!(await lstat(path.join(common, 'objects'))).isDirectory()) throw new Error('objects is not a folder');
+    if (/["\n]/.test(common) || common.includes(path.delimiter)) throw new Error('a path git cannot take as an alternate');
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const p = { dir, top, objects: path.join(common, 'objects') };
+  const p = { dir, top, objects: store, repoObjects: path.join(common, 'objects') };
   return { here, git: (args) => git(here, args, deadline, p), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
 }
 
 // The working tree under cwd as a git tree, through the box's index.
 const tree = async (b) => { await b.git(['add', '-A', '--', '.']); return (await b.git(['write-tree'])).trim(); };
+// The start's private object store lives until the turn's end (shellEnd removes it; chat.mjs calls it on every path).
+// ponytail: a daemon killed mid-turn leaves that store in the temp folder.
 async function snap(cwd, deadline) {
-  const b = await box(cwd, deadline);
-  try { return { tree: await tree(b) }; } finally { await b.done(); }
+  const store = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-objects-'));
+  try { const b = await box(cwd, deadline, store); try { return { tree: await tree(b), store }; } finally { await b.done(); } }
+  catch (error) { await rm(store, { recursive: true, force: true }); throw error; }
 }
 
 // The turn's start: its tree, or null (not a repo, or too slow).
@@ -143,7 +149,7 @@ export async function shellEnd(from, cwd, named = []) {
   if (!from) return null;
   let b;
   try {
-    b = await box(cwd, Date.now() + LIMIT_MS);
+    b = await box(cwd, Date.now() + LIMIT_MS, from.store);
     const { here } = b;
     const to = { tree: await tree(b) };
     if (to.tree === from.tree) return null;
@@ -170,5 +176,5 @@ export async function shellEnd(from, cwd, named = []) {
       left -= size(item); out.push(item);
     }
     return out.length ? out : null;
-  } catch { return null; } finally { await b?.done(); }
+  } catch { return null; } finally { await b?.done(); await rm(from.store, { recursive: true, force: true }).catch(() => {}); }
 }
