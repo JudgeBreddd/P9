@@ -847,7 +847,9 @@ one('#earlier').addEventListener('click', async () => {
   if (!id || from === undefined || button.disabled) return;
   button.disabled = true; button.textContent = 'Loading…';
   try {
-    take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1)), [id]);
+    const page = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1));
+    // O251: a jump meanwhile read the chat again from its newest blocks; a page from before it would skip what lies between.
+    if (older.get(id) === from) take(page, [id]);
     button.disabled = false; button.textContent = 'Load earlier';
     if (openId === id) render();
   } catch { button.disabled = false; button.textContent = 'Not loaded · Tap to try again'; }
