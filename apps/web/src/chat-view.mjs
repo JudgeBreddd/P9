@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, attachFull, readAttachment, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, keptItems, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -839,6 +839,7 @@ function pickImages(s) {
 }
 // The paperclip, a pasted screenshot and dropped files all come through here (pasting screenshots did not work).
 async function addImages(s, files) {
+  const { attachFull, readAttachment } = await import('./attach.mjs');
   for (const file of files) {
     const full = attachFull(file, s.images ||= []); if (full) { outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
     try { s.images.push(await readAttachment(file, s.images)); }

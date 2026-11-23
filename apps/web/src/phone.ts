@@ -1,6 +1,7 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, attachFull, readAttachment, attachBody, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
