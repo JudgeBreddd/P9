@@ -1,15 +1,15 @@
 // MC-15: edits made through the shell (sed, heredocs, a script) reach no Write or Edit tool call, so the chat's Changes list
 // missed them. When the chat's folder is in a git repo, its working tree is written as a git tree at a prompted turn's start
-// and again at its end, each through a spare index (the repo's own index and files are not touched; the new blobs are loose
-// objects git prunes as unreachable). The files that differ, less those the agent's own finished edit calls named, come back
+// and again at its end, each through a spare index (the repo's own index, files and objects are not touched: the new
+// blobs and trees go to a private object store kept from the start to the end of the turn). The files that differ, less those the agent's own finished edit calls named, come back
 // as diffs (acp-v2.mjs diffs: hunks, added, deleted, from, binary), for one completed edit call "Shell edits" (chat.mjs).
 // A folder outside git, git missing, or a step past its time gives null: nothing is added and the turn ends as before.
 // Only the chat's folder is read and listed (add -- ., diff --relative), never the rest of a larger repo it sits in.
 // No program the repo configures runs, and nothing the repo's config or files say reaches git's arguments or environment.
-// The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git folder.
+// The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git (O241: a file too).
 // Every git call (add, write-tree, diff) runs with GIT_DIR set to a private folder made for that snapshot: HEAD, refs and
 // a config of our own (constant), with system and global config off. From the repo it gets only paths built here (its
-// working tree, .git/objects) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
+// working tree, and .git/objects as an alternate for diff only, which only reads; writes go to the private store) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
 // as ignore patterns). So no filter, hook, fsmonitor, textconv or diff driver is configured where git reads config,
 // whatever the repo's config says, even while a snapshot runs. On top: hooks and fsmonitor off, diffs with no textconv or
 // external diff, no missing object fetched. File names git lists reach the diff's pathspec only after "--", literal.
@@ -18,12 +18,14 @@
 // ponytail: .gitignore'd files are not seen (build output, mostly what a user would not want listed either).
 // ponytail: files are stored as they are on disk, never through a filter (git-lfs's pointer files show as the real content).
 // ponytail: a split index (core.splitIndex) cannot be read from its copy, so such a repo adds nothing.
-// ponytail: a .git that is a file (a linked worktree, a submodule) or a sha256 repo adds nothing: following the file, or
-// reading the repo's object format, would take a value from the repo.
+// O241: a .git that is a file (a linked worktree, a submodule) is followed as one checked path, never as a git argument or
+// setting (pointed below): its index is copied from the folder it names, info/exclude and objects come from the common one.
+// ponytail: a sha256 repo adds nothing: reading the repo's object format would take a value from the repo.
 // ponytail: the repo's own core settings (filemode, ignorecase, autocrlf) and a global core.excludesFile are not used;
 // git's defaults are, and its default global ignore file (~/.config/git/ignore).
 import { execFile } from 'node:child_process';
-import { copyFile, lstat, mkdir, mkdtemp, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -37,22 +39,81 @@ const run = promisify(execFile);
 // past it is listed with no line rows if that fits, else left out.
 export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 
-// p: the box's paths, built here (the private folder, the repo folder, its objects folder); every name below is fixed.
+// p: the box's paths, built here (the private folder, the repo folder, the turn's private object store, the repo's objects
+// folder); every name below is fixed. O241 review: git writes objects only to the private store; the repo's objects are
+// only read, as an alternate, so no link inside a repo's object folders can lead a write anywhere.
+// Review round 5: git refreshes the time of an object it would write but finds (object-file.c freshen), and a link there
+// would lead that anywhere; so add and write-tree (which write) never see the repo's objects (write-tree --missing-ok: the
+// index names blobs only the repo has), and only diff (which only reads) gets them, as an alternate.
 const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
   '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
-  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
+  env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_DIR: p.dir, GIT_WORK_TREE: p.top, GIT_OBJECT_DIRECTORY: p.objects, ...(args.at(0) === 'diff' ? { GIT_ALTERNATE_OBJECT_DIRECTORIES: p.repoObjects } : {}), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
 }).then((r) => r.stdout);
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
-// The private git folder for the repo the chat's folder is in (the throw: none, or its .git is not a folder). git(args)
+// O241: the folders a .git FILE leads to, each checked, or the throw (the repo then adds nothing, as before). The file and
+// commondir: a regular file (not a link, read through the handle its checks ran on) of at most 1 KB, one line, no control
+// characters. Each folder: real path, a folder owned by this user. A linked worktree: its folder is <common>/worktrees/<name>
+// and names this .git file back (its gitdir file, git's own back-link), so a pointer reaches another repo only through that
+// repo's own entry for this folder. A submodule: no commondir, and its folder sits in <superproject>/.git/modules/, the
+// superproject being the nearest folder above with a .git folder.
+// ponytail: Windows has no owner id, so the owner check is skipped there; a submodule of a submodule adds nothing.
+// ponytail: the checks guard against what a repo's files say, not a process of this user swapping folders while a snapshot
+// runs: such a process can already write anywhere this user can. git writes only into the private store either way.
+const ONE_LINE = /^([^\x00-\x1f\x7f]+)\n?$/;
+// A regular file's bytes, read through one handle that refuses a link (O_NOFOLLOW where the system has it), checked on it.
+async function bytes(file, max = Infinity) {
+  const fh = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const st = await fh.stat(); if (!st.isFile() || st.size > max) throw new Error('not a small file');
+    if (max === Infinity) return { st, data: await fh.readFile() };
+    const buf = Buffer.alloc(max + 1), { bytesRead } = await fh.read(buf, 0, max + 1, 0); // bounded: a file grown since the stat is refused
+    if (bytesRead > max) throw new Error('not a small file');
+    return { st, data: buf.subarray(0, bytesRead) };
+  } finally { await fh.close(); }
+}
+async function line(file, prefix = '') {
+  if (!(await lstat(file)).isFile()) throw new Error('not a file'); // O_NOFOLLOW is 0 on Windows
+  const m = ONE_LINE.exec((await bytes(file, 1024)).data.toString('utf8'));
+  if (!m || !m[1].startsWith(prefix) || !m[1].slice(prefix.length)) throw new Error('not one line');
+  return m[1].slice(prefix.length);
+}
+async function folder(from, rel) {
+  const at = await realpath(path.resolve(from, rel)), st = await stat(at), uid = process.getuid?.();
+  if (!st.isDirectory() || (uid !== undefined && st.uid !== uid)) throw new Error('not our folder');
+  return at;
+}
+async function pointed(file, top) {
+  const dot = await folder(path.dirname(file), await line(file, 'gitdir: '));
+  const back = await line(path.join(dot, 'gitdir')).catch(keep), cd = await line(path.join(dot, 'commondir')).catch(keep);
+  if (cd !== undefined) {
+    const common = await folder(dot, cd);
+    if (path.join(common, 'worktrees', path.basename(dot)) !== dot) throw new Error('not its worktree entry');
+    if (back === undefined || await realpath(path.resolve(dot, back)).catch(() => null) !== await realpath(file)) throw new Error('no back-link');
+    return { dot, common };
+  }
+  for (let up = path.dirname(top); ; up = path.dirname(up)) {
+    const st = await lstat(path.join(up, '.git')).catch(keep);
+    if (st) {
+      if (!st.isDirectory()) throw new Error('a submodule of a submodule');
+      if (!(await lstat(path.join(up, '.git', 'modules'))).isDirectory()) throw new Error('modules is not a folder'); // not a link to another store
+      const modules = await realpath(path.join(up, '.git', 'modules'));
+      if (!dot.startsWith(modules + path.sep)) throw new Error('not this superproject\'s submodule');
+      return { dot, common: dot };
+    }
+    if (path.dirname(up) === up) throw new Error('no superproject');
+  }
+}
+
+// The private git folder for the repo the chat's folder is in (the throw: none, or a .git file that fails pointed's checks). git(args)
 // runs there from the chat's folder; here: that folder's real path; done() removes the private folder.
-async function box(cwd, deadline) {
+async function box(cwd, deadline, store) {
   const here = await realpath(cwd);
   let top = here, st;
   while (!(st = await lstat(path.join(top, '.git')).catch(keep))) { if (path.dirname(top) === top) throw new Error('not in git'); top = path.dirname(top); }
-  if (!st.isDirectory()) throw new Error('.git is not a folder');
-  const dot = path.join(top, '.git'), dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
+  const { dot, common } = st.isDirectory() ? { dot: path.join(top, '.git'), common: path.join(top, '.git') } : await pointed(path.join(top, '.git'), top);
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
   try {
     await mkdir(path.join(dir, 'refs')); await mkdir(path.join(dir, 'info'));
     await writeFile(path.join(dir, 'HEAD'), 'ref: refs/heads/p9\n');
@@ -60,19 +121,26 @@ async function box(cwd, deadline) {
     // The copy keeps the index's own time (read first, so a newer index makes entries look racier, never surer): git trusts an
     // entry whose file is older than its index and checks again one that is not, so a file changed in the same second as the
     // index, at the same size, is still read (with the copy's later time it was taken as unchanged).
-    const ix = path.join(dot, 'index'), at = await stat(ix).catch(keep); // a fresh repo has none yet
-    if (at) await copyFile(ix, path.join(dir, 'index')).then(() => utimes(path.join(dir, 'index'), at.atime, at.mtime)).catch(keep);
-    await copyFile(path.join(dot, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
+    // O241 review: both copies are read through a handle that refuses a link, and objects must be a folder, not a link.
+    const ix = await bytes(path.join(dot, 'index')).catch(keep); // a fresh repo has none yet
+    if (ix) { await writeFile(path.join(dir, 'index'), ix.data); await utimes(path.join(dir, 'index'), ix.st.atime, ix.st.mtime); }
+    const ex = await bytes(path.join(common, 'info', 'exclude')).catch(keep);
+    if (ex) await writeFile(path.join(dir, 'info', 'exclude'), ex.data);
+    if (!(await lstat(path.join(common, 'objects'))).isDirectory()) throw new Error('objects is not a folder');
+    if (/["\n]/.test(common) || common.includes(path.delimiter)) throw new Error('a path git cannot take as an alternate');
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const p = { dir, top, objects: path.join(dot, 'objects') };
+  const p = { dir, top, objects: store, repoObjects: path.join(common, 'objects') };
   return { here, git: (args) => git(here, args, deadline, p), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
 }
 
 // The working tree under cwd as a git tree, through the box's index.
-const tree = async (b) => { await b.git(['add', '-A', '--', '.']); return (await b.git(['write-tree'])).trim(); };
+const tree = async (b) => { await b.git(['add', '-A', '--', '.']); return (await b.git(['write-tree', '--missing-ok'])).trim(); };
+// The start's private object store lives until the turn's end (shellEnd removes it; chat.mjs calls it on every path).
+// ponytail: a daemon killed mid-turn leaves that store in the temp folder.
 async function snap(cwd, deadline) {
-  const b = await box(cwd, deadline);
-  try { return { tree: await tree(b) }; } finally { await b.done(); }
+  const store = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-objects-'));
+  try { const b = await box(cwd, deadline, store); try { return { tree: await tree(b), store }; } finally { await b.done(); } }
+  catch (error) { await rm(store, { recursive: true, force: true }); throw error; }
 }
 
 // The turn's start: its tree, or null (not a repo, or too slow).
@@ -84,7 +152,7 @@ export async function shellEnd(from, cwd, named = []) {
   if (!from) return null;
   let b;
   try {
-    b = await box(cwd, Date.now() + LIMIT_MS);
+    b = await box(cwd, Date.now() + LIMIT_MS, from.store);
     const { here } = b;
     const to = { tree: await tree(b) };
     if (to.tree === from.tree) return null;
@@ -111,5 +179,5 @@ export async function shellEnd(from, cwd, named = []) {
       left -= size(item); out.push(item);
     }
     return out.length ? out : null;
-  } catch { return null; } finally { await b?.done(); }
+  } catch { return null; } finally { await b?.done(); await rm(from.store, { recursive: true, force: true }).catch(() => {}); }
 }

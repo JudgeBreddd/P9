@@ -688,7 +688,7 @@ test('every process the server starts gets childEnv(); only launchTree adds name
     P9_SCRIPT_SOCKET: 'O189: a sprint script\'s run, the desktop socket', P9_SCRIPT_TOKEN: 'O189: a sprint script\'s run, its own token',
     // MC-15 shell-edits.mjs: its snapshot's private git folder; the values are paths it builds or constants, none read from the repo.
     GIT_NO_LAZY_FETCH: 'MC-15: a snapshot fetches no missing object', GIT_DIR: 'MC-15: the snapshot\'s private git folder',
-    GIT_WORK_TREE: 'MC-15: the repo folder found from the chat\'s folder', GIT_OBJECT_DIRECTORY: 'MC-15: that repo\'s .git/objects',
+    GIT_WORK_TREE: 'MC-15: the repo folder found from the chat\'s folder', GIT_OBJECT_DIRECTORY: 'O241: the snapshot\'s private object store', GIT_ALTERNATE_OBJECT_DIRECTORIES: 'O241: the repo\'s .git/objects, for diff only (reads)',
     GIT_CONFIG_NOSYSTEM: 'MC-15: no system git config', GIT_CONFIG_GLOBAL: 'MC-15: no global git config (the null device)' };
   const WITH = (list) => 'childEnv(process.env, process.platform, ' + list + ')';
   const TOOLS = { 'server.mjs': WITH('TOOL_NAMES'), 'update.mjs': WITH('names'), 'setup-routes.mjs': WITH('FETCH_NAMES') };

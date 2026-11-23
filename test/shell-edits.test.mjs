@@ -3,7 +3,7 @@
 // are in fake-acp-agent.mjs ('shell writes', 'shell many', 'shell big').
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -238,4 +238,86 @@ test('MC-15 a same-size edit git must re-read because the index is no newer than
   assert.ok(out, 'Shell edits found a change');
   assert.deepEqual(out.map((d) => path.basename(d.path)), ['a.txt']);
   assert.match(JSON.stringify(out[0]), /TWO/);
+});
+
+// O241: a .git that is a file (a linked worktree, a submodule) is followed as one checked path. Each good one lists a shell
+// edit; a pointer with a second line, one to a missing folder, one with no back-link add nothing; a filter set in the
+// pointed (common) folder's config runs nothing (its marker stays absent) and the file is listed as it is on disk.
+test('O241 a linked worktree and a submodule list shell edits; a bad .git file adds nothing and runs nothing', { timeout: 60000 }, async (t) => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'o241-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const init = (dir) => { sh(dir, 'init', '-q'); sh(dir, 'config', 'user.email', 't@example.invalid'); sh(dir, 'config', 'user.name', 't'); };
+  const main = path.join(base, 'main'); await mkdir(main); init(main);
+  await writeFile(path.join(main, 'a.txt'), 'one\n'); await writeFile(path.join(main, '.gitattributes'), '*.f filter=evil\n'); await writeFile(path.join(main, 'x.f'), 'f\n');
+  sh(main, 'add', '-A'); sh(main, 'commit', '-qm', 'start');
+  const wt = path.join(base, 'wt'); sh(main, 'worktree', 'add', '-q', wt);
+  const listed = async (dir, file, text) => {
+    const from = await shellStart(dir); if (!from) return null;
+    await writeFile(path.join(dir, file), text);
+    return (await shellEnd(from, dir))?.map((d) => path.basename(d.path)) ?? null;
+  };
+  assert.deepEqual(await listed(wt, 'a.txt', 'one\nwt\n'), ['a.txt'], 'a linked worktree lists its shell edit');
+  // A submodule: the superproject keeps its git folder under .git/modules/.
+  const sup = path.join(base, 'sup'); await mkdir(sup); init(sup);
+  await writeFile(path.join(sup, 'r.txt'), 'r\n'); sh(sup, 'add', '-A'); sh(sup, 'commit', '-qm', 'start');
+  execFileSync(realGit, ['-C', sup, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', main, 'sub'], { encoding: 'utf8' });
+  const sub = path.join(sup, 'sub');
+  assert.match(await readFile(path.join(sub, '.git'), 'utf8'), /^gitdir: /, 'the submodule has a .git file');
+  assert.deepEqual(await listed(sub, 'a.txt', 'one\nsub\n'), ['a.txt'], 'a submodule lists its shell edit');
+  // A filter configured in the common folder never runs; the file is listed as it is on disk.
+  const marker = path.join(base, 'marker'), evil = path.join(base, 'evil.sh');
+  await writeFile(evil, `#!/bin/sh\necho ran >> '${marker}'\ncat\n`); await chmod(evil, 0o755);
+  sh(wt, 'config', 'filter.evil.clean', evil);
+  assert.deepEqual(await listed(wt, 'x.f', 'f\nchanged\n'), ['x.f'], 'a filtered file is still listed');
+  await assert.rejects(stat(marker), 'the configured filter never ran');
+  // Bad pointers: each a copy of the worktree with its .git file rewritten.
+  const bad = async (name, text, setup) => {
+    const dir = path.join(base, name); await mkdir(dir); await writeFile(path.join(dir, 'a.txt'), 'one\n');
+    await writeFile(path.join(dir, '.git'), typeof text === 'function' ? await text(dir) : text); await setup?.(dir);
+    assert.equal(await shellStart(dir), null, name + ' adds nothing');
+  };
+  const wtGit = (await readFile(path.join(wt, '.git'), 'utf8')).trim().slice('gitdir: '.length);
+  await bad('newline', `gitdir: ${wtGit}\ngitdir: ${wtGit}\n`);
+  await bad('missing', `gitdir: ${path.join(base, 'nowhere')}\n`);
+  await bad('no-backlink', `gitdir: ${wtGit}\n`); // the worktree folder's gitdir names wt/.git, not this file
+  await bad('not-modules', async (dir) => { await mkdir(path.join(dir, 'g')); await writeFile(path.join(dir, 'g', 'HEAD'), 'ref: refs/heads/x\n'); return 'gitdir: g\n'; });
+  // Review round 1: a self-made worktree folder whose commondir names another repo; a submodule pointer into another
+  // superproject's modules; a worktree whose index is a link.
+  await mkdir(path.join(base, 'fake', 'wt1'), { recursive: true });
+  await bad('foreign-common', `gitdir: ${path.join(base, 'fake', 'wt1')}\n`, async (dir) => {
+    await writeFile(path.join(base, 'fake', 'wt1', 'gitdir'), path.join(dir, '.git') + '\n');
+    await writeFile(path.join(base, 'fake', 'wt1', 'commondir'), path.join(main, '.git') + '\n');
+  });
+  await mkdir(path.join(main, 'inner'));
+  const inner = path.join(main, 'inner'); await writeFile(path.join(inner, '.git'), `gitdir: ${path.join(sup, '.git', 'modules', 'sub')}\n`);
+  assert.equal(await shellStart(inner), null, 'a submodule pointer into another superproject adds nothing');
+  const wt2 = path.join(base, 'wt2'); sh(main, 'worktree', 'add', '-q', wt2);
+  const wt2Index = path.join(main, '.git', 'worktrees', 'wt2', 'index');
+  await rm(wt2Index); await symlink(path.join(main, '.git', 'index'), wt2Index);
+  assert.equal(await shellStart(wt2), null, 'an index that is a link adds nothing');
+  // Review round 2: a superproject whose .git/modules is a link to another superproject's store.
+  const sup2 = path.join(base, 'sup2'); await mkdir(sup2); init(sup2); await symlink(path.join(sup, '.git', 'modules'), path.join(sup2, '.git', 'modules'));
+  const sub2 = path.join(sup2, 'sub'); await mkdir(sub2); await writeFile(path.join(sub2, '.git'), `gitdir: ${path.join(sup2, '.git', 'modules', 'sub')}\n`);
+  assert.equal(await shellStart(sub2), null, 'a modules folder that is a link adds nothing');
+  // Review round 3: a link at a two-character folder under the repo's objects would lead git's loose-object write
+  // outside. The snapshot writes into its own store and only reads the repo's objects: nothing lands outside, and the
+  // repo's own objects gain no file.
+  const outside = path.join(base, 'outside'); await mkdir(outside);
+  const objs = path.join(main, '.git', 'objects'), hex = [...'0123456789abcdef'];
+  for (const a of hex) for (const b of hex) await symlink(outside, path.join(objs, a + b)).catch(() => {}); // the folders not there yet
+  const loose = () => execFileSync('find', [objs, '-type', 'f'], { encoding: 'utf8' });
+  const before = loose();
+  assert.deepEqual(await listed(wt, 'a.txt', 'one\nround3\n'), ['a.txt'], 'a worktree with linked object folders still lists its edit');
+  assert.deepEqual(await readdir(outside), [], 'nothing was written through a linked object folder');
+  assert.equal(loose(), before, 'the repo\'s objects gained no file');
+  // Review round 5: an object file that is itself a link: git would refresh its time (utime) when it finds the object
+  // while writing one with the same content; the snapshot's writes never look in the repo's objects, so the outside file keeps its time.
+  const blob = execFileSync(realGit, ['-C', main, 'hash-object', '-w', '--stdin'], { encoding: 'utf8', input: 'shared\n' }).trim();
+  const victim = path.join(base, 'victim'); await writeFile(victim, 'x'); await utimes(victim, 1000, 1000);
+  const objFile = path.join(objs, blob.slice(0, 2), blob.slice(2));
+  await rm(objFile); await symlink(victim, objFile);
+  const shared = await listed(wt, 'shared.txt', 'shared\n');
+  assert.equal((await stat(victim)).mtimeMs, 1000000, 'the linked object\'s target kept its time');
+  assert.deepEqual(shared, ['shared.txt'], 'a file whose content the repo already has is listed');
+  await assert.rejects(stat(marker), 'nothing ran for any of them');
 });
