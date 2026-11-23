@@ -97,3 +97,22 @@ test('a runner that ends early names each file that never reported and how it en
   assert.match(out, /✖ \S*d-later\.test\.mjs never reported: never started/, 'the waiting file named:\n' + out);
   assert.doesNotMatch(out, /a-ok\.test\.mjs never reported/, 'a file that reported is not listed:\n' + out);
 });
+
+// The green check (scripts/green-check.mjs) reads which file each passed test came from off these lines, as spec's ✔ lines
+// say no file. Review fix 2: a.test.mjs skips "alpha works" (and has its words in a comment) while b.test.mjs passes a test
+// of that title in the same run; only b gets a line, and neither a skipped nor a todo test does.
+test('the reporter names each passed test with its file, and no skipped or todo test', { timeout: 60000 }, async (t) => {
+  const flags = await ciFlags();
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-pass-lines-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, 'a.test.mjs'), "import test from 'node:test';\n// alpha works\ntest('alpha works', { skip: true }, () => {});\ntest('kept a', () => {});\ntest('later a', { todo: true }, () => {});\n");
+  await writeFile(path.join(dir, 'b.test.mjs'), "import test from 'node:test';\ntest('alpha works', () => {});\n");
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  const child = spawn(process.execPath, ['--test', ...flags, path.join(dir, 'a.test.mjs'), path.join(dir, 'b.test.mjs')], { cwd: root, env });
+  let out = '';
+  child.stdout.on('data', (chunk) => { out += chunk; });
+  child.stderr.on('data', (chunk) => { out += chunk; });
+  assert.equal(await new Promise((resolve) => child.on('close', resolve)), 0, out);
+  const lines = out.split('\n').filter((l) => l.startsWith('P9_PASS ')).map((l) => l.replace(/ \S*[/\\]([ab]\.test\.mjs) ::/, ' $1 ::')).sort();
+  assert.deepEqual(lines, ['P9_PASS a.test.mjs :: kept a', 'P9_PASS b.test.mjs :: alpha works'], out);
+});

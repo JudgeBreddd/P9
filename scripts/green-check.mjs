@@ -2,11 +2,12 @@
 // The mechanical green check (Tyler, 2026-11-13: "Whatever tests the user and the agent agree on are the tests that have to
 // be green"). A plan item names its agreed tests in a last clause, `Tests: <file>::<title words> | <file>::<title words>`
 // (the format is in the plan template, apps/server/sprint-files.mjs). Before a merge this script checks, for the item's
-// commit, that CI is complete and green and that each named test has exactly one passed (✔) line and no failed (✖) line
-// in the CI job logs, in a job whose "shard N:" line lists its file, and that its title words are in that file at the
-// commit (spec lines carry no file). Anything it cannot read (no item, no Tests clause, a selector not "file::title", gh
-// failing, more runs or jobs than one page, a missing log, a title matching no line or more than one) refuses: exit 1, and
-// the last line names what is missing. It never passes by default.
+// commit, that CI is complete and green and that each named test has exactly one passed line from its own file and no
+// failed (✖) line in the CI job logs. The passed lines are the "P9_PASS <file> :: <title>" lines test/file-limit.mjs (the CI
+// Tests line's reporter) writes for each test that ran and passed; a skipped or todo test writes none, and spec's ✔ lines,
+// which carry no file, are not read. Anything it cannot read (no item, no Tests clause, a selector not "file::title", gh
+// failing, more runs or jobs than one page, a missing log, a log with no P9_PASS lines, a title matching no line or more
+// than one) refuses: exit 1, and the last line names what is missing. It never passes by default.
 //
 // As a sprint script (hooks.json: point before-merge, blocking: true): P9 gives the sprint's state on stdin and runs it in
 // the sprint folder; the item and commit come from the lead's sprint_event subject (subject.item, subject.commit; without a
@@ -19,7 +20,7 @@ import path from 'node:path';
 const refuse = (why) => { console.log('green check refused: ' + why); process.exit(1); };
 const arg = (name) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : undefined; };
 // ponytail: gh does the GitHub calls (its own sign-in); a host without gh refuses, which is the safe side.
-const gh = (route, ...flags) => { try { return execFileSync('gh', ['api', ...flags, route], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
+const gh = (route) => { try { return execFileSync('gh', ['api', route], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
   catch (e) { refuse(`gh api ${route.split('?')[0]} failed (${String(e.stderr || e.message).trim().split('\n').at(-1) || 'no output'})`); } };
 const json = (route) => { const text = gh(route); try { return JSON.parse(text); } catch { refuse(`gh api ${route.split('?')[0]} gave no JSON`); } };
 
@@ -38,17 +39,14 @@ export function namedTests(row) {
 export function rowOf(plan, item) {
   return plan.split('\n').map((l) => /^\s*- \[[ xX]\] (.+)$/.exec(l)?.[1].trim()).find((t) => t && t.split(':')[0].trim() === item) ?? null;
 }
-// ✔ / ✖ lines of the spec reporter, the title without its "(12.3ms)" and the log's timestamp.
-// The files a CI job ran, from its "shard N: a b, then alone: c" line (the Tests step of test.yaml).
-export function jobFiles(log) {
-  const m = /^(?:\S+Z )?shard \d+: (.*)$/m.exec(log);
-  return m ? m[1].replace(', then alone:', ' ').split(/\s+/).filter(Boolean) : [];
-}
+// P9_PASS lines (file and title of a test that passed) and ✖ lines (spec's or file-limit's), without the log's timestamp
+// and spec's "(12.3ms)".
 export function results(log) {
   const out = [];
   for (const line of log.split('\n')) {
-    const m = /^(?:\S+Z )?\s*([✔✖]) (.+?)(?: \([\d.]+m?s\))?\s*$/.exec(line);
-    if (m) out.push({ ok: m[1] === '✔', title: m[2] });
+    const pass = /^(?:\S+Z )?P9_PASS (\S+) :: (.+?)\s*$/.exec(line), fail = /^(?:\S+Z )?\s*✖ (.+?)(?: \([\d.]+m?s\))?\s*$/.exec(line);
+    if (pass) out.push({ ok: true, file: pass[1], title: pass[2] });
+    else if (fail) out.push({ ok: false, title: fail[1] });
   }
   return out;
 }
@@ -89,20 +87,16 @@ async function main() {
     if (j.conclusion === 'skipped') continue;
     const log = gh(`repos/${repo}/actions/jobs/${j.id}/logs`);
     if (!log.trim()) refuse(`item ${item}: the log of CI job "${j.name}" is empty`);
-    const files = jobFiles(log);
-    seen.push(...results(log).map((s) => ({ ...s, files })));
+    seen.push(...results(log));
   }
+  if (!seen.some((s) => s.ok)) refuse(`item ${item}: the CI logs on ${commit.slice(0, 8)} have no P9_PASS lines (the per-test file evidence test/file-limit.mjs writes)`);
   for (const t of tests) {
     const name = t.file + '::' + t.title;
-    // ponytail: a job lists its files but its spec lines do not say which file each came from; the title words must also be
-    // in the named file at the commit, and a title two files in one job share matches two lines and refuses.
-    const hits = seen.filter((s) => s.title.includes(t.title)), ok = hits.filter((s) => s.ok), bad = hits.filter((s) => !s.ok);
+    // ponytail: a ✖ line has no file, so a failure of the same title in any file refuses; the safe side.
+    const hits = seen.filter((s) => s.title.includes(t.title)), ok = hits.filter((s) => s.ok && s.file === t.file), bad = hits.filter((s) => !s.ok);
     if (bad.length) refuse(`item ${item}: ${name} failed in CI (${bad.length} ✖ line${bad.length > 1 ? 's' : ''})`);
     if (!ok.length) refuse(`item ${item}: ${name} has no passed line in CI on ${commit.slice(0, 8)}`);
     if (ok.length > 1) refuse(`item ${item}: ${name} matches ${ok.length} passed lines; name it so it matches exactly one`);
-    if (!ok[0].files.includes(t.file)) refuse(`item ${item}: ${name} passed in a CI job that did not run ${t.file}`);
-    const source = gh(`repos/${repo}/contents/${t.file}?ref=${commit}`, '-H', 'Accept: application/vnd.github.raw');
-    if (!source.includes(t.title)) refuse(`item ${item}: ${name}: "${t.title}" is not in ${t.file} at ${commit.slice(0, 8)}`);
   }
   console.log(`green: item ${item}, ${tests.length} named test${tests.length > 1 ? 's' : ''} passed in CI on ${commit.slice(0, 8)}`);
 }
