@@ -3,10 +3,13 @@
 // are in fake-acp-agent.mjs ('shell writes', 'shell many', 'shell big').
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
+import { shellStart, shellEnd } from '../apps/server/shell-edits.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
@@ -203,4 +206,36 @@ test('MC-15 a chat folder inside a larger repo: files changed outside the folder
   assert.equal(found.length, 1);
   assert.deepEqual(found[0].data.content.map((c) => path.basename(c.path)), ['in.txt']);
   assert.ok(!JSON.stringify(all).includes('SECRET'), 'sib.txt (in the workspace) and outside.txt (above it) are not in any event');
+});
+
+// MC-15: git trusts an index entry whose size and times match the file, unless the entry is no older than the index file
+// itself ("racily clean"): then it reads the file. A same-size edit made in the same second as the index was written is
+// caught only that way. The snapshot copies the index, so the copy must keep the index's time; a fresh time made such an
+// edit read as unchanged (the desktop test missed a.txt once, run 040503). The state is built here without waiting on the
+// clock: a.txt holds TWO, its index entry has TWO's size and times but two's object id, and the index is older than it.
+test('MC-15 a same-size edit git must re-read because the index is no newer than it is listed', { timeout: 30000 }, async (t) => {
+  const repo = await mkdtemp(path.join(os.tmpdir(), 'mc15-racy-'));
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  const a = path.join(repo, 'a.txt'), ix = path.join(repo, '.git', 'index');
+  sh(repo, 'init', '-q'); sh(repo, 'config', 'user.email', 't@example.invalid'); sh(repo, 'config', 'user.name', 't');
+  await writeFile(a, 'one\ntwo\n'); sh(repo, 'add', '-A'); sh(repo, 'commit', '-qm', 'start');
+  const from = await shellStart(repo);
+  assert.ok(from, 'a start snapshot');
+  await writeFile(a, 'one\nTWO\n');
+  const old = new Date(Date.now() - 10000);
+  await utimes(a, old, old); // older than the index git add writes next, so git does not mark the entry racy itself
+  sh(repo, 'add', 'a.txt');
+  const oid = (text) => Buffer.from(execFileSync(realGit, ['-C', repo, 'hash-object', '--stdin'], { input: text, encoding: 'utf8' }).trim(), 'hex');
+  const buf = Buffer.from(await readFile(ix)), was = oid('one\nTWO\n'), at = buf.indexOf(was);
+  assert.ok(at > 0 && buf.indexOf(was, at + 1) < 0, 'one entry with TWO');
+  oid('one\ntwo\n').copy(buf, at);
+  createHash('sha1').update(buf.subarray(0, -20)).digest().copy(buf, buf.length - 20);
+  await writeFile(ix, buf);
+  const back = new Date((await stat(a)).mtimeMs - 1000);
+  await utimes(ix, back, back);
+  assert.match(execFileSync(realGit, ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }), /^ M a\.txt$/m, 'git itself calls a.txt changed');
+  const out = await shellEnd(from, repo);
+  assert.ok(out, 'Shell edits found a change');
+  assert.deepEqual(out.map((d) => path.basename(d.path)), ['a.txt']);
+  assert.match(JSON.stringify(out[0]), /TWO/);
 });
