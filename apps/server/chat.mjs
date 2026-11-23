@@ -1481,7 +1481,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
     if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(() => {
       session.ghost = null;
-      if (!session.turn && live.get(id) === session) emit(id, 'turn-end', { stopReason: 'end_turn', unprompted: true });
+      // O253: during a Stop's pending cancel the cancel sends this run's one end, not the timer.
+      if (!session.turn && !session.unstop && live.get(id) === session) emit(id, 'turn-end', { stopReason: 'end_turn', unprompted: true });
     }, 10000);
     return { status: 202, steered: true };
   }
