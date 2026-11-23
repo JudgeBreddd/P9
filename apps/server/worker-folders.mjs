@@ -406,6 +406,19 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     if (!home || !ID.test(sprint ?? '')) return { error: 'request-refused' };
     return (await closeOf(dirOf(sprint))) ?? { error: 'not-applied' };
   }
+  // O233: a closed sprint's page shows its copy's change (SECURITY.md § Sprint from a folder with no remote): what the
+  // apply did once it is recorded, else the change and its digest for the owner's yes, as preview gives them. null: no copy.
+  // unnamed: the commits on the copy's main line past its baseline that none of the named (review) commits holds; absent
+  // when git cannot say.
+  async function change(sprint, named = []) {
+    const dir = dirOf(sprint ?? ''), copy = path.join(dir, 'copy');
+    if (!home || !ID.test(sprint ?? '') || !await lstat(path.join(dir, 'copy-record.json')).then(() => true, () => false)) return null;
+    const done = await closeOf(dir), out = done ? { applied: true, ...done } : { applied: false, ...await previewSprint(dir) };
+    const base = (await readFile(path.join(dir, 'copy-record.json'), 'utf8').then(JSON.parse).catch(() => null))?.baseline?.commit, main = await mainOf(copy);
+    const r = main && typeof base === 'string' && HEX.test(base) && await git(copy, ['rev-list', '--count', '--ignore-missing', main, '--not', base, ...named.filter((c) => typeof c === 'string' && HEX.test(c))]);
+    if (r?.code === 0) out.unnamed = Number(r.out.trim());
+    return out;
+  }
   // The copies P9 made, for the desktop's review list: each sprint id, and whether its apply is recorded. Read-only.
   async function copies() {
     const out = [];
@@ -419,5 +432,5 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     }
     return { copies: out };
   }
-  return { make, where, clean, preview, apply, close, copies, merged, repoOf };
+  return { make, where, clean, preview, apply, close, change, copies, merged, repoOf };
 }
