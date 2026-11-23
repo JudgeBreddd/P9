@@ -432,7 +432,8 @@ test('O21: a tap on Send with text in the box sends it, even when the button sti
   await page.evaluate(() => { document.querySelector('#prompt').value = 'nudge'; }); // no input event: the button still says Stop
   assert.equal(await page.textContent('#composer button[type="submit"]'), 'Stop');
   await page.click('#composer button[type="submit"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 }).catch(() => {});
+  // Sent, not just posted: the daemon took it (the box is cleared only on its 202) and it is in the chat.
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '' && [...document.querySelectorAll('#events article')].some((el) => el.textContent.includes('nudge')), null, { timeout: 15000 });
   await page.waitForTimeout(500);
   assert.deepEqual(posts, [['prompt', 'nudge']], 'the tap stopped the turn or sent nothing: ' + JSON.stringify(posts));
   console.log('PASS O21: text put in the box with no input event went as a send on the Stop-labelled button, nothing cancelled');
