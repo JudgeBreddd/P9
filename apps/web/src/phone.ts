@@ -543,7 +543,7 @@ function patch(list: HTMLElement, wanted: Entry[]) {
 // after it is working; an approval or question not yet answered is waiting on you; otherwise stopped.
 type Digest = { run: 'working' | 'needs' | 'idle'; last: string; mine?: boolean };
 // F4 item 9: a left fold over each chat's events, carried on from the last event folded while that chat's list only grew.
-type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean; mine?: boolean };
+type Fold = { list: Json[]; n: number; working: boolean; open: Set<string>; last: string; tail: boolean; mine?: boolean; prompted?: boolean };
 const folds = new Map<string, Fold>();
 function digest() {
   const seen = new Map<string, Fold>();
@@ -560,15 +560,20 @@ function digest() {
 function fold(chat: Fold, event: Json) {
   {
     const kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
-    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; chat.mine = !data.from; } // O73: another chat's message is not the reader's own
+    if (kind === 'user') { chat.working = chat.prompted = true; chat.last = String(data.text ?? ''); chat.tail = false; chat.mine = !data.from; } // O73: another chat's message is not the reader's own
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
+      // O253: a turn nobody prompted (the run after a compaction, a plugin's prompt, a background task's report) has no user
+      // event to start it and no turn-end to close it. As on the desktop (chat-view.mjs), agent output marks the chat
+      // working and that run's closing usage_update (the one with a cost) marks it done.
+      if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(update)) chat.working = true;
+      else if (update === 'usage_update' && data.cost && !chat.prompted) chat.working = false;
       if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; chat.mine = false; }
       else if (update === 'tool_call') chat.tail = false;
     }
     else if (kind === 'approval' || kind === 'question') chat.open.add(String(data.request));
     else if (kind === 'answered') chat.open.delete(String(data.request));
-    else if (['turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error'].includes(kind)) { chat.working = false; chat.open.clear(); }
+    else if (['turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error'].includes(kind)) { chat.working = chat.prompted = false; chat.open.clear(); }
   }
 }
 const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
