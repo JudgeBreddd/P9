@@ -614,3 +614,43 @@ test('O237 fix 2 a window that ran the script shows the other client\'s later ru
   assert.equal(await page.locator('#mdlFoot [data-copy]').count(), 0, 'and Copy output (this window\'s run) is gone');
   console.log('PASS O237 fix 2 screen: local run then another client\'s run: header, output and Copy all describe the newer run');
 });
+
+// O239: a section with a card and a data tile (the owner's Logs and incidents: two feeder buttons, a card with a folder, a list
+// tile, placed as a tile) draws both in its window, and the list uses the window's width instead of one 220 px tile column.
+test('O239 a section window draws its card and its data list, the list wider than a tile', { timeout: 120000 }, async (t) => {
+  const rows = Array.from({ length: 30 }, (_, i) => ({ title: 'host: check ' + i, subtitle: 'a long reason line that should use the width of the window ' + i, badge: 'setup' }));
+  const logsSpace = { sections: [{ id: 'logs-and-incidents', title: 'Logs and incidents', place: 'tile', text: 'Red while any doctor check has an open incident.',
+    buttons: [{ id: 'ns-logs-data', title: 'Logs card data', cmd: print({ files: 3 }) }, { id: 'ns-notices-data', title: 'Notices data', cmd: print({ type: 'list', level: 'bad', rows }) }, { id: 'ns-count-data', title: 'Count data', cmd: print({ type: 'stat', value: 7 }) }],
+    cards: [{ id: 'ns-logs-card', title: 'Logs and incidents', html: 'cards/logs.html', script: 'ns-logs-data', folder: { path: 'logs', recursive: true, fix: 'Find the cause.' } }],
+    data: [{ id: 'ns-notices', title: 'Silent jobs and setup', script: 'ns-notices-data' }, { id: 'ns-count', title: 'Count', script: 'ns-count-data' }] }] };
+  const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9); await writeFile(path.join(paths.workspace, SETTINGS.space), JSON.stringify(logsSpace)); return r; } });
+  for (const id of ['ns-logs-card', 'ns-notices', 'ns-count']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  await sleep(1500); shot('o239-page', await page.screenshot());
+  await page.click('#fMission [data-group="Logs and incidents"]');
+  await page.locator('#mdlBody [data-tile="ns-notices"] .tile-list li').first().waitFor({ timeout: 20000 });
+  await sleep(1500);
+  shot('o239-window', await page.screenshot());
+  assert.equal(await page.locator('#mdlT').innerText(), 'Logs and incidents · 3 items');
+  const card = page.locator('#mdlBody [data-card][data-tile="ns-logs-card"]');
+  assert.equal(await card.count(), 1, 'the card is in the window');
+  await card.frameLocator('iframe').locator('body[data-ready]').waitFor({ timeout: 15000 });
+  const cb = await card.boundingBox(), tb = await page.locator('#mdlBody [data-tile="ns-notices"]').boundingBox(), wb = await page.locator('#mdlBody').boundingBox();
+  assert.ok(cb.height >= 60 && cb.width > 0, 'the card is drawn: ' + JSON.stringify(cb));
+  assert.ok(tb.width > wb.width * 0.8, 'the list uses the window width, not one tile column: ' + JSON.stringify([tb, wb]));
+  assert.ok(cb.y < wb.y + wb.height, 'the card is in view under the list without scrolling the window: ' + JSON.stringify([cb, wb]));
+  const sb = await page.locator('#mdlBody [data-tile="ns-count"]').boundingBox();
+  assert.ok(sb.width < wb.width * 0.6, 'a number tile keeps its tile width: ' + JSON.stringify([sb, wb]));
+  const list = page.locator('#mdlBody [data-tile="ns-notices"] .tile-list');
+  assert.ok(await list.evaluate((e) => e.scrollHeight > e.clientHeight), 'the long list scrolls inside its tile');
+  await list.locator('li').last().scrollIntoViewIfNeeded(); assert.ok(await list.locator('li').last().isVisible(), 'its last row can be reached');
+  console.log('PASS O239: the section window draws its card and its list across the window');
+});
