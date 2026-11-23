@@ -340,7 +340,8 @@ function bindProfiles() {
     profileForm = null; profileNote = ''; await redraw();
   };
 }
-// The handlers of the three selects in each agent's defaults row (renderSettings, refreshDefaults).
+// The handlers of the three selects in each agent's defaults row (renderSettings, refreshDefaults). startsOut: saves still out, per agent:field.
+const startsOut = {};
 function bindDefaults() {
   outer.$('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
     const a = el.dataset.defaultMode, m = el.value;
@@ -352,7 +353,10 @@ function bindDefaults() {
   // (Settings reopened, or the agents' lists arrived) showed the value from before it, so once it answers the rows are drawn again.
   outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = async () => {
     const a = el.dataset.defaultModel || el.dataset.defaultEffort, kind = el.dataset.defaultModel ? 'model' : 'effort';
-    if (!await outer.saveStarts(a, kind, el.value)) el.value = kind === 'model' ? outer.defaultModel(a) : outer.defaultEffort(a);
+    // N6-2b review: two picks can be applied in another order than made, so once the last save of this field answers its select
+    // (the one on the page now: the row may have been drawn again meanwhile) shows what the daemon kept, even while it has focus.
+    const f = a + ':' + kind; startsOut[f] = (startsOut[f] || 0) + 1; await outer.saveStarts(a, kind, el.value);
+    if (!--startsOut[f]) { const now = outer.$('#setBody').querySelector(`[data-default-${kind}="${a}"]`); if (now) now.value = kind === 'model' ? outer.defaultModel(a) : outer.defaultEffort(a); }
     refreshDefaults();
   }; });
 }

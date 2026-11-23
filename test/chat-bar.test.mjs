@@ -563,7 +563,10 @@ test('O133 Settings: the Default model and effort show as kept after a failed fi
   await until(async () => await app.evaluate(() => globalThis.held7) >= 1, 'the High save was sent (and held)');
   await page.selectOption('[data-default-effort="claude"]', 'low');
   await until(async () => (await call(instance, '/start-defaults')).claude.effort === 'low', 'the Low save, sent second, applied first');
+  await page.focus('[data-default-effort="claude"]'); // a focused row is not drawn again, so the select itself must follow
   await until(async () => await app.evaluate(() => globalThis.held7Done), 'the High save answered', 10000);
+  await until(async () => await page.evaluate(() => document.activeElement?.dataset?.defaultEffort === 'claude' && document.activeElement.value === 'high'),
+    '(7) the focused Settings select shows what the daemon kept (High), not the last pick (Low)');
   await close();
   assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', '(7) the daemon applied High last');
   const before4 = await ids();
