@@ -314,33 +314,32 @@ test('A2 step 1: the desktop paperclip attaches any file; the agent gets its pat
   const docx = Buffer.from('PK\x03\x04 any bytes at all');
   const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
   assert.equal(await chooser.element().evaluate((input) => input.accept), '', 'the picker greys nothing out');
-  await chooser.setFiles([{ name: 'report.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docx }, { name: 'dot.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') }]);
+  await chooser.setFiles([{ name: 'report.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docx }, { name: 'empty.txt', mimeType: 'text/plain', buffer: Buffer.alloc(0) }, { name: 'dot.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') }]);
   await pane.locator('.attach .att-file', { hasText: 'report.docx' }).waitFor({ timeout: 10000 });
+  await pane.locator('.attach .att-file', { hasText: 'empty.txt' }).waitFor({ timeout: 10000 });
   await pane.locator('.attach img[alt="dot.png"]').waitFor({ timeout: 10000 });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-desktop-chips ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
   await send('edit attached');
   let reply;
   await until(async () => (reply = (await said(instance, id, 'update')).map((e) => e.data.content?.text).find((text) => text?.startsWith('edited:'))), 'the agent edited the file');
-  const [name, uri] = reply.slice('edited:'.length).split('=');
-  assert.equal(name, 'report.docx');
-  assert.match(uri, new RegExp('/attachments/' + id + '/report\\.docx$'), 'saved in the chat\'s own folder');
-  assert.equal(await readFile(fileURLToPath(uri), 'utf8'), docx.toString() + ' edited by the agent', 'the agent\'s edit is on disk');
+  const edited = Object.fromEntries(reply.slice('edited:'.length).split(',').map((pair) => pair.split('=')));
+  assert.deepEqual(Object.keys(edited), ['report.docx', 'empty.txt']);
+  for (const [name, uri] of Object.entries(edited)) assert.match(uri, new RegExp('/attachments/' + id + '/' + name.replace('.', '\\.') + '$'), 'saved in the chat\'s own folder');
+  assert.equal(await readFile(fileURLToPath(edited['report.docx']), 'utf8'), docx.toString() + ' edited by the agent', 'the agent\'s edit is on disk');
+  assert.equal(await readFile(fileURLToPath(edited['empty.txt']), 'utf8'), ' edited by the agent', 'an empty file goes too, and its edit is on disk');
   const user = (await said(instance, id, 'user')).at(-1).data;
-  assert.deepEqual([user.text, user.files, user.images?.length], ['edit attached', [{ name: 'report.docx', size: docx.length }], 1]);
+  assert.deepEqual([user.text, user.files, user.images?.length], ['edit attached', [{ name: 'report.docx', size: docx.length }, { name: 'empty.txt', size: 0 }], 1]);
   await pane.locator('.msg.user [data-sent-files]', { hasText: 'report.docx' }).waitFor({ timeout: 10000 });
   assert.equal(await pane.locator('.attach').count(), 0, 'the chips went with the message');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-desktop-sent ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
-  // A name the daemon refuses (a Windows device name) is not checked here; the refusal says what a name cannot be, and the
-  // message and the file come back to the box.
+  // A name the daemon would refuse (a Windows device name) is refused when attached, with the reason; nothing is attached.
   const [again] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
   await again.setFiles([{ name: 'CON.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
-  await pane.locator('.attach .att-file', { hasText: 'CON.txt' }).waitFor({ timeout: 10000 });
-  await send('bad name');
-  await page.locator('#toasts .toast', { hasText: 'Windows device name such as CON; rename it and attach it again.' }).waitFor({ timeout: 15000 });
-  await pane.locator('.attach .att-file', { hasText: 'CON.txt' }).waitFor({ timeout: 10000 });
-  assert.equal(await pane.locator('.composer textarea').inputValue(), 'bad name');
+  await page.locator('#toasts .toast', { hasText: 'CON.txt: its name cannot have' }).waitFor({ timeout: 15000 });
+  assert.match(await page.locator('#toasts .toast', { hasText: 'CON.txt' }).innerText(), /Windows device name such as CON; rename it and attach it again/);
+  assert.equal(await pane.locator('.attach').count(), 0, 'CON.txt was not attached');
   assert.deepEqual(errors, []);
-  console.log('PASS A2 step 1 desktop: report.docx attached as a file beside a photo, saved in attachments/<chat>/, edited there by the agent, named in the sent message; CON.txt refused with the reason, message and file back in the box');
+  console.log('PASS A2 step 1 desktop: report.docx attached as a file beside a photo, saved in attachments/<chat>/, edited there by the agent, named in the sent message; an empty file went and was edited too; CON.txt refused with the reason when attached');
 });
 
 // RS2: the agent asks through P9's MCP server, as a real one would. The native "Restart P9?" dialog is answered Cancel,
