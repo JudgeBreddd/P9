@@ -5,20 +5,25 @@
 // as diffs (acp-v2.mjs diffs: hunks, added, deleted, from, binary), for one completed edit call "Shell edits" (chat.mjs).
 // A folder outside git, git missing, or a step past its time gives null: nothing is added and the turn ends as before.
 // Only the chat's folder is read and listed (add -- ., diff --relative), never the rest of a larger repo it sits in.
-// No program the repo configures runs, whatever its config says while the snapshot runs: every git call that reads the
-// working tree or diffs runs against a private git folder (made per snapshot, with its own config and nothing else), with
-// system and global config off, so no filter, hook, fsmonitor, textconv or diff driver is configured there. The repo
-// lends only its objects folder (where the trees go), a copy of its index (so add hashes only what changed) and its
-// info/exclude. Its own config is read once, as data: the core settings that change how files are read, and the
-// excludes file. On top, hooks and fsmonitor are turned off, diffs use no textconv or external diff, and no missing
-// object is fetched.
+// No program the repo configures runs, and nothing the repo's config or files say reaches git's arguments or environment.
+// The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git folder.
+// Every git call (add, write-tree, diff) runs with GIT_DIR set to a private folder made for that snapshot: HEAD, refs and
+// a config of our own (constant), with system and global config off. From the repo it gets only paths built here (its
+// working tree, .git/objects) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
+// as ignore patterns). So no filter, hook, fsmonitor, textconv or diff driver is configured where git reads config,
+// whatever the repo's config says, even while a snapshot runs. On top: hooks and fsmonitor off, diffs with no textconv or
+// external diff, no missing object fetched. File names git lists reach the diff's pathspec only after "--", literal.
 // ponytail: a file another chat or the user changed in the same repo during the turn is counted as this turn's too.
 // ponytail: a file the agent's edit call named and the shell then changed again is left to that call's own diff.
 // ponytail: .gitignore'd files are not seen (build output, mostly what a user would not want listed either).
 // ponytail: files are stored as they are on disk, never through a filter (git-lfs's pointer files show as the real content).
 // ponytail: a split index (core.splitIndex) cannot be read from its copy, so such a repo adds nothing.
+// ponytail: a .git that is a file (a linked worktree, a submodule) or a sha256 repo adds nothing: following the file, or
+// reading the repo's object format, would take a value from the repo.
+// ponytail: the repo's own core settings (filemode, ignorecase, autocrlf) and a global core.excludesFile are not used;
+// git's defaults are, and its default global ignore file (~/.config/git/ignore).
 import { execFile } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -32,34 +37,30 @@ const run = promisify(execFile);
 // past it is listed with no line rows if that fits, else left out.
 export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 
-// env: the private folder's (box below); without it, a read of the repo itself (rev-parse, config: no program runs).
-const git = (cwd, args, deadline, { env, flags = [] } = {}) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
-  '-c', 'core.fsmonitor=false', ...flags, '--literal-pathspecs', ...args], {
+const git = (cwd, args, deadline, env) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
+  '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
   env: { ...childEnv(), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', ...env },
 }).then((r) => r.stdout);
-const none = (error) => { if (error.code === 1) return ''; throw error; }; // git config's exit 1: nothing set
+const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
-// The private git folder for cwd's repo: HEAD, refs, a config of its own, the repo's index and info/exclude copied in.
-// Its git(args) runs there, the repo's working tree and objects folder named by environment. done() removes it.
+// The private git folder for the repo the chat's folder is in (the throw: none, or its .git is not a folder). git(args)
+// runs there from the chat's folder; here: that folder's real path; done() removes the private folder.
 async function box(cwd, deadline) {
-  const [top, index, objects, exclude, format] = (await git(cwd, ['rev-parse', '--show-toplevel', '--git-path', 'index', '--git-path', 'objects',
-    '--git-path', 'info/exclude', '--show-object-format'], deadline)).split('\n');
-  // How files are read (as data: "key value" lines): -c flags on each call. Nothing here names a program.
-  const flags = (await git(cwd, ['config', '--get-regexp', '^core\\.(filemode|symlinks|ignorecase|precomposeunicode|autocrlf|eol|excludesfile)$'], deadline).catch(none))
-    .split('\n').filter(Boolean).flatMap((l) => ['-c', l.includes(' ') ? l.replace(' ', '=') : l]);
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
+  const here = await realpath(cwd);
+  let top = here, st;
+  while (!(st = await lstat(path.join(top, '.git')).catch(keep))) { if (path.dirname(top) === top) throw new Error('not in git'); top = path.dirname(top); }
+  if (!st.isDirectory()) throw new Error('.git is not a folder');
+  const dot = path.join(top, '.git'), dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
   try {
     await mkdir(path.join(dir, 'refs')); await mkdir(path.join(dir, 'info'));
     await writeFile(path.join(dir, 'HEAD'), 'ref: refs/heads/p9\n');
-    await writeFile(path.join(dir, 'config'), `[core]\n\trepositoryformatversion = 1\n\tbare = false\n[extensions]\n\tobjectformat = ${format}\n`);
-    // From the repo's own index, so add only hashes what changed since (a fresh repo has none yet).
-    const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
-    await copyFile(path.resolve(cwd, index), path.join(dir, 'index')).catch(keep);
-    await copyFile(path.resolve(cwd, exclude), path.join(dir, 'info', 'exclude')).catch(keep);
+    await writeFile(path.join(dir, 'config'), '[core]\n\trepositoryformatversion = 0\n\tbare = false\n');
+    await copyFile(path.join(dot, 'index'), path.join(dir, 'index')).catch(keep); // a fresh repo has none yet
+    await copyFile(path.join(dot, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const env = { GIT_DIR: dir, GIT_WORK_TREE: top, GIT_OBJECT_DIRECTORY: path.resolve(cwd, objects), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
-  return { git: (args) => git(cwd, args, deadline, { env, flags }), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
+  const env = { GIT_DIR: dir, GIT_WORK_TREE: top, GIT_OBJECT_DIRECTORY: path.join(dot, 'objects'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+  return { here, git: (args) => git(here, args, deadline, env), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
 }
 
 // The working tree under cwd as a git tree, through the box's index.
@@ -78,8 +79,8 @@ export async function shellEnd(from, cwd, named = []) {
   if (!from) return null;
   let b;
   try {
-    const deadline = Date.now() + LIMIT_MS, here = await realpath(cwd);
-    b = await box(cwd, deadline);
+    b = await box(cwd, Date.now() + LIMIT_MS);
+    const { here } = b;
     const to = { tree: await tree(b) };
     if (to.tree === from.tree) return null;
     const own = new Set(await Promise.all([...named].map((p) => { const at = path.resolve(cwd, p); return realpath(at).catch(() => at); })));

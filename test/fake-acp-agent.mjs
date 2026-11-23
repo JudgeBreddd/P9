@@ -673,7 +673,7 @@ const connection = acp.connectAgent(stream, {
     }
     // MC-15 (shell-edits.test.mjs): files changed with no edit call (as a shell would), next to ones the agent's own
     // edit calls name: tool.md through a finished Edit (left out of Shell edits), failed.md through a failed one (still counted).
-    if (text === 'shell writes' || text === 'shell many' || text === 'shell big' || text === 'shell tc' || text === 'shell outside' || text === 'shell deep') {
+    if (text === 'shell writes' || text === 'shell many' || text === 'shell big' || text === 'shell tc' || text === 'shell outside' || text === 'shell deep' || text === 'shell odd') {
       const at = (f) => path.join(folder, f);
       if (text === 'shell tc') { writeFileSync(at('a.tc'), 'changed tc\n'); writeFileSync(at('note.txt'), 'note\n'); }
       else if (text === 'shell outside') { writeFileSync(at('in.txt'), 'inside\n'); writeFileSync(path.join(folder, '..', 'sib.txt'), 'SECRET-SIB\n'); writeFileSync(path.join(folder, '..', '..', 'outside.txt'), 'SECRET-OUT\n'); }
@@ -682,6 +682,7 @@ const connection = acp.connectAgent(stream, {
         mkdirSync(deep, { recursive: true });
         for (let i = 0; i < 40; i++) writeFileSync(path.join(deep, 'f-' + String(i).padStart(2, '0') + '-' + 'n'.repeat(150) + '.txt'), Array.from({ length: 12 }, (_, j) => 'row ' + j + ' ' + 'y'.repeat(60)).join('\n') + '\n');
       }
+      else if (text === 'shell odd') { writeFileSync(at('plain.txt'), 'plain\n'); writeFileSync(at('o"dd\nfilter.evil.clean=x.txt'), 'odd\n'); writeFileSync(at('f.txt'), 'changed in the turn\n'); }
       else if (text === 'shell many') for (let i = 0; i < 45; i++) writeFileSync(at('many-' + String(i).padStart(2, '0') + '.txt'), 'n' + i + '\n');
       else if (text === 'shell big') writeFileSync(at('big.txt'), Array.from({ length: 6000 }, (_, i) => 'line ' + i + ' ' + 'x'.repeat(20)).join('\n') + '\n');
       else {
