@@ -121,7 +121,10 @@ function applyOverview(o) {
   // W-C: a group's key is its section's id (titles may repeat; M.title says what each key is called). A space button names its
   // section; a registry group named like a section joins the first one with that title; any other is 'g:' + its name (an id has no ':').
   const named = {}; for (const s of o.space || []) { named[s.title] ??= s.id; outer.M.title[s.id] = s.title; }
-  for (const x of o.scripts) { const row = [x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }];
+  // O237: the daemon keeps each script's last run, so every poll, device and restart shows the same one.
+  for (const x of o.scripts) { const L = x.last, row = [x.id, x.title, x.desc, !L ? 'idle' : L.terminal || L.code === 0 ? 'ok' : 'bad',
+    L ? new Date(L.at).toLocaleString() + (L.terminal ? ', opened in a terminal' : ', exit ' + L.code) : 'not run here yet',
+    L && !L.terminal ? L.secs + ' s' : '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true, tail: L?.tail, at: L?.at }];
     const name = x.group || 'Other', key = x.section ?? named[name] ?? 'g:' + name; outer.M.title[key] ??= name;
     if (x.hidden) outer.M.cardScripts[x.id] = row; else (outer.M.scripts[key] ||= []).push(row); }
   outer.M.buttons = o.scripts.map(x => ({ id: x.id, title: x.title, icon: x.icon, section: x.section })); // the editor's button rows (W-N)
@@ -133,18 +136,19 @@ function applyOverview(o) {
   for (const s of outer.M.space) if (!s.widget) outer.M.scripts[s.id] ||= []; // a widget section is its panel or built-in tile, not a group tile
   applyQueue(o);
 }
-async function refreshMission() {
-  if (!outer.live.on || document.hidden || outer.S.focus !== 'mission' || outer.lifetime.signal.aborted) return;
+// now: read it whatever is in front (a finished turn or run, queueSoon); the regular poll reads only while Mission is shown.
+async function refreshMission(now) {
+  if (!outer.live.on || !now && (document.hidden || outer.S.focus !== 'mission') || outer.lifetime.signal.aborted) return;
   const r = await overview().catch(() => null);
   if (r?.status !== 200 || outer.lifetime.signal.aborted) return;
   loadArt(); // a site's icon can arrive or age out with no change to the overview
   const key = JSON.stringify(r.body); if (key === outer.lastOverview) return; outer.lastOverview = key;
   applyOverview(r.body); outer.renderMission(); outer.renderTabs();
   if (outer.S.modal?.kind === 'scripts' && !outer.M.scripts[outer.S.modal.g]) outer.closeModal(); // its group is gone
-  else if (['scripts', 'win', 'reviews', 'center'].includes(outer.S.modal?.kind)) outer.renderModal();
+  else if (['scripts', 'script', 'win', 'reviews', 'center'].includes(outer.S.modal?.kind)) outer.renderModal(); // script: a run another device finished (O237)
 }
 const pollMission = () => { refreshMission(); outer.setTimeout(pollMission, 20000); };
-const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(async () => { const r = window.p9?.mission ? await overview().catch(() => null) : null; if (outer.live.on && r?.status === 200) { outer.lastOverview = JSON.stringify(r.body); applyOverview(r.body); outer.renderMission(); outer.renderTabs(); if (outer.S.modal?.kind === 'reviews' || outer.S.modal?.kind === 'center') outer.renderModal(); } }, 500); };
+const queueSoon = () => { clearTimeout(outer.queueTimer); outer.queueTimer = outer.setTimeout(() => refreshMission(1), 500); }; // #489: the poll's own read, once (bytes)
 function applyQueue(o) {
   const drafts = Object.fromEntries(outer.S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = outer.S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
@@ -180,18 +184,19 @@ async function answerLive(r) {
 }
 async function runLive(m, id) {
   const res = await window.p9.mission('run', { id, args: m.args, ...(m.armedRun ? { confirm: true } : {}) });
-  if (res.status === 200 && res.body.launched) { m.out = ['Opened in a terminal.']; return outer.S.modal === m && outer.renderModal(); }
+  if (res.status === 200 && res.body.launched) { m.out = ['Opened in a terminal.']; queueSoon(); return outer.S.modal === m && outer.renderModal(); }
   if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.reason || res.body?.error || res.status)]; return outer.S.modal === m && outer.renderModal(); }
-  let text = '', from = 0;
+  let text = '', from = 0; m.running = true;
   for (;;) {
     const o = await window.p9.mission('output', { run: res.body.run, from });
     if (o.status !== 200) { m.out = [text, '[lost the run: ' + (o.body?.error || o.status) + ']']; break; }
-    text += o.body.output; from = o.body.next; m.out = text.split('\n');
+    text += o.body.output; from = o.body.next; m.out = text.split('\n'); m.outAt = o.body.at;
     if (outer.S.modal === m) outer.renderModal();
     if (o.body.done) break;
     await new Promise(done => outer.setTimeout(done, 300));
   }
-  if (outer.S.modal === m) outer.renderModal();
+  m.running = false; if (outer.S.modal === m) outer.renderModal();
+  queueSoon(); // the overview now carries this run as the script's last run (O237)
 }
 // Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
 // names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
@@ -864,19 +869,24 @@ function missionModal(m, body, row) {
       outer.renderModal();
     };
   } else if (m.kind === 'script') {
+    if (m.s[6]?.live) m.s = scriptById(m.s[0]) ?? m.s; // the overview's row now: its last run (O237)
+    const f = document.activeElement, typing = body.contains(f) && f.dataset.arg ? [f.dataset.arg, f.selectionStart, f.selectionEnd] : null;
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
     m.args ||= (x.args || []).map(() => '');
+    // #489 fix 2: this window's output is its run's, shown while it runs and until the last run is another one (another device's).
+    const out = m.out && (m.running || x.at === m.outAt || !(x.at > m.before)) ? m.out : null;
     outer.$('#mdlT').textContent = name;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : ''}</div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${out ? `<pre class="out">${esc(out.join('\n'))}</pre>` : x.tail ? `<pre class="out" data-last-tail>${esc(x.tail)}</pre>` : ''}</div>`;
     body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = inp.onchange = () => { m.args[+inp.dataset.arg] = inp.value; });
-    outer.$('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${m.out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
+    if (typing) { const inp = body.querySelector(`[data-arg="${typing[0]}"]`); inp?.focus(); try { inp?.setSelectionRange(typing[1], typing[2]); } catch {} } // a poll's redraw keeps the field being typed in
+    outer.$('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
     outer.$('#mdlFoot [data-run]').onclick = () => {
       if (x.confirm && !m.armed) { m.armed = true; return outer.renderModal(); }
-      m.armedRun = m.armed; m.armed = false; m.out = ['running…']; outer.renderModal();
+      m.armedRun = m.armed; m.armed = false; m.out = ['running…']; m.before = x.at ?? 0; outer.renderModal();
       if (x.live) return runLive(m, id);
       outer.setTimeout(() => { m.out = outer.M.outputs[id] || [name, '', '[ok] ' + name + ' completed']; if (outer.S.modal === m) outer.renderModal(); }, 600);
     };
-    if (m.out) outer.$('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
+    if (out) outer.$('#mdlFoot [data-copy]').onclick = e => copy(out.join('\n'), e.currentTarget);
   } else if (m.kind === 'hubtext') {
     outer.$('#mdlT').textContent = m.title;
     if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call, m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; m.canFix = r.status === 200 && !!r.body.fix; if (outer.S.modal === m) outer.renderModal(); }); }

@@ -120,7 +120,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const outer = { get AGENTS_FETCH_MS() { return AGENTS_FETCH_MS; }, get AGENT_COMMANDS() { return AGENT_COMMANDS; },
     get STARTER_AGENTS() { return STARTER_AGENTS; }, get STARTER_SETTINGS() { return STARTER_SETTINGS; },
     get STARTER_WAITING() { return STARTER_WAITING; }, get WIZARD_KEYS() { return WIZARD_KEYS; },
-    get agentsFetching() { return agentsFetching; }, set agentsFetching(v) { agentsFetching = v; }, get allowed() { return allowed; },
+    get agentsFetching() { return agentsFetching; }, set agentsFetching(v) { agentsFetching = v; }, get allowed() { return allowed; }, get lastRuns() { return lastRuns; },
     get api() { return api; }, get app() { return app; }, get chat() { return chat; }, get drafts() { return drafts; },
     get existing() { return existing; }, get greeting() { return greeting; }, get instance() { return instance; }, get json() { return json; },
     get ledger() { return ledger; }, get lifecycle() { return lifecycle; }, get loose() { return loose; },
@@ -136,9 +136,11 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const allowed = settingsFile ? path.join(path.dirname(settingsFile), 'mission-allowed.json') : undefined;
   // Scratch spaces (threat model row 71): <settings folder>/spaces/<name>.json.
   const drafts = settingsFile ? path.join(path.dirname(settingsFile), SPACES_DIR) : undefined;
+  // Each script's last run (O237): beside settings.json too, so a restart keeps it.
+  const lastRuns = settingsFile ? path.join(path.dirname(settingsFile), 'mission-runs.json') : undefined;
   // Unrestricted mode (v0.1.6 U1): chat is made on the next line; Mission asks only at request time.
   const loose = () => chat.loose();
-  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts, loose });
+  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts, lastRuns, loose });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery, loose });
   const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive, turnLimit: updateTurnMs });

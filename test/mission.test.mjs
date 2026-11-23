@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, readdir, access, chmod, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { once } from 'node:events';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { parseRegistry } from '../apps/server/mission.mjs';
 
 const hash = (text) => createHash('sha256').update(text).digest('hex');
@@ -493,4 +494,74 @@ test('M6: page_schemes pages need confirm; javascript, file and data are refused
   assert.equal((await call(instance, '/pages/js/launch', 'POST', { confirm: true })).status, 404);
   assert.equal(parseRegistry(JSON.stringify({ pages: [{ id: 'x', title: 'X', url: 'javascript:1' }] }), ['javascript']).pages.length, 0);
   assert.throws(() => parseSettings(JSON.stringify({ ...BUILDER, page_schemes: ['x'] })), 'a one-letter scheme (a Windows drive) is not a scheme');
+});
+
+// O237: a button's window said "not run here yet" for scripts run many times: the daemon kept runs only in memory and never sent
+// a script's last run in the overview. Now each finished run is the script's last run, in the overview, across a restart.
+test('O237 each script\'s last run is in the overview and survives a daemon restart; a broken file reads as none', { timeout: 60000 }, async (t) => {
+  const instance = await start(t, BUILDER, [
+    { id: 'echo', title: 'Echo', group: 'Tools', cmd: [node, '-e', 'console.log("hello from echo")'] },
+    { id: 'fail', title: 'Fail', group: 'Tools', cmd: [node, '-e', 'console.error("broke"); process.exit(3)'] },
+  ]);
+  const scripts = async (at) => Object.fromEntries(JSON.parse((await call(at, '/mission')).text).scripts.map((x) => [x.id, x.last]));
+  assert.deepEqual(await scripts(instance), { echo: undefined, fail: undefined }, 'nothing run yet');
+  const before = Date.now();
+  await finished(instance, JSON.parse((await call(instance, '/scripts/echo/run', 'POST', {})).text).run);
+  await finished(instance, JSON.parse((await call(instance, '/scripts/fail/run', 'POST', {})).text).run);
+  let last;
+  for (let i = 0; i < 100 && !(last = await scripts(instance)).fail; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(last.echo.code, 0); assert.equal(last.fail.code, 3);
+  assert.ok(last.echo.at >= before && last.echo.at <= Date.now(), 'when it started');
+  assert.ok(typeof last.echo.secs === 'number' && last.echo.secs >= 0);
+  assert.match(last.echo.tail, /hello from echo[\s\S]*\[exit 0 in/); assert.match(last.fail.tail, /broke[\s\S]*\[exit 3 in/);
+  assert.deepEqual(await scripts(instance), last, 'a second poll answers the same');
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  assert.deepEqual(await scripts(second), last, 'a fresh daemon on the same settings folder still has both last runs');
+  second.child.kill('SIGTERM'); await once(second.child, 'exit');
+  await writeFile(path.join(instance.directory, 'mission-runs.json'), '[1, 2');
+  const third = await restart(t, instance, 'state-3');
+  assert.deepEqual(await scripts(third), { echo: undefined, fail: undefined }, 'a broken file reads as no last runs');
+  await finished(third, JSON.parse((await call(third, '/scripts/echo/run', 'POST', {})).text).run);
+  for (let i = 0; i < 100 && !(last = await scripts(third)).echo; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(last.echo.code, 0, 'and the next run is recorded over it');
+  assert.equal(JSON.parse(await readFile(path.join(instance.directory, 'mission-runs.json'), 'utf8')).echo.code, 0);
+  console.log('PASS O237: last run per script in the overview, kept across a restart, broken file = none');
+});
+
+// #489 fix 1: the file is read once. Two first reads used to race: a slow first read finishing after a run was recorded put the
+// old copy back, so the new run left the overview (and the next save). The reads are held here and let go newest first.
+test('O237 fix 1: a slow first read of the last-runs file never puts an old copy over a run recorded meanwhile', { timeout: 30000 }, async (t) => {
+  const fsp = (await import('node:fs/promises')).default, { syncBuiltinESMExports } = await import('node:module');
+  const os = (await import('node:os')).default, { mkdtemp } = await import('node:fs/promises');
+  const { createMission } = await import('../apps/server/mission.mjs'), { createLifecycle } = await import('../apps/server/lifecycle.mjs');
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-o237-')), workspace = path.join(dir, 'ws');
+  for (const folder of ['hub', '_waiting', 'projects/event-horizon', 'rec']) await mkdir(path.join(folder === 'rec' ? dir : workspace, folder), { recursive: true });
+  await writeFile(path.join(workspace, 'hub/registry.json'), JSON.stringify({ scripts: [{ id: 'echo', title: 'Echo', cmd: [node, '-e', 'console.log("hi")'] }], apps: [], pages: [] }));
+  await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
+  const lastRuns = path.join(dir, 'mission-runs.json');
+  await writeFile(lastRuns, JSON.stringify({ old: { at: 1, code: 0, secs: 0, tail: '' } }));
+  const real = fsp.readFile, held = [];
+  // The read happens when asked (so it sees the file as it was then); only its answer is held.
+  fsp.readFile = (file, ...rest) => { const read = real(file, ...rest); return file === lastRuns ? new Promise((resolve) => held.push(() => resolve(read))) : read; };
+  syncBuiltinESMExports();
+  t.after(() => { fsp.readFile = real; syncBuiltinESMExports(); });
+  const mission = createMission({ workspace, recovery: path.join(dir, 'rec'), settings: { registry: 'hub/registry.json', waiting: '_waiting', primary: 'projects/AGENTS.md' },
+    instance: 'o237-' + process.pid, lifecycle: createLifecycle(), lastRuns });
+  const first = mission.overview(); // its read of the file is held
+  for (let i = 0; i < 100 && !held.length; i += 1) await sleep(20);
+  assert.equal(held.length, 1, 'the overview asked for the file');
+  const started = await mission.run('echo', {});
+  assert.equal(started.status, 202, JSON.stringify(started));
+  for (let i = 0; i < 200 && !mission.output(started.run).done; i += 1) await sleep(25);
+  await sleep(100); // the finished run has asked for the file too
+  while (held.length) { held.pop()(); await sleep(100); } // newest read first: an old first read lands last
+  await first;
+  const now = await mission.overview();
+  assert.equal(now.scripts.find((x) => x.id === 'echo').last?.code, 0, 'the run recorded meanwhile is still the last run');
+  assert.equal(mission.output(started.run).at, now.scripts.find((x) => x.id === 'echo').last.at, 'a run\'s output names its last-run time (#489 fix 2)');
+  await mission.stopAll();
+  assert.deepEqual(Object.keys(JSON.parse(await real(lastRuns, 'utf8'))).sort(), ['echo', 'old'], 'and the file has it beside the old record');
+  console.log('PASS O237 fix 1: one read of the file; a held first read does not drop a run recorded meanwhile');
 });
