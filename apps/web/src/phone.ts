@@ -1152,10 +1152,12 @@ async function submitFromBox(event: Event) {
   event.preventDefault(); const id = openId; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
-  if (id && submitter?.dataset.stop === 'true') {
-    // No turn to stop (it just ended): 409 no-turn, and the events say so.
+  // O21: Stop only when the box is empty at the tap. data-stop is from the last redraw, and text can reach the box with
+  // no input event (a keyboard's own insert, dictation): that tap then stopped the turn, or did nothing, and sent nothing.
+  if (id && submitter?.dataset.stop === 'true' && art === null && !input.value.trim() && !images.length) {
     const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
-    if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
+    if (result.body.error === 'no-turn') note('Nothing to stop: the turn had already ended.');
+    else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   const text = (art ?? input.value).trim();

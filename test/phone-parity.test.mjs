@@ -418,6 +418,25 @@ test('P4: with an empty box during a turn the send button is Stop, and Stop ends
   await send(page, 'after');
   await said(page, 'echo:after');
 });
+// O21 (2026-11-23): Send read the Stop state left by the last redraw, not the box. Text that reached the box with no input
+// event (a keyboard's own insert, dictation) after the box was empty during a turn made the tap a Stop: the turn was
+// cancelled, or with no turn left nothing happened at all, until a key redrew the button.
+test('O21: a tap on Send with text in the box sends it, even when the button still says Stop from an empty box', { timeout: 60000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await sendLabel(page, 'Stop');
+  const posts = [];
+  page.on('request', (request) => { if (request.method() === 'POST' && /\/chat\/[^/]+\/(cancel|prompt)$/.test(new URL(request.url()).pathname)) posts.push([new URL(request.url()).pathname.split('/').pop(), request.postDataJSON()?.text]); });
+  await page.evaluate(() => { document.querySelector('#prompt').value = 'nudge'; }); // no input event: the button still says Stop
+  assert.equal(await page.textContent('#composer button[type="submit"]'), 'Stop');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(500);
+  assert.deepEqual(posts, [['prompt', 'nudge']], 'the tap stopped the turn or sent nothing: ' + JSON.stringify(posts));
+  console.log('PASS O21: text put in the box with no input event went as a send on the Stop-labelled button, nothing cancelled');
+});
 // P18: typing during a turn shows a slim card over the box (the desktop's Steer / Queue chip and its Ctrl Enter
 // interrupt); Interrupt stops the turn and sends the text as the next prompt, and nothing typed is lost on the way.
 test('P18: a card over the box during a turn: Steer, Queue, Interrupt; Interrupt stops the turn and sends', { timeout: 90000 }, async (t) => {
