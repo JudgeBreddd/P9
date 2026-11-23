@@ -830,7 +830,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // ponytail: async_task_* updates are read for this only, not stored or shown.
   const marked = (session, id, update) => {
     if (update?.sessionUpdate === 'async_task_spawned' && update.taskType === 'turn') {
-      if (session.turn || session.solo || session.stopping || session.compacting) return;
+      if (session.turn || session.solo || session.stopping || session.compacting || session.unstop) return;
       session.marked = update.asyncTaskId;
       quiet(session, id);
     } else if (update?.sessionUpdate === 'async_task_state_update' && update.asyncTaskId === session.marked && ['completed', 'failed', 'stopped'].includes(update.state)) {
@@ -1990,13 +1990,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!session.turn) {
         // O253: Stop on a run nobody prompted (open quiet or ghost timer: O192, O194, CP8). The agent is told to cancel
         // and that run ends here, once, so the phone and desktop stop showing Working and the end hooks run.
-        // session.unstop: output arriving while the cancel is pending opens no new quiet timer (unprompted() skips it).
-        const off = () => { clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null; };
-        off(); session.unstop = true;
+        // session.unstop: while the cancel is pending no new run opens (unprompted(), marked()), and a second Stop returns at once:
+        // this one ends the run. The markers are cleared only once the cancel returned, so a cancel that fails leaves the run open
+        // and a retry finds it.
+        if (session.unstop) return { status: 200, ok: true };
+        session.unstop = true;
         try { await session.agent.cancel({ sessionId: session.sessionId }); } finally { session.unstop = false; }
-        // A prompt that started while the cancel was pending owns the chat now: the old run's end is not sent over it.
-        if (live.get(id) !== session || session.turn) return { status: 200, ok: true };
-        off();
+        // A prompt that started meanwhile owns the chat now, and a run that ended on its own meanwhile has had its end.
+        if (live.get(id) !== session || session.turn || !(session.quiet || session.ghost)) return { status: 200, ok: true };
+        clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null;
         emit(id, 'turn-end', { stopReason: 'cancelled', unprompted: true });
         unpromptedEnd(session, id);
         return { status: 200, ok: true };
