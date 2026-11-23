@@ -166,7 +166,7 @@ export function createWorkerFolders({ home, setupMs = SETUP_MS, protocols = ['ht
     // A sprint from a folder with no remote, or a folder inside a larger repository: its copy (folder-copy.mjs), made once.
     if (await realDir(copy, 2)) {
       if (address) return { clone: copy };
-      const record = await readFile(path.join(dirOf(sprint), 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
+      const record = await readFile(path.join(dirOf(sprint), 'copy-record.json'), 'utf8').then(JSON.parse).catch(() => null);
       const real = typeof source === 'string' && path.isAbsolute(source) ? await realpath(source).catch(() => null) : null;
       if (real && record?.source === real) return { clone: copy };
       return { error: 'other-repository', detail: 'This sprint\'s worker folders all come from one copy, made from another folder: a sprint has one repository. Leave folder out, name the folder the sprint started from, or start this work from another chat.' };
