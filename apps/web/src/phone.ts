@@ -265,10 +265,14 @@ function perChat<T>(read: (events: Json[], id: string) => T) {
 }
 // O251: true when a live read (live) came back full, so this phone fell behind (a sleep, a dropped link); the caller reads the
 // current state again (behind, below) instead of every page of the gap.
+// jumps counts them: a read sent before one began answers from the old cursor and is dropped, or it would fill the
+// cleared transcript with the old page and leave a hole below the new tail.
+let jumps = 0;
 async function pull(extra: string, wait = 0, live = false): Promise<boolean> {
   let batch: Json[];
   do {
-    const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
+    const sent = jumps, result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
+    if (sent !== jumps) return false;
     batch = result.events as Json[] ?? [];
     if (live && batch.length === 500) return true;
     // The live loop and a refresh can overlap; an event already held is skipped.
@@ -309,6 +313,7 @@ async function fetchEvents(wait = 0) {
   else {
     // O251: a full live page means this phone fell behind (jump, above).
     if (await pull('', wait, true)) await (jumping ||= jump().finally(() => { jumping = null; }));
+    else if (jumping) return jumping; // this read was dropped (pull): the jump sets the cursor it saves
     else gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
     for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled')
@@ -321,6 +326,7 @@ async function fetchEvents(wait = 0) {
 // (history() reads only stubs) and one still in flight ends first: either would read up to the old base and clear the new
 // stub. A read that fails puts the old state back, so the next one finds the same full page and jumps again.
 async function jump() {
+  jumps++;
   const stubs = state.stubs, flying = [...loading];
   state.stubs = new Set();
   // A load that ended here took its chat's events and is no stub any more; the old state is kept from after the wait.
