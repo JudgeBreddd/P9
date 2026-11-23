@@ -238,12 +238,21 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     });
     assert.deepEqual(await record.evaluate(r => r.selfCheck()), [false, true, false], 'a drag is redone only on a real hide: none on a no-op removal, one on a batched hide and restore, none on a restore alone');
     // O242: CI cut the drag at 5 of 6 steps (+100/+66) with no hide and no focus change in the record: the button went up
-    // before the last move was applied. A hand keeps moving, the test's last move is its only one, so the test lets go only
-    // once the dock has the size the pointer asks for, sending that last move once more if it was not applied.
+    // before the last move was applied. The page's own record of moves tells the two causes apart. If the last move never
+    // reached the page, the test lost it (a hand keeps moving; the test's last move is its only one) and it is sent once more.
+    // If it reached the page and the dock is still short, the page dropped it: no resend, and the size check fails.
     const reached = (w, h, timeout) => page.waitForFunction(([w, h]) => { const r = document.querySelector('#dock').getBoundingClientRect(); return Math.round(r.width) === w && Math.round(r.height) === h; }, [w, h], { timeout }).then(() => true, () => false);
+    await page.evaluate(() => { window.__moves = []; addEventListener('mousemove', (e) => window.__moves.push([e.clientX, e.clientY]), true); });
+    let lostMove = '';
     const dragBy = async (gw, gh) => { const b = await dockBox(), to = [b.x + b.width + gw - 3, b.y + b.height + gh - 3], size = [Math.round(b.width + gw), Math.round(b.height + gh)];
+      await page.evaluate(() => { window.__moves.length = 0; });
       await page.mouse.move(b.x + b.width - 3, b.y + b.height - 3); await page.mouse.down(); await page.mouse.move(...to, { steps: 6 });
-      if (!(await reached(...size, 1000))) { await page.mouse.move(to[0] + 1, to[1] + 1); await page.mouse.move(...to); await reached(...size, 2000); }
+      if (!(await reached(...size, 1000))) {
+        const moves = await page.evaluate(() => window.__moves), last = moves.at(-1) ?? [];
+        lostMove = `moves the page saw: ${moves.length}, last ${JSON.stringify(last)}, asked ${JSON.stringify(to.map(Math.round))}`;
+        if (Math.round(last[0]) !== Math.round(to[0]) || Math.round(last[1]) !== Math.round(to[1])) { lostMove += ' (never reached the page: sent again)'; await page.mouse.move(to[0] + 1, to[1] + 1); await page.mouse.move(...to); await reached(...size, 2000); }
+        else lostMove += ' (reached the page, which did not resize: a page bug)';
+      }
       await page.mouse.up(); return await dockBox(); };
     let d2 = await dragBy(120, 80), drags = 1, why = '';
     while (drags < 3 && (Math.round(d2.width - d1.width) !== 120 || Math.round(d2.height - d1.height) !== 80)) {
@@ -252,8 +261,9 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
       d2 = await dragBy(120 - (d2.width - d1.width), 80 - (d2.height - d1.height)); drags++;
     }
     const changes = await record.evaluate(r => r.stop());
+    console.log('O242 drag: ' + (lostMove || 'the last move was applied at once') + '; moves the page saw on the last drag: ' + (await page.evaluate(() => window.__moves.length)));
     if (drags > 1) console.log('the corner resize was cut short (' + why + ') and completed on drag ' + drags + '; changes during the drag:\n' + changes);
-    assert.deepEqual([Math.round(d2.width - d1.width), Math.round(d2.height - d1.height)], [120, 80], 'the corner resizes it; changes during the drag:\n' + changes);
+    assert.deepEqual([Math.round(d2.width - d1.width), Math.round(d2.height - d1.height)], [120, 80], 'the corner resizes it; ' + lostMove + '; changes during the drag:\n' + changes);
     if (process.env.P9_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.P9_SCREENSHOTS, 'terminal-float.png') });
     if (!wasFloat) await page.click('#dFloat'); await page.keyboard.press('Control+Backquote');
     console.log('PASS floating terminal: drag follows the cursor with no selection, corner resize');
