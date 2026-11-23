@@ -73,6 +73,29 @@ globalThis.document?.addEventListener('click', e => {
     .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
     .then(t => { said(t); lock(false); });
 });
+// I3 worker window, what it reads (look: sprint-hooks.mjs view, kept 15 s per chat): Details under a chat's row opens
+// its role, folder, branch, head and changed files, its items with each review, ready and verdict, a question waiting,
+// its notes file's last lines and its last reply. Open or shut is kept per chat across the 5 s redraws (looking).
+const looking = new Set();
+const lookHtml = (w, s, esc) => {
+  const L = w.look, g = L?.git, mine = s.items.filter(i => i.role && i.role === w.key), p = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
+  const where = !w.folder ? 'No folder' : !L ? 'Not read for this record' : !g ? 'Not a git folder, or git did not answer in time'
+    : `${g.branch === null ? 'No branch (detached)' : esc(g.branch)} · ${g.head ? esc(g.head.slice(0, 8)) : 'no commit yet'}`;
+  const ch = g ? (g.changed.count ? `${g.changed.count} not committed: ${g.changed.files.map(esc).join(', ')}${g.changed.count > g.changed.files.length ? ', …' : ''}` : 'Nothing uncommitted') : '';
+  return `<div class="sv-look" data-sv-look${looking.has(w.chat) ? '' : ' hidden'}><dl class="sv-facts">`
+    + p('Role', esc([w.key ?? 'no role', w.profile && `profile ${w.profile}`, w.mode && `mode ${w.mode}`].filter(Boolean).join(' · ')))
+    + p('Folder', esc(w.folder ?? 'none')) + p('Branch', where) + (ch ? p('Changed', ch) : '')
+    + p('Review', w.ready ? `Ready: ${esc(w.ready.item ?? '')} at ${esc(String(w.ready.commit ?? '').slice(0, 8))}` + (w.verdict ? ` · ${esc(w.verdict.result ?? '')}${w.verdict.note ? ': ' + esc(w.verdict.note) : ''}` : '') : w.verdict ? esc(`${w.verdict.result ?? ''}${w.verdict.note ? ': ' + w.verdict.note : ''}`) : 'Nothing sent for review')
+    + (w.waiting ? p('Question', 'It is waiting for you: open its chat to answer.') : '') + '</dl>'
+    + `<h4>Its items</h4>${mine.length ? `<ul class="sv-items">${mine.map(i => `<li data-sv-litem="${esc(i.id)}"><span class="sv-text">${esc(i.text)}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.merged ? ', merged' : '') + (i.review.fixes ? ` · ${i.review.fixes} fix${i.review.fixes === 1 ? '' : 'es'}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : '<p class="muted sm">No items in the plan for this role.</p>'}`
+    + `<h4>Notes${L?.notes ? ` <span class="muted sm mono">${esc(L.notes.file)}</span>` : ''}</h4>${L?.notes?.tail.length ? `<pre class="sv-pre" data-sv-notes>${esc(L.notes.tail.join('\n'))}</pre>` : `<p class="muted sm">${L?.notes ? 'The notes file is empty.' : 'No notes file.'}</p>`}`
+    + `<h4>Last reply</h4>${L?.reply ? `<pre class="sv-pre" data-sv-reply>${esc(L.reply)}</pre>` : '<p class="muted sm">No reply yet.</p>'}</div>`;
+};
+globalThis.document?.addEventListener('click', e => {
+  const b = e.target.closest?.('[data-sv-lookbtn]'), li = b?.closest('li[data-key]'); if (!li) return;
+  const f = li.querySelector('[data-sv-look]'), open = f.hidden; f.hidden = !open; b.setAttribute('aria-expanded', open);
+  if (open) looking.add(li.dataset.key); else looking.delete(li.dataset.key);
+});
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
 // out() is called once the press is going out.
@@ -118,7 +141,7 @@ export function statusHtml(s, esc, opts = {}, o = null) {
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
         <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}${w.spent ? ' · ' + usedText(w.spent) : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? (q.next ? 'Next: ' + q.next : q.next === null ? 'All its items passed review' : 'No item taken yet') : 'No items in the plan for this role'))}</span>
-        <span class="tag" data-sv-state>${esc(word)}</span></button>${!end && o ? repick(w, o, esc) : ''}</li>`; }).join('')}</ul>
+        <span class="tag" data-sv-state>${esc(word)}</span></button><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-sv-lookbtn aria-expanded="${looking.has(w.chat)}" title="Everything about this chat: role, folder, branch, items, notes, last reply">Details</button>${!end && o ? repick(w, o, esc) : ''}${lookHtml(w, s, esc)}</li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
       <ul class="sv-items">${s.owner.items.map(i => `<li data-sv-item="${esc(i.id)}" data-owner="${i.done ? 'closed' : 'open'}"><span class="sv-text">${esc(i.text)}</span>${i.done ? '<span class="tag">Closed by you</span>' : end ? '<span class="tag">Open at Close</span>' : `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}" data-item="${esc(i.id)}" title="Closes this item. It is yours: no review and no merge is involved, and the plan's box stays as it is.">Close</button>`}</li>`).join('')}</ul></li></ul>` : ''}
     ${plan.length ? `<div data-sv-flat${byPhase(s) && planOpen.has(s.sprint.id) ? ' hidden' : ''}><h3>Plan items</h3><ul class="sv-items">${plan.map(i => row(i)).join('')}</ul></div>${byPhase(s) ? planView(s, plan, row, esc) : ''}` : ''}
