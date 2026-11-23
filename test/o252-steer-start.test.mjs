@@ -22,7 +22,8 @@ test('O252: a steer sent while the turn start snapshot runs joins the turn', { t
 });
 
 // Review round 1: a Stop while the steer waits cuts the turn (no prompt goes); the waiting steer must not reach the agent
-// either. On Codex, a steer with no turn running starts one of its own (startedNewTurn), which would be work after Stop.
+// either. The test adapter for this chat's provider answers a steer with no turn running by starting one of its own
+// (startedNewTurn), which would be work after Stop.
 test('O252: a steer waiting on the start snapshot is refused when Stop cuts that turn', { timeout: 120000 }, async (t) => {
   const instance = await start(t, { P9_SHELL_START_MS: '2500' });
   const chat = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Stopped at start' })).body.conversation;
