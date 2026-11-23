@@ -18,14 +18,15 @@ In a P9 chat, Claude and Codex have P9's Mission tools. The agent should:
 
 1. Call describe_mission to read the format and an example of every item.
 2. Ask you what you want, one section at a time.
-3. Add each section with add_section.
-4. For a built-in panel (Waiting on you, Usage, Apps and pages or Notifications), call update_section with widget.
-5. To show a button you already have in the registry, call update_section with refs and the button's ID. Never copy its command into a new button.
-6. Add new buttons with add_button. Add data tiles, log views, folders, links and checklists with set_section_items.
-7. For a custom card, write a workspace .html file with its own file tool (you approve the write). Then add it with set_section_items cards. The .html file stays in the workspace even if a scratch space is dropped.
-8. When it cannot find a folder, file or command, ask you in the chat. Never skip it.
-9. Check the space with validate_space.
-10. At the end, list anything it did not build.
+3. Add each section with add_section, in one write: its set takes the section's other fields (icon, widget, buttons, data, cards and the rest), as patch_section does.
+4. For a built-in panel (Waiting on you, Usage, Apps and pages or Notifications), give add_section's set a widget. For a section already there, call update_section with widget.
+5. Place each section meant to be seen at a glance (cards, data tiles, lists, folders) in a column: place col1 to col6, and span for a wider one. A section with no place is a top-row tile that shows its items only in its window, so a space of tiles leaves the page empty. Keep tiles for groups of buttons.
+6. To show a button you already have in the registry, call update_section with refs and the button's ID. Never copy its command into a new button.
+7. Add new buttons with add_button. Add data tiles, log views, folders, links and checklists with set_section_items.
+8. For a custom card, write a workspace .html file with its own file tool (you approve the write). Then add it with set_section_items cards. The .html file stays in the workspace even if a scratch space is dropped.
+9. When it cannot find a folder, file or command, ask you in the chat. Never skip it.
+10. Check the space with validate_space.
+11. At the end, list anything it did not build.
 
 To try changes without touching the space you use, the agent passes a scratch space name, such as "draft", to each write tool. Pick that name in Mission's space picker to see it, and pick Main to go back.
 
@@ -56,7 +57,10 @@ If the card's own code stops with an error, the card shows only that error, not 
 ## What runs, and when
 
 - A button runs only when you click it.
-- A data tile or a card runs its script only after you answer Allow on it.
+- A data tile or a card runs its script only after you answer Allow on it. The page asks every 30 s; a section's refresh (30 to 3600 seconds) makes its tiles and cards run their scripts less often.
+- A tile's or card's script is stopped after 10 s. For something slower, have a timer or cron job write the result to a file, and make the tile's script print that file.
+- Scripts run on this computer, and folders and notes read only its paths. For another machine, make the script run ssh with the command there and print the JSON.
+- A button with "terminal": true opens in konsole on Linux and in a console window on Windows. Without konsole, the button says it did not start.
 - Links open http and https addresses. A link to another app (an address whose scheme is in page_schemes, such as obsidian://) shows the address first and opens only when you click Open.
 `;
 

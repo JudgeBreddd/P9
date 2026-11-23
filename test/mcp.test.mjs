@@ -754,3 +754,31 @@ test('Wave 3: log heading/from/lines, col6 and span, base merges a racing save, 
   console.log('PASS wave 3 MCP: 4 log views (heading, tail 2, default 200, missing heading), 4 refused; col6/span 2 kept, span 7 and col7 refused; '
     + 'base merged 2 racing saves, refused a clash naming icon; form edited a registry script, a space button (merge, clash, move, icon), 3 bad bodies refused; preview_card document exact, script not run');
 });
+
+// MC-6, MC-9: add_section's set makes a whole section (icon, widget, buttons, data, cards) in one write, checked as patch_section checks it.
+test('MC-6 MC-9: add_section with set writes a whole section once; a bad button, a picture or a clashing id writes nothing', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const before = await file(instance, SETTINGS.space);
+  // Each refused set leaves the file as it was.
+  assert.equal((await tool('add_section', { title: 'Bad', set: { buttons: [{ id: 'bad-up', title: 'Up', cmd: ['true'], shell: 'rm' }] } })).error, 'invalid-item', 'a field add_button refuses');
+  assert.equal((await tool('add_section', { title: 'Bad', set: { picture: 'x.png' } })).error, 'request-refused', 'picture only from the desktop form');
+  assert.equal((await tool('add_section', { title: 'Bad', set: { id: 'ops' } })).error, 'duplicate-section');
+  assert.match((await tool('add_section', { title: 'Bad', set: { widget: 'nope' } })).detail, /^widget:/);
+  assert.match((await tool('add_section', { title: 'Bad', set: { refresh: 5 } })).detail, /^refresh:/, 'MC-20: under 30 s is refused');
+  assert.equal(await file(instance, SETTINGS.space), before, 'nothing written by a refused add');
+  const made = await tool('add_section', { title: 'Home', place: 'col2', set: { icon: 'house', refresh: 300, buttons: [{ id: 'home-up', title: 'Up', cmd: ['true'] }],
+    data: [{ id: 'home-tile', title: 'Tile', script: 'mark' }], cards: [{ id: 'home-card', title: 'Card', html: 'cards/home.html', script: 'mark' }] } });
+  assert.deepEqual([made.isError, made.action, made.kind], [false, 'added', 'section']);
+  const panel = await tool('add_section', { title: 'Waiting', set: { widget: 'waiting' } });
+  assert.deepEqual([panel.isError, panel.action], [false, 'added'], 'MC-9: a built-in panel in one call');
+  const sections = JSON.parse(await file(instance, SETTINGS.space)).sections;
+  const home = sections.find((entry) => entry.id === 'home');
+  assert.deepEqual([home.place, home.icon, home.refresh, home.buttons.map((b) => b.id), home.data.map((d) => d.id), home.cards.map((c) => c.id)], ['col2', 'house', 300, ['home-up'], ['home-tile'], ['home-card']]);
+  assert.equal(sections.find((entry) => entry.title === 'Waiting').widget, 'waiting');
+  // What /mission shows: the button runs from its section, and refresh reaches the page.
+  const shown = (await call(instance, '/mission')).body;
+  assert.equal(shown.space.find((entry) => entry.id === 'home').refresh, 300);
+  assert.ok(shown.scripts.some((item) => item.id === 'home-up' && item.section === 'home'));
+});

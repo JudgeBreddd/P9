@@ -96,3 +96,19 @@ test('M3 data tiles: nothing runs before Allow; each shape comes back; slow, ove
   assert.ok(!drawn.includes('javascript:') && !drawn.includes('<b>') && drawn.includes('href="https://example.com/a&quot;b"'), drawn);
   assert.ok(linkHtml({ title: 'Docs', url: 'https://example.com/docs' }, esc).includes('<small>example.com</small>'));
 });
+
+// MC-20, MC-8: a section's refresh keeps its tiles' answers that long; a section without one still runs every 30 s; under 30 s drops the section.
+test('MC-20: refresh 300 on a section runs its tile once in 31 s while a default tile runs twice; refresh 10 is a malformed section', { timeout: 90000 }, async (t) => {
+  const instance = await start(t);
+  const space = { sections: [{ id: 'slow-host', title: 'Slow host', refresh: 300, data: [{ id: 'tile-list', title: 'list', script: 'list' }] },
+    { id: 'home', title: 'Home', data: [{ id: 'tile-stat', title: 'stat', script: 'stat' }] },
+    { id: 'fast', title: 'Fast', refresh: 10, data: [{ id: 'tile-rings', title: 'rings', script: 'rings' }] }] };
+  await writeFile(path.join(instance.workspace, SETTINGS.space), JSON.stringify(space));
+  const overview = (await call(instance, '/mission')).body;
+  assert.deepEqual(overview.space.map((section) => [section.id, section.refresh]), [['slow-host', 300], ['home', undefined]]);
+  assert.match(JSON.stringify(overview.invalid), /refresh/, 'refresh 10 is named as the reason');
+  for (const id of ['list', 'stat']) { await allow(instance, id); assert.ok((await tile(instance, id)).body.shape, id); }
+  await new Promise((done) => setTimeout(done, 31000));
+  for (const id of ['list', 'stat']) assert.ok((await tile(instance, id)).body.shape, id);
+  assert.deepEqual([await ran(instance, 'list'), await ran(instance, 'stat')], ['x', 'xx'], 'refresh 300 kept the answer; the default ran again after 30 s');
+});
