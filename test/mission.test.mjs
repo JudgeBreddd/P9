@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, readdir, access, chmod, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { once } from 'node:events';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { parseRegistry } from '../apps/server/mission.mjs';
 
 const hash = (text) => createHash('sha256').update(text).digest('hex');
@@ -493,4 +494,37 @@ test('M6: page_schemes pages need confirm; javascript, file and data are refused
   assert.equal((await call(instance, '/pages/js/launch', 'POST', { confirm: true })).status, 404);
   assert.equal(parseRegistry(JSON.stringify({ pages: [{ id: 'x', title: 'X', url: 'javascript:1' }] }), ['javascript']).pages.length, 0);
   assert.throws(() => parseSettings(JSON.stringify({ ...BUILDER, page_schemes: ['x'] })), 'a one-letter scheme (a Windows drive) is not a scheme');
+});
+
+// O237: a button's window said "not run here yet" for scripts run many times: the daemon kept runs only in memory and never sent
+// a script's last run in the overview. Now each finished run is the script's last run, in the overview, across a restart.
+test('O237 each script\'s last run is in the overview and survives a daemon restart; a broken file reads as none', { timeout: 60000 }, async (t) => {
+  const instance = await start(t, BUILDER, [
+    { id: 'echo', title: 'Echo', group: 'Tools', cmd: [node, '-e', 'console.log("hello from echo")'] },
+    { id: 'fail', title: 'Fail', group: 'Tools', cmd: [node, '-e', 'console.error("broke"); process.exit(3)'] },
+  ]);
+  const scripts = async (at) => Object.fromEntries(JSON.parse((await call(at, '/mission')).text).scripts.map((x) => [x.id, x.last]));
+  assert.deepEqual(await scripts(instance), { echo: undefined, fail: undefined }, 'nothing run yet');
+  const before = Date.now();
+  await finished(instance, JSON.parse((await call(instance, '/scripts/echo/run', 'POST', {})).text).run);
+  await finished(instance, JSON.parse((await call(instance, '/scripts/fail/run', 'POST', {})).text).run);
+  let last;
+  for (let i = 0; i < 100 && !(last = await scripts(instance)).fail; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(last.echo.code, 0); assert.equal(last.fail.code, 3);
+  assert.ok(last.echo.at >= before && last.echo.at <= Date.now(), 'when it started');
+  assert.ok(typeof last.echo.secs === 'number' && last.echo.secs >= 0);
+  assert.match(last.echo.tail, /hello from echo[\s\S]*\[exit 0 in/); assert.match(last.fail.tail, /broke[\s\S]*\[exit 3 in/);
+  assert.deepEqual(await scripts(instance), last, 'a second poll answers the same');
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  assert.deepEqual(await scripts(second), last, 'a fresh daemon on the same settings folder still has both last runs');
+  second.child.kill('SIGTERM'); await once(second.child, 'exit');
+  await writeFile(path.join(instance.directory, 'mission-runs.json'), '[1, 2');
+  const third = await restart(t, instance, 'state-3');
+  assert.deepEqual(await scripts(third), { echo: undefined, fail: undefined }, 'a broken file reads as no last runs');
+  await finished(third, JSON.parse((await call(third, '/scripts/echo/run', 'POST', {})).text).run);
+  for (let i = 0; i < 100 && !(last = await scripts(third)).echo; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(last.echo.code, 0, 'and the next run is recorded over it');
+  assert.equal(JSON.parse(await readFile(path.join(instance.directory, 'mission-runs.json'), 'utf8')).echo.code, 0);
+  console.log('PASS O237: last run per script in the overview, kept across a restart, broken file = none');
 });

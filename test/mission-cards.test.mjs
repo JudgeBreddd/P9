@@ -507,3 +507,42 @@ test('O152 an open Mission section or Usage window keeps its nodes and focus acr
   assert.equal(await page.evaluate(() => window.__win.isConnected), true, 'the Usage window kept its panel node');
   console.log('PASS O152: an open Mission section or Usage window keeps its nodes and focus across a redraw');
 });
+
+// O237 (screen): a button's window showed "not run here yet" after every overview poll. Now it shows the last run's time, exit
+// code and output end, after the window is reopened and after the overview is read again.
+test('O237 a button window shows its last run after a reopen and a redraw', { timeout: 120000 }, async (t) => {
+  let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, 9); } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  const kind = page.locator('#mdlBody .review .kind');
+  const openPlain = async () => {
+    await page.click('#fMission [data-group="Home"]');
+    const plain = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Plain row' });
+    await plain.waitFor({ timeout: 10000 }); await plain.click();
+    await page.locator('#mdlFoot [data-run]').waitFor({ timeout: 10000 });
+  };
+  await openPlain();
+  assert.match(await kind.innerText(), /not run here yet/i, 'never run');
+  await page.click('#mdlFoot [data-run]');
+  await page.locator('#mdlBody .out', { hasText: '[exit 0' }).waitFor({ timeout: 15000 });
+  await kind.filter({ hasText: 'exit 0' }).waitFor({ timeout: 10000 }); // the open window, once the overview has the run
+  await page.keyboard.press('Escape');
+  await openPlain();
+  assert.match(await kind.innerText(), /, exit 0 · \d+(\.\d)? s/i, 'reopened: the last run, not "not run here yet"');
+  assert.match(await page.locator('#mdlBody [data-last-tail]').innerText(), /plain[\s\S]*\[exit 0 in/, 'and the end of its output');
+  await page.keyboard.press('Escape');
+  // A redraw: the space changes on disk and the rail's Mission button reads the overview again.
+  await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [{ ...space().sections[0], text: 'Custom cards, read again.' }] }));
+  await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+  await page.locator('#fMission', { hasText: 'Custom cards, read again.' }).waitFor({ timeout: 10000 }).catch(() => {});
+  await openPlain();
+  assert.match(await kind.innerText(), /, exit 0 · /i, 'after the overview is read again');
+  console.log('PASS O237 screen: the button window keeps its last run across a reopen and a redraw');
+});

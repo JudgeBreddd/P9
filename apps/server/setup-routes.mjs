@@ -110,7 +110,7 @@ export function setupRoutes(outer) {
     if (!outer.settings) {
       outer.settings = disk.parsed ?? paths;
       outer.settingsInvalid = false;
-      outer.server.mission = outer.mission = createMission({ workspace: outer.workspace, recovery: outer.recovery, settings: outer.settings, instance: outer.instance, lifecycle: outer.lifecycle, allowed: outer.allowed, drafts: outer.drafts, loose: outer.loose });
+      outer.server.mission = outer.mission = createMission({ workspace: outer.workspace, recovery: outer.recovery, settings: outer.settings, instance: outer.instance, lifecycle: outer.lifecycle, allowed: outer.allowed, drafts: outer.drafts, lastRuns: outer.lastRuns, loose: outer.loose });
     }
     return c.json({ created, settings: true }, 201);
   });
