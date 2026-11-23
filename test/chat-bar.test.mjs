@@ -634,15 +634,15 @@ test('N6-2: a Default effort row drawn again while its save is out shows the sav
   await until(async () => (await call(instance, '/start-defaults')).claude.model === 'haiku', 'the model saved');
   await app.evaluate(({ ipcMain }) => {
     const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
-    ipcMain.handle('p9:chat', async (e, ...args) => { const r = await h(e, ...args); if (args[0] !== 'newChatDefaults' || !args[1]?.set?.claude?.effort) return r;
-      await new Promise((resolve) => { globalThis.n62release = resolve; }); return r; });
+    // N6-2b review: held before the daemon applies it, so no read can show it early (with rev a read made meanwhile is kept).
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] === 'newChatDefaults' && args[1]?.set?.claude?.effort) await new Promise((resolve) => { globalThis.n62release = resolve; });
+      return h(e, ...args); });
   });
   await page.selectOption('[data-default-effort="claude"]', 'high');
   await until(async () => app.evaluate(() => !!globalThis.n62release), 'the effort save held in main');
-  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', 'the daemon has it; only its answer is held');
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, '', 'the save is held before the daemon has it');
   await page.click('#setClose'); await open();
-  // N6-2b: a read answered while the save is out is kept by the daemon's rev, so the reopened row may already show the save.
-  assert.ok(['', 'high'].includes(await page.locator('[data-default-effort="claude"]').inputValue()), 'drawn from what was kept, before or with the save');
+  assert.equal(await page.locator('[data-default-effort="claude"]').inputValue(), '', 'drawn from what was kept before the save');
   // The page's lists loop (chat-view.mjs lists) redraws the rows once more when it ends, which would hide the bug: wait until the
   // daemon reads none of them, then wait out the loop's 1.5 s pause and its last ask, so only the save's answer can draw the row.
   await until(async () => !Object.values((await call(instance, '/chat?lists=fresh')).lists || {}).some(l => l?.state === 'loading'), 'the lists read', 30000);
