@@ -239,3 +239,47 @@ test('MC-15 a same-size edit git must re-read because the index is no newer than
   assert.deepEqual(out.map((d) => path.basename(d.path)), ['a.txt']);
   assert.match(JSON.stringify(out[0]), /TWO/);
 });
+
+// O241: a .git that is a file (a linked worktree, a submodule) is followed as one checked path. Each good one lists a shell
+// edit; a pointer with a second line, one to a missing folder, one with no back-link add nothing; a filter set in the
+// pointed (common) folder's config runs nothing (its marker stays absent) and the file is listed as it is on disk.
+test('O241 a linked worktree and a submodule list shell edits; a bad .git file adds nothing and runs nothing', { timeout: 60000 }, async (t) => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'o241-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const init = (dir) => { sh(dir, 'init', '-q'); sh(dir, 'config', 'user.email', 't@example.invalid'); sh(dir, 'config', 'user.name', 't'); };
+  const main = path.join(base, 'main'); await mkdir(main); init(main);
+  await writeFile(path.join(main, 'a.txt'), 'one\n'); await writeFile(path.join(main, '.gitattributes'), '*.f filter=evil\n'); await writeFile(path.join(main, 'x.f'), 'f\n');
+  sh(main, 'add', '-A'); sh(main, 'commit', '-qm', 'start');
+  const wt = path.join(base, 'wt'); sh(main, 'worktree', 'add', '-q', wt);
+  const listed = async (dir, file, text) => {
+    const from = await shellStart(dir); if (!from) return null;
+    await writeFile(path.join(dir, file), text);
+    return (await shellEnd(from, dir))?.map((d) => path.basename(d.path)) ?? null;
+  };
+  assert.deepEqual(await listed(wt, 'a.txt', 'one\nwt\n'), ['a.txt'], 'a linked worktree lists its shell edit');
+  // A submodule: the superproject keeps its git folder under .git/modules/.
+  const sup = path.join(base, 'sup'); await mkdir(sup); init(sup);
+  await writeFile(path.join(sup, 'r.txt'), 'r\n'); sh(sup, 'add', '-A'); sh(sup, 'commit', '-qm', 'start');
+  execFileSync(realGit, ['-C', sup, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', main, 'sub'], { encoding: 'utf8' });
+  const sub = path.join(sup, 'sub');
+  assert.match(await readFile(path.join(sub, '.git'), 'utf8'), /^gitdir: /, 'the submodule has a .git file');
+  assert.deepEqual(await listed(sub, 'a.txt', 'one\nsub\n'), ['a.txt'], 'a submodule lists its shell edit');
+  // A filter configured in the common folder never runs; the file is listed as it is on disk.
+  const marker = path.join(base, 'marker'), evil = path.join(base, 'evil.sh');
+  await writeFile(evil, `#!/bin/sh\necho ran >> '${marker}'\ncat\n`); await chmod(evil, 0o755);
+  sh(wt, 'config', 'filter.evil.clean', evil);
+  assert.deepEqual(await listed(wt, 'x.f', 'f\nchanged\n'), ['x.f'], 'a filtered file is still listed');
+  await assert.rejects(stat(marker), 'the configured filter never ran');
+  // Bad pointers: each a copy of the worktree with its .git file rewritten.
+  const bad = async (name, text, setup) => {
+    const dir = path.join(base, name); await mkdir(dir); await writeFile(path.join(dir, 'a.txt'), 'one\n');
+    await writeFile(path.join(dir, '.git'), typeof text === 'function' ? await text(dir) : text); await setup?.(dir);
+    assert.equal(await shellStart(dir), null, name + ' adds nothing');
+  };
+  const wtGit = (await readFile(path.join(wt, '.git'), 'utf8')).trim().slice('gitdir: '.length);
+  await bad('newline', `gitdir: ${wtGit}\ngitdir: ${wtGit}\n`);
+  await bad('missing', `gitdir: ${path.join(base, 'nowhere')}\n`);
+  await bad('no-backlink', `gitdir: ${wtGit}\n`); // the worktree folder's gitdir names wt/.git, not this file
+  await bad('not-modules', async (dir) => { await mkdir(path.join(dir, 'g')); await writeFile(path.join(dir, 'g', 'HEAD'), 'ref: refs/heads/x\n'); return 'gitdir: g\n'; });
+  await assert.rejects(stat(marker), 'nothing ran for any of them');
+});

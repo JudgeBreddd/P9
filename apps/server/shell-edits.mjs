@@ -6,7 +6,7 @@
 // A folder outside git, git missing, or a step past its time gives null: nothing is added and the turn ends as before.
 // Only the chat's folder is read and listed (add -- ., diff --relative), never the rest of a larger repo it sits in.
 // No program the repo configures runs, and nothing the repo's config or files say reaches git's arguments or environment.
-// The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git folder.
+// The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git (O241: a file too).
 // Every git call (add, write-tree, diff) runs with GIT_DIR set to a private folder made for that snapshot: HEAD, refs and
 // a config of our own (constant), with system and global config off. From the repo it gets only paths built here (its
 // working tree, .git/objects) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
@@ -18,12 +18,13 @@
 // ponytail: .gitignore'd files are not seen (build output, mostly what a user would not want listed either).
 // ponytail: files are stored as they are on disk, never through a filter (git-lfs's pointer files show as the real content).
 // ponytail: a split index (core.splitIndex) cannot be read from its copy, so such a repo adds nothing.
-// ponytail: a .git that is a file (a linked worktree, a submodule) or a sha256 repo adds nothing: following the file, or
-// reading the repo's object format, would take a value from the repo.
+// O241: a .git that is a file (a linked worktree, a submodule) is followed as one checked path, never as a git argument or
+// setting (pointed below): its index is copied from the folder it names, info/exclude and objects come from the common one.
+// ponytail: a sha256 repo adds nothing: reading the repo's object format would take a value from the repo.
 // ponytail: the repo's own core settings (filemode, ignorecase, autocrlf) and a global core.excludesFile are not used;
 // git's defaults are, and its default global ignore file (~/.config/git/ignore).
 import { execFile } from 'node:child_process';
-import { copyFile, lstat, mkdir, mkdtemp, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -45,14 +46,43 @@ const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quote
 }).then((r) => r.stdout);
 const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 
-// The private git folder for the repo the chat's folder is in (the throw: none, or its .git is not a folder). git(args)
+// O241: the folders a .git FILE leads to, each checked, or the throw (the repo then adds nothing, as before). The file and
+// commondir: a regular file (not a link) of at most 1 KB, one line, no control characters. Each folder: real path, a folder
+// owned by this user. A linked worktree's folder must name this .git file back (its gitdir file, git's own back-link) and
+// names the common folder in commondir; a submodule's has no commondir and sits under a superproject's .git/modules/.
+const ONE_LINE = /^([^\x00-\x1f\x7f]+)\n?$/;
+async function line(file, st, prefix = '') {
+  st ??= await lstat(file);
+  if (!st.isFile() || st.size > 1024) throw new Error('not a small file');
+  const m = ONE_LINE.exec(await readFile(file, 'utf8'));
+  if (!m || !m[1].startsWith(prefix) || !m[1].slice(prefix.length)) throw new Error('not one line');
+  return m[1].slice(prefix.length);
+}
+async function folder(from, rel) {
+  const at = await realpath(path.resolve(from, rel)), st = await stat(at), uid = process.getuid?.();
+  if (!st.isDirectory() || (uid !== undefined && st.uid !== uid)) throw new Error('not our folder');
+  return at;
+}
+async function pointed(file, st) {
+  const dot = await folder(path.dirname(file), await line(file, st, 'gitdir: '));
+  const back = await line(path.join(dot, 'gitdir')).catch(keep), cd = await line(path.join(dot, 'commondir')).catch(keep);
+  if (cd !== undefined) {
+    if (back === undefined || await realpath(path.resolve(dot, back)).catch(() => null) !== await realpath(file)) throw new Error('no back-link');
+    return { dot, common: await folder(dot, cd) };
+  }
+  const parts = dot.split(path.sep);
+  if (!parts.some((x, i) => x === 'modules' && parts[i - 1] === '.git')) throw new Error('not a submodule');
+  return { dot, common: dot };
+}
+
+// The private git folder for the repo the chat's folder is in (the throw: none, or a .git file that fails pointed's checks). git(args)
 // runs there from the chat's folder; here: that folder's real path; done() removes the private folder.
 async function box(cwd, deadline) {
   const here = await realpath(cwd);
   let top = here, st;
   while (!(st = await lstat(path.join(top, '.git')).catch(keep))) { if (path.dirname(top) === top) throw new Error('not in git'); top = path.dirname(top); }
-  if (!st.isDirectory()) throw new Error('.git is not a folder');
-  const dot = path.join(top, '.git'), dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
+  const { dot, common } = st.isDirectory() ? { dot: path.join(top, '.git'), common: path.join(top, '.git') } : await pointed(path.join(top, '.git'), st);
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shell-'));
   try {
     await mkdir(path.join(dir, 'refs')); await mkdir(path.join(dir, 'info'));
     await writeFile(path.join(dir, 'HEAD'), 'ref: refs/heads/p9\n');
@@ -62,9 +92,9 @@ async function box(cwd, deadline) {
     // index, at the same size, is still read (with the copy's later time it was taken as unchanged).
     const ix = path.join(dot, 'index'), at = await stat(ix).catch(keep); // a fresh repo has none yet
     if (at) await copyFile(ix, path.join(dir, 'index')).then(() => utimes(path.join(dir, 'index'), at.atime, at.mtime)).catch(keep);
-    await copyFile(path.join(dot, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
+    await copyFile(path.join(common, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const p = { dir, top, objects: path.join(dot, 'objects') };
+  const p = { dir, top, objects: path.join(common, 'objects') };
   return { here, git: (args) => git(here, args, deadline, p), done: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
 }
 
