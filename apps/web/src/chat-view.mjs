@@ -1172,15 +1172,19 @@ async function loadChat() {
   const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
-  // Each poll's events are one batch and settle together, as the loop's do: a stop in a later poll is not applied before an
-  // earlier turn end sends the queue.
+  // Review rounds 2-3: every buffered event applies first, so a send uses the chat's mode as it is now; then at most one
+  // queued message goes (one turn end, or the launch drain, s.drain), and none to a chat stopped meanwhile, which the
+  // daemon would resume.
   const behind = (s, evs) => {
-    if (s.behind) return void s.behind.push(evs);
-    s.behind = [evs];
+    if (s.behind) return void s.behind.push(...evs);
+    s.behind = [...evs];
     history(s, evs[0].cursor - 1).then(() => {
-      const batches = s.behind || []; s.behind = null;
-      for (const b of batches) { const ended = [], answered_ = []; for (const e of b) take(e, ended, answered_); settle(ended, answered_); }
-      if (s.drain) { s.drain = false; if (s.state === 'running' && s.queue.length) turnEnd(s); }
+      const buffered = s.behind || [], ended = [], answered_ = [], drain = s.drain; s.behind = null; s.drain = false;
+      for (const e of buffered) take(e, ended, answered_);
+      const gone = ['stopped', 'stopping', 'moved', 'moving'].includes(s.state), end = ended.length ? [ended.at(-1)] : [];
+      if (gone) for (const x of end) finished(x);
+      settle(gone ? [] : end, answered_);
+      if (drain && !end.length && s.state === 'running' && s.queue.length) turnEnd(s);
       try { outer.renderTabs(); renderChats(new Set([s.id])); } catch (e) { console.error('chat paint', e); }
     }, (e) => console.error('chat history', e));
   };
