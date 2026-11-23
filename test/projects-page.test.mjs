@@ -1176,6 +1176,22 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   assert.deepEqual([w.work, await lead.locator('.sv-ring b').textContent(), await page.locator('.sv-ring.big svg').evaluate((el) => el.getBoundingClientRect().width)], [{ done: 0, total: 2, next: 'A1: draw the page; role lead' }, '0/2', 76]);
   // Work Queue row: with no item taken, the row names the next one (the first neither passed nor merged).
   assert.equal(await lead.locator('.sv-item').textContent(), 'Next: A1: draw the page; role lead');
+  // I3 worker window: Model or effort under the lead's row. Pressing Send with nothing changed sends nothing; another effort
+  // than the one it runs on goes to the chat as a queued message of the owner's, and its next turn runs on it (the status answer says so).
+  const li = page.locator(`.sv li[data-key="${run.sprint}"]`), form = li.locator('[data-sv-repick]');
+  assert.equal(await form.isVisible(), false);
+  await li.locator('[data-sv-pick]').click();
+  await li.locator('[data-sv-apply]').click();
+  assert.equal(await li.locator('[data-sv-said]').textContent(), 'Pick another model or effort first.');
+  const eff = w.effort === 'low' ? 'medium' : 'low'; // not the one it runs on (the lead's row starts it on high)
+  await li.locator('[data-sv-r="effort"]').selectOption(eff);
+  await form.evaluate((f) => { f.dataset.old = '1'; }); // the pick and the open form stay through the 5 s redraw
+  await until(async () => (await li.locator('[data-sv-repick][data-old]').count()) === 0, 'the Sprint View never redrew', 12000);
+  assert.deepEqual([await form.isVisible(), await li.locator('[data-sv-r="effort"]').inputValue()], [true, eff], 'the redraw lost the open form or the pick');
+  await li.locator('[data-sv-apply]').click();
+  await until(async () => new RegExp(`^Sent: .*${eff} from its next turn\\.$`).test(await li.locator('[data-sv-said]').textContent()), async () => 'said: ' + await li.locator('[data-sv-said]').textContent());
+  await until(async () => (await call(instance, `/sprints/${run.sprint}/status`)).workers[0].effort === eff, 'the lead never ran on the new effort', 20000);
+  assert.ok((await call(instance, '/chat/events?after=0&only=' + run.sprint)).events.some((e) => e.type === 'user' && /changed by the owner in the Sprint View/.test(e.data?.text ?? JSON.stringify(e.data))), 'the message went to the chat');
   // The Setup parts are still below: the roles and the files.
   assert.deepEqual([await page.locator('[data-role-row]').count() > 0, await page.locator('[data-pj="spfile"]').count() > 0, (await page.locator('[data-pj="spstart"]').textContent()).trim()], [true, true, 'Start again']);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view ' + (await page.screenshot({ type: 'png' })).toString('base64'));
