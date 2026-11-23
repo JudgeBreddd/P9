@@ -1192,6 +1192,20 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   await until(async () => new RegExp(`^Sent: .*${eff} from its next turn\\.$`).test(await li.locator('[data-sv-rsaid]').textContent()), async () => 'said: ' + await li.locator('[data-sv-rsaid]').textContent());
   await until(async () => (await call(instance, `/sprints/${run.sprint}/status`)).workers[0].effort === eff, 'the lead never ran on the new effort', 20000);
   assert.ok((await call(instance, '/chat/events?after=0&only=' + run.sprint)).events.some((e) => e.type === 'user' && /changed by the owner in the Sprint View/.test(e.data?.text ?? JSON.stringify(e.data))), 'the message went to the chat');
+  // I3 Details: really not shown until pressed (the page's CSS included, not only the hidden attribute), shown after a
+  // press and through the 5 s redraw, and gone again after a second press and through the next redraw.
+  const lookBtn = li.locator('[data-sv-lookbtn]'), look = li.locator('[data-sv-look]');
+  const redraw = async () => { await look.evaluate((f) => { f.dataset.old = '1'; }); await until(async () => (await li.locator('[data-sv-look][data-old]').count()) === 0, 'the Sprint View never redrew', 12000); };
+  const seen = async () => [await lookBtn.getAttribute('aria-expanded'), await look.isVisible()];
+  assert.deepEqual(await seen(), ['false', false], 'Details shows before it is pressed');
+  await lookBtn.click();
+  assert.deepEqual(await seen(), ['true', true], 'Details did not open');
+  await redraw();
+  assert.deepEqual(await seen(), ['true', true], 'the redraw shut Details');
+  await lookBtn.click();
+  assert.deepEqual(await seen(), ['false', false], 'a second press did not shut Details');
+  await redraw();
+  assert.deepEqual(await seen(), ['false', false], 'the redraw opened Details again');
   // The Setup parts are still below: the roles and the files.
   assert.deepEqual([await page.locator('[data-role-row]').count() > 0, await page.locator('[data-pj="spfile"]').count() > 0, (await page.locator('[data-pj="spstart"]').textContent()).trim()], [true, true, 'Start again']);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sprint-view ' + (await page.screenshot({ type: 'png' })).toString('base64'));
