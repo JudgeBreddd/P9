@@ -382,6 +382,9 @@ test('A2 step 1: a failed load of the attach code says so, keeps the draft, and 
   await page.locator('#toasts .toast', { hasText: 'Could not load attaching; nothing was attached. Try again.' }).waitFor({ timeout: 15000 });
   assert.equal(await pane.locator('.attach').count(), 0, 'nothing attached');
   assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is kept');
+  // The toast pops up over the paperclip, and hovering holds it: move off, and let it fade before the next attach.
+  await page.mouse.move(0, 0);
+  await page.locator('#toasts .toast').first().waitFor({ state: 'detached', timeout: 20000 });
   await pick();
   await pane.locator('.attach .att-file', { hasText: 'notes.txt' }).waitFor({ timeout: 10000 });
   assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is still there');
