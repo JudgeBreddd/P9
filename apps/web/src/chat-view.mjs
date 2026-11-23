@@ -1169,7 +1169,9 @@ async function loadChat() {
     if (closed) { closed.hidden = true; untab(closed.id); }
   };
   // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // Review round 4: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends nothing:
+  // s.working is that newer turn, and a queued message sent now would steer into it. It goes when that turn ends.
+  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); if (!s.working) turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so a send uses the chat's mode as it is now; then at most one
