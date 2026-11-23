@@ -1146,7 +1146,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // The chats it started first, deepest last in the list, so they end before the one that would restart them.
     const all = [...below(found.family, args.chat).reverse(), args.chat], stopped = [];
     for (const id of all) {
-      const result = args.close ? await chat.stop(id) : await chat.cancel(id);
+      const result = args.close ? await chat.stop(id) : await chat.cancel(id, `stop_chat from another chat's agent, "${String(chat.info(caller)?.title ?? 'a chat').replace(/[\[\]"\n\r]/g, ' ').slice(0, 80)}" (chat ${caller})`);
       if (result.status === 200) stopped.push(id);
       else if (args.close) return { error: 'stop-failed', chat: id, stopped };
     }

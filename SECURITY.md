@@ -858,6 +858,12 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   agent's text in such a prompt, P9 changes `[P9:` to `[P9 (quoted):`, so that text cannot pass
   as one of P9's lines. A different mode and another chat's question still each get a turn of
   their own.
+- **What cut a call short (O231).** The agent's command-line tool ends any call it cuts short with
+  words saying the user wants it to stop and wait. Your Stop is the only cut that is yours. So a
+  message steered into a running turn carries a P9 line saying that it, not you, cut a call
+  short; and after P9 cut a turn itself (a restart, or another chat's `stop_chat`), the chat's next
+  prompt carries a line naming what cut it, once. Your own Stop adds no line. Like the sender
+  line, it is a label, not a control.
 - **After a restart.** P9 resends nothing a restart cut off. When P9 starts and finds that a
   restart stopped a chat of a sprint in the middle of a turn, it sends one line to the chat at the
   top of that sprint, `[p9] P9 restarted. Interrupted mid-turn: <titles>. Not resent.`, which
