@@ -2067,8 +2067,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.
     answering: (id) => !!live.get(id)?.solo,
     // A note for chat id from the chat `from` (notes, above). A running turn that cannot take it now leaves it parked.
-    async note(id, text, from) {
+    // title: the sender's name shown in the chat window, for a sender that is not a chat (the owner's note, server.mjs).
+    async note(id, text, from, title) {
       const body = { text };
+      if (title) titles.set(body, title);
       waitingFor(id); // FIX1 (#241): notes kept over a restart are numbered first, so a new one sorts after them
       notes.set(body, noteCount += 1);
       const result = await api.prompt(id, body, undefined, from);

@@ -122,6 +122,9 @@
 .ppage .sv-look{display:grid;gap:8px;padding:8px 0 12px}
 .ppage .sv-look[hidden]{display:none}
 .ppage .sv-look h4{margin:4px 0 0;font-size:12px}
+.ppage .sv-acts{display:grid;gap:6px}
+.ppage .sv-acts textarea{width:100%;resize:vertical}
+.ppage .sv-btns{display:flex;flex-wrap:wrap;gap:6px}
 .ppage .sv-pre{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;padding:8px;border-radius:calc(var(--radius) - 4px);background:color-mix(in oklch,var(--foreground) 6%,transparent)}
 .ppage .sv-main{display:flex;flex-direction:column;min-width:0}
 .ppage .sv-main b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
