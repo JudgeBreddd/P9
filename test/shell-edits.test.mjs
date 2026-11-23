@@ -14,12 +14,13 @@ const sh = (cwd, ...args) => execFileSync(realGit, ['-C', cwd, ...args], { encod
 
 // proj: a repo with a commit, plus predirty.txt and dirty.txt changed before any turn. plain: a folder outside git.
 // hooked: a repo whose post-index-change hook, fsmonitor and *.tc textconv run the evil script; filtered: one whose
-// filter (clean, smudge) does. The evil script notes each run in its marker file.
+// filter (clean, smudge) does; late: one whose files ask for that filter (f.txt changed before any turn) with no filter
+// configured yet, so a test can set one while a snapshot runs. The evil script notes each run in its marker file.
 // outer: the workspace and the folder above it are in one repo (sib.txt in the workspace, outside.txt above it), so plain is
 // a subfolder of a larger repo.
 // A git on PATH that waits the seconds in its folder's "sleep" file before "add" (the snapshot's slow step).
 async function start(t, { outer = false } = {}) {
-  let bin, marker;
+  let bin, marker, late;
   const instance = await daemon(t, undefined, outer, async ({ workspace }) => {
     const proj = path.join(workspace, 'proj');
     await mkdir(proj); await mkdir(path.join(workspace, 'plain'));
@@ -34,7 +35,8 @@ async function start(t, { outer = false } = {}) {
     // One script per program, each writing its own name to the marker (and passing its input through).
     const evil = async (name) => { const f = path.join(evilDir, name); await writeFile(f, `#!/bin/sh\necho ${name} >> '${marker}'\ncat "$@" 2>/dev/null\n`); await chmod(f, 0o755); return f; };
     const hooked = path.join(workspace, 'hooked'), filtered = path.join(workspace, 'filtered');
-    for (const [dir, files] of [[hooked, [['a.tc', 'tc\n'], ['.gitattributes', '*.tc diff=evil\n']]], [filtered, [['f.txt', 'f\n'], ['.gitattributes', '* filter=evil\n']]]]) {
+    late = path.join(workspace, 'late');
+    for (const [dir, files] of [[hooked, [['a.tc', 'tc\n'], ['.gitattributes', '*.tc diff=evil\n']]], ...[filtered, late].map((d) => [d, [['f.txt', 'f\n'], ['.gitattributes', '* filter=evil\n']]])]) {
       await mkdir(dir); sh(dir, 'init', '-q'); sh(dir, 'config', 'user.email', 't@example.invalid'); sh(dir, 'config', 'user.name', 't');
       for (const [f, text] of files) await writeFile(path.join(dir, f), text);
       sh(dir, 'add', '-A'); sh(dir, 'commit', '-qm', 'start');
@@ -42,6 +44,7 @@ async function start(t, { outer = false } = {}) {
     sh(hooked, 'config', 'core.fsmonitor', await evil('fsmonitor')); sh(hooked, 'config', 'diff.evil.textconv', await evil('textconv'));
     await writeFile(path.join(hooked, '.git/hooks/post-index-change'), `#!/bin/sh\nexec '${await evil('hook')}'\n`); await chmod(path.join(hooked, '.git/hooks/post-index-change'), 0o755);
     sh(filtered, 'config', 'filter.evil.clean', await evil('filter-clean')); sh(filtered, 'config', 'filter.evil.smudge', await evil('filter-smudge'));
+    await writeFile(path.join(late, 'f.txt'), 'changed before the turn\n'); await evil('late-clean');
     if (outer) {
       const top = path.join(workspace, '..');
       await writeFile(path.join(top, 'outside.txt'), 'out\n'); await writeFile(path.join(workspace, 'sib.txt'), 'sib\n');
@@ -61,7 +64,7 @@ async function start(t, { outer = false } = {}) {
   const ended = async (id, n) => { for (const end = Date.now() + 30000; Date.now() < end; await new Promise((r) => setTimeout(r, 200))) { const all = await events(id); if (all.filter((e) => e.type === 'turn-end').length >= n) return all; } assert.fail('no turn-end'); };
   const chat = async (folder) => (await call('/chat', 'POST', { provider: 'claude', folder })).conversation;
   const shells = (all) => all.filter((e) => e.type === 'update' && e.data.title === 'Shell edits');
-  return { call, ended, chat, shells, bin, marker };
+  return { call, ended, chat, shells, bin, marker, late };
 }
 
 test('MC-15 a turn\'s shell edits come as one Shell edits call: changed, new, deleted, moved, binary; not the edit calls\' own files', { timeout: 90000 }, async (t) => {
@@ -140,7 +143,7 @@ test('MC-15 a slow snapshot is given up after its limit, and a Stop while it run
   assert.ok(!last.some((e) => e.type === 'update' && e.data.sessionUpdate === 'agent_message_chunk'), 'the agent got no prompt');
 });
 
-test('MC-15 no program the repo configures runs: hook, fsmonitor, textconv; a repo with a filter is skipped', { timeout: 90000 }, async (t) => {
+test('MC-15 no program the repo configures runs: hook, fsmonitor, textconv, filter', { timeout: 90000 }, async (t) => {
   const { call, ended, chat, shells, marker } = await start(t);
   const id = await chat('hooked');
   await call('/chat/' + id + '/prompt', 'POST', { text: 'shell tc' });
@@ -154,8 +157,24 @@ test('MC-15 no program the repo configures runs: hook, fsmonitor, textconv; a re
   await call('/chat/' + f + '/prompt', 'POST', { text: 'shell many' });
   const out = await ended(f, 1);
   assert.equal(await ran(), '', 'no filter ran');
-  assert.equal(shells(out).length, 0, 'a filter is configured: no snapshot, nothing added');
+  assert.equal(shells(out).length, 1, 'a repo with a filter is listed, its files as they are on disk');
   assert.ok(!out.some((e) => e.type === 'error'), 'and no error');
+});
+
+// A filter set while a snapshot runs (held before its add by the slow git) still does not run: the snapshot's git never
+// reads the repo's config for programs, so there is no check-then-run gap. f.txt, changed before the turn, is hashed by
+// the turn start's add, which on the old code ran the clean filter set in the gap.
+test('MC-15 a filter set in the repo while a snapshot runs does not run', { timeout: 90000 }, async (t) => {
+  const { call, ended, chat, shells, bin, marker, late } = await start(t);
+  const id = await chat('late');
+  await call('/chat/' + id + '/prompt', 'POST', { text: 'hello' }); await ended(id, 1); // the session is up
+  await writeFile(path.join(bin, 'sleep'), '1.5');
+  await call('/chat/' + id + '/prompt', 'POST', { text: 'shell many' });
+  await new Promise((r) => setTimeout(r, 500)); // the start snapshot is held before its add
+  sh(late, 'config', 'filter.evil.clean', path.join(marker, '..', 'late-clean'));
+  const all = await ended(id, 2);
+  assert.equal(await readFile(marker, 'utf8').catch(() => ''), '', 'the filter set during the snapshot did not run');
+  assert.equal(shells(all).length, 1, 'the turn\'s files are listed');
 });
 
 test('MC-15 a chat folder inside a larger repo: files changed outside the folder are never listed or read', { timeout: 90000 }, async (t) => {
