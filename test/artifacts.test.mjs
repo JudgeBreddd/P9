@@ -480,16 +480,26 @@ test('MC-13 MC-14 the Changes tab counts lines over a file\'s writes and says Cr
   assert.match(await (await frame()).locator('pre').textContent(), /@@ Edit 1 of 2 @@[\s\S]*@@ Edit 2 of 2 @@/, 'the diff view steps through both writes');
 });
 
-// MC-13: the list is a chunk loaded on the panel's first open; when that load fails the panel says so, and the next open loads it.
+// MC-13: the list is a chunk loaded on the panel's first open. A load that fails after another panel took the side leaves
+// that panel alone (Reviewer, #495); one that fails while the list is shown says so, and the next open loads it.
 test('MC-13 a Changes list that failed to load comes back on the next open', { timeout: 120000 }, async (t) => {
-  const { page, show, app } = await chatDesktop(t, [['mc13 writes', 'mc13 done']]);
-  // The window loads over p9://, which page.route does not see; the main process's session can cancel it.
-  const block = on => app.evaluate(({ session }, on) => session.defaultSession.webRequest.onBeforeRequest(on ? (d, cb) => cb({ cancel: /\/chat-files[^/]*\.js(\?|$)/.test(d.url) }) : null), on);
-  await block(true);
+  const { page, show, app } = await chatDesktop(t, [['mc13 writes', 'mc13 done'], [`Here:\n${F}markdown artifact Held one\n# Kept\n${F}`, 'echo:Here']]);
+  // The window loads over p9://, which page.route does not see; the main process's session can hold or cancel the chunk.
+  const block = mode => app.evaluate(({ session }, mode) => { globalThis.mc13Held = null; session.defaultSession.webRequest.onBeforeRequest(mode ? (d, cb) => !/\/chat-files[^/]*\.js(\?|$)/.test(d.url) ? cb({}) : mode === 'hold' ? globalThis.mc13Held = cb : cb({ cancel: true }) : null); }, mode);
   const { button } = await show();
+  await block('hold');
+  await button.click();
+  await app.evaluate(() => new Promise(r => { const t0 = Date.now(), go = () => globalThis.mc13Held || Date.now() - t0 > 8000 ? r() : setTimeout(go, 50); go(); }));
+  await page.locator('#chats .artifact-chip[data-title="Held one"]').first().click();
+  await page.locator('#side .art-bar .art-title', { hasText: 'Held one' }).waitFor({ timeout: 8000 });
+  assert.equal(await app.evaluate(() => { const cb = globalThis.mc13Held; if (cb) cb({ cancel: true }); return Boolean(cb); }), true, 'the chunk was held until the artifact took the side');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#side', { hasText: 'could not be loaded' }).count(), 0, 'the failed load leaves the artifact panel alone');
+  await page.locator('#side .art-bar .art-title', { hasText: 'Held one' }).waitFor({ timeout: 2000 });
+  await block('fail');
   await button.click();
   await page.locator('#side', { hasText: 'The list could not be loaded. Open it again to retry.' }).waitFor({ timeout: 8000 });
-  await block(false);
+  await block(null);
   await page.locator('#side [data-side-close]').click();
   await button.click();
   await page.locator('#side .cf-tabs [role=tab]').first().waitFor({ timeout: 8000 });

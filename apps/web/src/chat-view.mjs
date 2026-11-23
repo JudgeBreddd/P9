@@ -126,7 +126,7 @@ function openNotes(s) {
 const CFM = {};
 function renderChatFiles() {
   if (outer.side.current()?.slot !== 'chat-files') return;
-  if (!CFM.render) { CFM.load ??= import('./chat-files.mjs').then(m => { CFM.render = m.render; renderChatFiles(); }, () => { CFM.load = null; outer.side.body.textContent = 'The list could not be loaded. Open it again to retry.'; }); return; }
+  if (!CFM.render) { CFM.load ??= import('./chat-files.mjs').then(m => { CFM.render = m.render; renderChatFiles(); }, () => { CFM.load = null; if (outer.side.current()?.slot === 'chat-files') outer.side.body.textContent = 'The list could not be loaded. Open it again to retry.'; }); return; }
   const s = outer.S.sessions.find(x => x.id === CF.sid);
   CFM.render({ outer, CF, s, all: s ? chatItems(s) : [], GH, cfKey, openArtifact, again: renderChatFiles });
 }
