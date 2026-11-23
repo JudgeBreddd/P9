@@ -264,7 +264,7 @@ export function installProjects(o, api) {
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
       const [m, r] = await Promise.all([loadSv(), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
-      if (m && r.status === 200) { sv = { lead, draw: opts => m.statusHtml(r.body, esc, opts) }; renderPage(); if (r.body.closed) return; } // a closed sprint's record does not change: read once
+      if (m && r.status === 200) { sv = { lead, draw: opts => m.statusHtml(r.body, esc, opts, o) }; renderPage(); if (r.body.closed) return; } // a closed sprint's record does not change: read once
     }
     setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
   }
