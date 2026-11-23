@@ -1116,7 +1116,7 @@ export function createDelegate({ chat, allowed, usage }) {
       next = event.cursor;
     }
     if (!more && page.events.length < 500) next = Math.max(next, page.cursor);
-    const goal = chat.goal(args.chat);
+    const goal = chat.goal?.(args.chat); // a chat object without goal() (a stand-in) has none
     return { guidance: CROSS_CHAT, chat: args.chat, ...(goal && { goal }), messages: messages.filter((m) => m.role !== 'break'), next, more: more || page.events.length >= 500 };
   }
 
@@ -1271,7 +1271,7 @@ export function createDelegate({ chat, allowed, usage }) {
     return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
       ...chat.gauge(c.id), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
-      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...(chat.goal(c.id) && { goal: chat.goal(c.id) }) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
+      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
   }
 
   async function answerChat(caller, args, signal) {
