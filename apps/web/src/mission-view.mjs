@@ -124,7 +124,7 @@ function applyOverview(o) {
   // O237: the daemon keeps each script's last run, so every poll, device and restart shows the same one.
   for (const x of o.scripts) { const L = x.last, row = [x.id, x.title, x.desc, !L ? 'idle' : L.terminal || L.code === 0 ? 'ok' : 'bad',
     L ? new Date(L.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + (L.terminal ? ', opened in a terminal' : ', exit ' + L.code) : 'not run here yet',
-    L && !L.terminal ? L.secs + ' s' : '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true, tail: L?.tail }];
+    L && !L.terminal ? L.secs + ' s' : '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true, tail: L?.tail, at: L?.at }];
     const name = x.group || 'Other', key = x.section ?? named[name] ?? 'g:' + name; outer.M.title[key] ??= name;
     if (x.hidden) outer.M.cardScripts[x.id] = row; else (outer.M.scripts[key] ||= []).push(row); }
   outer.M.buttons = o.scripts.map(x => ({ id: x.id, title: x.title, icon: x.icon, section: x.section })); // the editor's button rows (W-N)
@@ -185,16 +185,16 @@ async function runLive(m, id) {
   const res = await window.p9.mission('run', { id, args: m.args, ...(m.armedRun ? { confirm: true } : {}) });
   if (res.status === 200 && res.body.launched) { m.out = ['Opened in a terminal.']; queueSoon(); return outer.S.modal === m && outer.renderModal(); }
   if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.reason || res.body?.error || res.status)]; return outer.S.modal === m && outer.renderModal(); }
-  let text = '', from = 0;
+  let text = '', from = 0; m.running = true;
   for (;;) {
     const o = await window.p9.mission('output', { run: res.body.run, from });
     if (o.status !== 200) { m.out = [text, '[lost the run: ' + (o.body?.error || o.status) + ']']; break; }
-    text += o.body.output; from = o.body.next; m.out = text.split('\n');
+    text += o.body.output; from = o.body.next; m.out = text.split('\n'); m.outAt = o.body.at;
     if (outer.S.modal === m) outer.renderModal();
     if (o.body.done) break;
     await new Promise(done => outer.setTimeout(done, 300));
   }
-  if (outer.S.modal === m) outer.renderModal();
+  m.running = false; if (outer.S.modal === m) outer.renderModal();
   queueSoon(); // the overview now carries this run as the script's last run (O237)
 }
 // Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
@@ -867,18 +867,20 @@ function missionModal(m, body, row) {
     const f = document.activeElement, typing = body.contains(f) && f.dataset.arg ? [f.dataset.arg, f.selectionStart, f.selectionEnd] : null;
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
     m.args ||= (x.args || []).map(() => '');
+    // #489 fix 2: this window's output is its run's, shown while it runs and until the last run is another one (another device's).
+    const out = m.out && (m.running || x.at === m.outAt || !(x.at > m.before)) ? m.out : null;
     outer.$('#mdlT').textContent = name;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : x.tail ? `<pre class="out" data-last-tail>${esc(x.tail)}</pre>` : ''}</div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${out ? `<pre class="out">${esc(out.join('\n'))}</pre>` : x.tail ? `<pre class="out" data-last-tail>${esc(x.tail)}</pre>` : ''}</div>`;
     body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = inp.onchange = () => { m.args[+inp.dataset.arg] = inp.value; });
     if (typing) { const inp = body.querySelector(`[data-arg="${typing[0]}"]`); inp?.focus(); try { inp?.setSelectionRange(typing[1], typing[2]); } catch {} } // a poll's redraw keeps the field being typed in
-    outer.$('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${m.out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
+    outer.$('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
     outer.$('#mdlFoot [data-run]').onclick = () => {
       if (x.confirm && !m.armed) { m.armed = true; return outer.renderModal(); }
-      m.armedRun = m.armed; m.armed = false; m.out = ['running…']; outer.renderModal();
+      m.armedRun = m.armed; m.armed = false; m.out = ['running…']; m.before = x.at ?? 0; outer.renderModal();
       if (x.live) return runLive(m, id);
       outer.setTimeout(() => { m.out = outer.M.outputs[id] || [name, '', '[ok] ' + name + ' completed']; if (outer.S.modal === m) outer.renderModal(); }, 600);
     };
-    if (m.out) outer.$('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
+    if (out) outer.$('#mdlFoot [data-copy]').onclick = e => copy(out.join('\n'), e.currentTarget);
   } else if (m.kind === 'hubtext') {
     outer.$('#mdlT').textContent = m.title;
     if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call, m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; m.canFix = r.status === 200 && !!r.body.fix; if (outer.S.modal === m) outer.renderModal(); }); }

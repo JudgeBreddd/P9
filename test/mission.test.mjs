@@ -560,6 +560,7 @@ test('O237 fix 1: a slow first read of the last-runs file never puts an old copy
   await first;
   const now = await mission.overview();
   assert.equal(now.scripts.find((x) => x.id === 'echo').last?.code, 0, 'the run recorded meanwhile is still the last run');
+  assert.equal(mission.output(started.run).at, now.scripts.find((x) => x.id === 'echo').last.at, 'a run\'s output names its last-run time (#489 fix 2)');
   await mission.stopAll();
   assert.deepEqual(Object.keys(JSON.parse(await real(lastRuns, 'utf8'))).sort(), ['echo', 'old'], 'and the file has it beside the old record');
   console.log('PASS O237 fix 1: one read of the file; a held first read does not drop a run recorded meanwhile');

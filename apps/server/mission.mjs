@@ -754,7 +754,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const entry = runs.get(id);
     if (!entry) return { status: 404, error: 'unknown-run' };
     const start = Number.isSafeInteger(from) && from >= 0 ? Math.min(from, entry.output.length) : 0;
-    return { status: 200, script: entry.script, output: entry.output.slice(start), next: entry.output.length, done: entry.done, code: entry.code };
+    return { status: 200, script: entry.script, output: entry.output.slice(start), next: entry.output.length, done: entry.done, code: entry.code, at: entry.started }; // at: the last run's at (O237)
   }
 
   // A server that prints its URL (hub's vscode-web): run it up to 30 s, open the last stdout line if it is http(s).

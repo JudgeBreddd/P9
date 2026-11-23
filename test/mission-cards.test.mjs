@@ -552,7 +552,7 @@ test('O237 a button window shows its last run after a reopen and a redraw', { ti
 test('O237 fix 1 an open button window shows a run another client finished, keeping the typed argument', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9);
     await writeFile(path.join(paths.workspace, SETTINGS.registry), JSON.stringify({ scripts: [...SCRIPTS,
-      { id: 'say', title: 'Say words', group: 'Tools', cmd: [node, '-e', 'console.log(process.argv.slice(1).join(" "))'], args: ['Words'] }], apps: [], pages: [] }));
+      { id: 'say', title: 'Say words', group: 'Tools', cmd: [node, '-e', 'const w = process.argv.slice(1).join(" "); console.log(w); process.exitCode = w.includes("fail") ? 3 : 0'], args: ['Words'] }], apps: [], pages: [] }));
     return r; } });
   const profile = path.join(server.directory, 'electron-profile');
   await mkdir(profile); await versionSeen(profile);
@@ -578,4 +578,39 @@ test('O237 fix 1 an open button window shows a run another client finished, keep
   assert.equal(await input.inputValue(), 'kept words', 'the typed argument is kept');
   assert.equal(await input.evaluate((el) => el === document.activeElement), true, 'and the field keeps its focus');
   console.log('PASS O237 fix 1 screen: an open window shows another client\'s run on the poll, argument and focus kept');
+});
+
+// #489 fix 2: this window ran the script itself, then another device ran it again. The header and the output both show the
+// newer run; the first run's output (and Copy output) does not stay under the other run's header.
+test('O237 fix 2 a window that ran the script shows the other client\'s later run output under its header', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9);
+    await writeFile(path.join(paths.workspace, SETTINGS.registry), JSON.stringify({ scripts: [...SCRIPTS,
+      { id: 'say', title: 'Say words', group: 'Tools', cmd: [node, '-e', 'const w = process.argv.slice(1).join(" "); console.log(w); process.exitCode = w.includes("fail") ? 3 : 0'], args: ['Words'] }], apps: [], pages: [] }));
+    return r; } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  await page.locator('#fMission [data-group]', { hasText: 'Tools' }).first().click();
+  const row = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Say words' });
+  await row.waitFor({ timeout: 10000 }); await row.click();
+  const kind = page.locator('#mdlBody .review .kind'), out = page.locator('#mdlBody pre.out');
+  await page.locator('#mdlBody input[data-arg="0"]').fill('local words');
+  await page.click('#mdlFoot [data-run]');
+  await kind.filter({ hasText: 'exit 0' }).waitFor({ timeout: 15000 }); // this run, once the overview is read again
+  assert.match(await out.innerText(), /local words/);
+  // Another client runs it with a different output and exit code.
+  const run = (await call(server, '/scripts/say/run', 'POST', { args: ['fail elsewhere'] })).body.run;
+  for (let i = 0; i < 200 && !(await call(server, '/runs/' + run)).body.done; i += 1) await sleep(25);
+  await kind.filter({ hasText: 'exit 3' }).waitFor({ timeout: 35000 }); // the regular poll is every 20 s
+  const shown = await out.innerText();
+  assert.match(shown, /fail elsewhere/, 'the output is the newer run\'s');
+  assert.doesNotMatch(shown, /local words/, 'not this window\'s older run');
+  assert.equal(await page.locator('#mdlFoot [data-copy]').count(), 0, 'and Copy output (this window\'s run) is gone');
+  console.log('PASS O237 fix 2 screen: local run then another client\'s run: header, output and Copy all describe the newer run');
 });
