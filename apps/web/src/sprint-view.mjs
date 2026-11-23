@@ -45,6 +45,8 @@ const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.s
 // o: the shell's agent lists (projects-view.mjs). picks: per chat, open or not, the values picked and what came back, kept
 // across the 5 s redraws; this module's own listeners, so the startup JS carries none of it.
 const picks = new Map(), pk = id => picks.get(id) ?? (picks.set(id, {}), picks.get(id));
+// #493: what P9 answers a press (placed) on a chat stopped since the last poll drew it; the daemon refuses it (chat.mjs prompt).
+const STALE = 'Not sent: it was stopped since this page last read it, so it holds no worker place. Its lead\'s send_chat starts it under the limit.';
 const flat = xs => xs.flatMap(x => Array.isArray(x.options) ? flat(x.options) : [[x.value, x.name]]);
 function repick(w, o, esc) {
   const k = pk(w.chat), a = w.profile ? 'claude' : w.provider, ep = o.lastPickers[a]?.find(p => o.pickerKind(p) === 'effort');
@@ -68,9 +70,9 @@ globalThis.document?.addEventListener('click', e => {
   const to = [mx?.value, ef?.value].filter(Boolean).join(' · ');
   const lock = on => { b.disabled = k.busy = on; f.querySelectorAll('[data-sv-r]').forEach(x => { x.disabled = on; }); };
   lock(true); said('Sending…');
-  window.p9.chat('prompt', { id: li.dataset.key, when: 'queue', text: `You now run on ${to} (changed by the owner in the Sprint View), from this turn on. Carry on with your work.`,
+  window.p9.chat('prompt', { id: li.dataset.key, placed: true, when: 'queue', text: `You now run on ${to} (changed by the owner in the Sprint View), from this turn on. Carry on with your work.`,
     ...(m && { model: m }), ...(e2 && { config: { [ef.dataset.id]: e2 } }) })
-    .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
+    .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : r.body?.error === 'chat-stopped' ? STALE : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
     .then(t => { said(t); lock(false); });
 });
 // I3 worker window, what it reads (look: sprint-hooks.mjs view, kept 15 s per chat): Details under a chat's row opens
@@ -112,7 +114,8 @@ function actsHtml(w, esc) {
 }
 const answerSaid = (act, r) => r.status === 202 || r.status === 200 ? (act === 'stop' ? 'Stopped its turn.' : act === 'note' ? (r.body?.steered ? 'Noted, into its running turn.' : 'Noted: it reads it with its next message.')
   : r.body?.held ? 'Sent: it gets it when its running turn ends.' : r.body?.steered ? 'Sent into its running turn.' : 'Sent: it started a turn.')
-  : act === 'stop' && r.body?.error === 'no-turn' ? 'It has no turn running.' : `Not sent: ${r.body?.error || r.status}.`;
+  : act === 'stop' && r.body?.error === 'no-turn' ? 'It has no turn running.'
+  : r.body?.error === 'chat-stopped' ? STALE : `Not sent: ${r.body?.error || r.status}.`;
 globalThis.document?.addEventListener('input', e => { const x = e.target.closest?.('[data-sv-msg]'), id = x?.closest('li[data-key]')?.dataset.key; if (id) ak(id).text = x.value; });
 globalThis.document?.addEventListener('click', e => {
   const b = e.target.closest?.('[data-sv-act]'), li = b?.closest('li[data-key]'); if (!li) return;
@@ -125,10 +128,10 @@ globalThis.document?.addEventListener('click', e => {
   const lock = on => { k.busy = on; box.querySelectorAll('[data-sv-act]:not([data-sv-act="copy"]), [data-sv-msg]').forEach(x => { x.disabled = on; }); };
   lock(true); said('Sending…');
   const out = act === 'note' ? go('note', { text }) : act === 'stop' ? go('cancel', {})
-    : act === 'review' ? go('prompt', { when: 'queue', text: 'The owner asks you, from the Sprint View, to send your work for review now: call ready with your row id, the commit and each check. If it is not finished, say what is left instead.' })
+    : act === 'review' ? go('prompt', { placed: true, when: 'queue', text: 'The owner asks you, from the Sprint View, to send your work for review now: call ready with your row id, the commit and each check. If it is not finished, say what is left instead.' })
     // Restart: its turn stops (none running is fine), then a message waits for the turn's end and starts the next one.
-    : act === 'restart' ? go('cancel', {}).then(r => r.status === 200 || r.body?.error === 'no-turn' ? go('prompt', { when: 'queue', text: `The owner restarted you from the Sprint View: read ${b.dataset.notes} in the sprint folder first, then carry on with your work.` }) : r)
-    : go('prompt', { text, when: act });
+    : act === 'restart' ? go('cancel', {}).then(r => r.status === 200 || r.body?.error === 'no-turn' ? go('prompt', { placed: true, when: 'queue', text: `The owner restarted you from the Sprint View: read ${b.dataset.notes} in the sprint folder first, then carry on with your work.` }) : r)
+    : go('prompt', { placed: true, text, when: act });
   out.then(r => { const ok = r.status === 202 || r.status === 200; if (ok && ['steer', 'queue', 'note'].includes(act)) { k.text = ''; const t2 = li.querySelector('[data-sv-msg]'); if (t2) t2.value = ''; }
     said(act === 'restart' && ok ? 'Restarted: its turn stopped and it reads its notes next.' : answerSaid(act, r)); lock(false); });
 });
