@@ -321,12 +321,15 @@ async function fetchEvents(wait = 0) {
 // (history() reads only stubs) and one still in flight ends first: either would read up to the old base and clear the new
 // stub. A read that fails puts the old state back, so the next one finds the same full page and jumps again.
 async function jump() {
-  const old = { events: state.events, cursor: state.cursor, stubs: state.stubs, byChat: new Map(byChat), older: new Map(older) };
+  const stubs = state.stubs, flying = [...loading];
   state.stubs = new Set();
-  await Promise.all([...loading.values()].map((p) => p.catch(() => {})));
+  // A load that ended here took its chat's events and is no stub any more; the old state is kept from after the wait.
+  const ends = await Promise.allSettled(flying.map(([, p]) => p));
+  flying.forEach(([id], i) => { if (ends[i].status === 'fulfilled') stubs.delete(id); });
+  const old = { events: state.events, cursor: state.cursor, base: state.base, stubs, byChat: new Map(byChat), older: new Map(older) };
   state.events = []; byChat.clear(); older.clear(); state.cursor = 0;
   try { await replay(); } catch (error) {
-    Object.assign(state, { events: old.events, cursor: old.cursor, stubs: old.stubs });
+    Object.assign(state, { events: old.events, cursor: old.cursor, base: old.base, stubs: old.stubs });
     byChat.clear(); for (const [k, v] of old.byChat) byChat.set(k, v); older.clear(); for (const [k, v] of old.older) older.set(k, v);
     throw error;
   }
