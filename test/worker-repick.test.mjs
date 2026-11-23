@@ -43,7 +43,7 @@ const live = async () => {
 };
 const page = (chat, now) => {
   const said = { textContent: '' }, sel = { dataset: { svR: 'effort', now, id: 'effort' }, value: now || 'low', disabled: false };
-  const f = { hidden: false, querySelector: (q) => (q === '[data-sv-said]' ? said : q === '[data-sv-r="effort"]' ? sel : null), querySelectorAll: () => [sel] };
+  const f = { hidden: false, querySelector: (q) => (q === '[data-sv-rsaid]' ? said : q === '[data-sv-r="effort"]' ? sel : null), querySelectorAll: () => [sel] };
   const li = { dataset: { key: chat }, querySelector: () => f };
   const b = { dataset: {}, disabled: false, closest: (q) => (q === 'li[data-key]' ? li : q.includes('data-sv-apply') ? b : null) };
   sel.closest = (q) => (q === '[data-sv-r]' ? sel : li);

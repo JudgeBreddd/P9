@@ -54,12 +54,12 @@ function repick(w, o, esc) {
   const body = (w.profile ? '' : sel('model', flat(o.lastModels[a]?.options ?? []), w.model, k.model ?? w.model))
     + (ep ? sel('effort', flat(ep.options ?? []), w.effort, k.effort ?? w.effort, ` data-id="${esc(ep.id)}"`) : '');
   return `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-sv-pick aria-expanded="${!!k.open}" title="Moves this chat to another model or effort from its next turn, with a message from you">Model or effort</button>`
-    + `<div class="sv-repick" data-sv-repick${k.open ? '' : ' hidden'}>${body ? body + `<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-sv-apply${k.busy ? ' disabled' : ''}>Send with a message</button>` : `<span class="hint">Start one ${esc(o.names[a] ?? a)} chat first: its models and efforts are listed here after that.</span>`}<span class="hint" data-sv-said role="status">${esc(k.said ?? '')}</span></div>`;
+    + `<div class="sv-repick" data-sv-repick${k.open ? '' : ' hidden'}>${body ? body + `<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-sv-apply${k.busy ? ' disabled' : ''}>Send with a message</button>` : `<span class="hint">Start one ${esc(o.names[a] ?? a)} chat first: its models and efforts are listed here after that.</span>`}<span class="hint" data-sv-rsaid role="status">${esc(k.said ?? '')}</span></div>`;
 }
 globalThis.document?.addEventListener('change', e => { const x = e.target.closest?.('[data-sv-r]'), id = x?.closest('li[data-key]')?.dataset.key; if (id) pk(id)[x.dataset.svR] = x.value; });
 globalThis.document?.addEventListener('click', e => {
   const b = e.target.closest?.('[data-sv-pick], [data-sv-apply]'), li = b?.closest('li[data-key]'); if (!li) return;
-  const k = pk(li.dataset.key), f = li.querySelector('[data-sv-repick]'), said = t => { k.said = t; f.querySelector('[data-sv-said]').textContent = t; };
+  const k = pk(li.dataset.key), f = li.querySelector('[data-sv-repick]'), said = t => { k.said = t; f.querySelector('[data-sv-rsaid]').textContent = t; };
   if (b.dataset.svPick !== undefined) { k.open = f.hidden; f.hidden = !k.open; return b.setAttribute('aria-expanded', k.open); }
   // Only what you picked and changed is sent: a select showing what the chat runs on, or with none known only its first option,
   // sends nothing. While a send is out the picks are disabled (kept through the redraw by busy), so the 202's clear loses no newer pick.
