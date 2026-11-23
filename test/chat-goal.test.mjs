@@ -37,14 +37,20 @@ test('A2 goal: an agent\'s goal reaches read_chat, list_chats and wait_chat; non
   await tell('goal {"objective":"merge #493","status":"paused"}');
   const merge = { objective: 'merge #493', status: 'paused' };
   assert.deepEqual(await goalIn(), [merge, merge, merge]);
-  // A daemon restart keeps it: read back from the ledger, not memory.
-  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
-  instance = await restart(t, instance, 'state-2');
-  const cursor = await now();
-  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' });
-  a = await connect(t, instance, a.conversation, cursor);
+  // A daemon restart keeps it: read back from the ledger, not memory, past junk said after it (the newest update read back).
+  await tell('goal {"objective":7}');
+  const again = async (name) => {
+    instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+    instance = await restart(t, instance, name);
+    const cursor = await now();
+    await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' });
+    a = await connect(t, instance, a.conversation, cursor);
+  };
+  await again('state-2');
   assert.deepEqual(await goalIn(), [merge, merge, merge], 'the restart lost the goal');
-  // Cleared (null): none again.
+  // Cleared (null): none again, and still none after a restart (the stored null is read back, not the goal before it).
   await tell('goal null');
   assert.deepEqual(await goalIn(), [undefined, undefined, undefined], 'a cleared goal is still given');
+  await again('state-3');
+  assert.deepEqual(await goalIn(), [undefined, undefined, undefined], 'a restart brought back a cleared goal');
 });
