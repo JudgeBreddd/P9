@@ -54,6 +54,8 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { text += chunk; });
+      // O251: a link that drops mid-body (a remote's ssh, a sleep) is an error, not a promise left waiting forever.
+      res.on('close', () => { if (!res.complete) reject(Object.assign(new Error('dropped'), { status: res.statusCode })); });
       res.on('end', () => {
         if (res.statusCode === 401) return reject(Object.assign(new Error('unauthorized'), { status: 401, reply: text }));
         try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); }

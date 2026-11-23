@@ -263,16 +263,24 @@ function perChat<T>(read: (events: Json[], id: string) => T) {
     const value = read(list, id); kept.set(id, { list, n: list.length, value }); return value;
   };
 }
-async function pull(extra: string, wait = 0) {
+// O251: true when a live read (live) came back full, so this phone fell behind (a sleep, a dropped link); the caller reads the
+// current state again (behind, below) instead of every page of the gap.
+// jumps counts them: a read sent before one began answers from the old cursor and is dropped, or it would fill the
+// cleared transcript with the old page and leave a hole below the new tail.
+let jumps = 0;
+async function pull(extra: string, wait = 0, live = false): Promise<boolean> {
   let batch: Json[];
   do {
-    const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
+    const sent = jumps, result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
+    if (sent !== jumps) return false;
     batch = result.events as Json[] ?? [];
+    if (live && batch.length === 500) return true;
     // The live loop and a refresh can overlap; an event already held is skipped.
     for (const event of batch) if (Number(event.cursor) > state.cursor) { keepEvent(event); state.cursor = Number(event.cursor); }
     // A narrowed read reports how far it scanned, matching or not.
     if (extra && batch.length < 500) state.cursor = Math.max(state.cursor, Number(result.cursor));
   } while (batch.length === 500);
+  return false;
 }
 // A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
 const gapAfter = (next?: Json) => { if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false; };
@@ -298,15 +306,39 @@ async function replay() {
   const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; // MC-16: a Settings default changed meanwhile
   state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
 }
+let jumping: Promise<void> | null = null; // O251: a jump under way; a read asked for meanwhile waits for it
 async function fetchEvents(wait = 0) {
+  if (jumping) return jumping;
   if (!state.replayed) { await replay(); state.replayed = true; }
   else {
-    await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
+    // O251: a full live page means this phone fell behind (jump, above).
+    if (await pull('', wait, true)) await (jumping ||= jump().finally(() => { jumping = null; }));
+    else if (jumping) return jumping; // this read was dropped (pull): the jump sets the cursor it saves
+    else gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
     for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled')
       putBack(String(event.conversation), String((event.data as Json).text)); // O61: into its own chat's text, open or not
   }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
+}
+// O251: behind, the held events go and the first read runs again: the shown chat's newest blocks, the others stubs. The
+// gap's ends are not played one by one; the list's states say which chats moved. No stub starts a load from here
+// (history() reads only stubs) and one still in flight ends first: either would read up to the old base and clear the new
+// stub. A read that fails puts the old state back, so the next one finds the same full page and jumps again.
+async function jump() {
+  jumps++;
+  const stubs = state.stubs, flying = [...loading];
+  state.stubs = new Set();
+  // A load that ended here took its chat's events and is no stub any more; the old state is kept from after the wait.
+  const ends = await Promise.allSettled(flying.map(([, p]) => p));
+  flying.forEach(([id], i) => { if (ends[i].status === 'fulfilled') stubs.delete(id); });
+  const old = { events: state.events, cursor: state.cursor, base: state.base, stubs, byChat: new Map(byChat), older: new Map(older) };
+  state.events = []; byChat.clear(); older.clear(); state.cursor = 0;
+  try { await replay(); } catch (error) {
+    Object.assign(state, { events: old.events, cursor: old.cursor, base: old.base, stubs: old.stubs });
+    byChat.clear(); for (const [k, v] of old.byChat) byChat.set(k, v); older.clear(); for (const [k, v] of old.older) older.set(k, v);
+    throw error;
+  }
 }
 // P20: a tail read's events go in once each, in cursor order. older holds, per chat, the first cursor read when
 // older events were left out; Load earlier reads up to the one before it.
@@ -821,7 +853,9 @@ one('#earlier').addEventListener('click', async () => {
   if (!id || from === undefined || button.disabled) return;
   button.disabled = true; button.textContent = 'Loading…';
   try {
-    take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1)), [id]);
+    const page = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1));
+    // O251: a jump meanwhile read the chat again from its newest blocks; a page from before it would skip what lies between.
+    if (older.get(id) === from) take(page, [id]);
     button.disabled = false; button.textContent = 'Load earlier';
     if (openId === id) render();
   } catch { button.disabled = false; button.textContent = 'Not loaded · Tap to try again'; }

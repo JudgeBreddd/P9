@@ -10,9 +10,30 @@ const BIG = '00000000-0000-4000-8000-0000000000d1', TURNS = 450;
 // A screenshot goes out in the log (P9_SHOT name base64), as agent-setup.test.mjs does.
 const shot = async (page, name) => { const png = await page.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 
+// O251: a message still held from early in a long turn comes along when the tail leaves it out; one a later user event
+// took, or an unheld named, does not.
+test('O251: the tail read keeps a message still held from early in a long turn', () => {
+  const ledger = openLedger(':memory:'), add = (type, data) => ledger.append(BIG, type, data);
+  add('user', { text: 'go' });
+  add('held', { id: 'h1', text: 'still waiting', when: 'auto' }); add('held', { id: 'h2', text: 'taken', when: 'auto' }); add('held', { id: 'h3', text: 'refused', when: 'auto' });
+  add('unheld', { id: 'h3', text: 'refused', why: 'refused' }); add('user', { text: 'taken', held: ['h2'] });
+  for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 't' + i, title: 'step' });
+  const result = ledger.tail([BIG], undefined, 5);
+  assert.ok(result.more[BIG] > 0, 'the held events are older than the kept blocks');
+  assert.deepEqual(result.events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1']);
+  // A read up to an earlier cursor sees h1 still held though it is taken later, and a message that only mentions the id takes nothing.
+  const at = result.cursor; add('user', { text: 'about h1' });
+  for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 'u' + i, title: 'step' });
+  assert.deepEqual(ledger.tail([BIG], undefined, 5).events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1'], 'text naming the id is not a release');
+  add('user', { text: 'still waiting', held: ['h1'] });
+  for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 'v' + i, title: 'step' });
+  assert.deepEqual(ledger.tail([BIG], undefined, 5).events.filter((event) => event.type === 'held'), [], 'taken now');
+  assert.deepEqual(ledger.tail([BIG], at, 5).events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1'], 'held at the earlier cursor');
+});
+
 // P20: the tail read counts blocks as the phone draws them: a run of streamed chunks is one block, bookkeeping
-// updates are none, and it always reaches back to the latest message from the user.
-test('P20: the tail read counts a chunk run as one block and reaches back to the latest message', () => {
+// updates are none, and the latest message from the user comes along when the kept blocks hold none (O251).
+test('P20: the tail read counts a chunk run as one block and carries the latest message', () => {
   const ledger = openLedger(':memory:'), add = (type, data) => ledger.append(BIG, type, data);
   const chunk = (sessionUpdate, text) => add('update', { sessionUpdate, content: { type: 'text', text } });
   add('card', { id: 'c', kind: 'note', text: 'Pinned early' });
@@ -23,7 +44,8 @@ test('P20: the tail read counts a chunk run as one block and reaches back to the
   const three = ledger.tail([BIG], undefined, 3);
   assert.deepEqual(texts(three), ['Pinned early', undefined, 'two', 't', undefined, 'b', 'b', 'b', undefined], 'three blocks: two, the thought, the three b chunks as one; the early card comes along');
   assert.ok(three.more[BIG] > 0, 'older events are left out, so more says where the kept ones start');
-  assert.deepEqual(texts(ledger.tail([BIG], undefined, 1)), texts(three), 'one block still reaches back to the latest message');
+  // O251: one block is the last block, and the latest message comes along with the early events, so the turn reads as its own.
+  assert.deepEqual(texts(ledger.tail([BIG], undefined, 1)), ['Pinned early', 'two', undefined, 'b', 'b', 'b', undefined], 'one block: the usage update and the b run, with the message it answers');
   const all = ledger.tail([BIG], undefined, 10);
   assert.equal(all.events.length, 12); assert.equal(all.more[BIG], undefined);
   assert.equal(all.cursor, 12);

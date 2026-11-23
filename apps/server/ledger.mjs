@@ -149,6 +149,11 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       + " CASE WHEN json_valid(data) THEN json_extract(data, '$.stopReason') END AS r FROM events WHERE conversation = ? AND cursor <= ? ORDER BY cursor DESC LIMIT ?"),
     span: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor >= ? AND cursor <= ? ORDER BY cursor'),
     kept: db.prepare("SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type IN ('card', 'unpin', 'config')"),
+    // O251: a message still held at the read's cursor (no user event up to it took it, no unheld named it); the queue is drawn from these.
+    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type = 'held' AND NOT EXISTS ("
+      + "SELECT 1 FROM events x WHERE x.conversation = h.conversation AND x.cursor > h.cursor AND x.cursor <= ? AND x.type IN ('user', 'unheld') AND ("
+      + "x.type = 'unheld' AND json_extract(CASE WHEN json_valid(x.data) THEN x.data END, '$.id') = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id') OR "
+      + "x.type = 'user' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(x.data) THEN x.data ELSE '{}' END, '$.held') AS j WHERE j.value = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id'))))"),
     latest: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1'),
     operation: db.prepare('SELECT * FROM operations WHERE id = ?'),
     recent: db.prepare('SELECT COUNT(*) AS n FROM operations WHERE login = ? AND at > ?'),
@@ -235,11 +240,11 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       return { events: rows.map(parsed), cursor: rows.length === limit ? rows.at(-1).cursor : Math.max(cursor, top) };
     },
     // P20: the newest blocks of each chat in only, up to until, counted as the phone draws them (phone.ts build()): a
-    // run of streamed chunks is one block, bookkeeping updates are none. It always reaches back to the chat's latest
-    // message from the user, so a turn still running reads as running. Older events the chat screen still needs come
-    // along (pinned cards, the agent's picks, the latest mode, plan and slash commands). more[id] is the first cursor
+    // run of streamed chunks is one block, bookkeeping updates are none. Older events the chat screen still needs come
+    // along (pinned cards, the agent's picks, the latest mode, plan and slash commands), and the chat's latest message from
+    // the user when the kept blocks hold none, so a turn still running reads as running, and every message still held. O251: it used to read back to
+    // that message instead, and one long turn (4,500 updates) came whole, a megabyte over a remote. more[id] is the first cursor
     // kept, for a chat with older events left out; the next read asks up to the one before it.
-    // ponytail: one turn longer than the window loads whole, back to its message.
     tail(only, until = Infinity, blocks = 30) {
       const top = Math.min(until, statements.top.get().n), events = [], more = {};
       for (const id of only) {
@@ -249,7 +254,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
           for (const { cursor, type, u, r } of rows) {
             const chunk = type === 'update' && (u === 'agent_message_chunk' || u === 'agent_thought_chunk') ? u : null;
             const starts = chunk ? chunk !== run : BLOCKS.has(type) || (type === 'update' && u === 'tool_call') || (type === 'turn-end' && r !== 'end_turn');
-            if (starts) { if (count >= blocks && user) { cut = true; break; } count++; run = chunk; }
+            if (starts) { if (count >= blocks) { cut = true; break; } count++; run = chunk; }
             if (type === 'user') user = true;
             from = cursor;
           }
@@ -259,7 +264,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         events.push(...statements.span.all(id, from, top));
         if (cut) {
           more[id] = from;
-          events.push(...statements.kept.all(id, from), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ['update', '"sessionUpdate":"available_commands_update"']]
+          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ['update', '"sessionUpdate":"available_commands_update"'], ...(user ? [] : [['user', '']])]
             .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean));
         }
       }
