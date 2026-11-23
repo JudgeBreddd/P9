@@ -349,9 +349,9 @@ export async function closeOf(sprintDir) {
   return { source: done.source, at: done.at, cause: pending ? 'unknown' : done.cause ?? null, pending, written, rolledBack, left, partial, copyKept, lines };
 }
 
-// A result that is there but does not parse reads as unknown (pending), as one never finalized does: the copy is kept.
+// A result that is there but does not parse, or is not a record, reads as unknown (pending), as one never finalized does: the copy is kept.
 async function resultOf(sprintDir) {
-  return readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then((text) => { try { return JSON.parse(text); } catch { return { pending: true }; } }, () => null);
+  return readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then((text) => { try { const r = JSON.parse(text); if (r && typeof r === 'object' && !Array.isArray(r)) return r; } catch {} return { pending: true }; }, () => null);
 }
 // A record that does not parse, or lacks its folder or baseline, is no copy.
 async function readRecord(sprintDir) {

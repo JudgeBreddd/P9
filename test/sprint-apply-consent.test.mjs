@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { applySprint, closeOf, previewSprint, startCopy } from '../apps/server/folder-copy.mjs';
+import { applySprint, closeOf, copyKeptBecause, previewSprint, startCopy } from '../apps/server/folder-copy.mjs';
 import { setProtection } from '../packages/files/index.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -139,5 +139,10 @@ test('Sprint apply: an apply result that does not parse reads as unknown: the cl
   assert.match(close.lines[0], /^Unknown: the apply started and its result was not recorded/);
   assert.equal(close.copyKept, 'apply unknown: its result was not recorded', 'the copy is kept');
   assert.deepEqual(await applySprint(sprint, { yes: true, shown: 'x' }), { refused: 'already-applied' });
+  for (const text of ['null', '5', '[]']) {
+    fs.writeFileSync(path.join(sprint, 'apply-result.json'), text);
+    assert.equal((await closeOf(sprint))?.pending, true, `${text} is not a result: unknown`);
+    assert.equal(await copyKeptBecause(sprint), 'apply unknown: its result was not recorded', `${text}: the copy is kept`);
+  }
 });
 
