@@ -295,5 +295,9 @@ test('O241 a linked worktree and a submodule list shell edits; a bad .git file a
   const wt2Index = path.join(main, '.git', 'worktrees', 'wt2', 'index');
   await rm(wt2Index); await symlink(path.join(main, '.git', 'index'), wt2Index);
   assert.equal(await shellStart(wt2), null, 'an index that is a link adds nothing');
+  // Review round 2: a superproject whose .git/modules is a link to another superproject's store.
+  const sup2 = path.join(base, 'sup2'); await mkdir(sup2); init(sup2); await symlink(path.join(sup, '.git', 'modules'), path.join(sup2, '.git', 'modules'));
+  const sub2 = path.join(sup2, 'sub'); await mkdir(sub2); await writeFile(path.join(sub2, '.git'), `gitdir: ${path.join(sup2, '.git', 'modules', 'sub')}\n`);
+  assert.equal(await shellStart(sub2), null, 'a modules folder that is a link adds nothing');
   await assert.rejects(stat(marker), 'nothing ran for any of them');
 });

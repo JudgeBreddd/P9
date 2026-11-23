@@ -54,11 +54,19 @@ const keep = (error) => { if (error.code !== 'ENOENT') throw error; };
 // repo's own entry for this folder. A submodule: no commondir, and its folder sits in <superproject>/.git/modules/, the
 // superproject being the nearest folder above with a .git folder.
 // ponytail: Windows has no owner id, so the owner check is skipped there; a submodule of a submodule adds nothing.
+// ponytail: the checks guard against what a repo's files say, not a process of this user swapping folders while a snapshot
+// runs (objects is checked, then named to git): such a process can already write anywhere this user can.
 const ONE_LINE = /^([^\x00-\x1f\x7f]+)\n?$/;
 // A regular file's bytes, read through one handle that refuses a link (O_NOFOLLOW where the system has it), checked on it.
 async function bytes(file, max = Infinity) {
   const fh = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try { const st = await fh.stat(); if (!st.isFile() || st.size > max) throw new Error('not a small file'); return { st, data: await fh.readFile() }; } finally { await fh.close(); }
+  try {
+    const st = await fh.stat(); if (!st.isFile() || st.size > max) throw new Error('not a small file');
+    if (max === Infinity) return { st, data: await fh.readFile() };
+    const buf = Buffer.alloc(max + 1), { bytesRead } = await fh.read(buf, 0, max + 1, 0); // bounded: a file grown since the stat is refused
+    if (bytesRead > max) throw new Error('not a small file');
+    return { st, data: buf.subarray(0, bytesRead) };
+  } finally { await fh.close(); }
 }
 async function line(file, prefix = '') {
   if (!(await lstat(file)).isFile()) throw new Error('not a file'); // O_NOFOLLOW is 0 on Windows
@@ -84,6 +92,7 @@ async function pointed(file, top) {
     const st = await lstat(path.join(up, '.git')).catch(keep);
     if (st) {
       if (!st.isDirectory()) throw new Error('a submodule of a submodule');
+      if (!(await lstat(path.join(up, '.git', 'modules'))).isDirectory()) throw new Error('modules is not a folder'); // not a link to another store
       const modules = await realpath(path.join(up, '.git', 'modules'));
       if (!dot.startsWith(modules + path.sep)) throw new Error('not this superproject\'s submodule');
       return { dot, common: dot };
