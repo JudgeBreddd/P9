@@ -32,7 +32,7 @@ test('usage catalog: a made-up agent added as data shows its reader\'s numbers, 
   const catalog = [...CATALOG, stub({ reader: 'stub' })], readers = { ...READERS, stub: () => reading(now - 2000) };
   const limits = await planLimits({ home, catalog, readers, now });
   assert.deepEqual(Object.keys(limits), ['claude', 'codex', 'stub']);
-  assert.deepEqual(limits.stub, { ...reading(now - 2000), stale: true, pool: 'stub-plan' }, '2 s old against a 1 s limit');
+  assert.deepEqual(limits.stub, { ...reading(now - 2000), stale: true, pool: 'stub-plan', sharedWith: [] }, '2 s old against a 1 s limit');
   assert.equal((await planLimits({ home, catalog, readers: { ...READERS, stub: () => reading(now - 500) }, now })).stub.stale, false, 'inside its limit');
   assert.equal((await planLimits({ home, catalog, readers: { ...READERS, stub: () => ({ ...reading(now), asOf: undefined }) }, now })).stub.stale, true, 'a reading with no time is stale');
   assert.deepEqual([limits.claude.fiveHour.usedPercent, limits.codex.fiveHour.usedPercent], [42, 61]);
@@ -44,8 +44,8 @@ test('usage catalog: claude and codex give main\'s numbers for the same files, p
   const limits = await planLimits({ home, now });
   // main's planLimits for these files (the readers are main's code, moved): the same objects without stale and pool.
   assert.deepEqual(limits, {
-    claude: { fiveHour: { usedPercent: 42, resetsAt: five, windowMins: 300 }, sevenDay: { usedPercent: 90, resetsAt: week, windowMins: 10080 }, asOf: at, stale: false, pool: 'claude' },
-    codex: { fiveHour: { usedPercent: 61, resetsAt: five, windowMins: 300 }, sevenDay: { usedPercent: 33, resetsAt: week, windowMins: 10080 }, asOf: at, stale: false, pool: 'codex' } });
+    claude: { fiveHour: { usedPercent: 42, resetsAt: five, windowMins: 300 }, sevenDay: { usedPercent: 90, resetsAt: week, windowMins: 10080 }, asOf: at, stale: false, pool: 'claude', sharedWith: [] },
+    codex: { fiveHour: { usedPercent: 61, resetsAt: five, windowMins: 300 }, sevenDay: { usedPercent: 33, resetsAt: week, windowMins: 10080 }, asOf: at, stale: false, pool: 'codex', sharedWith: [] } });
   // 15 min is the line for both (the ledger's own).
   const old = await seed(16 * MIN), fresh = await seed(14 * MIN);
   const flags = async (s) => { const l = await planLimits({ home: s.home, now: s.now }); return [l.claude.stale, l.codex.stale]; };
