@@ -9,7 +9,7 @@
 // The repo is found on disk, not asked of git: the nearest folder at or above the chat's folder that holds a .git (O241: a file too).
 // Every git call (add, write-tree, diff) runs with GIT_DIR set to a private folder made for that snapshot: HEAD, refs and
 // a config of our own (constant), with system and global config off. From the repo it gets only paths built here (its
-// working tree, and .git/objects as a read-only alternate; writes go to the private store) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
+// working tree, and .git/objects as an alternate, read, its found objects' times refreshed as git always does; writes go to the private store) and two copied files (.git/index, so add hashes only what changed, and .git/info/exclude,
 // as ignore patterns). So no filter, hook, fsmonitor, textconv or diff driver is configured where git reads config,
 // whatever the repo's config says, even while a snapshot runs. On top: hooks and fsmonitor off, diffs with no textconv or
 // external diff, no missing object fetched. File names git lists reach the diff's pathspec only after "--", literal.
@@ -42,6 +42,9 @@ export const LIMIT_MS = 3000, FILES = 40, EVENT_BYTES = 60 * 1024;
 // p: the box's paths, built here (the private folder, the repo folder, the turn's private object store, the repo's objects
 // folder); every name below is fixed. O241 review: git writes objects only to the private store; the repo's objects are
 // only read, as an alternate, so no link inside a repo's object folders can lead a write anywhere.
+// ponytail: git still refreshes the time of an object it finds there (utime, object-file.c freshen), as the user's own
+// git add in that repo does: through a planted link that touches the time of a file already named as that object, never
+// its bytes, and never a file of any other name.
 const git = (cwd, args, deadline, p) => run('git', ['-C', cwd, '-c', 'core.quotePath=false', '-c', 'core.hooksPath=' + os.devNull,
   '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args], {
   timeout: Math.max(50, deadline - Date.now()), maxBuffer: 8 << 20, windowsHide: true,
