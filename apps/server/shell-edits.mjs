@@ -23,7 +23,7 @@
 // ponytail: the repo's own core settings (filemode, ignorecase, autocrlf) and a global core.excludesFile are not used;
 // git's defaults are, and its default global ignore file (~/.config/git/ignore).
 import { execFile } from 'node:child_process';
-import { copyFile, lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -56,7 +56,11 @@ async function box(cwd, deadline) {
     await mkdir(path.join(dir, 'refs')); await mkdir(path.join(dir, 'info'));
     await writeFile(path.join(dir, 'HEAD'), 'ref: refs/heads/p9\n');
     await writeFile(path.join(dir, 'config'), '[core]\n\trepositoryformatversion = 0\n\tbare = false\n');
-    await copyFile(path.join(dot, 'index'), path.join(dir, 'index')).catch(keep); // a fresh repo has none yet
+    // The copy keeps the index's own time (read first, so a newer index makes entries look racier, never surer): git trusts an
+    // entry whose file is older than its index and checks again one that is not, so a file changed in the same second as the
+    // index, at the same size, is still read (with the copy's later time it was taken as unchanged).
+    const ix = path.join(dot, 'index'), at = await stat(ix).catch(keep); // a fresh repo has none yet
+    if (at) await copyFile(ix, path.join(dir, 'index')).then(() => utimes(path.join(dir, 'index'), at.atime, at.mtime)).catch(keep);
     await copyFile(path.join(dot, 'info', 'exclude'), path.join(dir, 'info', 'exclude')).catch(keep);
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const env = { GIT_DIR: dir, GIT_WORK_TREE: top, GIT_OBJECT_DIRECTORY: path.join(dot, 'objects'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
