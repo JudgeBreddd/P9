@@ -729,6 +729,8 @@ dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 .tile-list small{grid-column:1/-1;font-size:11px;color:var(--muted-foreground)}
 .tile-table{overflow:auto}.tile-table table{border-collapse:collapse;width:100%;font-size:12px}
 .tile-table th{text-align:left;font-weight:600;color:var(--muted-foreground);border-bottom:1px solid var(--border);padding:2px 8px 4px 0}.tile-table td{padding:3px 8px 3px 0;color:var(--foreground);font-variant-numeric:tabular-nums}
+/* O239: in a section's window a list or table tile takes the whole row (not one 220 px column), and a long one scrolls inside 12rem, so the cards after it are in view */
+#mdlBody .dtile:has(>.tile-list,>.tile-table){grid-column:1/-1}#mdlBody .dtile>.tile-list,#mdlBody .dtile>.tile-table{max-height:12rem;overflow:auto}
 .tile-rings{display:flex;flex-wrap:wrap;gap:10px}.tile-rings figure{margin:0;display:grid;justify-items:center;position:relative;width:64px}
 .tile-rings svg{width:56px;height:56px;transform:rotate(-90deg)}.tile-rings circle{fill:none;stroke:var(--border);stroke-width:3.2}.tile-rings circle+circle{stroke:var(--primary);stroke-linecap:round}
 .tile-rings b{position:absolute;top:19px;font-size:12px;font-variant-numeric:tabular-nums;color:var(--foreground)}.tile-rings figcaption{font-size:11px;color:var(--muted-foreground);text-align:center}
