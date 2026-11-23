@@ -307,8 +307,9 @@ async function fetchEvents(wait = 0) {
   else {
     // O251: behind, the held events go and the first read runs again: the shown chat's newest blocks, the others stubs. The
     // gap's ends are not played one by one; the list's states say which chats moved.
-    // A stub's load still in flight ends first: it would put events up to the old base back and clear the new stub.
-    if (await pull('', wait, true)) { await Promise.all([...loading.values()].map((p) => p.catch(() => {}))); state.events = []; byChat.clear(); older.clear(); state.cursor = 0; await replay(); }
+    // No stub starts a load from here (history() reads only stubs) and one still in flight ends first: either would read up to
+    // the old base and clear the new stub, leaving that chat without the gap.
+    if (await pull('', wait, true)) { state.stubs = new Set(); await Promise.all([...loading.values()].map((p) => p.catch(() => {}))); state.events = []; byChat.clear(); older.clear(); state.cursor = 0; await replay(); }
     else gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
     for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled')

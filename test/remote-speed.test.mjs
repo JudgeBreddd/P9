@@ -113,6 +113,8 @@ test('O251 back after time away: the window draws the current state in one step,
   link.hold();
   const N = 1500;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'stream ' + N }); await ended(instance, id);
+  // A chat made while away: its created event is in the skipped gap, so its row comes from the list.
+  assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Made away' })).status < 300, true);
   const gap = (await call(instance, '/chat/events?after=0&only=&tail=1')).cursor; // a tail of no chats answers with the newest cursor
   const mark = link.log.length, woke = Date.now() - link.t0;
   link.release();
@@ -124,6 +126,7 @@ test('O251 back after time away: the window draws the current state in one step,
     for (const e of link.log.slice(mark)) console.log(`O251 ${String(e.at - woke).padStart(6)} ms -> ${String(e.done === null ? "never" : e.done - woke).padStart(6)} ${String(e.bytes).padStart(8)} B  ${e.req}`);
   }
   assert.ok(drawn, 'the chat shows its current state after wake');
+  await page.locator('#navList .row', { hasText: 'Made away' }).first().waitFor({ timeout: 15000 });
   const took = Date.now() - t1;
   const after = link.log.slice(mark), pages = after.filter((e) => /^GET \/chat\/events/.test(e.req));
   console.log(`O251 rtt ${RTT} ms, ${BPS * 8 / 1e6} Mbit/s: ${3 * N} updates streamed while away (ledger cursor ${gap}); current state drawn ${took} ms after wake; ${after.length} requests, ${pages.length} event reads, ${after.reduce((a, e) => a + e.bytes, 0)} bytes`);

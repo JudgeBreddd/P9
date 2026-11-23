@@ -1075,24 +1075,49 @@ async function loadChat() {
   };
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
   let sprintStale = false, sprintAt = 0;
+  // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
+  // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.
+  const caughtUp = (listed) => {
+    // Tabs keep the order the chats were made in; History sorts by last used.
+    const all = [...listed].sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
+    // 712: a stub carries its archive too; without it, after a restart an archived chat came back to the card and the sidebar.
+    outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+    // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out). O126: so does a
+    // name the user gave (its renamed event may be out of the tail, and the agent's title in it), through sprintFields.
+    for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
+    outer.loadProjects?.();
+    // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
+    try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
+    unseenKept = outer.S.loaded = true; // 733: from here a new ask or finish shows a notice (renderCards)
+    // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
+    // running (the phone may have resumed it) and gets its tab back.
+    for (const s of outer.S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (outer.closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; outer.liveChat.stop(s, true); } }
+    outer.closedChats.clear(); localStorage.removeItem('eh-closed-chats');
+    if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
+    // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
+    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+  };
   // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
   // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
-  // the box, the queue, a closed tab, an unseen mark. The gap's finishes are summed: a chat not shown that was used in the
+  // the box, the queue, an unseen mark; tabs follow the list as at launch (caughtUp: a stopped chat's is closed). The gap's finishes are summed: a chat not shown that was used in the
   // gap gets one unseen mark, not a notice per turn. False when the daemon did not answer, so the page is drawn as before.
   const jump = async () => {
     const head = await window.p9.chat('events', { after: 0, only: [], tail: TAIL }), l = await window.p9.chat('list', {});
     if (head.status !== 200 || l.status !== 200) return false;
     // A chat's load still in flight ends first: it marks its chat loaded when done, which would land on the emptied stub.
     await Promise.all(outer.S.sessions.map(s => s.loading).filter(Boolean).map(p => p.catch(() => {})));
-    const by = new Map((l.body.conversations || []).map(c => [c.id, c])), shown = new Set(outer.S.open);
+    const listed = l.body.conversations || [], by = new Map(listed.map(c => [c.id, c])), shown = new Set(outer.S.open);
+    // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
+    outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
     for (const s of outer.S.sessions) {
-      const c = by.get(s.id); if (!c || s.stub) continue;
-      const keep = { queue: s.queue, draft: s.draft, hidden: s.hidden, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
+      const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), { state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived }, keep);
-      sprintFields(s, c);
     }
     outer.liveChat.cursor = head.body.cursor; outer.keepUnseen();
+    // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
+    caughtUp(listed); outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
+    if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
     return true;
   };
@@ -1137,24 +1162,7 @@ async function loadChat() {
     if (r.body.more) for (const s of outer.S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
     if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
-      // Tabs keep the order the chats were made in; History sorts by last used.
-      const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
-      // 712: a stub carries its archive too; without it, after a restart an archived chat came back to the card and the sidebar.
-      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
-      // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out). O126: so does a
-      // name the user gave (its renamed event may be out of the tail, and the agent's title in it), through sprintFields.
-      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; sprintFields(s, c); } }
-      outer.loadProjects?.();
-      // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
-      try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
-      unseenKept = outer.S.loaded = true; // 733: from here a new ask or finish shows a notice (renderCards)
-      // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
-      // running (the phone may have resumed it) and gets its tab back.
-      for (const s of outer.S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (outer.closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; outer.liveChat.stop(s, true); } }
-      outer.closedChats.clear(); localStorage.removeItem('eh-closed-chats');
-      if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
-      // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
-      for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+      caughtUp(await list());
       outer.moveReloaded();
     }
     // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
