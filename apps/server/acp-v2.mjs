@@ -54,6 +54,19 @@ const withOptions = (value) => (value && Array.isArray(value.configOptions) ? { 
 // O121 part 2: each file keeps its hunks in _meta.hunks (the SDK drops a diff's other unknown fields; { old, new, rows }: start lines and ['ctx'|'add'|'del', text] rows), so the
 // chat shows each hunk with its line numbers. A hunk's lines are counted from its @@ header, so a removed line that reads
 // "-- x" or an added "++ x" is content, never a ---/+++ file line.
+// git C-quotes a path with a quote, a backslash or a control character in it ("o\\"dd\\n.txt"; other bytes as \\ooo): back to the
+// file's own name. A name git did not quote never starts with a quote (one that does gets quoted).
+const ESC = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+export function unquote(p) {
+  if (!(p.length > 1 && p.startsWith('"') && p.endsWith('"'))) return p;
+  const s = Buffer.from(p.slice(1, -1)), out = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== 92) { out.push(s[i]); continue; }
+    const c = String.fromCharCode(s[++i]);
+    if (/[0-7]/.test(c)) { out.push(parseInt(s.subarray(i, i + 3).toString('latin1'), 8) & 255); i += 2; } else out.push(ESC[c] ?? s[i]);
+  }
+  return Buffer.from(out).toString('utf8');
+}
 export function diffs(item) {
   const text = item?.patch?.text;
   if (typeof text !== 'string') return [];
@@ -72,8 +85,9 @@ export function diffs(item) {
     if (!file) continue;
     const at = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (at) { file.hunks.push(hunk = { old: +at[1], new: +at[3], rows: [] }); left = at[2] === undefined ? 1 : +at[2]; right = at[4] === undefined ? 1 : +at[4]; }
-    else if (line.startsWith('--- ')) { if (line.slice(4) === '/dev/null') file.added = true; else file.path = line.slice(4); }
-    else if (line.startsWith('+++ ')) { if (line.slice(4) === '/dev/null') file.deleted = true; else file.path = line.slice(4); }
+    // A path with a space ends its ---/+++ line with a tab (git's own diff), never part of the name.
+    else if (line.startsWith('--- ')) { if (line.slice(4) === '/dev/null') file.added = true; else file.path = line.slice(4).replace(/\t$/, ''); }
+    else if (line.startsWith('+++ ')) { if (line.slice(4) === '/dev/null') file.deleted = true; else file.path = line.slice(4).replace(/\t$/, ''); }
     else if (/^(rename|copy) to /.test(line)) file.path = line.slice(line.indexOf(' to ') + 4);
     else if (/^(rename|copy) from /.test(line)) file.from = line.slice(line.indexOf(' from ') + 6);
     else if (line.startsWith('new file mode ')) file.added = true;
@@ -82,8 +96,8 @@ export function diffs(item) {
     else if (line.startsWith('new mode ') && file.old) file.mode = file.old + ' → ' + line.slice(9);
     else if (line === 'GIT binary patch' || /^Binary files .* differ$/.test(line)) file.binary = true;
   }
-  return out.filter((f) => f.path).map((f) => ({ type: 'diff', path: f.path, newText: '', _meta: { added: f.added,
-    ...(f.deleted && { deleted: true }), ...(f.from && { from: f.from }), ...(f.binary && { binary: true }), ...(f.mode && { mode: f.mode }), hunks: f.hunks } }));
+  return out.filter((f) => f.path).map((f) => ({ type: 'diff', path: unquote(f.path), newText: '', _meta: { added: f.added,
+    ...(f.deleted && { deleted: true }), ...(f.from && { from: unquote(f.from) }), ...(f.binary && { binary: true }), ...(f.mode && { mode: f.mode }), hunks: f.hunks } }));
 }
 const content = (list) => Array.isArray(list) ? list.flatMap((item) => (item?.type === 'diff' && item.patch ? diffs(item) : [item])) : list;
 const tool = (call) => (call && Array.isArray(call.content) ? { ...call, content: content(call.content) } : call);

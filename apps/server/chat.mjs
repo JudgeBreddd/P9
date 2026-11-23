@@ -25,6 +25,7 @@ import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted } from './ledger.mjs';
+import { shellEnd, shellStart } from './shell-edits.mjs';
 import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START } from './agents.mjs';
 
 const run = promisify(execFile);
@@ -1322,6 +1323,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const init = await bounded(ask > 1 ? hello(ask).catch(() => hello(1)) : hello(1));
       // The chat's folder, checked again at every start like a file path (threat model row 24): a folder since swapped for a link fails.
       const cwd = await bounded(startOf(conversation));
+      session.cwd = cwd; // MC-15: where a turn's shell edits are looked for (shell-edits.mjs)
       session.capabilities = init.agentCapabilities ?? {};
       session.steering = init._meta?.steering?.supported === true;
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
@@ -1534,6 +1536,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // O188: each chat's count of turns and tool calls started (delegate.mjs: a worker's late wake is cancelled by either).
   const acts = new Map(), act = (id) => acts.set(id, (acts.get(id) ?? 0) + 1);
   function toolStep(id, session, update) {
+    // MC-15: the files the agent's own edit calls named, kept per call and counted at its finish (a failed write changed nothing),
+    // so the turn's Shell edits leave them to those calls' own diffs.
+    if (session.turnEdits && (update.kind === 'edit' || session.turnEdits.calls.has(update.toolCallId))) {
+      const calls = session.turnEdits.calls, paths = calls.get(update.toolCallId) ?? new Set();
+      calls.set(update.toolCallId, paths);
+      for (const p of [update.rawInput?.file_path, update.rawInput?.notebook_path, ...(Array.isArray(update.locations) ? update.locations.map((l) => l?.path) : []), ...(Array.isArray(update.content) ? update.content.filter((c) => c?.type === 'diff').map((c) => c.path) : [])]) if (typeof p === 'string' && p) paths.add(p);
+      if (update.status === 'completed') for (const p of paths) session.turnEdits.named.add(p);
+    }
     if (update.status === 'completed' || update.status === 'failed') {
       session.tools.delete(update.toolCallId);
       for (const item of session.held.splice(0)) steerHeld(id, session, item);
@@ -1885,6 +1895,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session, body);
       const turn = session.turn = randomUUID();
+      // MC-15: the folder's state as the turn starts; Shell edits at its end are what changed since (shell-edits.mjs).
+      const shellFrom = shellStart(session.cwd), edits = session.turnEdits = { calls: new Map(), named: new Set() };
       act(id);
       // O176: a prompted turn ends the unprompted run; the agent's next one has a new ID (ownRun), never the old one back.
       session.unprompted = null;
@@ -1909,7 +1921,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // the reply's model_usage, compactions included) when the reply has it.
       const done = (result) => { ended = result; untake(id); if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
       // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
-      new Promise((resolve) => resolve(session.agent.prompt({ sessionId: session.sessionId, prompt }))).then(
+      // MC-15: the files the turn changed outside its edit calls, as one finished edit call, before its turn-end (or error).
+      const shellEdits = () => shellFrom.then((from) => shellEnd(from, session.cwd, edits.named)).then((content) => {
+        if (content?.length && session.turn === turn && live.get(id) === session) emit(id, 'update', { sessionUpdate: 'tool_call', toolCallId: 'p9-shell-' + turn, title: 'Shell edits', kind: 'edit', status: 'completed', content, locations: content.map((c) => ({ path: c.path })) });
+      });
+      // The snapshot is taken before the prompt goes, so the agent's first write is never in it.
+      new Promise((resolve) => resolve(shellFrom.then(() => (session.cut === turn ? { stopReason: 'cancelled' } : session.agent.prompt({ sessionId: session.sessionId, prompt }))))).then(
+        (result) => shellEdits().then(() => result), (error) => shellEdits().then(() => { throw error; }),
+      ).then(
         done,
         // A prompt that failed may not have been read: its notes wait again, once (said twice is better than never;
         // a second failure drops them, so a note no prompt can carry does not fail every prompt after it).
@@ -1924,7 +1943,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
-        session.turn = null;
+        session.turn = null; session.turnEdits = null;
         if (!solo && sprintOf(id).task && !sprintOf(id).ready) setSprint(id, { idleSince: Date.now() });
         session.tools.clear();
         if (live.get(id) === session) setState(id, 'running');
@@ -1966,6 +1985,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!session?.turn) return refused(409, 'no-turn');
       for (const pending of session.pending.values()) pending.resolve(null);
       if (typeof by === 'string') cutBy(id, by);
+      session.cut = session.turn; // MC-15: a Stop while the turn's start snapshot runs sends no prompt
       await session.agent.cancel({ sessionId: session.sessionId });
       return { status: 200, ok: true };
     },

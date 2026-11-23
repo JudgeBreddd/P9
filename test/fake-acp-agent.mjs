@@ -11,7 +11,7 @@
 // own (startedNewTurn) that answers "got:<text>" and reports no end. "limits <n>" ends the turn, then reports context and plan use at n% a second later.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -681,6 +681,36 @@ const connection = acp.connectAgent(stream, {
         { type: 'diff', path: 'gone.md', newText: '', _meta: { added: false, deleted: true, hunks: [{ old: 1, new: 0, rows: [['del', 'x']] }] } }] } });
       await say('v2 kinds done');
       return { stopReason: 'end_turn' };
+    }
+    // MC-15 (shell-edits.test.mjs): files changed with no edit call (as a shell would), next to ones the agent's own
+    // edit calls name: tool.md through a finished Edit (left out of Shell edits), failed.md through a failed one (still counted).
+    if (text === 'shell writes' || text === 'shell many' || text === 'shell big' || text === 'shell tc' || text === 'shell outside' || text === 'shell deep' || text === 'shell odd') {
+      const at = (f) => path.join(folder, f);
+      if (text === 'shell tc') { writeFileSync(at('a.tc'), 'changed tc\n'); writeFileSync(at('note.txt'), 'note\n'); }
+      else if (text === 'shell outside') { writeFileSync(at('in.txt'), 'inside\n'); writeFileSync(path.join(folder, '..', 'sib.txt'), 'SECRET-SIB\n'); writeFileSync(path.join(folder, '..', '..', 'outside.txt'), 'SECRET-OUT\n'); }
+      else if (text === 'shell deep') {
+        const deep = path.join(folder, ...Array.from({ length: 3 }, (_, i) => String(i).repeat(200)));
+        mkdirSync(deep, { recursive: true });
+        for (let i = 0; i < 40; i++) writeFileSync(path.join(deep, 'f-' + String(i).padStart(2, '0') + '-' + 'n'.repeat(150) + '.txt'), Array.from({ length: 12 }, (_, j) => 'row ' + j + ' ' + 'y'.repeat(60)).join('\n') + '\n');
+      }
+      else if (text === 'shell odd') { writeFileSync(at('plain.txt'), 'plain\n'); writeFileSync(at('o"dd\nfilter.evil.clean=x.txt'), 'odd\n'); writeFileSync(at('f.txt'), 'changed in the turn\n'); }
+      else if (text === 'shell many') for (let i = 0; i < 45; i++) writeFileSync(at('many-' + String(i).padStart(2, '0') + '.txt'), 'n' + i + '\n');
+      else if (text === 'shell big') writeFileSync(at('big.txt'), Array.from({ length: 6000 }, (_, i) => 'line ' + i + ' ' + 'x'.repeat(20)).join('\n') + '\n');
+      else {
+        writeFileSync(at('a.txt'), 'one\nTWO\nthree\n');
+        writeFileSync(at('new.md'), 'fresh\n');
+        rmSync(at('gone.txt'));
+        renameSync(at('old.txt'), at('moved.txt'));
+        writeFileSync(at('bin.dat'), Buffer.from([0, 1, 2, 3, 0, 255]));
+        writeFileSync(at('sp ace.txt'), 'spaced again\n');
+        writeFileSync(at('predirty.txt'), 'before turn\nin turn\n');
+        writeFileSync(at('tool.md'), 'by the tool\n');
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'shell-edit-ok', title: 'Write tool.md', kind: 'edit', status: 'in_progress', locations: [{ path: at('tool.md') }] } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'shell-edit-ok', status: 'completed', content: [{ type: 'diff', path: at('tool.md'), oldText: null, newText: 'by the tool\n' }] } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'shell-edit-failed', title: 'Edit failed.md', kind: 'edit', status: 'failed', rawInput: { file_path: 'failed.md' } } });
+        writeFileSync(at('failed.md'), 'by the shell after all\n');
+      }
+      await say('shell done');
     }
     // MC-13, MC-14: one file created then edited, one edited twice, one created, deleted and written again.
     if (text === 'mc13 writes') {
