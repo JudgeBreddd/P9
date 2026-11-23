@@ -244,6 +244,17 @@ const connection = acp.connectAgent(stream, {
       await say('Glad she turned out just how you wanted!');
       return { stopReason: 'end_turn' };
     }
+    // O249: a busy chat as a real one is: each step a tool call whose result is a ~400 KB screenshot (base64 'A's: any
+    // base64 passes the image check), then a fresh slash-command list of ~70 KB, as the adapters resend it.
+    const heavy = /^heavy (\d+)$/.exec(text);
+    if (heavy) {
+      for (let i = 0; i < Number(heavy[1]); i += 1) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'heavy-' + i, title: 'Read shot' + i + '.png', kind: 'read', status: 'completed',
+          content: [{ type: 'content', content: { type: 'image', mimeType: 'image/png', data: 'A'.repeat(400000) } }] } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands: Array.from({ length: 300 }, (_, j) => ({ name: 'cmd' + j, description: 'x'.repeat(220) })) } });
+      }
+      await say('heavy done'); return { stopReason: 'end_turn' };
+    }
     // Images the way the real adapters send them (threat model row 26): Codex's image generation as a finished tool call
     // with the image (and its saved path as uri), Claude's image in a reply, and an image known only by its address.
     if (text === 'images') {

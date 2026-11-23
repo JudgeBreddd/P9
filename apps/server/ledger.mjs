@@ -81,6 +81,7 @@ export function rollbackLedger(file) {
 // steps: test hook to stand in for a later build's longer migration list.
 // The event types the phone draws as a block of their own (P20's tail read counts them).
 const BLOCKS = new Set(['user', 'approval', 'answered', 'question', 'error', 'steer-lost', 'interrupted', 'exited', 'stopped']);
+const COMMANDS = '"sessionUpdate":"available_commands_update"';
 const parsed = (row) => {
   try { return { ...row, data: JSON.parse(row.data) }; }
   catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }
@@ -261,10 +262,13 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
           if (rows.length < 500) break;
           before = rows.at(-1).cursor - 1;
         }
-        events.push(...statements.span.all(id, from, top));
+        // O249: only the newest slash-command list is used (chat-view.mjs, phone.ts), and each is about 70 KB: a busy chat's
+        // tail carried ten of them, 0.7 MB of a launch read over a remote. The older ones in the span stay out.
+        const span = statements.span.all(id, from, top), last = span.findLastIndex((e) => e.type === 'update' && e.data.includes(COMMANDS));
+        events.push(...span.filter((e, i) => i === last || e.type !== 'update' || !e.data.includes(COMMANDS)));
         if (cut) {
           more[id] = from;
-          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ['update', '"sessionUpdate":"available_commands_update"'], ...(user ? [] : [['user', '']])]
+          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ...(last < 0 ? [['update', COMMANDS]] : []), ...(user ? [] : [['user', '']])]
             .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean));
         }
       }

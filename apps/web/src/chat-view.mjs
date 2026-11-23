@@ -935,7 +935,7 @@ const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c =>
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
 const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return keptItems(q); } catch { return []; } };
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
-// E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
+// E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
 function history(s, until = outer.liveChat.cursor) {
   return s.loading ||= (async () => {
@@ -1063,9 +1063,11 @@ function applyChat(ev, into) {
 }
 async function loadChat() {
   if (!window.p9?.chat) return;
-  // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
-  // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
-  let replaying = true, scope = null, listed = [];
+  // O249: launch reads no chat's events before the list draws: a tail of no chats answers with the newest cursor (as jump()
+  // does), every chat comes from the list as a stub, the shown ones load their newest blocks (renderChats -> history), and
+  // the other open chats load after, one at a time (late, below). Before, launch replayed every open chat first (E2, P20),
+  // and a busy chat's screenshots held the whole window empty for 45 s over a remote.
+  let replaying = true, scope = null;
   // O47: the list reply carries each agent's lists; while the daemon reads them fresh, ask again until it is done.
   let asking = false;
   const lists = async body => { if (!outer.takeLists(body?.lists) || asking) return; asking = true;
@@ -1128,11 +1130,20 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
     return true;
   };
+  // O249: the open chats not shown load after the list draws, shown ones first, one read at a time so the shown chat's
+  // read is not shared with the rest over a slow link. Their asks were there before launch, so the bell's notices start
+  // only when all are in (S.loaded; bell-notice.mjs counts the first draw after as old).
+  // ponytail: an ask that comes in while they load counts as old too: it is on the bell, without its notice.
+  const late = async () => {
+    outer.S.loaded = false;
+    const shown = new Set(outer.S.open), open = outer.S.sessions.filter(s => s.stub && !s.hidden).sort((a, b) => shown.has(b.id) - shown.has(a.id));
+    for (const s of open) { if (outer.lifetime.signal.aborted) return; try { await history(s); } catch (e) { console.error('chat history', e); } }
+    outer.S.loaded = true; outer.renderCards();
+  };
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { lists(l.body); listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
-    // P20: the first replay reads each open chat's newest blocks only (tailed, above).
+    if (l?.status === 200) { lists(l.body); scope = { only: [] }; }
     const tail = replaying && scope?.only && !outer.liveChat.cursor ? { tail: TAIL } : {};
     const r = scope ? await window.p9.chat('events', { after: outer.liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
@@ -1142,8 +1153,6 @@ async function loadChat() {
     // O251: a full page while live means this window fell behind (a sleep, a dropped link), and drawing every update since,
     // 500 at a time, took minutes over a remote. Jump instead, as a fresh launch would (jump, below).
     if (!replaying && r.body.events.length >= 500 && await jump()) continue;
-    // A tail can leave out a chat's created event, so its tab comes from the list.
-    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), archived: c.archived, parent: c.parent ?? null });
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
@@ -1166,11 +1175,11 @@ async function loadChat() {
       if (closed) { closed.hidden = true; untab(closed.id); }
     }
     outer.liveChat.cursor = r.body.cursor; if (!replaying && r.body.events.length) sprintStale = true;
-    if (r.body.more) for (const s of outer.S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
     if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
       caughtUp(await list());
       outer.moveReloaded();
+      late();
     }
     // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
     else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }

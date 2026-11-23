@@ -87,6 +87,46 @@ test('remote speed: the window over a slow link, how long until the chats show, 
   assert.deepEqual(errors, []);
 });
 
+// O249: a remote with a busy chat (MBs of screenshots and repeated slash-command lists) drew empty boxes for ~45 s, because
+// launch replayed every open chat before it drew the list. The list should draw in a few round trips, whatever a chat holds.
+test('O249 a busy chat does not hold the chat list back over a slow link', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // The busy chat first, so the two newest (the ones shown at launch) are small: the list must not wait on any chat's events.
+  const heavy = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Busy' })).conversation;
+  await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'heavy 8' }); await ended(instance, heavy);
+  // Only the newest slash-command list comes in a chat's tail (ledger.tail): eight came before, 0.5 MB of nothing.
+  const tail = await call(instance, '/chat/events?after=0&tail=200&only=' + heavy);
+  assert.equal(tail.events.filter((e) => e.data?.sessionUpdate === 'available_commands_update').length, 1, 'one slash-command list in the tail');
+  for (let i = 0; i < 11; i += 1) {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Chat ' + i })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello ' + i }); await ended(instance, id);
+  }
+  const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
+  const sock = path.join(slow, 'daemon.sock');
+  const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
+  await writeFile(path.join(slow, 'desktop.json'), JSON.stringify({ ...creds, socketPath: sock }), { mode: 0o600 });
+  const link = await slowLink(path.join(instance.state, 'daemon.sock'), sock, RTT, t);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const start = Date.now(); // not from Chat live: before the fix that came only when the whole replay had arrived
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', slow, '--user-data-dir=' + path.join(slow, 'profile')], env, chromiumSandbox: true, timeout: 60000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((r) => setTimeout(r, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 1400, height: 900 }).catch(() => {});
+  await page.locator('#navList .row[data-chat]').nth(11).waitFor({ timeout: 120000 });
+  await page.locator('#chats').getByText('echo:hello 10', { exact: false }).first().waitFor({ timeout: 120000 });
+  const drawn = Date.now() - start;
+  console.log(`O249 rtt ${RTT} ms, ${BPS * 8 / 1e6} Mbit/s: 12 chats listed and the shown chat drawn ${drawn} ms after launch`);
+  for (const e of link.log) console.log(`O249 ${String(e.at).padStart(6)} -> ${String(e.done == null ? 'open' : e.done).padStart(6)} ms ${String(e.bytes).padStart(8)} B  ${e.req}`);
+  // The busy chat's ~3.5 MB alone is 14 s at 2 Mbit/s; the list and the shown chat are a few small reads after the window starts.
+  assert.ok(drawn < 10000, `the list and the shown chat drew ${drawn} ms after launch; a busy chat's events must not come first`);
+  // It still loads, after: opened, its last reply shows.
+  await page.locator(`#navList .row[data-chat="${heavy}"]`).click();
+  await page.locator('#chats').getByText('heavy done', { exact: false }).first().waitFor({ timeout: 120000 });
+  assert.deepEqual(errors, []);
+});
+
 // O251: back after time away. The window was open, its machine slept (the link held), one chat worked meanwhile; on wake the
 // window should draw that chat's current state in one step, not page through every update the chat streamed meanwhile.
 test('O251 back after time away: the window draws the current state in one step, not every update since', { timeout: 300000 }, async (t) => {
