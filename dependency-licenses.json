@@ -14,7 +14,7 @@
     }
   },
   {
-    "name": "@agentclientprotocol/sdk@2.6.0",
+    "name": "@agentclientprotocol/sdk@2.8.0",
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a"
