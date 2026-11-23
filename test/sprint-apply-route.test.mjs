@@ -22,7 +22,7 @@ test('Folder sprint routes: the copy list names the sprint, and an apply without
   fs.writeFileSync(path.join(sprint, 'copy-record.json'), JSON.stringify({ source: 'x', baseline: { commit: 'x' } }));
   const list = await call(instance, '/sprints');
   assert.equal(list.status, 200, JSON.stringify(list.body));
-  assert.deepEqual(list.body.copies, [{ id: ID, applied: false }], 'the copy is listed, not applied yet');
+  assert.deepEqual(list.body.copies, [{ id: ID, source: 'x', applied: false }], 'the copy is listed with its folder, not applied yet');
   for (const body of [{ shown: 'x' }, { yes: false, shown: 'x' }, { yes: true, shown: 'x', extra: 1 }]) {
     const r = await call(instance, `/sprints/${ID}/apply`, 'POST', body);
     assert.equal(r.status, 400, JSON.stringify(body));

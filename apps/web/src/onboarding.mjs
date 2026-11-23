@@ -1,14 +1,14 @@
 // The onboarding card on an empty Mission (M4, threat model row 72) and the space picker (row 71), drawn the same on the desktop
-// and the phone. esc is the caller's escaper. Every word is P9's own; template names, titles and space names come from the daemon.
+// and the phone. esc is the caller's escaper. Every word is P9's own; template names, titles, space names and the agents' names
+// (CAT-1h: agents, [{ id, name }], one build button each; the phone gives none) come from the daemon.
 // protect: File protection is on, so an agent cannot write the space yet: say so, with a button to that setting.
-export function onboardCard({ templates = [], spaces = [], current = null, protect = false }, esc) {
+export function onboardCard({ templates = [], spaces = [], current = null, protect = false, agents = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }] }, esc) {
   return '<section class="onboard" data-onboard aria-labelledby="onboardTitle">'
     + '<h3 id="onboardTitle">Build your Mission Control</h3>'
     + '<p>Mission Control is your control room: buttons that run your scripts, live numbers, log views, notes and links, in sections you choose. It is empty for now.</p>'
     + '<p class="muted">Have an agent build it with you, or start from a template and fill it in. You can change all of it later.</p>'
     + '<div class="onboard-go">'
-    + '<button type="button" data-slot="button" data-variant="default" data-build="claude">Have Claude build it</button>'
-    + '<button type="button" data-slot="button" data-variant="outline" data-build="codex">Have Codex build it</button>'
+    + agents.map((a, i) => `<button type="button" data-slot="button" data-variant="${i ? 'outline' : 'default'}" data-build="${esc(a.id)}">Have ${esc(a.name)} build it</button>`).join('')
     + '<button type="button" data-slot="button" data-variant="outline" data-yourself>Build it yourself</button></div>'
     + (protect ? '<div class="onboard-protect" data-onboard-protect><p>' + PROTECT_WORDS[0] + '</p>'
       + '<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-open-protect>Open File protection</button>'

@@ -1,6 +1,6 @@
 // Mission Control's page: sections, windows, the space menu, notes and file modals. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { tileLevel, tileAnswer, tileHtml, quickNoteHtml, linkHtml, quickNotePath, quickNoteWords } from './data-tiles.mjs';
-import { esc, limitItems, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImageError, sprintTimes, md } from './helpers.mjs';
+import { esc, limitItems, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImageError, md } from './helpers.mjs';
 import { editItems, editorModal } from './mission-editor.mjs';
 import { freeName, templateWords } from './onboarding.mjs';
 import { checklistHtml, checklistAnswer, checklistAction } from './checklist.mjs';
@@ -32,7 +32,7 @@ async function loadUsage() {
   const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
   // O190/O191 FIX1: each answer replaces the last one whole, so a field an older daemon does not send (tokens, profiles,
   // limits) or a failed read leaves nothing of the previous answer behind. A failed read keeps only the plan limits: they
-  // carry their own age (limitLine: "N min old", muted after 1 h), and dropping them would blank every chat's meter on a blip.
+  // carry their own age (limitLine: "N min old", muted by the daemon's stale mark), and dropping them would blank every chat's meter on a blip.
   const kept = result.status === 200 ? result.body : { limits: usage.limits };
   for (const key of Object.keys(usage)) delete usage[key];
   Object.assign(usage, noUsage(), kept);
@@ -87,20 +87,19 @@ async function loadMission() {
   outer.renderMission(); outer.renderTabs(); loadArt(); loadSprint();
 }
 // Sprint tracker: the button shows while the connected machine has a sprint status file (the sprint skill writes it each
-// wake-up). 404 = no sprint; any other answer keeps the button and the window says why.
+// wake-up), or while a folder sprint's change waits to be applied (O233: a P9 sprint writes no status file). 404 = no sprint;
+// any other answer keeps the button and the window says why.
 async function loadSprint() {
   clearTimeout(outer.SP.timer);
-  const r = await window.p9.mission('sprint').catch(() => ({ status: 503 }));
+  const [r, c] = await Promise.all([window.p9.mission('sprint').catch(() => ({ status: 503 })), window.p9.mission('sprintCopies').catch(() => ({ status: 503 }))]);
   if (outer.lifetime.signal.aborted) return;
-  const on = r.status !== 404 && r.status !== 503, before = JSON.stringify([outer.SP.on, outer.SP.data]);
+  const on = r.status !== 404 && r.status !== 503, before = JSON.stringify([outer.SP.on, outer.SP.data, outer.SP.waiting]);
   outer.SP.on = on; outer.SP.data = r.status === 200 ? r.body : null; outer.SP.error = on && r.status !== 200 ? (r.body?.reason || r.body?.error || String(r.status)) : '';
-  if (before !== JSON.stringify([outer.SP.on, outer.SP.data])) outer.renderMission(); // the tile shows merged/total
-  if (outer.mdl.open && outer.S.modal?.kind === 'sprint') { if (on) outer.renderModal(); else outer.closeModal(); }
+  outer.SP.waiting = c.status === 200 && Array.isArray(c.body?.copies) ? c.body.copies.filter(x => !x.applied).length : 0;
+  if (before !== JSON.stringify([outer.SP.on, outer.SP.data, outer.SP.waiting])) outer.renderMission(); // the tile shows merged/total or what waits
+  if (outer.mdl.open && outer.S.modal?.kind === 'sprint') { if (on || outer.SP.waiting) outer.renderModal(); else outer.closeModal(); }
   outer.SP.timer = outer.setTimeout(loadSprint, 30000);
 }
-const SPRINT_STATE = { running: 'running', waiting: 'waiting', merged: 'merged', blocked: 'blocked', unknown: 'unknown' };
-const sprintOverall = d => Number.isFinite(d.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${d.overall}%" style="--p:${d.overall}" data-overall><b>${d.overall}%</b></div><div class="spt"><b>Whole sprint</b><span class="sm muted">${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</span></div></div>` : '';
-const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}${c.activity ? ` · <span data-activity="${esc(c.activity)}">${esc(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${esc(c.steps)}</span>` : ''}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
 // The unnamed tile's buttons: each is a registry script (asks first, like any script), found by its fixed id.
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
 const scriptById = id => outer.M.cardScripts?.[id] ?? Object.values(outer.M.scripts).flat().find(s => s[0] === id && s[6]?.live);
@@ -243,11 +242,11 @@ const placedHtml = s => s.widget === 'waiting' ? NEEDS : s.widget === 'usage' ||
   : s.widget ? `<div data-card="${WIDGET_WIN[s.widget]}"></div>`
   : `<section class="mpanel" data-sec="${esc(s.title)}" data-key="${esc(s.id)}"><button class="phead" data-group="${esc(s.title)}" data-key="${esc(s.id)}"><h4>${esc(s.title)}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 // P9's built-in tiles (W-D). Named by a section (s), each draws there under the section's title; idea shows because the file asks for it,
-// sprint still only while there is a sprint status file. Unnamed, the three keep their own titles and today's rules.
+// sprint only while there is a sprint status file or a folder sprint's change waiting (O233). Unnamed, the three keep their own titles and today's rules.
 const BUILTIN = { idea: '+ New idea', sprint: 'Sprint status', edit: 'Edit names and icons' };
-const builtinTile = (w, s) => !outer.live.on || (w === 'idea' && !s && !icmSpace()) || (w === 'sprint' && !outer.SP.on) ? ''
+const builtinTile = (w, s) => !outer.live.on || (w === 'idea' && !s && !icmSpace()) || (w === 'sprint' && !outer.SP.on && !outer.SP.waiting) ? ''
   : w === 'idea' ? `<button class="tile" data-idea><span></span><b>${esc(s?.title ?? BUILTIN.idea)}</b></button>`
-  : w === 'sprint' ? `<button class="tile" data-sprint="${esc(s?.id ?? '')}"><span class="lvl" data-l="${outer.SP.data ? 'ok' : 'bad'}"></span><b>${esc(s?.title ?? BUILTIN.sprint)}</b><span class="n">${outer.SP.data ? outer.SP.data.chunks.filter(c => c.state === 'merged').length + '/' + outer.SP.data.chunks.length : '!'}</span></button>`
+  : w === 'sprint' ? `<button class="tile" data-sprint="${esc(s?.id ?? '')}"><span class="lvl" data-l="${outer.SP.data || !outer.SP.on ? 'ok' : 'bad'}"></span><b>${esc(s?.title ?? BUILTIN.sprint)}</b><span class="n">${outer.SP.data ? outer.SP.data.chunks.filter(c => c.state === 'merged').length + '/' + outer.SP.data.chunks.length : outer.SP.on ? '!' : outer.SP.waiting + ' to apply'}</span></button>`
   : `<button class="tile" data-medit><span></span><b>${esc(s?.title ?? BUILTIN.edit)}</b></button>`;
 // What a built-in tile (or its button inside a section's widgets) opens; sec is the section naming sprint, whose buttons its window runs.
 const builtinModal = (w, sec) => w === 'idea' ? { kind: 'idea', name: '', text: '', needs: false } : w === 'sprint' ? { kind: 'sprint', sec } : { kind: 'medit', items: editItems(outer.M) };
@@ -402,7 +401,7 @@ function bindOnboard(root) {
     b.disabled = false;
     if (r.status === 201 && r.body.space) {
       outer.live.adding = false; outer.renderMission();
-      outer.toast({ kind: 'chat', txt: (b.dataset.build === 'codex' ? 'Codex' : 'Claude') + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
+      outer.toast({ kind: 'chat', txt: (outer.names[b.dataset.build] ?? b.dataset.build) + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
     }
     if (r.status === 201) outer.openModal({ kind: 'chat', id: r.body.conversation });
     else outer.toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
@@ -516,7 +515,7 @@ function fillWidgets(root, back) {
     else if (w === 'usage') outer.setHTML(b, outer.wins.musage.inline());
     else if (w === 'apps') bindWin(outer.setHTML(b, outer.wins.mlaunch.body()), back ?? { kind: 'win', id: 'mlaunch' });
     else if (w === 'primary') outer.setHTML(b, outer.live.primary ? outer.wins.mprimary.body() : '<p class="empty">No main project.</p>');
-    else if (TILE_WIDGETS.includes(w)) outer.setHTML(b, w === 'sprint' && !outer.SP.on ? '<p class="empty">No sprint status file.</p>' : `<button data-slot="button" data-variant="outline" data-wopen>${esc(BUILTIN[w])}</button>`)
+    else if (TILE_WIDGETS.includes(w)) outer.setHTML(b, w === 'sprint' && !outer.SP.on && !outer.SP.waiting ? '<p class="empty">No sprint status file.</p>' : `<button data-slot="button" data-variant="outline" data-wopen>${esc(BUILTIN[w])}</button>`)
       .querySelectorAll('[data-wopen]').forEach(x => x.onclick = () => outer.openModal(builtinModal(w, box.dataset.wkey)));
   });
 }
@@ -887,15 +886,12 @@ function missionModal(m, body, row) {
       else outer.toast({ kind: 'chat', txt: 'Fix with Claude: ' + (r.body?.error || r.status), level: 'bad' }, true);
     };
   } else if (m.kind === 'sprint') {
-    const d = outer.SP.data;
-    outer.$('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
-    body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
-      : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(outer.SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}<div data-copies></div></div>`;
-    // Folder sprints: each copy P9 made opens its review (SECURITY.md "Applying to your folder is a yes").
-    window.p9.mission('sprintCopies').then(r => { const box = body.querySelector('[data-copies]'); if (!box || r.status !== 200) return;
-      box.innerHTML = r.body.copies.length ? `<h3>Folder sprints</h3>${r.body.copies.map(c => `<button data-slot="button" data-variant="outline" data-copy="${esc(c.id)}">${c.applied ? 'Applied' : 'Review change'}</button>`).join(' ')}` : '';
-      box.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => outer.openModal({ kind: 'sprintcopy', id: b.dataset.copy, back: m }));
-    }, () => {});
+    outer.$('#mdlT').textContent = outer.SP.data ? 'Sprint · ' + (outer.SP.data.sprint || 'unnamed') : 'Sprint';
+    // The rings, the status file's error and Folder sprints are drawn by the lazy chunk, out of the shell's startup JS (O233);
+    // a redraw keeps the last body (and its scroll) until the new one is ready.
+    if (!body.querySelector('[data-sprint-body]')) body.innerHTML = '<div class="review" data-sprint-body><p class="sm muted">Loading…</p></div>';
+    import('./mission-sprint.mjs').then(v => (b) => v.sprintBody(outer, m, b), () => (b) => { b.textContent = 'Cannot show the sprint right now.'; })
+      .then(draw => { if (outer.mdl.open && outer.S.modal === m) draw(body); }); // loaded or not, only into this window
     const runs = sprintScripts(m.sec);
     outer.$('#mdlFoot').innerHTML = runs.map(([id, label, row]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${esc(id)}"${row ? '' : ` disabled title="Add a ${esc(id)} button to the registry"`}>${esc(label)}</button>`).join('')
       + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
