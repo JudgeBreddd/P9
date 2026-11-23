@@ -281,6 +281,27 @@ function trim(update) {
 export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath, state, ownership }) {
   const db = ledger.db;
   const live = new Map(); // conversation -> { proc, agent, sessionId, exited, turn, pending: Map }
+  // A2 step 5 (goal, server half): an agent that keeps a goal (claude-agent-acp: /goal in a prompt or _session/goal) sends
+  // it to a client that declares the _meta extension clientCapabilities has, as session_info_update _meta.jetbrains.air.goal:
+  // the snapshot, or null once cleared. Codex declares nothing to P9 (ACP 2: acp-v2.mjs passes only elicitation), so it
+  // sends none. Kept per chat: read back once from the update events already in the ledger (so a restart keeps it), then
+  // followed live. Only the objective and its status are given out, cut to size; anything else is not a goal.
+  const goals = new Map(); // conversation -> { objective, status } | null
+  const goalOf = (g) => (g === null ? null : g && typeof g === 'object' && typeof g.objective === 'string' && g.objective.trim()
+    ? { objective: g.objective.trim().slice(0, 2000), status: typeof g.status === 'string' && g.status ? g.status.slice(0, 20) : 'active' } : undefined);
+  const goalSaid = (update) => {
+    const air = update?.sessionUpdate === 'session_info_update' ? update._meta?.jetbrains?.air : undefined;
+    return air && typeof air === 'object' && Object.hasOwn(air, 'goal') ? goalOf(air.goal) : undefined;
+  };
+  const goalNow = (id) => {
+    if (!goals.has(id)) {
+      const rows = db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'update' AND json_extract(data, '$.sessionUpdate') = 'session_info_update' AND json_type(data, '$._meta.jetbrains.air.goal') IS NOT NULL ORDER BY cursor DESC").iterate(id);
+      let found = null;
+      for (const { data } of rows) { const g = goalSaid(JSON.parse(data)); if (g !== undefined) { found = g; break; } }
+      goals.set(id, found);
+    }
+    return goals.get(id);
+  };
   const listeners = new Set();
   const stops = new Map(); // conversation -> the Stop in progress
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
@@ -1254,7 +1275,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         compacted.seen(session, conversation.id, update);
         compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
-        emit(conversation.id, 'update', trim(agentImages(update)));
+        const g = goalSaid(update);
+        if (g !== undefined) goals.set(conversation.id, g);
+        // An oversized update is stored without its _meta (trim); its goal (set or cleared, already cut to size) is put
+        // back alone, so the read-back after a restart finds it and does not bring back the one before.
+        let stored = trim(agentImages(update));
+        if (g !== undefined && stored.truncated) stored = { ...stored, _meta: { jetbrains: { air: { goal: g } } } };
+        emit(conversation.id, 'update', stored);
         if (session.ghost) session.ghost.refresh();
         if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);
         unprompted(session, conversation.id, update);
@@ -1997,6 +2024,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     // A7 Delegate (delegate.mjs). info: one chat as the tools need it; mode is the name in MODES, null until its agent runs.
+    // A2 step 5: the chat's goal as its agent last said it, or null (none, or cleared).
+    goal: (id) => (ID.test(id ?? '') ? goalNow(id) : null),
     info(id) {
       const c = ID.test(id ?? '') && row(id);
       if (!c) return null;
@@ -2009,7 +2038,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // session.back: during and after a turn that answered another chat, the chat's own mode is the one it returns to.
         mode: (session?.back ?? session?.mode) ? Object.keys(MODES[c.provider]).find((k) => MODES[c.provider][k] === (session.back ?? session.mode)) ?? null : null,
         model: session?.models?.current ?? null, effort: effort ? { id: effort.id, value: effort.current } : null,
-        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)), compacting: Boolean(session?.compacting),
+        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)), compacting: Boolean(session?.compacting), ...(goalNow(id) && { goal: goalNow(id) }),
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
     turnEnded: (hook) => { turnEndedHooks.add(hook); },
