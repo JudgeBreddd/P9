@@ -59,6 +59,10 @@ export default async function* fileLimit(source) {
       const exit = details?.error?.exitCode != null || details?.error?.signal ? ` exited with ${details.error.signal ? 'signal ' + details.error.signal : 'code ' + details.error.exitCode}` : '';
       process.stderr.write(`✖ failed now: ${name} (${where ? path.relative(process.cwd(), where) : '?'}:${line ?? '?'})${exit}\n  ${why}\n`);
     }
+    // The green check (scripts/green-check.mjs): spec's ✔ lines carry no file, so each test that ran and passed is named
+    // here with its file; a skipped or todo test is not.
+    const { skip, todo, file: from, name } = event.data ?? {};
+    if (event.type === 'test:pass' && !skip && !todo && from && !fileOf(event.data)) process.stderr.write(`P9_PASS ${path.relative(process.cwd(), from)} :: ${name}\n`);
     const file = fileOf(event.data);
     if (!file) continue;
     if (event.type === 'test:dequeue' && !timers.has(file)) {
