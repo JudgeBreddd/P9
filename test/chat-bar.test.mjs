@@ -548,6 +548,34 @@ test('O133 Settings: the Default model and effort show as kept after a failed fi
   const reply3 = pane3.locator('.hist', { hasText: 'config:model=' }).first();
   await reply3.waitFor({ timeout: 20000 });
   assert.match(await reply3.innerText(), /effort=high,/, '(6) a New chat starts on the held save, not the read served before it');
+  // (7) N6-2b: two saves applied out of send order. High is picked and held 3 s on its way; Low is picked after it and goes at once,
+  // so the daemon applies Low, then High, and keeps High. The page must keep what the daemon kept (its revision), not the
+  // newest send (Low).
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.held7 = 0; globalThis.held7Done = false;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'newChatDefaults' && args[1]?.set?.claude?.effort === 'high' && !globalThis.held7++
+      ? new Promise((res) => setTimeout(res, 3000)).then(() => h(e, ...args)).then((r) => { globalThis.held7Done = true; return r; }) : h(e, ...args));
+  });
+  await open();
+  await page.selectOption('[data-default-effort="claude"]', 'medium');
+  await until(async () => (await call(instance, '/start-defaults')).claude.effort === 'medium', 'Medium saved');
+  await page.selectOption('[data-default-effort="claude"]', 'high');
+  await until(async () => await app.evaluate(() => globalThis.held7) >= 1, 'the High save was sent (and held)');
+  await page.selectOption('[data-default-effort="claude"]', 'low');
+  await until(async () => (await call(instance, '/start-defaults')).claude.effort === 'low', 'the Low save, sent second, applied first');
+  await until(async () => await app.evaluate(() => globalThis.held7Done), 'the High save answered', 10000);
+  await close();
+  assert.equal((await call(instance, '/start-defaults')).claude.effort, 'high', '(7) the daemon applied High last');
+  const before4 = await ids();
+  await page.click('#newBtn');
+  let id4;
+  await until(async () => (id4 = (await ids()).find((x) => !before4.includes(x))), 'the fourth New chat listed');
+  await page.locator('#nav .row[data-chat="' + id4 + '"]').click();
+  const pane4 = page.locator('#chats .pane[data-id="' + id4 + '"]');
+  await pane4.locator('.composer textarea').fill('config'); await pane4.locator('.composer textarea').press('Enter');
+  const reply4 = pane4.locator('.hist', { hasText: 'config:model=' }).first();
+  await reply4.waitFor({ timeout: 20000 });
+  assert.match(await reply4.innerText(), /effort=high,/, '(7) a New chat starts on what the daemon kept (High), not the newest send (Low)');
   assert.deepEqual(errors, []);
   console.log('PASS O133 Settings: Defaults shown as kept; a late read never puts back an older one');
 });

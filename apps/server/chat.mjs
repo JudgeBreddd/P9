@@ -2179,9 +2179,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // #222 review: a save names only the fields it changes ({ codex: { effort: 'high' } }) and is merged into what is kept, so two
     // picks in flight, or two windows, never put back each other's older value. onlyEmpty (the one-time move of a value the window
     // kept itself) fills a field only while it is still ''.
-    setNewChatDefaults(patch, onlyEmpty = false) { const v = this.newChatDefaults();
+    // N6-2b: each save also counts up rev, kept with them, so a window keeps the answer the daemon applied last, not the one it sent last.
+    startDefaultsRev: () => { try { const rev = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'start-defaults'").get()?.value ?? '{}')?.rev; return Number.isSafeInteger(rev) ? rev : 0; } catch { return 0; } },
+    setNewChatDefaults(patch, onlyEmpty = false) { const v = this.newChatDefaults(), rev = this.startDefaultsRev() + 1;
       for (const [a, f] of Object.entries(patch)) for (const [k, x] of Object.entries(f)) if (!onlyEmpty || !v[a][k]) { if (k === 'mode' && !x) delete v[a].mode; else v[a][k] = x; }
-      db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(v)); return this.newChatDefaults(); },
+      db.prepare("INSERT INTO prefs (key, value) VALUES ('start-defaults', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify({ ...v, rev })); return this.newChatDefaults(); },
     // O197: how each kind of P9 notice reaches a parent chat: 'note' (starts no turn) or 'message' (starts or joins its turn,
     // only in a parent that is open and not stopped; delegate.mjs notify). Kept in prefs under 'notices'; a save names only the kinds it changes.
     notices: () => { let v; try { v = JSON.parse(db.prepare("SELECT value FROM prefs WHERE key = 'notices'").get()?.value ?? '{}'); } catch { v = {}; }
