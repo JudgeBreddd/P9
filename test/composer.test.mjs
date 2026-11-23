@@ -362,3 +362,28 @@ test('RS2: an agent\'s restart request shows a Restart P9 button that asks to re
   await until(() => button.isEnabled(), 'the button back after Cancel', 5000);
   console.log('PASS RS2: the restart request showed Restart P9; it asked to restart, and Cancel left P9 running');
 });
+
+// #479 review: attach.mjs loads on the first attach. A failed load (the chunk's first request cancelled) says why, keeps the
+// draft and attaches nothing; the next attach loads it afresh, without a reload, and the file is a chip.
+test('A2 step 1: a failed load of the attach code says so, keeps the draft, and the next attach works', { timeout: 90000 }, async (t) => {
+  const { app, page, pane, type } = await setup(t, 'a2-chunk');
+  await app.evaluate(({ session }) => {
+    globalThis.attachRequests = 0;
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      if (/\/_astro\/attach[^/]*\.js/.test(details.url)) callback({ cancel: ++globalThis.attachRequests === 1 }); else callback({});
+    });
+  });
+  await type('keep this draft');
+  const pick = async () => {
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
+    await chooser.setFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('n') }]);
+  };
+  await pick();
+  await page.locator('#toasts .toast', { hasText: 'Could not load attaching; nothing was attached. Try again.' }).waitFor({ timeout: 15000 });
+  assert.equal(await pane.locator('.attach').count(), 0, 'nothing attached');
+  assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is kept');
+  await pick();
+  await pane.locator('.attach .att-file', { hasText: 'notes.txt' }).waitFor({ timeout: 10000 });
+  assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is still there');
+  assert.equal(await app.evaluate(() => globalThis.attachRequests), 2, 'the chunk was requested again on the next attach');
+});

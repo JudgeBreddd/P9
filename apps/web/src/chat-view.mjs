@@ -838,8 +838,11 @@ function pickImages(s) {
   input.click();
 }
 // The paperclip, a pasted screenshot and dropped files all come through here (pasting screenshots did not work).
+// attach.mjs loads on the first attach; a failed load says so and changes nothing, and the next attach imports it afresh.
 async function addImages(s, files) {
-  const { attachFull, readAttachment } = await import('./attach.mjs');
+  const m = await import('./attach.mjs').catch(() => null);
+  if (!m) return outer.toast({ kind: 'not attached', txt: 'Could not load attaching; nothing was attached. Try again.', level: 'warn' }, true);
+  const { attachFull, readAttachment } = m;
   for (const file of files) {
     const full = attachFull(file, s.images ||= []); if (full) { outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
     try { s.images.push(await readAttachment(file, s.images)); }
