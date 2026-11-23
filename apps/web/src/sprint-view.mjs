@@ -78,6 +78,7 @@ export function statusHtml(s, esc, opts = {}) {
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
     ${end ? `<p class="hint" data-sv-closed>Closed ${esc(when)} by ${end.by === 'owner' ? 'you' : 'a chat\'s agent, on your yes'}. This is its record: everything here is as it stood at Close and no longer changes. Its chats are stopped; its files stay, and so do the worker folders Close kept (work not saved or not yet in the main line).</p>`
       : `<div class="sv-ctl"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}"${opts.closing ? ' disabled' : ''} title="Stops every chat of this sprint, keeps its record, turns its scripts off and removes its finished worker folders (merged, nothing unsaved). An agent does the same with close_sprint, after asking you.">${opts.closing ? 'Closing…' : 'Close sprint'}</button>${opts.said ? `<span class="hint" data-sv-said role="status">${esc(opts.said)}</span>` : ''}</div>`}
+    ${end ? copyHtml(s, esc, opts) : ''}
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
@@ -89,6 +90,26 @@ export function statusHtml(s, esc, opts = {}) {
     ${plan.length ? `<div data-sv-flat${byPhase(s) && planOpen.has(s.sprint.id) ? ' hidden' : ''}><h3>Plan items</h3><ul class="sv-items">${plan.map(i => row(i)).join('')}</ul></div>${byPhase(s) ? planView(s, plan, row, esc) : ''}` : ''}
   </section>`;
 }
+
+// O233: a closed sprint from a folder with no remote shows its change on its page, with the same preview and yes as the
+// Folder sprints review (sprint-copy-view.mjs): until applied it says the change is not in the owner's folder. A closed page
+// has no Close press, so opts.closing and opts.said serve its Save press.
+const CHANGE = { A: 'added', M: 'changed', D: 'removed' };
+function copyHtml(s, esc, opts) {
+  const c = s.copy, li = items => items.length ? `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p class="sm muted">None.</p>';
+  if (!c) return '';
+  // O233 (the count, Lead's A): an item counts only by P9's own evidence; commits on the copy's main line that no review names are said, not counted.
+  const un = c.unnamed ? `<p class="sm" data-sv-unnamed>The copy's main line has ${c.unnamed} ${c.unnamed === 1 ? 'commit' : 'commits'} since the sprint started that no review names: P9 cannot tie ${c.unnamed === 1 ? 'it' : 'them'} to an item, so the count above leaves ${c.unnamed === 1 ? 'it' : 'them'} out.</p>` : '';
+  if (c.applied) return `<div data-sv-copy="applied"><h3>Your folder</h3>${un}${(c.lines ?? []).map(l => `<p class="sm" role="status">${esc(l)}</p>`).join('')}${c.pending ? ''
+    : `<h3>Written</h3>${li(c.written.map(p => `<code>${esc(p)}</code>`))}${c.rolledBack.length ? `<h3>Rolled back</h3>${li(c.rolledBack.map(p => `<code>${esc(p)}</code>`))}` : ''}${c.left.length ? `<h3>Left or failed</h3>${li(c.left.map(l => `<code>${esc(l.path)}</code>: ${esc(l.reason)}`))}` : ''}`}</div>`;
+  if (c.refused) return `<div data-sv-copy="refused"><h3>Your folder</h3>${un}<p class="sm" role="status">This sprint's change is not in your folder, and P9 cannot show it: ${esc(c.refused)}.</p></div>`;
+  return `<div data-sv-copy="waiting"><h3>Your folder</h3>${un}<p data-sv-copy-say>Not applied: this sprint's change is only in P9's copy, not in ${esc(c.source)}. These are the files that were edited during the sprint. Do you want to save them to your linked project folder?</p>`
+    + li(c.changes.map(x => `${CHANGE[x.status] ?? esc(x.status)} <code>${esc(x.path)}</code>`)) + ((c.left ?? []).length ? `<h3>Not copied from your folder</h3>${li(c.left.map(l => `<code>${esc(l.path)}</code>: ${esc(l.reason)}`))}` : '')
+    + (c.changes.length ? `<p class="sm muted">A file changed since this was shown is refused.</p><div class="sv-ctl"><button type="button" data-slot="button" data-size="sm" data-pj="spapply" data-lead="${esc(s.sprint.id)}" data-shown="${esc(c.shown)}"${opts.closing ? ' disabled' : ''}>${opts.closing ? 'Saving…' : 'Yes, save to my folder'}</button>${opts.said ? `<span class="hint" data-sv-apply-said role="status">${esc(opts.said)}</span>` : ''}</div>` : '') + '</div>';
+}
+// The yes: the change shown (its digest), applied only by the owner's press. Answers '' when applied, else why not.
+export const applyPress = async b => { const r = await Promise.resolve().then(() => window.p9.mission('sprintApply', { id: b.dataset.lead, shown: b.dataset.shown })).catch(e => ({ body: { error: e?.message } }));
+  return r.status === 200 ? '' : 'Not saved: ' + (r.body?.refused || r.body?.detail || r.body?.error || r.status || 'no answer'); };
 
 // H2 (SECURITY.md § Standing merge): the owner's switch, on Sprint Setup; only this page sets it, no agent tool does.
 export const mergeHtml = (sp, esc) => sp.closed ? '' : `<label class="set-pick" data-sp-merge title="On: the lead may merge a PR that passed review, once the sprint's before-merge scripts allow it. Off: the lead is told merge is yours and asks you. A new sprint starts with it off; a sprint made before this switch existed keeps merge on. It binds a lead that reports before it merges (sprint_event), as the sprint rules tell it to; it cannot stop git itself."><input type="checkbox" data-pj="spmerge" data-lead="${esc(sp.lead)}"${sp.merge ? ' checked' : ''}> Standing merge: the lead may merge</label>`;
