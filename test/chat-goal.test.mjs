@@ -53,4 +53,14 @@ test('A2 goal: an agent\'s goal reaches read_chat, list_chats and wait_chat; non
   assert.deepEqual(await goalIn(), [undefined, undefined, undefined], 'a cleared goal is still given');
   await again('state-3');
   assert.deepEqual(await goalIn(), [undefined, undefined, undefined], 'a restart brought back a cleared goal');
+  // An update over the stored-event size (70 KB of other _meta): its set and its clear both still hold after a restart.
+  const big = { objective: 'big set', status: 'active' };
+  await tell('goal-pad {"objective":"big set"}');
+  assert.deepEqual(await goalIn(), [big, big, big]);
+  await again('state-4');
+  assert.deepEqual(await goalIn(), [big, big, big], 'a restart lost an oversized update\'s goal');
+  await tell('goal-pad null');
+  assert.deepEqual(await goalIn(), [undefined, undefined, undefined], 'an oversized clear was not kept');
+  await again('state-5');
+  assert.deepEqual(await goalIn(), [undefined, undefined, undefined], 'a restart brought back the goal an oversized update cleared');
 });

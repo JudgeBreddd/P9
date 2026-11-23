@@ -318,9 +318,11 @@ const connection = acp.connectAgent(stream, {
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
     // A2 step 5: like claude-agent-acp's publishGoal, a goal snapshot (JSON, or null) in session_info_update _meta, only
     // to a client that declares the _meta extension; 'goal-raw <json>' sends the _meta as given.
-    if (text.startsWith('goal ') || text.startsWith('goal-raw ')) {
-      const raw = text.startsWith('goal-raw '), value = JSON.parse(text.slice(raw ? 9 : 5));
-      if (air) await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', _meta: raw ? value : { jetbrains: { air: { version: 1, goal: value } } } } });
+    // 'goal-pad <json>' sends the goal with 70 KB of other _meta, so the update is over P9's stored-event size.
+    if (text.startsWith('goal ') || text.startsWith('goal-raw ') || text.startsWith('goal-pad ')) {
+      const raw = text.startsWith('goal-raw '), pad = text.startsWith('goal-pad '), value = JSON.parse(text.slice(text.indexOf(' ') + 1));
+      const meta = raw ? value : { jetbrains: { air: { version: 1, goal: value } }, ...(pad ? { pad: 'x'.repeat(70000) } : {}) };
+      if (air) await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', _meta: meta } });
       await say('goal sent'); return { stopReason: 'end_turn' };
     }
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }

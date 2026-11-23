@@ -1275,8 +1275,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         compacted.seen(session, conversation.id, update);
         compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
-        { const g = goalSaid(update); if (g !== undefined) goals.set(conversation.id, g); }
-        emit(conversation.id, 'update', trim(agentImages(update)));
+        const g = goalSaid(update);
+        if (g !== undefined) goals.set(conversation.id, g);
+        // An oversized update is stored without its _meta (trim); its goal (set or cleared, already cut to size) is put
+        // back alone, so the read-back after a restart finds it and does not bring back the one before.
+        let stored = trim(agentImages(update));
+        if (g !== undefined && stored.truncated) stored = { ...stored, _meta: { jetbrains: { air: { goal: g } } } };
+        emit(conversation.id, 'update', stored);
         if (session.ghost) session.ghost.refresh();
         if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);
         unprompted(session, conversation.id, update);
