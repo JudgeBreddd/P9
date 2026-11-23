@@ -5,11 +5,11 @@ const host = (url) => { try { return new URL(url).host; } catch { return ''; } }
 
 // A tile's or card's level from its script's JSON: 'warn', 'bad' or '' (ok, none, or not answered yet).
 export const tileLevel = (r) => { const v = r?.shape || r?.json; return v && typeof v === 'object' && ['warn', 'bad'].includes(v.level) ? v.level : ''; };
-// r: the daemon's answer ({ shape } or { why, printed }), { allow: script title } before the user's Allow, { error }, or nothing yet.
+// r: the daemon's answer ({ shape } or { why, printed }), { allow: script title, every: its section's refresh in s } before the user's Allow, { error }, or nothing yet.
 // what: the word for it in the text ('card' for a Mission card, row M5).
 export function tileHtml(r, esc, what = 'tile') {
   if (!r) return '<p class="tile-note">Loading…</p>';
-  if (r.allow) return `<p class="tile-note">Runs ${esc(r.allow)} every 30 s while Mission shows this ${what}.</p><button type="button" class="tile-allow" data-tile-allow>Allow</button>`;
+  if (r.allow) return `<p class="tile-note">Runs ${esc(r.allow)} every ${r.every ?? 30} s while Mission shows this ${what}.</p><button type="button" class="tile-allow" data-tile-allow>Allow</button>`;
   if (r.error) return `<p class="tile-note">Could not run it: ${esc(r.error)}</p>`;
   if (r.why) return `<p class="tile-note">This ${what}'s script ${esc(r.why)}${r.printed ? ':' : '.'}</p>${r.printed ? `<pre class="tile-printed">${esc(r.printed)}</pre>` : ''}`;
   const s = r.shape;
@@ -30,7 +30,7 @@ export const linkHtml = (l, esc, open = true) => web(l.url) && !l.ask
     : `<span class="tile-link" data-weblink-off><span>${esc(l.title)}</span><small>Open it in the P9 desktop app</small></span>`;
 
 // The daemon's reply to a tile's ask, as tileHtml takes it.
-export const tileAnswer = (status, body) => status === 200 ? body : body?.error === 'allow-required' ? { allow: body.script } : { error: body?.detail || body?.error || String(status) };
+export const tileAnswer = (status, body) => status === 200 ? body : body?.error === 'allow-required' ? { allow: body.script, every: body.every } : { error: body?.detail || body?.error || String(status) };
 
 // Quick note (threat model row 76), the same on the desktop and the phone: the title is the file name (characters a file name or
 // Obsidian cannot hold become spaces), saved as one new .md in the section's folder; an existing name is refused, never replaced.

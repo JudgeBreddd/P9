@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { daemon, http, authenticated } from './helpers.mjs';
-import { tileHtml, linkHtml } from '../apps/web/src/data-tiles.mjs';
+import { tileHtml, tileAnswer, linkHtml } from '../apps/web/src/data-tiles.mjs';
 import { dataShape } from '../apps/server/mission-fields.mjs';
 
 // Mission data tiles and links (M3, threat model row 70).
@@ -107,6 +107,11 @@ test('MC-20: refresh 300 on a section runs its tile once in 31 s while a default
   const overview = (await call(instance, '/mission')).body;
   assert.deepEqual(overview.space.map((section) => [section.id, section.refresh]), [['slow-host', 300], ['home', undefined]]);
   assert.match(JSON.stringify(overview.invalid), /refresh/, 'refresh 10 is named as the reason');
+  // MC-20 note: before Allow, the ask names the section's interval, and the note under the tile says it.
+  const asks = await Promise.all(['list', 'stat'].map(async (id) => (await tile(instance, id)).body));
+  assert.deepEqual(asks.map((b) => [b.error, b.every]), [['allow-required', 300], ['allow-required', 30]]);
+  assert.match(tileHtml(tileAnswer(409, asks[0]), esc), /every 300 s while Mission shows this tile/);
+  assert.match(tileHtml(tileAnswer(409, asks[1]), esc, 'card'), /every 30 s while Mission shows this card/);
   for (const id of ['list', 'stat']) { await allow(instance, id); assert.ok((await tile(instance, id)).body.shape, id); }
   await new Promise((done) => setTimeout(done, 31000));
   for (const id of ['list', 'stat']) assert.ok((await tile(instance, id)).body.shape, id);

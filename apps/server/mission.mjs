@@ -906,7 +906,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   async function data(id) {
     const target = await tile(id);
     if (target.error) return target;
-    if ((await answered())[id] !== target.key) return { status: 409, error: 'allow-required', script: target.script.title };
+    if ((await answered())[id] !== target.key) return { status: 409, error: 'allow-required', script: target.script.title, every: target.everyMs / 1000 };
     const last = tileRuns.get(id);
     if (last?.key === target.key && Date.now() - last.at < target.everyMs) return { status: 200, ...(await last.result) };
     const result = runTile(target);
