@@ -1984,23 +1984,26 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // by: what cut it when not the user (stop_chat names the chat), said with the chat's next prompt (O231).
     async cancel(id, by) {
       const session = ID.test(id) && live.get(id);
-      if (!session?.turn && !session?.quiet && !session?.ghost) return refused(409, 'no-turn');
+      if (!session?.turn && !session?.quiet && !session?.ghost && !session?.unstop) return refused(409, 'no-turn');
       // A question or approval still open is declined, prompted turn or not, so the agent's wait on it ends.
       for (const pending of session.pending.values()) pending.resolve(null);
       if (!session.turn) {
         // O253: Stop on a run nobody prompted (open quiet or ghost timer: O192, O194, CP8). The agent is told to cancel
         // and that run ends here, once, so the phone and desktop stop showing Working and the end hooks run.
-        // session.unstop: while the cancel is pending no new run opens (unprompted(), marked()), and a second Stop returns at once:
-        // this one ends the run. The markers are cleared only once the cancel returned, so a cancel that fails leaves the run open
-        // and a retry finds it.
-        if (session.unstop) return { status: 200, ok: true };
-        session.unstop = true;
-        try { await session.agent.cancel({ sessionId: session.sessionId }); } finally { session.unstop = false; }
-        // A prompt that started meanwhile owns the chat now, and a run that ended on its own meanwhile has had its end.
-        if (live.get(id) !== session || session.turn || !(session.quiet || session.ghost)) return { status: 200, ok: true };
-        clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null;
-        emit(id, 'turn-end', { stopReason: 'cancelled', unprompted: true });
-        unpromptedEnd(session, id);
+        // session.unstop: the pending cancel. While it runs no new run opens (unprompted(), marked()), and an overlapping
+        // Stop shares its result, a failure included. The markers are cleared only once the cancel returned, so a cancel
+        // that fails leaves the run open and a retry finds it.
+        session.unstop ??= (async () => {
+          try { await session.agent.cancel({ sessionId: session.sessionId }); } finally { session.unstop = null; }
+          // A prompt that started meanwhile owns the chat now: the old run's end is not sent over it.
+          if (live.get(id) !== session || session.turn) return;
+          // A run whose quiet time or end mark came meanwhile had its end hooks but no turn-end the phone sees: send it.
+          const open = !!(session.quiet || session.ghost);
+          clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null;
+          emit(id, 'turn-end', { stopReason: 'cancelled', unprompted: true });
+          if (open) unpromptedEnd(session, id);
+        })();
+        await session.unstop;
         return { status: 200, ok: true };
       }
       if (typeof by === 'string') cutBy(id, by);
