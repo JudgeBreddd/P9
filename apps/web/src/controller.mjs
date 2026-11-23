@@ -583,7 +583,7 @@ function renderMission() {
   // a template click shows its preview.
   if ((live.empty || live.adding) && !sampleView) {
     const t = live.preview && guide?.templates?.find(x => x.name === live.preview);
-    setHTML($('#fMission'), t ? previewCard(t, esc) : onboardCard({ templates: guide?.templates, protect: live.fileProtection }, esc)
+    setHTML($('#fMission'), t ? previewCard(t, esc) : onboardCard({ templates: guide?.templates, protect: live.fileProtection, agents: Object.entries(names).map(([id, name]) => ({ id, name })) }, esc)
       + (live.adding ? `<p class="onboard-back"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-add-cancel>Back to ${esc(live.spaceName || 'Main')}</button></p>` : ''));
     bindOnboard($('#fMission'));
     if (!guide) loadGuide();

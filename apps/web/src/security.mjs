@@ -22,6 +22,10 @@ export const SECURITY = {
 };
 // The mode Unrestricted mode starts new chats in, per agent.
 export const LOOSEST = { claude: 'Bypass permissions', codex: 'Full access' };
+// CAT-1h: from GET /agents (the chat list's read), each agent's mode that acts unasked (tier 4) warns and is its LOOSEST;
+// a built-in warning keeps its words. ponytail: LOOSE is keyed by mode name, so a name two agents share warns for both.
+export const fillLoose = (agents) => agents.forEach((a) => a.modes?.forEach((m) => { if (m.tier === 4) { LOOSEST[a.id] = m.name;
+  LOOSE[m.name] ??= (a.short || a.name) + ' acts without asking first: it can run any command and change any file it can reach.'; } }));
 // The warnings are on while any loosened mode still asks ("Don't show again" not set for it).
 export const warnsLoose = () => Object.keys(LOOSE).some((m) => !localStorage.getItem('p9-mode-ok:' + m));
 export const setWarnsLoose = (on) => Object.keys(LOOSE).forEach((m) => on ? localStorage.removeItem('p9-mode-ok:' + m) : localStorage.setItem('p9-mode-ok:' + m, '1'));
