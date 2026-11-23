@@ -85,8 +85,8 @@ const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop th
 export function chatFailed(action, body, ms) {
   // The daemon refuses a new chat's folder only (chat.mjs create): say what a folder needs.
   if (action === 'create' && body?.error === 'request-refused') return 'Could not start the chat in that folder. It must exist on the server; a full path works only in Unrestricted mode.';
-  if (action === 'prompt' && body?.error === 'file-too-large') return body.message || 'A file is over 6 MiB; nothing was sent.';
-  if (action === 'prompt' && body?.error === 'body-too-large') return 'The message and its files are over 12 MiB; nothing was sent.';
+  // A send over the size limits (chat.mjs file-too-large, server.mjs body-too-large): the daemon's message says which.
+  if (action === 'prompt' && /too-large$/.test(body?.error)) return body.message ?? null;
   if (body?.error === 'profile-gone') return 'This chat\'s provider profile was removed in Settings. The chat can be read, not continued.';
   if (body?.error !== 'daemon-unavailable') return null;
   const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);
