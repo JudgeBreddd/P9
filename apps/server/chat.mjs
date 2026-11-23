@@ -798,6 +798,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // and no tool call open, it has ended and the turn's end hooks run (delegate.mjs: the parent's end note and late wake).
   // ponytail: a tool call that never completes keeps the run open; a run that pauses longer than the quiet time ends twice.
   const UNPROMPTED_QUIET_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_QUIET_MS) > 0 ? Number(process.env.P9_UNPROMPTED_QUIET_MS) : 60000;
+  const unpromptedOn = (id) => { const session = live.get(id); return !!session && !session.turn && !!(session.quiet || session.ghost); };
   const unpromptedEnd = (session, id) => {
     if (live.get(id) === session && !session.turn && !session.stopping && !session.compacting && session.held.length + session.queued.length === 0) for (const hook of settledHooks) { try { hook(id, true, 'unprompted'); } catch {} }
   };
@@ -821,7 +822,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.quiet.unref?.();
   };
   const unprompted = (session, id, update) => {
-    if (session.turn || session.solo || session.stopping || session.compacting) return;
+    if (session.turn || session.solo || session.stopping || session.compacting || session.unstop) return;
     if (!session.quiet && !['tool_call', 'tool_call_update', 'agent_message_chunk'].includes(update?.sessionUpdate)) return;
     quiet(session, id);
   };
@@ -831,7 +832,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // ponytail: async_task_* updates are read for this only, not stored or shown.
   const marked = (session, id, update) => {
     if (update?.sessionUpdate === 'async_task_spawned' && update.taskType === 'turn') {
-      if (session.turn || session.solo || session.stopping || session.compacting) return;
+      if (session.turn || session.solo || session.stopping || session.compacting || session.unstop) return;
       session.marked = update.asyncTaskId;
       quiet(session, id);
     } else if (update?.sessionUpdate === 'async_task_state_update' && update.asyncTaskId === session.marked && ['completed', 'failed', 'stopped'].includes(update.state)) {
@@ -1485,7 +1486,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     emit(id, 'user', user());
     // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
     // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
-    if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(() => {
+    if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(function ended() {
+      // O253: during a Stop's pending cancel the run stays open; the cancel sends its one end, or a failed cancel leaves
+      // it open for a retry (checked again in 1 s).
+      if (session.unstop) { session.ghost = setTimeout(ended, 1000); return; }
       session.ghost = null;
       if (!session.turn && live.get(id) === session) emit(id, 'turn-end', { stopReason: 'end_turn', unprompted: true });
     }, 10000);
@@ -1718,9 +1722,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
             AND json_extract(b.data, '$.request') = json_extract(a.data, '$.request'))) AS waiting
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // named: the title stays over the agent's (the user's rename, or O172 a sprint chat's role name, as the title update above).
+      // unprompted (O253): a run nobody prompted is open (its state stays 'idle'), so a list row not loaded yet says Working.
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1 || !!key || sprintFiles.exists(c.id), waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(closedOf(c.id) && { sprintClosed: true }), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1 || !!key || sprintFiles.exists(c.id), waiting: c.waiting === 1, ...(unpromptedOn(c.id) && { unprompted: true }), preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(closedOf(c.id) && { sprintClosed: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1990,8 +1995,28 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // by: what cut it when not the user (stop_chat names the chat), said with the chat's next prompt (O231).
     async cancel(id, by) {
       const session = ID.test(id) && live.get(id);
-      if (!session?.turn) return refused(409, 'no-turn');
+      if (!session?.turn && !session?.quiet && !session?.ghost && !session?.unstop) return refused(409, 'no-turn');
+      // A question or approval still open is declined, prompted turn or not, so the agent's wait on it ends.
       for (const pending of session.pending.values()) pending.resolve(null);
+      if (!session.turn) {
+        // O253: Stop on a run nobody prompted (open quiet or ghost timer: O192, O194, CP8). The agent is told to cancel
+        // and that run ends here, once, so the phone and desktop stop showing Working and the end hooks run.
+        // session.unstop: the pending cancel. While it runs no new run opens (unprompted(), marked()), and an overlapping
+        // Stop shares its result, a failure included. The markers are cleared only once the cancel returned, so a cancel
+        // that fails leaves the run open and a retry finds it.
+        session.unstop ??= (async () => {
+          try { await session.agent.cancel({ sessionId: session.sessionId }); } finally { session.unstop = null; }
+          // A prompt that started meanwhile owns the chat now: the old run's end is not sent over it.
+          if (live.get(id) !== session || session.turn) return;
+          // A run whose quiet time or end mark came meanwhile had its end hooks but no turn-end the phone sees: send it.
+          const open = !!(session.quiet || session.ghost);
+          clearTimeout(session.quiet); clearTimeout(session.ghost); session.quiet = session.ghost = session.marked = null;
+          emit(id, 'turn-end', { stopReason: 'cancelled', unprompted: true });
+          if (open) unpromptedEnd(session, id);
+        })();
+        await session.unstop;
+        return { status: 200, ok: true };
+      }
       if (typeof by === 'string') cutBy(id, by);
       session.cut = session.turn; // MC-15: a Stop while the turn's start snapshot runs sends no prompt
       await session.agent.cancel({ sessionId: session.sessionId });
