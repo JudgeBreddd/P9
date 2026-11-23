@@ -1454,7 +1454,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // steer before that met an agent with no turn and was refused. It waits for the prompt (queued right after the snapshot).
     const turn = session.turn;
     await session.starting;
-    if (session.turn !== turn || session.stopping) return refused(409, 'turn-running');
+    if (session.turn !== turn || session.stopping || session.cut === turn) return refused(409, 'turn-running'); // a Stop meanwhile sent no prompt
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session, body);
