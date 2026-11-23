@@ -3,12 +3,12 @@
 // agent-first-workspace (_engine/acp-connection.ts, os-process.ts, provider-service.ts); the adapter
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import * as acp from './acp.mjs';
@@ -39,8 +39,26 @@ export const DEFAULT_RULES = ['Before you start, say in one line which folder yo
   'End every reply with one line that says whether the work passed, failed or is waiting, and on what.'].join('\n');
 // Photos from the paperclip (threat model row 20): raster types only, base64, 2 MiB each, four a message.
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']), MAX_IMAGES = 4, MAX_IMAGE = 2 * 1024 * 1024;
-const imagesOk = (images) => Array.isArray(images) && images.length <= MAX_IMAGES && images.every((image) => image && typeof image === 'object'
-  && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data));
+// A2 step 1 (SECURITY.md § Files you send in a chat): any other file from the paperclip is saved in <ownership>/attachments/<chat id>/ and
+// reaches the agent as a resource_link to that path, so the agent's own tools can open, edit and save it. At most 4 a
+// message, 8 MiB of base64 (6 MiB) each; the request as a whole stays under the server's body limit. A saved file rides in
+// the images list as { file, size }, so a held, paused or joined message carries it; its path is always that chat's folder
+// plus the name, so a forged entry can only name a file already in its own chat's folder.
+const MAX_FILES = 4, MAX_FILE = 8 * 1024 * 1024, BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+// FIX2 (Reviewer): a name is also refused if Windows would read it as something else: a device (CON, NUL, COM1, LPT\u00b9,
+// CONIN$... with or without an extension, any case), a name it would trim (a trailing dot or space) or a stream (':', above).
+// 200 bytes is under every system's 255 per name; a taken name's tag is cut to fit the same 200 (tagged, below). Node opens
+// long Windows paths itself.
+const DEVICE = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\.|$)/i;
+const fileName = (name) => typeof name === 'string' && name.length > 0 && Buffer.byteLength(name) <= 200 && name !== '.' && name !== '..' && !/[\x00-\x1f/\\:*?"<>|]/.test(name)
+  && !/[. ]$/.test(name) && !DEVICE.test(name);
+const linked = (image) => typeof image?.file === 'string';
+const photos = (images) => images.filter((image) => !linked(image));
+const imagesOk = (images) => Array.isArray(images) && photos(images).length <= MAX_IMAGES && images.length - photos(images).length <= MAX_FILES
+  && images.every((image) => (linked(image) ? fileName(image.file) && Number.isSafeInteger(image.size) && image.size >= 0 : image && typeof image === 'object'
+  && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data)));
+const filesOk = (files) => Array.isArray(files) && files.length <= MAX_FILES && files.every((file) => file && typeof file === 'object' && fileName(file.name)
+  && typeof file.data === 'string' && BASE64.test(file.data) && (file.mimeType === undefined || (typeof file.mimeType === 'string' && file.mimeType.length <= 200)));
 const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }, MAX_STORED = 200 * 1024 * 1024;
 // Item 26: before it, photos were kept in <state>/images. The Windows state folder (%LOCALAPPDATA%\P9\runtime) is never
 // emptied, so that folder made every later start refuse (state-directory-not-empty, main.mjs). Called before that check:
@@ -344,6 +362,47 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }
     return { hash, type: mimeType };
   });
+  // A2 step 1: a chat's own folder for files (0700), made at its start so the agent is given it (additionalDirectories).
+  // A folder since swapped for a link is refused, as the chat folder is (threat model row 24).
+  const attachDir = ownership && path.join(ownership, 'attachments');
+  // FIX1 (Reviewer): the attachments folder itself is checked too, on save, start and delete: one swapped for a link
+  // would take the chat's folder, its files and a delete outside ownership.
+  const rootOk = () => lstatSync(attachDir, { throwIfNoEntry: false })?.isDirectory() === true;
+  const filesOf = (id) => {
+    mkdirSync(attachDir, { recursive: true, mode: 0o700 });
+    if (!rootOk()) throw new Error('attachments-not-a-folder');
+    const dir = path.join(attachDir, id);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (!lstatSync(dir).isDirectory()) throw new Error('attachments-not-a-folder');
+    return dir;
+  };
+  // Each file is created new (O_EXCL, so a name taken by an earlier file or by a link the agent made is never written
+  // through), 0600; a taken name gets a short random tag before its extension.
+  // FIX3 (Reviewer): the tagged name keeps fileName's own limit, so a queued or held message that names it again passes
+  // imagesOk: the base is cut, whole characters only, to make room (a very long extension goes behind the tag, cut too).
+  const tagged = (name, ext) => {
+    if (Buffer.byteLength(ext) > 100) ext = '';
+    const base = Array.from(name.slice(0, name.length - ext.length)), tag = '-' + randomUUID().slice(0, 8) + ext;
+    while (base.length && Buffer.byteLength(base.join('') + tag) > 200) base.pop();
+    return base.join('') + tag;
+  };
+  const save = (id, files) => files.map(({ name, data }) => {
+    const dir = filesOf(id), bytes = Buffer.from(data, 'base64'), ext = path.extname(name);
+    for (let n = 0, file = name; ; n += 1, file = tagged(name, ext)) {
+      if (!fileName(file)) throw new Error('file-name');
+      let fd;
+      try { fd = openSync(path.join(dir, file), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
+      catch (error) { if (error.code === 'EEXIST' && n < 8) continue; throw error; }
+      // A write that fails (a full disk) leaves no half file behind.
+      try { writeFileSync(fd, bytes); } catch (error) { closeSync(fd); fd = undefined; unlinkSync(path.join(dir, file)); throw error; } finally { if (fd !== undefined) closeSync(fd); }
+      return { file, size: bytes.length };
+    }
+  });
+  // What an event shows of a message's images and files: photos by hash (keep), files by name and size.
+  const shown = (images) => {
+    const kept = photos(images), files = images.filter(linked);
+    return { ...(kept.length && { images: keep(kept) }), ...(files.length && { files: files.map(({ file, size }) => ({ name: file, size })) }) };
+  };
   // A failed append (disk full, a busy database) is logged, not thrown: emit runs inside child exit listeners and un-awaited
   // chains, where a throw would end the daemon and every chat with it (review 2026-11-03). The chat goes on; the event is lost.
   // A7 Delegate: who sent a message when it was not the user (a parent chat's id, or 'p9' for P9's own notice). Kept
@@ -1231,8 +1290,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const own = conversation.provider === 'claude' ? { emitRawSDKMessages: rawResults } : {}; // O190, rawResults above
       const _meta = profile ? { claudeCode: { ...own, options: { env: { ANTHROPIC_BASE_URL: profiles.get(profile.id).baseUrl, ANTHROPIC_AUTH_TOKEN: await bounded(profiles.secret(profile.id)) } } } }
         : own.emitRawSDKMessages ? { claudeCode: own } : undefined;
+      // A2 step 1: the chat's files folder, on new and on resume (claude-agent-acp restarts a resumed query once when it changes).
+      const extra = attachDir ? { additionalDirectories: [filesOf(conversation.id)] } : {};
       if (conversation.session) {
-        const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers, ...(_meta && { _meta }) }));
+        const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers, ...extra, ...(_meta && { _meta }) }));
         session.mode = resumed?.configOptions?.find((o) => o.id === 'mode')?.currentValue;
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
@@ -1254,7 +1315,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: label(session.models) }), ...(changes.length && { restoreNotice: changes }) });
         if (session.models) emit(conversation.id, 'config', configOf(session));
       } else {
-        const created = await bounded(session.agent.newSession({ cwd, mcpServers, ...(_meta && { _meta }) }));
+        const created = await bounded(session.agent.newSession({ cwd, mcpServers, ...extra, ...(_meta && { _meta }) }));
         session.sessionId = created.sessionId;
         db.prepare('UPDATE conversations SET session = ? WHERE id = ?').run(session.sessionId, conversation.id);
         // contracts.md rule 2: P9 picks the starting mode, not the adapter (claude-agent-acp 0.104.1 starts in auto, 0.88.0 in default).
@@ -1321,7 +1382,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return results.includes('cleanup-failed') ? 'cleanup-failed' : 'stopped';
   }
 
-  const blocks = (text, images) => [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(({ mimeType, data }) => ({ type: 'image', mimeType, data }))];
+  const blocks = (id, text, images) => [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(({ mimeType, data, file, size }) => (linked({ file })
+    ? { type: 'resource_link', name: file, uri: pathToFileURL(path.join(attachDir, id, file)).href, size } : { type: 'image', mimeType, data }))];
   // 2026-10-24 (a user's messages waited 8 h behind an open question and a turn that never ended): a message sent while
   // the agent asks declines the question or approval, as Claude Code's "tell Claude what to do differently" does.
   // Only the user's own message (O96): a P9 note or another chat's message is not the user's answer, so it leaves the
@@ -1343,7 +1405,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   async function steer(id, body, images, held) {
     const session = live.get(id);
     if (!session?.turn || !session.steering || session.stopping || session.solo) return refused(409, 'turn-running'); // nothing joins a turn that answers another chat
-    if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
+    if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session, body);
     // Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is delivered,
@@ -1351,8 +1413,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
     const rules = rulesFor(row(id), body);
     if (rules?.started) sending.set(id, rules.start);
-    const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held?.length && { held }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }), ...(repeats.has(body) && { repeat: true }) });
-    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(body.text, images)],
+    const user = () => ({ text: body.text, ...shown(images), steered: true, ...(held?.length && { held }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }), ...(repeats.has(body) && { repeat: true }) });
+    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(id, body.text, images)],
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
     try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
@@ -1391,7 +1453,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const waitingReplace = (session, body) => body.replaces !== undefined && [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
   // was: the IDs it waited under before (a restart's replay, O109 FIX1); its 'user' or 'unheld' event names them too.
   function hold(id, session, body, images, when, repicks = false, was = []) {
-    if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
+    if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     const item = { id: randomUUID(), body, images, allowed: captureAuthority(), was };
     const old = waitingReplace(session, body);
@@ -1420,7 +1482,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     if (old) unheld(id, [old], 'replaced');
-    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: mode, ...(old && { replaces: old.id }) });
+    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }) });
     if (kept) crashAt('held-event');
     crashHook(body);
     if (kept) crashAt('hold-write');
@@ -1486,7 +1548,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // O109 FIX1: a message that may be a repeat goes alone, so its label speaks for it only.
         || (send.length > 0 && (repeats.has(item.body) || repeats.has(send[0].body)));
       // rest: once one message waits for the next turn, so does every later one, or they would run out of order.
-      if (rest || (send.length && (other || joined.length > MAX_TEXT || images.length + item.images.length > MAX_IMAGES))) { rest = true; session.queued.push(item); continue; }
+      if (rest || (send.length && (other || joined.length > MAX_TEXT || photos(images).length + photos(item.images).length > MAX_IMAGES || images.length + item.images.length - photos(images).length - photos(item.images).length > MAX_FILES))) { rest = true; session.queued.push(item); continue; }
       send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode; model ??= item.body.model; config = { ...config, ...item.body.config };
     }
     if (!send.length) return;
@@ -1508,6 +1570,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const { usage, unused } = ledger.remove(id);
       db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id); // O48, A7, daemon-5, O214
       gauges.delete(id); parked.delete(id);
+      if (attachDir && ID.test(id) && rootOk()) rmSync(path.join(attachDir, id), { recursive: true, force: true }); // A2 step 1: this chat's folder only
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
     } });
@@ -1645,14 +1708,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!release) return refused(503, lifecycle.refusal());
       const conversation = ID.test(id) && row(id);
       if (!conversation) { release(); return refused(404, 'unknown-conversation'); }
-      const images = body?.images ?? [];
-      if (typeof body?.text !== 'string' || !imagesOk(images) || (!body.text.trim() && !images.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
+      let images = body?.images ?? [];
+      const files = body?.files ?? [];
+      if (typeof body?.text !== 'string' || !imagesOk(images) || !filesOk(files) || images.length - photos(images).length + files.length > MAX_FILES || (files.length && !attachDir) || (!body.text.trim() && !images.length && !files.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
+      if (files.some((file) => file.data.length > MAX_FILE)) { release(); return { status: 413, error: 'file-too-large', message: 'A file is over 6 MiB (8 MiB as sent); nothing was sent.' }; }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
       if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }
       if (body.replaces !== undefined && (typeof body.replaces !== 'string' || body.replaces.length > 64)) { release(); return refused(400, 'request-refused'); }
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
+      // A2 step 1: saved once, here; from now on the message carries { file, size } in its images, never the bytes again.
+      if (files.length) {
+        try { images = body.images = [...images, ...save(id, files)]; } catch { release(); return refused(500, 'file-not-saved'); }
+        delete body.files;
+      }
       // S13: a paused sprint's worker starts no turn and takes nothing into a running one for what an agent or P9 sends
       // (a lead's send_chat, a reviewer wake, the messages that waited for a turn's end): each is kept, in order, for
       // Resume. The owner's own message goes through (holding it would look like a dead chat),
@@ -1679,7 +1749,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         crashAt('pause-write');
         heldAuthority.set(item.id, captureAuthority()); // a phone's line in it, from a phone revoked by Resume, sends nothing
         // Messages that waited for a turn's end are on the window already, under their own IDs.
-        if (!held?.length) emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when: 'pause' });
+        if (!held?.length) emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: 'pause' });
         return { status: 202, held: item.id, when: 'pause' };
       }
       if (bare && conversation.state === 'turn') { release(); return refused(409, 'turn-running'); }
@@ -1719,7 +1789,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }), ...(bare && { command: true }) }); // hash and type only: events stay small
+      emit(id, 'user', { text: body.text, ...shown(images), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }), ...(bare && { command: true }) }); // hash and type only: events stay small
       if (held?.length) crashAt('user-event');
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
@@ -1761,7 +1831,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); }
         } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.' }); return refused(500, 'config-failed'); }
       }
-      if (images.length && !session.capabilities.promptCapabilities?.image) {
+      if (photos(images).length && !session.capabilities.promptCapabilities?.image) {
         if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not take images; nothing was sent.' }); return refused(400, 'images-unsupported');
       }
       // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
@@ -1785,7 +1855,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (told.length) keepWaiting(id);
       // With notes in front, the message itself says who sent it too (O109): the user's is not left to read as the last note's.
       const shared = told.length > 0 && !mixed.has(body);
-      const prompt = bare ? [...again(body), ...blocks(body.text, [])] : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(shared && fromFor(body) ? quoted(body.text) : body.text, images)];
+      const prompt = bare ? [...again(body), ...blocks(id, body.text, [])] : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(id, shared && fromFor(body) ? quoted(body.text) : body.text, images)];
       if (rules?.started) sending.set(id, rules.start);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
       // the reply's model_usage, compactions included) when the reply has it.

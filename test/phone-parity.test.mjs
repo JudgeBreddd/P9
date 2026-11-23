@@ -809,6 +809,30 @@ test('CAT-1f on the phone: New chat lists every agent from GET /agents, a new on
   assert.deepEqual(await page.locator('#sheet[open] [data-new]').evaluateAll((all) => all.map((b) => b.dataset.new + ':' + b.textContent)),
     ['claude:New Claude chat', 'codex:New Codex chat', 'tester:New Tester chat']);
 });
+// USE-1 web on the phone: one plan card per agent in /usage limits, named from GET /agents (as text), each with its own
+// signed-out mark and the daemon's stale mark, and two agents on one plan say so.
+test('USE-1 web on the phone: Usage draws one plan card per agent in the usage limits, shared plans marked', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const [agents, usage] = await page.evaluate(() => Promise.all(['/agents', '/usage'].map((p) => fetch(p).then((r) => r.json()))));
+  agents.agents.push({ id: 'kestrel', name: 'Kestrel Agent', short: '<i>Kes</i>', modes: [{ name: 'Careful', tier: 0 }] });
+  const now = Date.now(), w = (p) => ({ usedPercent: p, resetsAt: now + 3600000, windowMins: 300 });
+  usage.limits = { claude: { asOf: now, fiveHour: w(40), sevenDay: null, stale: false, pool: 'claude', sharedWith: ['kestrel'] }, codex: null,
+    kestrel: { asOf: now - 20 * 60000, fiveHour: w(40), sevenDay: null, stale: true, pool: 'claude', sharedWith: ['claude'] }, signedOut: ['codex'] };
+  // GET /agents answers 8 s late, after Usage is drawn with the bare id: the cards take the name within 3 s of the answer,
+  // not at the next 20 s redraw.
+  let answered; const named = new Promise((r) => { answered = r; });
+  await page.route('**/agents', async (route) => { await new Promise((r) => setTimeout(r, 8000)); await route.fulfill({ json: agents }); answered(); });
+  await page.route('**/usage', (route) => route.fulfill({ json: usage }));
+  await page.reload(); await page.locator('#newChat').waitFor();
+  await page.click('[data-nav="usage"]');
+  const read = () => page.locator('#usage [data-limits] article.plan').evaluateAll((all) => all.map((a) => [a.querySelector('h2').textContent, a.querySelector('small').textContent, a.classList.contains('muted')]));
+  const card = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#usage [data-limits] h2')].some((h) => h.textContent === w), want, { timeout: 3000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('#usage [data-limits] h2')].some((h) => h.textContent === 'kestrel plan'), null, { timeout: 7000 });
+  await named; await card('<i>Kes</i> plan').catch(() => {});
+  assert.deepEqual(await read(), [['Claude plan', 'Last read just now · shared plan with <i>Kes</i>', false], ['Codex plan', 'Codex not logged in', true],
+    ['<i>Kes</i> plan', 'Last read 20 min ago · shared plan with Claude', true]]);
+  assert.equal(await page.locator('#usage i:text-is("Kes")').count(), 0, 'the name is text, not markup');
+});
 test('O48 on the phone: New chat lists each provider profile\'s models; the chat it starts is on that profile and model; the phone reads id, name and model names only', { timeout: 90000 }, async (t) => {
   const { page, server, session } = await phoneOn(t);
   const KEY = 'sk-profile-test-0f3a9c71d2e84b56';
