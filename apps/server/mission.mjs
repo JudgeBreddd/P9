@@ -31,6 +31,7 @@ const SSH_WORD = /^[\w.@%+=:,/-]+$/;
 const RUN_LIMIT_MS = 15 * 60 * 1000;
 const PRINT_URL_MS = 30000;
 const OUTPUT_LIMIT = 1024 * 1024;
+const LAST_TAIL = 400; // O237: the end of a script's output kept as its last run
 const MAX_RUNNING = 4;
 
 // Windows editors save UTF-8 with a leading U+FEFF, which JSON.parse refuses; one is dropped (M1). Settings, registry and space all read through here.
@@ -274,10 +275,23 @@ export async function rootRefused(root, { workspace, recovery, also = [], loose 
 
 // allowed: the file holding the user's Allow answers for data tiles (threat model row 70), beside settings.json; none keeps them in memory.
 // loose: Unrestricted mode, asked at each use (server.mjs passes chat.loose()).
-export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed, drafts, loose = () => false }) {
+// lastRuns: the file holding each script's last run (O237), beside settings.json; none keeps them in memory.
+export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed, drafts, lastRuns, loose = () => false }) {
   // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
   const setSettings = (next) => { settings = next; plansCache.at = 0; };
   const runs = new Map();
+  // O237: each script's last run (when it started, exit code, seconds, the output's end), so a button's window shows it after a
+  // poll, on another device and after a restart. Written whole and renamed into place, one save at a time; memory first, so a
+  // failed save still shows the run until the daemon stops. ponytail: a removed script's record stays in the file (a few hundred bytes).
+  // The file is read once, by the first caller; every other caller waits on that same read, so a slow first read can never put
+  // an old copy over a run recorded meanwhile (#489 fix 1).
+  let last = lastRuns ? null : {}, lastLoad = null, lastSaves = Promise.resolve();
+  const lastOf = () => (last ? Promise.resolve(last) : (lastLoad ??= fsReadFile(lastRuns, 'utf8').then(JSON.parse)
+    .then((v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}), () => ({})).then((v) => (last ??= v))));
+  const remember = (script, record) => { lastSaves = lastSaves.then(async () => {
+    last = { ...(await lastOf()), [script]: record };
+    if (lastRuns) { await fsWriteFile(lastRuns + '.tmp', JSON.stringify(last) + '\n', { mode: 0o600 }); await fsRename(lastRuns + '.tmp', lastRuns); }
+  }).catch(() => {}); return lastSaves; };
   const recovered = stopScopes('p9-run', instance);
   // Registry commands run where the registry's relative paths resolve: the hub's ~/workspace, which can sit above P9's workspace.
   const root = () => settings?.scripts_root ?? workspace;
@@ -365,7 +379,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return { name: match[1].trim(), path: directory, status: status.slice(0, 240) };
   }
   async function overview() {
-    const reg = await registry(), waiting = await queue();
+    const reg = await registry(), waiting = await queue(), lasts = await lastOf();
     const strip = ({ id, title, icon, picture, desc = '', group = '', section, args = [], confirm = false, terminal = false, url = '' }) =>
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, ...(section ? { section } : {}), args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     // A button a checklist runs as its Apply is not drawn again as its own row; it still runs by ID through the checklist.
@@ -377,7 +391,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     // A card file's version (its hash, cut short): an edit to the HTML changes the overview, so an open card draws again.
     const cardV = new Map();
     for (const item of reg.space.flatMap((section) => section.cards ?? [])) cardV.set(item.id, await readFile(workspace, item.html, SPACE).then((file) => file.hash.slice(0, 12), () => ''));
-    return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map((script) => ({ ...strip(script), ...(onCards.has(script.id) ? { hidden: true } : {}) })), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
+    return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map((script) => ({ ...strip(script), ...(onCards.has(script.id) ? { hidden: true } : {}), ...(Object.hasOwn(lasts, script.id) ? { last: lasts[script.id] } : {}) })), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
       // Every field the parser kept goes to the page as it is (W-F), except a section's buttons (scripts above) and what P9 alone reads: a
       // log's path, a folder's path and filters, a data tile's or card's script and file. Known fields are written last, so an extra cannot replace one.
@@ -573,6 +587,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     stillAuthorized();
     const saved = await guardedSave(list.root, file.path, body.hash, content, recovery);
     if (saved.kind !== 'saved') return { status: saved.kind === 'conflict' ? 409 : 500, ...saved };
+    // O238: the write changed files the section's tiles and cards may read, so their next ask runs again, past the 30 s answer.
+    for (const section of (await registry()).space) if ((section.checklists ?? []).some((record) => record.id === body.id)) for (const record of [...(section.data ?? []), ...(section.cards ?? [])]) tileRuns.delete(record.id);
     if (kind !== 'apply') return { status: 200, hash: saved.hash };
     stillAuthorized();
     const started = await run(item.apply, { args: [file.name], confirm: true });
@@ -692,7 +708,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     try {
     const target = await resolve('scripts', id, body, ['args', 'confirm']);
     if (target.error) return target;
-    if (target.item.terminal) return await terminal(target.argv, target.cwd) ? { status: 200, launched: true } : notStarted;
+    if (target.item.terminal) { if (!await terminal(target.argv, target.cwd)) return notStarted; await remember(id, { at: Date.now(), terminal: true }); return { status: 200, launched: true }; }
     if ([...runs.values()].filter((entry) => entry.done === false).length >= MAX_RUNNING) return { status: 429, error: 'too-many-runs' };
     // ponytail: runs live in memory (latest 20); a daemon restart forgets them, the hub never kept them either.
     for (const key of [...runs.keys()].slice(0, Math.max(0, runs.size - 19))) if (runs.get(key).done) runs.delete(key);
@@ -710,6 +726,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     catch (error) {
       append(`[could not start: ${error.message}]\n\n[exit 127 in 0.0s]\n`);
       Object.assign(entry, { done: true, code: 127 });
+      remember(id, { at: entry.started, code: 127, secs: 0, tail: entry.output.slice(-LAST_TAIL) });
       return { status: 202, run: entry.id };
     }
     const { child } = proc;
@@ -727,6 +744,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       append(`\n[exit ${code} in ${((Date.now() - entry.started) / 1000).toFixed(1)}s]\n`);
       entry.done = true;
       entry.code = code;
+      remember(id, { at: entry.started, code, secs: Math.round((Date.now() - entry.started) / 100) / 10, tail: entry.output.slice(-LAST_TAIL) });
     };
     child.on('error', (error) => finish(127, error.code ?? 'error'));
     child.on('close', (code, signal) => finish(code ?? signal));
@@ -738,7 +756,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const entry = runs.get(id);
     if (!entry) return { status: 404, error: 'unknown-run' };
     const start = Number.isSafeInteger(from) && from >= 0 ? Math.min(from, entry.output.length) : 0;
-    return { status: 200, script: entry.script, output: entry.output.slice(start), next: entry.output.length, done: entry.done, code: entry.code };
+    return { status: 200, script: entry.script, output: entry.output.slice(start), next: entry.output.length, done: entry.done, code: entry.code, at: entry.started }; // at: the last run's at (O237)
   }
 
   // A server that prints its URL (hub's vscode-web): run it up to 30 s, open the last stdout line if it is http(s).
@@ -830,6 +848,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     await recovered;
     const results = await Promise.all([...runs.values()].filter((entry) => !entry.done && entry.proc).map((entry) => endTree(entry.proc)));
     results.push(await stopScopes('p9-run', instance));
+    await lastSaves; // a run that just ended keeps its last-run record across the stop (O237)
     if (!results.includes('cleanup-failed')) return 'stopped';
     return results.at(-1) === 'cleanup-failed' ? 'cleanup-failed-reconcile' : 'cleanup-failed-runs';
   }

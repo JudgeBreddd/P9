@@ -1615,3 +1615,62 @@ test('projects: Sprint Setup marks a file written by someone else as not seen un
   await until(async () => (await mark.count()) === 1, 'a later write did not mark it again', 20000);
   console.log('PASS H2 part B page: an outside write marked, the Seen press clears it and P9 keeps that, a later write marks it again');
 });
+
+// O233: a closed sprint from a folder with no remote shows its change on its own page (paths added, changed, removed),
+// says it is not in the owner's folder until applied, and takes the same yes as the Folder sprints review (the digest
+// shown). The copy is the one P9 itself makes (startCopy), one commit past its baseline.
+test('projects: a closed folder sprint\'s page shows its change and saves it to the folder on Yes', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'plain'));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Solo', work: { kind: 'new', parent: '', name: 'solo' } })).project;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); await ended(instance, first);
+  const run = await call(instance, '/projects/' + p.id + '/sprints', 'POST', { title: 'Folder one' });
+  await writeFile(path.join(run.folder, 'sprint.md'), '# Plan\n\n- [ ] A1: edit the notes; role lead\n');
+  await writeFile(path.join(run.folder, 'roles.json'), JSON.stringify({ folder: 'plain', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }] }));
+  await writeFile(path.join(run.folder, 'roles', 'lead.work.md'), 'config');
+  assert.equal((await call(instance, `/sprints/${run.sprint}/start`, 'POST', {})).status, 200);
+  assert.equal((await call(instance, `/sprints/${run.sprint}/close`, 'POST', {})).status, 200);
+  // The owner's folder at its baseline, and the sprint's copy with one change: a.txt changed, b.txt added, c.txt removed.
+  const solo = await mkdtemp(path.join(os.tmpdir(), 'p9-o233c-'));
+  t.after(() => rm(solo, { recursive: true, force: true }));
+  const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' });
+  g(solo, 'init', '-q', '-b', 'main');
+  await writeFile(path.join(solo, 'a.txt'), 'one\n'); await writeFile(path.join(solo, 'c.txt'), 'gone\n'); g(solo, 'add', '-A'); g(solo, 'commit', '-qm', 'first');
+  assert.equal(path.basename(run.folder), run.sprint);
+  const { startCopy } = await import('../apps/server/folder-copy.mjs');
+  assert.equal((await startCopy(run.folder, solo)).error, undefined);
+  const copy = path.join(run.folder, 'copy');
+  await writeFile(path.join(copy, 'a.txt'), 'two\n'); await writeFile(path.join(copy, 'b.txt'), 'new\n'); await rm(path.join(copy, 'c.txt'));
+  g(copy, 'add', '-A'); g(copy, 'commit', '-qm', 'second');
+  assert.equal((await call(instance, '/file-protection', 'POST', { on: false })).status, 200, 'file protection off so Yes may write');
+  const { page, errors } = await launch(t, instance);
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await page.locator(`[data-pj="spopen"][data-lead="${run.sprint}"]`).click();
+  const box = page.locator('[data-sv-copy]');
+  await box.waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-sv]').getAttribute('data-sv'), 'closed');
+  assert.equal(await box.getAttribute('data-sv-copy'), 'waiting');
+  // The count (Lead's A): 0 of 1 merged stays (no review names the copy's commit), and the page says why.
+  assert.equal(await page.locator('[data-sv-done]').textContent(), '0 of 1 item merged');
+  assert.match(await box.locator('[data-sv-unnamed]').textContent(), /^The copy's main line has 1 commit since the sprint started that no review names/);
+  assert.match(await box.locator('[data-sv-copy-say]').textContent(), /^Not applied: this sprint's change is only in P9's copy, not in .+p9-o233c-/);
+  assert.deepEqual((await box.locator('li').allTextContents()).sort(), ['added b.txt', 'changed a.txt', 'removed c.txt']);
+  assert.equal(await readFile(path.join(solo, 'a.txt'), 'utf8'), 'one\n', 'nothing is written before the yes');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o233-closed-change ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  // A yes for a change that moved since it was shown is refused, beside the button, and writes nothing; the page is read
+  // again and shows the change as it now is.
+  await writeFile(path.join(copy, 'd.txt'), 'later\n'); g(copy, 'add', '-A'); g(copy, 'commit', '-qm', 'third');
+  await box.locator('[data-pj="spapply"]').click();
+  await until(async () => (await page.locator('[data-sv-apply-said]').textContent().catch(() => '')) === 'Not saved: changed-since-shown', 'the refusal beside the button');
+  await until(async () => (await page.locator('[data-sv-copy] li').count()) === 4, 'the change as it now is');
+  assert.deepEqual([await readFile(path.join(solo, 'a.txt'), 'utf8'), existsSync(path.join(solo, 'd.txt'))], ['one\n', false], 'a refused yes writes nothing');
+  assert.match(await page.locator('[data-sv-unnamed]').textContent(), /has 2 commits/);
+  await page.locator('[data-pj="spapply"]').click();
+  await until(async () => (await page.locator('[data-sv-copy]').getAttribute('data-sv-copy').catch(() => '')) === 'applied',
+    async () => 'applied; said: ' + await page.locator('[data-sv-apply-said]').textContent().catch(() => 'nothing'));
+  assert.deepEqual([await readFile(path.join(solo, 'a.txt'), 'utf8'), await readFile(path.join(solo, 'b.txt'), 'utf8'), existsSync(path.join(solo, 'c.txt'))], ['two\n', 'new\n', false]);
+  assert.deepEqual((await page.locator('[data-sv-copy] li').allTextContents()).sort(), ['a.txt', 'b.txt', 'c.txt', 'd.txt'], 'what was written');
+  assert.equal(await page.locator('[data-pj="spapply"]').count(), 0, 'no second yes');
+  assert.deepEqual(errors, []);
+});

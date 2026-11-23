@@ -508,6 +508,113 @@ test('O152 an open Mission section or Usage window keeps its nodes and focus acr
   console.log('PASS O152: an open Mission section or Usage window keeps its nodes and focus across a redraw');
 });
 
+// O237 (screen): a button's window showed "not run here yet" after every overview poll. Now it shows the last run's time, exit
+// code and output end, after the window is reopened and after the overview is read again.
+test('O237 a button window shows its last run after a reopen and a redraw', { timeout: 120000 }, async (t) => {
+  let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, 9); } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  const kind = page.locator('#mdlBody .review .kind');
+  const openPlain = async () => {
+    await page.click('#fMission [data-group="Home"]');
+    const plain = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Plain row' });
+    await plain.waitFor({ timeout: 10000 }); await plain.click();
+    await page.locator('#mdlFoot [data-run]').waitFor({ timeout: 10000 });
+  };
+  await openPlain();
+  assert.match(await kind.innerText(), /not run here yet/i, 'never run');
+  await page.click('#mdlFoot [data-run]');
+  await page.locator('#mdlBody .out', { hasText: '[exit 0' }).waitFor({ timeout: 15000 });
+  await kind.filter({ hasText: 'exit 0' }).waitFor({ timeout: 10000 }); // the open window, once the overview has the run
+  await page.keyboard.press('Escape');
+  await openPlain();
+  assert.match(await kind.innerText(), /, exit 0 · \d+(\.\d)? s/i, 'reopened: the last run, not "not run here yet"');
+  assert.match(await page.locator('#mdlBody [data-last-tail]').innerText(), /plain[\s\S]*\[exit 0 in/, 'and the end of its output');
+  await page.keyboard.press('Escape');
+  // A redraw: the space changes on disk and the rail's Mission button reads the overview again.
+  await writeFile(path.join(ws, SETTINGS.space), JSON.stringify({ sections: [{ ...space().sections[0], text: 'Custom cards, read again.' }] }));
+  await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+  await page.locator('#fMission', { hasText: 'Custom cards, read again.' }).waitFor({ timeout: 10000 }).catch(() => {});
+  await openPlain();
+  assert.match(await kind.innerText(), /, exit 0 · /i, 'after the overview is read again');
+  console.log('PASS O237 screen: the button window keeps its last run across a reopen and a redraw');
+});
+
+// #489 fix 1 (screen): a window already open while another device runs the script shows that run on the regular poll, and keeps
+// the argument being typed and its focus.
+test('O237 fix 1 an open button window shows a run another client finished, keeping the typed argument', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9);
+    await writeFile(path.join(paths.workspace, SETTINGS.registry), JSON.stringify({ scripts: [...SCRIPTS,
+      { id: 'say', title: 'Say words', group: 'Tools', cmd: [node, '-e', 'const w = process.argv.slice(1).join(" "); console.log(w); process.exitCode = w.includes("fail") ? 3 : 0'], args: ['Words'] }], apps: [], pages: [] }));
+    return r; } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  await page.locator('#fMission [data-group]', { hasText: 'Tools' }).first().click();
+  const row = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Say words' });
+  await row.waitFor({ timeout: 10000 }); await row.click();
+  const kind = page.locator('#mdlBody .review .kind'), input = page.locator('#mdlBody input[data-arg="0"]');
+  await input.waitFor({ timeout: 10000 });
+  assert.match(await kind.innerText(), /not run here yet/i);
+  await input.fill('kept words');
+  // Another client runs it.
+  const run = (await call(server, '/scripts/say/run', 'POST', { args: ['from elsewhere'] })).body.run;
+  for (let i = 0; i < 200 && !(await call(server, '/runs/' + run)).body.done; i += 1) await sleep(25);
+  await kind.filter({ hasText: 'exit 0' }).waitFor({ timeout: 35000 }); // the regular poll is every 20 s
+  assert.match(await page.locator('#mdlBody [data-last-tail]').innerText(), /from elsewhere/);
+  assert.equal(await input.inputValue(), 'kept words', 'the typed argument is kept');
+  assert.equal(await input.evaluate((el) => el === document.activeElement), true, 'and the field keeps its focus');
+  console.log('PASS O237 fix 1 screen: an open window shows another client\'s run on the poll, argument and focus kept');
+});
+
+// #489 fix 2: this window ran the script itself, then another device ran it again. The header and the output both show the
+// newer run; the first run's output (and Copy output) does not stay under the other run's header.
+test('O237 fix 2 a window that ran the script shows the other client\'s later run output under its header', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => { const r = await files(paths, 9);
+    await writeFile(path.join(paths.workspace, SETTINGS.registry), JSON.stringify({ scripts: [...SCRIPTS,
+      { id: 'say', title: 'Say words', group: 'Tools', cmd: [node, '-e', 'const w = process.argv.slice(1).join(" "); console.log(w); process.exitCode = w.includes("fail") ? 3 : 0'], args: ['Words'] }], apps: [], pages: [] }));
+    return r; } });
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('#rMission');
+  await page.locator('#fMission [data-group]', { hasText: 'Tools' }).first().click();
+  const row = page.locator('#mdlBody .mlist [data-i]', { hasText: 'Say words' });
+  await row.waitFor({ timeout: 10000 }); await row.click();
+  const kind = page.locator('#mdlBody .review .kind'), out = page.locator('#mdlBody pre.out');
+  await page.locator('#mdlBody input[data-arg="0"]').fill('local words');
+  await page.click('#mdlFoot [data-run]');
+  await kind.filter({ hasText: 'exit 0' }).waitFor({ timeout: 15000 }); // this run, once the overview is read again
+  assert.match(await out.innerText(), /local words/);
+  // Another client runs it with a different output and exit code.
+  const run = (await call(server, '/scripts/say/run', 'POST', { args: ['fail elsewhere'] })).body.run;
+  for (let i = 0; i < 200 && !(await call(server, '/runs/' + run)).body.done; i += 1) await sleep(25);
+  await kind.filter({ hasText: 'exit 3' }).waitFor({ timeout: 35000 }); // the regular poll is every 20 s
+  const shown = await out.innerText();
+  assert.match(shown, /fail elsewhere/, 'the output is the newer run\'s');
+  assert.doesNotMatch(shown, /local words/, 'not this window\'s older run');
+  assert.equal(await page.locator('#mdlFoot [data-copy]').count(), 0, 'and Copy output (this window\'s run) is gone');
+  console.log('PASS O237 fix 2 screen: local run then another client\'s run: header, output and Copy all describe the newer run');
+});
+
 // O239: a section with a card and a data tile (the owner's Logs and incidents: two feeder buttons, a card with a folder, a list
 // tile, placed as a tile) draws both in its window, and the list uses the window's width instead of one 220 px tile column.
 test('O239 a section window draws its card and its data list, the list wider than a tile', { timeout: 120000 }, async (t) => {
