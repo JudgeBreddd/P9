@@ -337,5 +337,18 @@ test('MC-17: a build from a template adds it to a new space and the prompt names
   assert.equal((await call(instance, '/mission/space', 'POST', { name: 'lab' })).status, 200);
   assert.deepEqual((await call(instance, '/mission')).body.space.map((section) => section.id), homelab.space.sections.map((section) => section.id), 'the space holds the template');
   assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab', template: 'homelab', confirm: true })).status, 409, 'an existing space is never the target');
+  // Fix 1: the chat fails after the template is in (the test home's build-chat-fails file): the space is kept and
+  // named, and a retry with the same template starts the chat there instead of answering 409 forever.
+  await writeFile(path.join(instance.directory, 'build-chat-fails'), '');
+  const failed = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab', confirm: true });
+  assert.equal(failed.status, 500, JSON.stringify(failed.body)); assert.equal(failed.body.error, 'chat-not-started'); assert.equal(failed.body.space, 'lab2'); assert.equal(failed.body.kept, true);
+  assert.ok((await call(instance, '/mission')).body.spaces.includes('lab2'), 'the added space is kept');
+  const chatsBefore = await chats();
+  assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'blank', confirm: true })).status, 409, 'only the same template retries');
+  const again = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab' });
+  assert.equal(again.status, 201, JSON.stringify(again.body)); assert.equal(again.body.space, 'lab2');
+  assert.equal(await chats(), chatsBefore + 1, 'the retry makes one chat');
+  assert.equal((await until(instance, (event) => event.conversation === again.body.conversation && event.data?.content?.text?.startsWith('echo:'))).data.content.text, 'echo:' + buildPrompt('lab2', homelab));
+  assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'lab2', template: 'homelab', confirm: true })).status, 409, 'once its chat started, the space is never the target again');
   console.log('PASS MC-17 server: template build installs, then the prompt names it');
 });

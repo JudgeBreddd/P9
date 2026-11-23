@@ -403,11 +403,14 @@ function bindOnboard(root) {
     b.disabled = true;
     // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72). MC-17: from a
     // template preview the daemon adds the template to a new space first; File protection asks for a second click, as Choose does.
-    const from = b.dataset.from, space = from || outer.live.adding ? freeName(from || 'new-space', outer.live.spaces || []) : 0;
+    const from = b.dataset.from, kept = from && outer.live.kept?.from === from ? outer.live.kept.space : 0;
+    const space = kept || (from || outer.live.adding ? freeName(from || 'new-space', outer.live.spaces || []) : 0);
     const r = await window.p9.mission('build', { provider: b.dataset.build, ...(space ? { space } : {}), ...(from ? { template: from, confirm: !!b.dataset.armed } : {}) });
     b.disabled = false;
     if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; root.querySelector('[data-onboard-note]').textContent = 'File protection is on. Click again to add the template.'; return; }
-    if (from && r.status === 201) await window.p9.mission('space', { name: space });
+    // MC-17 fix 1: the space was added but its chat did not start: it shows in the Space menu, and a retry starts the chat there.
+    if (r.body?.kept) { outer.live.kept = { from, space }; refreshMission(1); outer.toast({ kind: 'chat', txt: 'Space ' + space + ' added, but its chat did not start (' + (r.body.error || r.status) + '). Click ' + b.textContent + ' again to retry.', level: 'bad' }, true); return; }
+    if (from && r.status === 201) { outer.live.kept = null; await window.p9.mission('space', { name: space }); }
     if (r.status === 201 && r.body.space) {
       outer.live.adding = false; outer.live.preview = null; from ? refreshMission() : outer.renderMission();
       outer.toast({ kind: 'chat', txt: (outer.names[b.dataset.build] ?? b.dataset.build) + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);

@@ -182,6 +182,13 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await page.locator('#fMission [data-onboard-note]:has-text("File protection is on")').waitFor({ timeout: 10000 });
   assert.equal(await page.locator('#mdl[open]').count(), 0, 'the first click under File protection opens no chat');
   assert.ok(!(await server.desk('/mission')).body.spaces.includes('homelab-2'), 'and writes no space');
+  // Fix 1: the template goes in but the chat does not start (the test home's build-chat-fails file, once): the toast says so,
+  // the space is kept, and the next click starts the chat in that same space, not homelab-3.
+  await writeFile(path.join(server.directory, 'build-chat-fails'), '');
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#toasts :text("homelab-2 added, but its chat did not start")').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#mdl[open]').count(), 0, 'a failed start opens no chat');
+  assert.ok((await server.desk('/mission')).body.spaces.includes('homelab-2'), 'the added space is kept');
   await page.click('#fMission [data-preview] [data-build="claude"]');
   await page.locator('#mdlBody[data-kind="chat"]').waitFor({ timeout: 15000 });
   await page.keyboard.press('Escape');
@@ -189,5 +196,6 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab-2', null, { timeout: 15000 });
   await page.locator('#fMission [data-group="Services"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-preview], #fMission [data-onboard]').count(), 0);
+  assert.ok(!(await server.desk('/mission')).body.spaces.includes('homelab-3'), 'the retry added no second copy');
   console.log('PASS MC-17: the preview builds from the template into homelab-2 and shows it');
 });
