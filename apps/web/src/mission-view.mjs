@@ -757,10 +757,14 @@ function sectionBody(m, body, g, o) {
     m.armed = act.arm || '';
     if (act.arm) return o.redraw();
     b.disabled = true;
-    const r = await window.p9.mission('checklistSet', act.body);
+    const r = await window.p9.mission('checklistSet', act.body), w = outer.S.modal?.g === g && outer.S.modal;
+    // O238: the page column and the window each keep their own copy of this section; both read its checklists and tiles again.
+    for (const x of [inlineSec[g], w]) if (x) { if (x !== m) x.ckRead = false; x.pulled = false; }
     await ckLoad(id);
     if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
     if (o.shown()) o.redraw();
+    if (inlineSec[g] !== m) secInline(g);
+    if (w && w !== m) outer.renderModal();
   });
   const lv = ['bad', 'warn'].find(l => runs.some(r => tileLevel(m.tiles[r.id]) === l)) || '';
   if ((secLv[g] || '') !== lv) { secLv[g] = lv; outer.setTimeout(outer.renderMission); }
