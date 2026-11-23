@@ -6,7 +6,7 @@ export const WHATS_NEW = {
   changes: [
     "Chat Changes tab: shell-made edits show too (in a git folder, worktree or submodule), with line counts and edit counts.",
     "Sprint View: each worker row opens Details (branch, head, files, review, notes) and can steer, stop or restart it.",
-    "Sprint View: each worker row shows its model and effort; Clear on a closed sprint also clears its lead chat.",
+    "Sprint View: worker rows show model and effort when known; Clear on a closed sprint also clears its lead chat.",
     "Mission: a template preview leads into its build, and a space added while its chat failed is kept and retried.",
     "Mission: a button's window shows its last run; a checklist write refreshes its section; long lists scroll in their tile.",
     "Phone: Send stops a running turn only when the box was empty at the tap.",
