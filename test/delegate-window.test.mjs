@@ -581,7 +581,7 @@ test('O235: on a closed sprint, Clear archives the stopped workers and then the 
   for (const id of kids.slice(0, 2)) { assert.equal((await L.tool('stop_chat', { chat: id, close: true })).action, 'stopped');
     assert.equal((await L.tool('archive_chat', { chat: id, archived: false })).action, 'unarchived'); }
 
-  const { page, errors } = await launch(t, instance);
+  const { app, page, errors } = await launch(t, instance);
   const nav = (id) => page.locator(`#navList [data-chat="${id}"]`);
   await nav(sprint).first().click({ timeout: 20000 });
   const pane = page.locator(`.pane[data-id="${sprint}"]`), card = pane.locator('.sprint'), clear = card.locator('[data-sprint-clear="*"]');
@@ -603,7 +603,23 @@ test('O235: on a closed sprint, Clear archives the stopped workers and then the 
   assert.equal(await nav(sprint).count() > 0, true, 'a worker\'s x took the closed sprint\'s lead');
   assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === sprint).archived, false, 'a worker\'s x archived the lead');
   await shot(page, 'o235-closed');
+  // Reviewer fix 1: the lead's archive refused (500), then rejected, after the worker's went. The worker stays cleared, the lead
+  // stays listed, the failure shows, and the card keeps a Clear for the lead; the third press goes through.
+  await app.evaluate(({ ipcMain }, lead) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let n = 0;
+    ipcMain.handle('p9:chat', (e, action, body) => { if (action === 'archiveChat' && body?.id === lead && n < 2) { n += 1; if (n === 1) return { status: 500, body: { error: 'test-held' } }; throw new Error('test-rejected'); } return h(e, action, body); }); }, sprint);
   await clear.click();
+  await page.locator('#toasts .toast', { hasText: 'test-held' }).waitFor({ timeout: 20000 });
+  const retry = clear.filter({ hasText: /^Clear this chat$/ });
+  await retry.waitFor({ timeout: 20000 });
+  assert.equal(await nav(kids[3]).count(), 0, 'the worker came back after the lead\'s archive failed');
+  assert.equal(await nav(sprint).count() > 0, true, 'the lead left the list though its archive failed');
+  await retry.click();
+  await page.locator('#toasts .toast', { hasText: 'A chat could not be archived. Press Clear again.' }).waitFor({ timeout: 20000 });
+  await retry.waitFor({ timeout: 20000 });
+  assert.equal(await nav(sprint).count() > 0, true, 'the lead left the list though its archive was rejected');
+  assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === sprint).archived, false, 'a failed archive archived the lead');
+  await shot(page, 'o235-retry');
+  await retry.click();
   const left = async () => { for (const id of [sprint, ...kids]) if (await nav(id).count()) return id; return null; };
   await until(async () => !(await left()), 'a chat of the closed sprint is still listed');
   const kept = (await call(instance, '/chat')).conversations.filter((c) => [sprint, ...kids].includes(c.id) && !c.archived).map((c) => c.id);
@@ -613,7 +629,7 @@ test('O235: on a closed sprint, Clear archives the stopped workers and then the 
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
   assert.equal(await left(), null, 'a chat of the closed sprint came back after a reload');
   assert.deepEqual(errors, []);
-  console.log('PASS O235: open sprint: Clear 2 stopped kept the lead; closed by the route, one worker x kept the lead; Clear 1 stopped and this chat then archived the worker and the lead; none listed, also after a reload');
+  console.log('PASS O235: open sprint: Clear 2 stopped kept the lead; closed by the route, one worker x kept the lead; Clear 1 stopped and this chat archived the worker, a refused then rejected archive kept it listed with a toast and Clear this chat, the third press archived it; none listed, also after a reload');
 });
 
 // window-3 (row "A sprint never ends": the closed probe worker's report was still drawn above the message box):

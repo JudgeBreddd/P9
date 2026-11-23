@@ -354,7 +354,12 @@ const askOf = k => { const e = k.events.find(x => x.t === k.pending); return e &
 function sprintCard(s) {
   if (s.stub) return '';
   // 712: an archived worker leaves the card, as it leaves the sidebar (listedChats). kin() kept it, so archive_chat changed nothing here.
-  const workers = kin(s.id).filter(k => !k.archived); if (!workers.length) return '';
+  const workers = kin(s.id).filter(k => !k.archived);
+  // O235 (Reviewer fix 1): a closed sprint's lead still listed with no worker left (its own archive failed, or the workers went
+  // another way) keeps a card with Clear, so the lead can still be cleared from here; any other chat without workers has none.
+  if (!workers.length) return s.sprintClosed && !s.archived ? `<aside class="sprint" data-sprint data-folded="false" data-auto="false" data-open-asks="0" aria-label="Sprint">
+    <div class="sp-headbar"><span class="sp-head"><span class="eyebrow">Sprint</span><span class="sp-sum">Closed · no workers left</span></span></div>
+    <div class="sp-body"><button type="button" class="sp-files sp-clearall" data-sprint-clear="*" title="Archive this lead chat: the sprint is closed">Clear this chat</button></div></aside>` : '';
   const project = projectOf(s, (outer.S.projects || []).filter(p => !p.archived));
   const choice = SPRINT.folded.get(s.id), folded = choice ?? false, now = Date.now(); // unchosen: placeSprints opens or folds it by the room this pane has
   const rows = workers.map(k => { const [st, at] = workerStatus(k), items = k.work?.total ?? (k.task?.item ? 1 : 0), passed = k.work ? k.work.done : st === 'passed' ? 1 : 0; // 709: a queue worker's ring is its plan items, done as P9's review record counts them
@@ -776,9 +781,13 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-sprint-clear]').forEach(b => b.onclick = async () => {
       const ws = b.dataset.sprintClear === '*' ? kin(s.id).filter(k => !k.archived && clearable(k)) : outer.S.sessions.filter(k => k.id === b.dataset.sprintClear);
       // 712: a cleared worker's report closes with it (SHUT, as its own x does); another worker's report stays.
-      for (const k of ws) { const r = await outer.liveChat.call('archiveChat', { id: k.id, archived: true }); if (r.status !== 200) continue; k.archived = true; const c = s.cards?.get('ready-' + k.id); if (c) SHUT.add(reportKey(s, c)); }
+      // O235 (Reviewer fix 1): a refused archive already says why (liveChat.call's toast); a rejected call says so here, and the
+      // ones that did go stay cleared, so the redraw below shows where it stopped and Clear can be pressed again.
+      const archive = id => outer.liveChat.call('archiveChat', { id, archived: true }).then(r => r.status === 200,
+        () => (outer.toast({ kind: 'chat', txt: 'A chat could not be archived. Press Clear again.', level: 'bad' }, true), false));
+      for (const k of ws) { if (!(await archive(k.id))) continue; k.archived = true; const c = s.cards?.get('ready-' + k.id); if (c) SHUT.add(reportKey(s, c)); }
       // O235: Close stopped every chat of the sprint, so once no worker is left on the card its lead clears too.
-      if (b.dataset.sprintClear === '*' && s.sprintClosed && !kin(s.id).some(k => !k.archived) && (await outer.liveChat.call('archiveChat', { id: s.id, archived: true })).status === 200) s.archived = true;
+      if (b.dataset.sprintClear === '*' && s.sprintClosed && !kin(s.id).some(k => !k.archived) && await archive(s.id)) s.archived = true;
       outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-open]').forEach(b => b.onclick = () => { show(b.dataset.sprintOpen); outer.renderTabs(); renderChats(); });
     p.querySelectorAll('[data-sprint-ask]').forEach(b => b.onclick = () => p.querySelector(`[data-ask="${CSS.escape(b.dataset.sprintAsk)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
