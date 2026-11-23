@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { applySprint, closeOf, previewSprint, startCopy } from '../apps/server/folder-copy.mjs';
+import { applySprint, closeOf, copyKeptBecause, previewSprint, startCopy } from '../apps/server/folder-copy.mjs';
 import { setProtection } from '../packages/files/index.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -118,3 +118,31 @@ test('Sprint apply: a result that cannot be recorded after the owner\'s files ch
   fs.chmodSync(sprint, 0o700);
   assert.equal((await applySprint(sprint, { yes: true, shown })).refused, 'already-applied', 'a pending apply blocks another');
 });
+
+// A sprint's copy record or apply result that exists but does not parse (a disk fault, a hand edit). The record reads as no
+// copy: preview and apply are refused, not thrown. The result reads as unknown, as one never finalized does: the close view
+// says to check the folder, the copy is kept, and a second apply is still refused.
+test('Sprint apply: a copy record that does not parse, or is not a record, is no copy: preview and apply are refused no-copy', { timeout: 60000 }, async (t) => {
+  const { sprint } = await setup(t);
+  for (const text of ['{"source": ', '{}']) {
+    fs.writeFileSync(path.join(sprint, 'copy-record.json'), text);
+    assert.deepEqual(await previewSprint(sprint), { refused: 'no-copy' }, 'preview with ' + text);
+    assert.deepEqual(await applySprint(sprint, { yes: true, shown: 'x' }), { refused: 'no-copy' }, 'apply with ' + text);
+  }
+});
+
+test('Sprint apply: an apply result that does not parse reads as unknown: the close view says so, the copy is kept, no second apply', { timeout: 60000 }, async (t) => {
+  const { sprint } = await setup(t);
+  fs.writeFileSync(path.join(sprint, 'apply-result.json'), '{"written": [');
+  const close = await closeOf(sprint);
+  assert.equal(close?.pending, true, 'unknown, not none');
+  assert.match(close.lines[0], /^Unknown: the apply started and its result was not recorded/);
+  assert.equal(close.copyKept, 'apply unknown: its result was not recorded', 'the copy is kept');
+  assert.deepEqual(await applySprint(sprint, { yes: true, shown: 'x' }), { refused: 'already-applied' });
+  for (const text of ['null', '5', '[]']) {
+    fs.writeFileSync(path.join(sprint, 'apply-result.json'), text);
+    assert.equal((await closeOf(sprint))?.pending, true, `${text} is not a result: unknown`);
+    assert.equal(await copyKeptBecause(sprint), 'apply unknown: its result was not recorded', `${text}: the copy is kept`);
+  }
+});
+
