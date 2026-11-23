@@ -47,7 +47,12 @@ export function render({ outer, CF, s, all, GH, cfKey, openArtifact, again }) {
   };
   const tab = (id, label, n) => `<button type="button" role="tab" ${GH} data-cf-tab="${id}" aria-selected="${CF.tab === id}">${label} <span class="cf-n">${n}</span></button>`;
   const html = `<div class="cf-tabs" role="tablist">${tab('artifacts', 'Artifacts', arts.length)}${tab('changes', 'Changes', files.length)}</div>`
-    + (items.length ? `<ul class="cf-list" role="tabpanel">${items.map(row).join('')}</ul>` : `<p class="empty" role="tabpanel">${changes ? 'No changes yet. The files this chat edits show here; click one to read its diff.' : 'No artifacts yet. The artifacts this chat posts show here.'}</p>`);
+    + (items.length ? `<ul class="cf-list" role="tabpanel">${items.map(row).join('')}</ul>` : `<p class="empty" role="tabpanel">${changes ? 'No changes yet. The files this chat edits show here; click one to read its diff.' : 'No artifacts yet. The artifacts this chat posts show here.'}</p>`)
+    // MC-15: files changed through the shell (no edit call) are found by a git snapshot at each turn's start and end
+    // (server shell-edits.mjs), so a folder outside git lists only the agent's edit calls. The page does not know which
+    // folders are in git, so the line says it for both. A linked worktree or submodule (.git is a file) adds nothing yet:
+    // following its pointer would take a path from the repo (#496).
+    + (changes ? '<p class="muted sm cf-foot">Files changed through the shell are listed only when this chat\'s folder is in a normal git repository, not a linked worktree or submodule.</p>' : '');
   if (CF.html === html) return; // called on every chat change: the DOM is left alone when nothing in it changed
   CF.html = html; b.innerHTML = html;
   b.querySelectorAll('[data-cf-tab]').forEach(el => el.onclick = () => { CF.tab = el.dataset.cfTab; localStorage.setItem(cfKey(CF.sid), CF.tab); again(); });
