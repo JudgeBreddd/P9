@@ -1103,7 +1103,8 @@ async function loadChat() {
     // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
     // O249: a stub loads first, so the message goes in the chat's own mode, not the window's default.
     // Events that came for it during that load apply first (behind(), which drains them after: s.drain).
-    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(() => { if (s.behind) s.drain = true; else turnEnd(s); }, () => {}) : turnEnd(s);
+    // Not into a turn running now (another window's): the message waits for its end (settle()).
+    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(() => { if (s.behind) s.drain = true; else if (!s.working) turnEnd(s); }, () => {}) : !s.working && turnEnd(s);
   };
   // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
   // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
@@ -1169,11 +1170,13 @@ async function loadChat() {
     if (closed) { closed.hidden = true; untab(closed.id); }
   };
   // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
-  // Review round 4: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends nothing:
-  // s.working is that newer turn, and a queued message sent now would steer into it. It goes when that turn ends.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); if (!s.working) turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // Review rounds 4-5: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends
+  // nothing: s.working is that newer turn, and a queued message sent now would steer into it; it goes when that turn ends.
+  // Nor to a chat stopped or moving by then (a stop in the same poll): the daemon would resume it.
+  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); if (!s.working && !gone(s)) turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
+  const gone = (s) => ['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
   // Review rounds 2-3: every buffered event applies first, so a send uses the chat's mode as it is now; then at most one
   // queued message goes (one turn end, or the launch drain, s.drain), and none to a chat stopped meanwhile, which the
   // daemon would resume.
@@ -1183,10 +1186,9 @@ async function loadChat() {
     history(s, evs[0].cursor - 1).then(() => {
       const buffered = s.behind || [], ended = [], answered_ = [], drain = s.drain; s.behind = null; s.drain = false;
       for (const e of buffered) take(e, ended, answered_);
-      const gone = ['stopped', 'stopping', 'moved', 'moving'].includes(s.state), end = ended.length ? [ended.at(-1)] : [];
-      if (gone) for (const x of end) finished(x);
-      settle(gone ? [] : end, answered_);
-      if (drain && !end.length && s.state === 'running' && s.queue.length) turnEnd(s);
+      const end = ended.length ? [ended.at(-1)] : [];
+      settle(end, answered_);
+      if (drain && !end.length && s.state === 'running' && !s.working && s.queue.length) turnEnd(s);
       try { outer.renderTabs(); renderChats(new Set([s.id])); } catch (e) { console.error('chat paint', e); }
     }, (e) => console.error('chat history', e));
   };
