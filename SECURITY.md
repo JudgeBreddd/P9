@@ -1525,7 +1525,9 @@ a message in all, counting files the message already names (below), and 8 MiB of
 whole request stays under the server's body limit (12 MiB). A message that names a saved file again (held, paused or
 joined) names it by its name in that same chat's folder only. Deleting a chat deletes its folder; no other chat's files. The attachments folder itself must be a real folder: if
 it is a link, nothing is saved (500 `file-not-saved`), a chat start makes no folder through it, and a delete removes nothing.
-Photos still go as photos (§ Photos you send).
+Photos still go as photos (§ Photos you send). The desktop paperclip and the phone's + take any file: a PNG, JPEG, GIF
+or WebP goes as a photo, anything else as a file. Both check the limits above before sending and say why a file was not
+attached; the daemon checks them again. A file is shown before sending by its name only, never opened or drawn.
 
 ## Files sent to the server
 

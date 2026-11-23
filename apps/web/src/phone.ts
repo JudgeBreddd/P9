@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, MAX_IMAGES, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, attachFull, readAttachment, attachBody, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -334,10 +334,10 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
+type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; files?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
-type Attached = { mimeType: string; data: string; name: string };
+type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache: the list key counts these, since a landing photo leaves sentCache.size as it was
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
@@ -402,7 +402,7 @@ function foldBlocks(now: Folded, events: Json[]) {
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
     // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
     if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
-    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)), who: sentBy(data) });
+    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)), files: (Array.isArray(data.files) ? data.files : []).map((file: Json) => String(file?.name)), who: sentBy(data) });
     else if (kind === 'note') add('user', data.text, { who: sentBy({ ...data, info: true }) }); // another chat's note, waiting for this chat's next message
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
@@ -466,7 +466,7 @@ function whoSent(data?: Json) {
 }
 function blockHtml(block: Block) {
   const kind = block.kind;
-  if (kind === 'user') { const who = whoSent(block.who); return `<article data-kind="user" class="msg user"${who ? ' data-from' : ''}>${who ? `<div class="who">${escape(who)}</div>` : ''}${escape(block.text)}${sentImgs(openId, block.sent)}</article>`; }
+  if (kind === 'user') { const who = whoSent(block.who); return `<article data-kind="user" class="msg user"${who ? ' data-from' : ''}>${who ? `<div class="who">${escape(who)}</div>` : ''}${escape(block.text)}${block.files?.length ? `<div class="sent-files">📎 ${escape(block.files.join(', '))}</div>` : ''}${sentImgs(openId, block.sent)}</article>`; }
   if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
@@ -1174,11 +1174,11 @@ async function submitFromBox(event: Event) {
   // O206, O209: which picks this send carries, each by its pid. A retry is the first try again, so it carries the first try's picks, not
   // newer ones of the same value.
   const sentPids = again ? inFlight.get(id)!.pids : Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid ?? ''])), sentPick = sentPids.model;
-  // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
+  // Behind a queued message it queues too, so they go in the order typed. Attachments are not queued (up to 12 MiB does not
   // fit this phone's storage): they stay attached and the box says why.
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
-    if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
+    if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
@@ -1194,7 +1194,7 @@ async function submitFromBox(event: Event) {
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
   // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
-  const sent = { ...first, ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) };
+  const sent = { ...first, ...attachBody(images) };
   inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
@@ -1205,12 +1205,12 @@ async function submitFromBox(event: Event) {
   // are no longer unsent: what the agent reports is the setting again.
   if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
-  // phone's own queue, as the desktop does, and the box empties. Images do not queue, so they stay and the box says why.
+  // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
-    if (images.length) note('Not sent: images go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
+    if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
     else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
-  else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
+  else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
 // O204 review 1: a send refused for good took no model, so its pick is not pending any more and the select goes back to the running
 // model. A newer pick made while it was on its way is the user's next choice: it stays, pending, even when it names the same
@@ -1291,7 +1291,7 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
 function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }
 // P8: images attach as on the desktop: the + sheet (Photo library, Take photo, File) or a paste, up to four, checked
-// and scaled by the desktop's own readImage; 48 px chips with ✕ above the box. Kept per chat until sent; K9: also in this
+// and scaled by the desktop's own readImage; 48 px chips with ✕ above the box; A2 step 1: any other file is a chip with its name. Kept per chat until sent; K9: also in this
 // phone's IndexedDB (localStorage holds about 5 MB, four images can be 8), so a reload or sign-in keeps them.
 function attachedStore(mode: IDBTransactionMode, use: (store: IDBObjectStore) => void) {
   const open = indexedDB.open('p9-attached', 1);
@@ -1305,7 +1305,7 @@ try { attachedStore('readonly', (store) => { const all = store.openCursor(); all
 function renderAttached() {
   const list = attached.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length; keepAttached();
-  box.innerHTML = list.map((image, i) => `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
 async function addImages(files: Iterable<File>) {
@@ -1313,8 +1313,8 @@ async function addImages(files: Iterable<File>) {
   const list = attached.get(id) ?? []; attached.set(id, list);
   note();
   for (const file of files) {
-    if (list.length >= MAX_IMAGES) { note('Not attached: four images a message at most.'); break; }
-    try { list.push(await readImage(file)); } catch (error) { note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    const full = attachFull(file, list); if (full) { note('Not attached: ' + full.toLowerCase() + '.'); continue; }
+    try { list.push(await readAttachment(file, list)); } catch (error) { note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached();
 }
@@ -1325,10 +1325,8 @@ one<HTMLElement>('#attached').onclick = (event) => {
 const picker = one<HTMLInputElement>('#attachInput');
 const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');
 // O68: + opens the phone's own chooser, which already offers the library, the camera and the files; P9 does not ask first.
-// An iPhone greys out what the filter leaves out and cannot say why, so it gets no filter and addImages() gives the reason.
-// ponytail: an iPad that reports itself as a Mac keeps the filter, and its greyed files.
-const NO_FILTER = /iP(hone|ad|od)/.test(navigator.userAgent);
-one<HTMLElement>('#attach').onclick = () => { picker.accept = NO_FILTER ? '' : 'image/*'; picker.click(); };
+// A2 step 1: any file attaches, so the chooser has no filter and greys nothing out; addImages() says why one is refused.
+one<HTMLElement>('#attach').onclick = () => picker.click();
 // The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's effort, fast mode and plan
 // (the model is the top bar's Model sheet), which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
 function pill() {

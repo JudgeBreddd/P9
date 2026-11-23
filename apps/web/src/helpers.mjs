@@ -85,6 +85,10 @@ const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop th
 export function chatFailed(action, body, ms) {
   // The daemon refuses a new chat's folder only (chat.mjs create): say what a folder needs.
   if (action === 'create' && body?.error === 'request-refused') return 'Could not start the chat in that folder. It must exist on the server; a full path works only in Unrestricted mode.';
+  if (action === 'prompt' && body?.error === 'file-too-large') return body.message || 'A file is over 6 MiB; nothing was sent.';
+  if (action === 'prompt' && body?.error === 'body-too-large') return 'The message and its files are over 12 MiB; nothing was sent.';
+  // The daemon's file-name rule (chat.mjs fileName) is not copied here; its plain 400 is named instead.
+  if (action === 'prompt' && body?.error === 'request-refused') return 'P9 refused the message; nothing was sent. A file\'s name cannot have / \\ : * ? " < > | or be a Windows device name such as CON; rename it and attach it again.';
   if (body?.error === 'profile-gone') return 'This chat\'s provider profile was removed in Settings. The chat can be read, not continued.';
   if (body?.error !== 'daemon-unavailable') return null;
   const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);
@@ -196,6 +200,22 @@ export async function readImage(file) {
   if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
   return { mimeType, data, name: file.name };
 }
+// A2 step 1: any other file goes as a file (SECURITY.md § Files you send in a chat; the daemon checks the same limits). It is
+// saved in that chat's own folder, where its agent can open, edit and save it. Four photos and four files a message, a file
+// up to 6 MiB (8 MiB as sent), and the whole message under the 12 MiB body limit. Attached items carry file: true.
+export const MAX_FILES = 4, MAX_FILE = 8 * 1024 * 1024, MAX_SENT = 12 * 1024 * 1024 - 64 * 1024;
+export const attachFull = (file, list) => { const photo = IMG_OK.includes(file.type); return list.filter(a => !a.file === photo).length >= (photo ? MAX_IMAGES : MAX_FILES) ? `Four ${photo ? 'images' : 'files'} a message at most` : ''; };
+export async function readAttachment(file, list) {
+  if (!IMG_OK.includes(file.type) && file.size > MAX_FILE * 3 / 4) throw new Error('over 6 MiB, the most a file can be');
+  const got = IMG_OK.includes(file.type) ? await readImage(file) : { file: true, name: file.name, data: await base64(file), ...(file.type && { mimeType: file.type }) };
+  if (list.reduce((n, a) => n + a.data.length, got.data.length) > MAX_SENT) throw new Error('with the others it would be over 12 MiB, the most one message can carry');
+  return got;
+}
+// What POST /chat/:id/prompt takes: photos as images, the rest as files.
+export const attachBody = list => {
+  const images = list.filter(a => !a.file).map(({ mimeType, data }) => ({ mimeType, data })), files = list.filter(a => a.file).map(({ name, data, mimeType }) => ({ name, data, ...(mimeType && { mimeType }) }));
+  return { ...(images.length && { images }), ...(files.length && { files }) };
+};
 // O191: a provider profile's chats (/usage profiles), outside the Claude totals; its cost is the adapter's estimate, never a
 // Claude bill. Drawn whatever /usage's state: state counts Claude records only. Old daemon (no profiles): nothing.
 export const profileLines = (usage, cls = 'sm') => (usage.profiles ?? []).map(p => `<p class="${cls}" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');
