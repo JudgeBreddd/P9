@@ -349,11 +349,14 @@ export async function closeOf(sprintDir) {
   return { source: done.source, at: done.at, cause: pending ? 'unknown' : done.cause ?? null, pending, written, rolledBack, left, partial, copyKept, lines };
 }
 
+// A result that is there but does not parse reads as unknown (pending), as one never finalized does: the copy is kept.
 async function resultOf(sprintDir) {
-  return readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then(JSON.parse, () => null);
+  return readFile(path.join(sprintDir, 'apply-result.json'), 'utf8').then((text) => { try { return JSON.parse(text); } catch { return { pending: true }; } }, () => null);
 }
+// A record that does not parse, or lacks its folder or baseline, is no copy.
 async function readRecord(sprintDir) {
-  return readFile(path.join(sprintDir, 'copy-record.json'), 'utf8').then(JSON.parse, () => null);
+  return readFile(path.join(sprintDir, 'copy-record.json'), 'utf8').then(JSON.parse)
+    .then((r) => typeof r?.source === 'string' && typeof r.baseline?.commit === 'string' ? r : null).catch(() => null);
 }
 async function copyHead(copy) {
   return (await git(copy, ['rev-parse', '-q', '--verify', 'HEAD^{commit}'])).out.trim();

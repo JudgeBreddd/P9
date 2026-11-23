@@ -97,7 +97,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       // GNU tar, no shell: it refuses names with .. and creates links last, so nothing lands outside `next`.
       if (!(await run('tar', ['-xzf', archiveFile, '-C', next, '--strip-components=1', '--no-same-owner', '--no-same-permissions'], parent)).ok) return fail('unpack-failed');
       await rm(archiveFile, { force: true });
-      const unpacked = await readFile(path.join(next, 'package.json'), 'utf8').then(JSON.parse, () => null);
+      const unpacked = await readFile(path.join(next, 'package.json'), 'utf8').then(JSON.parse).catch(() => null);
       if (unpacked?.version !== job.version) return fail('version-mismatch', { found: unpacked?.version ?? null });
       // install.sh's steps: --ignore-scripts skips Electron's download, which only a desktop install has.
       const electron = existsSync(path.join(root, 'node_modules', 'electron', 'dist'));
@@ -142,7 +142,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       // (two restarts of up to 120 s, two waits for active of up to 120 s, two 5 min health waits).
       const current = job;
       for (const end = Date.now() + 30 * 60_000; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 1000))) {
-        const result = await readFile(path.join(folder, 'result.json'), 'utf8').then(JSON.parse, () => null);
+        const result = await readFile(path.join(folder, 'result.json'), 'utf8').then(JSON.parse).catch(() => null);
         if (result?.id !== current.id) continue;
         if (!result.ok) { lifecycle.release?.('updating'); Object.assign(current, { phase: 'failed', error: String(result.reason ?? 'swap-failed').slice(0, 100) }); }
         return;
@@ -204,7 +204,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
     },
     // The update under way in this run, or else the last swap's result (it outlives the restart; the job does not).
     async status() {
-      const result = folder && await readFile(path.join(folder, 'result.json'), 'utf8').then(JSON.parse, () => null);
+      const result = folder && await readFile(path.join(folder, 'result.json'), 'utf8').then(JSON.parse).catch(() => null);
       const current = job && (({ log, ...rest }) => ({ ...rest, logTail: job.phase === 'failed' ? log.slice(-1500) : undefined }))(job);
       return { status: 200, version, supported: supported(), ...(current ? { job: current } : {}), ...(result ? { result } : {}) };
     },
