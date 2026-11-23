@@ -196,7 +196,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     c.header('X-Content-Type-Options', 'nosniff');
     await next();
   };
-  const limit = bodyLimit({ maxSize: MAX_BYTES * 6 + 8192, onError: (c) => c.json({ error: 'body-too-large' }, 413) });
+  const limit = bodyLimit({ maxSize: MAX_BYTES * 6 + 8192, onError: (c) => c.json({ error: 'body-too-large', message: 'The message and its files are over 12 MiB; nothing was sent.' }, 413) });
 
   // The routes both listeners serve. Device management is desktop-only and the login routes are remote-only.
   const api = new Hono();

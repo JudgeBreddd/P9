@@ -14,7 +14,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { createHash, randomUUID } from 'node:crypto';
 import * as acp from '../apps/server/acp.mjs';
@@ -226,6 +226,13 @@ const connection = acp.connectAgent(stream, {
     for (const block of params.prompt) if (block.type === 'text' && block.text.startsWith(NOTE) && block.text.includes(']\n\n')) await say('note:' + block.text.slice(block.text.indexOf(']\n\n') + 3).trim());
     if (text === 'crash') process.exit(3);
     if (text === 'auth-required') throw acp.RequestError.authRequired();
+    // A2 step 1: the agent edits a file sent with the message, in place, as its own Edit tool would (the file's link is its real path).
+    if (params.prompt.some((block) => block.type === 'text' && block.text === 'edit attached')) {
+      const links = params.prompt.filter((block) => block.type === 'resource_link');
+      for (const link of links) appendFileSync(fileURLToPath(link.uri), ' edited by the agent');
+      await say('edited:' + links.map((link) => link.name + '=' + link.uri).join(','));
+      return { stopReason: 'end_turn' };
+    }
     // codex-acp 2.1.1 to a client that takes no notices: its warnings arrive as whole reply chunks, then the reply.
     if (text === 'codex warning') {
       await say('Warning: Falling back from WebSockets to HTTPS transport. stream disconnected before completion: websocket closed by server before response.completed\n\n');

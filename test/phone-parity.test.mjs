@@ -6,7 +6,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
 
@@ -290,10 +291,12 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
     return page.$eval('#attachInput', (el) => [el.accept, el.getAttribute('capture'), document.querySelector('#sheet').open]);
   };
   await newChat(page, 'claude');
-  assert.deepEqual(await choose([{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', null, false]);
+  assert.deepEqual(await choose([{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]), ['', null, false], 'A2 step 1: the chooser greys nothing out');
   await chips(1);
+  // A2 step 1: a file that is not a photo attaches too, as a chip with its name (sent at the end of this test).
   await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]);
-  await noted('Not attached: notes.txt: PNG, JPEG, GIF or WebP only.');
+  await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
+  await page.click('#attached [aria-label="Remove notes.txt"]');
   await choose([{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]);
   await chips(2);
   await paste(1);
@@ -325,7 +328,7 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   // Offline the text would queue; images are not queued, so nothing goes and the box keeps both.
   await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => false, configurable: true }));
   await send(page, 'later');
-  await noted('Not sent: images go only with a message sent now.');
+  await noted('Not sent: attachments go only with a message sent now.');
   assert.equal(await page.inputValue('#prompt'), 'later');
   assert.equal(await page.isHidden('#queued'), true);
   await chips(4);
@@ -335,6 +338,23 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   // After a reload the sent photos still show, fetched again by hash.
   await page.reload();
   await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 5, null, { timeout: 15000 });
+  // A2 step 1: any file goes as a file. The agent gets its real path in the chat's own folder and its edit is on disk; the sent
+  // message names the file. One over 6 MiB is refused before sending, with the reason.
+  await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('from the phone') }]);
+  await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
+  await page.locator('#composer').scrollIntoViewIfNeeded(); await shot(page, 'phone-a2-file-chip');
+  await send(page, 'edit attached');
+  const reply = await (await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].map((el) => el.textContent.trim()).find((text) => text.startsWith('edited:')), null, { timeout: 15000 })).jsonValue();
+  const [name, uri] = reply.slice('edited:'.length).split('=');
+  assert.equal(name, 'notes.txt');
+  assert.match(uri, /\/attachments\/[0-9a-f-]+\/notes\.txt$/, 'saved in the chat\'s own folder');
+  assert.equal(await readFile(fileURLToPath(uri), 'utf8'), 'from the phone edited by the agent', 'the agent\'s edit is on disk');
+  await page.waitForSelector('#events .msg.user .sent-files >> text=notes.txt', { timeout: 10000 });
+  await shot(page, 'phone-a2-file-sent');
+  assert.equal(await page.isHidden('#attached'), true);
+  await choose([{ name: 'big.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(6 * 1024 * 1024 + 1) }]);
+  await noted('Not attached: big.bin: over 6 MiB, the most a file can be.');
+  assert.equal(await page.isHidden('#attached'), true);
 });
 // CI job 135799199043: after the reload P8 saw fewer than its 5 sent photos for 15 s. The chat's folder answer redraws the
 // chat while a photo is still loading; the redraw kept the list's key (the photo cache's size, unchanged when a photo lands),

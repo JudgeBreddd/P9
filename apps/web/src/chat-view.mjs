@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, keptItems, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -293,7 +293,7 @@ const sentBy = (id, title) => esc(title || (id === 'p9' ? 'P9' : outer.S.session
 function event(e, s) {
   switch (e.t) {
     // O109-repeat-visible: a message P9 resent after a restart (repeat: true) says so on its row, as the agent was told.
-    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}${e.ask || e.info || e.from ? ' data-from' : ''}><div class="who"${e.repeat ? ' data-repeat' : ''}>${e.ask ? 'Question from ' + sentBy(e.ask, e.fromTitle) + ' · answered read-only' : e.info ? 'Note from ' + sentBy(e.info, e.fromTitle) + ' · information only' : e.from ? 'Message from ' + sentBy(e.from, e.fromTitle) : 'You'}${e.when ? ' · ' + esc(e.when) : ''}${e.repeat ? ' · sent again after a restart, may be a repeat' : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
+    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${outer.chatImgs.get(i.hash) ? ` src="${outer.chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"${e.ask ? ' data-ask-msg' : ''}${e.ask || e.info || e.from ? ' data-from' : ''}><div class="who"${e.repeat ? ' data-repeat' : ''}>${e.ask ? 'Question from ' + sentBy(e.ask, e.fromTitle) + ' · answered read-only' : e.info ? 'Note from ' + sentBy(e.info, e.fromTitle) + ' · information only' : e.from ? 'Message from ' + sentBy(e.from, e.fromTitle) : 'You'}${e.when ? ' · ' + esc(e.when) : ''}${e.repeat ? ' · sent again after a restart, may be a repeat' : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}${Array.isArray(e.files) && e.files.length ? `<div class="xs muted" data-sent-files>📎 ${e.files.map(f => esc(f?.name)).join(', ')}</div>` : ''}</div>`;
     // O109: a worker report scrolls with the chat once it is not the one pinned above the box (closed, or a newer one came).
     case 'report': { const c = s.cards?.get(e.id), on = c && c.text === e.text && s.events.findLast(x => x.t === 'report') === e && !SHUT.get().has(reportKey(s, c)) && !shelved(e.id);
       return on ? '' : `<div class="report" data-report="${esc(e.id)}"><div class="eyebrow">Worker report</div><div class="msg agent">${outer.mdOf(e)}</div></div>`; }
@@ -642,7 +642,7 @@ function pane(s, i, bare) {
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get(), shelved)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? esc(outer.names[s.agent]) + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
@@ -833,15 +833,19 @@ function answered(s) {
 }
 // Paperclip (it only drew a blue square). Threat model row 20; the daemon checks the same limits.
 function pickImages(s) {
-  const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMG_OK.join(','), multiple: true });
+  const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true });
   input.onchange = () => addImages(s, input.files);
   input.click();
 }
 // The paperclip, a pasted screenshot and dropped files all come through here (pasting screenshots did not work).
+// attach.mjs loads on the first attach; a failed load says so and changes nothing, and the next attach imports it afresh.
 async function addImages(s, files) {
+  const m = await import('./attach.mjs').catch(() => null);
+  if (!m) return outer.toast({ kind: 'not attached', txt: 'Could not load attaching; nothing was attached. Try again.', level: 'warn' }, true);
+  const { attachFull, readAttachment } = m;
   for (const file of files) {
-    if ((s.images ||= []).length >= MAX_IMAGES) { outer.toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
-    try { s.images.push(await readImage(file)); }
+    const full = attachFull(file, s.images ||= []); if (full) { outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
+    try { s.images.push(await readAttachment(file, s.images)); }
     catch (e) { outer.toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
   }
   renderChats();
@@ -993,7 +997,7 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.

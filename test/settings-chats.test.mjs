@@ -252,7 +252,8 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   const pick = async (...files) => { const chooser = page.waitForEvent('filechooser'); await pane.locator('[data-attach]').click(); await (await chooser).setFiles(files.map((f) => path.join(profile, f))); };
   await pick('small.png', 'big.png', 'note.svg');
   await pane.locator('.attach .att').nth(1).waitFor();
-  await page.locator('#toasts .toast', { hasText: 'PNG, JPEG, GIF or WebP only' }).waitFor();
+  // A2 step 1: an SVG is not a photo, so it goes as a file: a chip with its name, never drawn, so its script never runs (pwned below).
+  await pane.locator('.attach .att-file', { hasText: 'note.svg' }).waitFor();
   assert.deepEqual(await pane.evaluate((p) => ({
     chips: [...p.querySelectorAll('.attach img')].map((i) => [i.alt, i.naturalWidth > 0]), text: p.querySelector('.composer textarea').value,
     boxShown: p.querySelector('.composer textarea').getBoundingClientRect().height > 15,

@@ -50,6 +50,7 @@ const MAX_FILES = 4, MAX_FILE = 8 * 1024 * 1024, BASE64 = /^[A-Za-z0-9+/]*={0,2}
 // 200 bytes is under every system's 255 per name; a taken name's tag is cut to fit the same 200 (tagged, below). Node opens
 // long Windows paths itself.
 const DEVICE = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\.|$)/i;
+// The web app checks the same rule when a file is attached (apps/web/src/attach.mjs NAME_BAD); keep the two alike.
 const fileName = (name) => typeof name === 'string' && name.length > 0 && Buffer.byteLength(name) <= 200 && name !== '.' && name !== '..' && !/[\x00-\x1f/\\:*?"<>|]/.test(name)
   && !/[. ]$/.test(name) && !DEVICE.test(name);
 const linked = (image) => typeof image?.file === 'string';

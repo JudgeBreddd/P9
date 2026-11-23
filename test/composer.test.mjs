@@ -5,6 +5,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { deflateSync, crc32 } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root, watchStartup, waitStartup } from './helpers.mjs';
 
@@ -305,6 +306,42 @@ test('CP10: clicking a chat picture shows it large; a click anywhere or Esc clos
   console.log('PASS CP10: the picture opened large over a dim backdrop; a backdrop click and Esc each closed it');
 });
 
+// A2 step 1, the paperclip half: any file attaches, not only photos. A .docx goes as a file (a chip with its name), the daemon
+// saves it in the chat's own folder, the agent gets its real path and edits it there, and the sent message names it. The photo
+// beside it still goes as a photo. Fails on main: the picker filters to photos and readImage refuses the .docx.
+test('A2 step 1: the desktop paperclip attaches any file; the agent gets its path and its edit is on disk', { timeout: 90000 }, async (t) => {
+  const { instance, id, page, pane, send, errors } = await setup(t, 'a2-files');
+  const docx = Buffer.from('PK\x03\x04 any bytes at all');
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
+  assert.equal(await chooser.element().evaluate((input) => input.accept), '', 'the picker greys nothing out');
+  await chooser.setFiles([{ name: 'report.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docx }, { name: 'empty.txt', mimeType: 'text/plain', buffer: Buffer.alloc(0) }, { name: 'dot.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') }]);
+  await pane.locator('.attach .att-file', { hasText: 'report.docx' }).waitFor({ timeout: 10000 });
+  await pane.locator('.attach .att-file', { hasText: 'empty.txt' }).waitFor({ timeout: 10000 });
+  await pane.locator('.attach img[alt="dot.png"]').waitFor({ timeout: 10000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-desktop-chips ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
+  await send('edit attached');
+  let reply;
+  await until(async () => (reply = (await said(instance, id, 'update')).map((e) => e.data.content?.text).find((text) => text?.startsWith('edited:'))), 'the agent edited the file');
+  const edited = Object.fromEntries(reply.slice('edited:'.length).split(',').map((pair) => pair.split('=')));
+  assert.deepEqual(Object.keys(edited), ['report.docx', 'empty.txt']);
+  for (const [name, uri] of Object.entries(edited)) assert.match(uri, new RegExp('/attachments/' + id + '/' + name.replace('.', '\\.') + '$'), 'saved in the chat\'s own folder');
+  assert.equal(await readFile(fileURLToPath(edited['report.docx']), 'utf8'), docx.toString() + ' edited by the agent', 'the agent\'s edit is on disk');
+  assert.equal(await readFile(fileURLToPath(edited['empty.txt']), 'utf8'), ' edited by the agent', 'an empty file goes too, and its edit is on disk');
+  const user = (await said(instance, id, 'user')).at(-1).data;
+  assert.deepEqual([user.text, user.files, user.images?.length], ['edit attached', [{ name: 'report.docx', size: docx.length }, { name: 'empty.txt', size: 0 }], 1]);
+  await pane.locator('.msg.user [data-sent-files]', { hasText: 'report.docx' }).waitFor({ timeout: 10000 });
+  assert.equal(await pane.locator('.attach').count(), 0, 'the chips went with the message');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-desktop-sent ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
+  // A name the daemon would refuse (a Windows device name) is refused when attached, with the reason; nothing is attached.
+  const [again] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
+  await again.setFiles([{ name: 'CON.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
+  await page.locator('#toasts .toast', { hasText: 'CON.txt: its name cannot have' }).waitFor({ timeout: 15000 });
+  assert.match(await page.locator('#toasts .toast', { hasText: 'CON.txt' }).innerText(), /Windows device name such as CON; rename it and attach it again/);
+  assert.equal(await pane.locator('.attach').count(), 0, 'CON.txt was not attached');
+  assert.deepEqual(errors, []);
+  console.log('PASS A2 step 1 desktop: report.docx attached as a file beside a photo, saved in attachments/<chat>/, edited there by the agent, named in the sent message; an empty file went and was edited too; CON.txt refused with the reason when attached');
+});
+
 // RS2: the agent asks through P9's MCP server, as a real one would. The native "Restart P9?" dialog is answered Cancel,
 // so nothing restarts; it opening proves the button reached the restart.
 test('RS2: an agent\'s restart request shows a Restart P9 button that asks to restart P9', { timeout: 90000 }, async (t) => {
@@ -324,4 +361,32 @@ test('RS2: an agent\'s restart request shows a Restart P9 button that asks to re
   await until(async () => (await app.evaluate(() => globalThis.asked)).includes('Restart P9?'), 'the restart dialog', 5000);
   await until(() => button.isEnabled(), 'the button back after Cancel', 5000);
   console.log('PASS RS2: the restart request showed Restart P9; it asked to restart, and Cancel left P9 running');
+});
+
+// #479 review: attach.mjs loads on the first attach. A failed load (the chunk's first request cancelled) says why, keeps the
+// draft and attaches nothing; the next attach loads it afresh, without a reload, and the file is a chip.
+test('A2 step 1: a failed load of the attach code says so, keeps the draft, and the next attach works', { timeout: 90000 }, async (t) => {
+  const { app, page, pane, type } = await setup(t, 'a2-chunk');
+  await app.evaluate(({ session }) => {
+    globalThis.attachRequests = 0;
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      if (/\/_astro\/attach[^/]*\.js/.test(details.url)) callback({ cancel: ++globalThis.attachRequests === 1 }); else callback({});
+    });
+  });
+  await type('keep this draft');
+  const pick = async () => {
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
+    await chooser.setFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('n') }]);
+  };
+  await pick();
+  await page.locator('#toasts .toast', { hasText: 'Could not load attaching; nothing was attached. Try again.' }).waitFor({ timeout: 15000 });
+  assert.equal(await pane.locator('.attach').count(), 0, 'nothing attached');
+  assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is kept');
+  // The toast pops up over the paperclip, and hovering holds it: move off, and let it fade before the next attach.
+  await page.mouse.move(0, 0);
+  await page.locator('#toasts .toast').first().waitFor({ state: 'detached', timeout: 20000 });
+  await pick();
+  await pane.locator('.attach .att-file', { hasText: 'notes.txt' }).waitFor({ timeout: 10000 });
+  assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is still there');
+  assert.equal(await app.evaluate(() => globalThis.attachRequests), 2, 'the chunk was requested again on the next attach');
 });
