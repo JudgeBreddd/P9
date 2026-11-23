@@ -1081,7 +1081,7 @@ async function loadChat() {
   // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
   // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.
   // A chat from the daemon's list, not loaded yet (its events read when opened). O251: the launch and jump() both make them.
-  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived });
+  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, askable: !!c.askable });
   const lastTwo = () => { if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id); };
   const caughtUp = (listed) => {
     // Tabs keep the order the chats were made in; History sorts by last used.
@@ -1101,7 +1101,8 @@ async function loadChat() {
     outer.closedChats.clear(); localStorage.removeItem('eh-closed-chats');
     lastTwo();
     // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
-    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+    // O249: a stub loads first, so the message goes in the chat's own mode, not the window's default.
+    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(() => turnEnd(s), () => {}) : turnEnd(s);
   };
   // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
   // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
@@ -1110,6 +1111,8 @@ async function loadChat() {
   const jump = async () => {
     const head = await window.p9.chat('events', { after: 0, only: [], tail: TAIL }), l = await window.p9.chat('list', {});
     if (head.status !== 200 || l.status !== 200) return false;
+    // A late() still loading stops at its next chat (it would take the gate below and skip that chat) and starts over at the end.
+    const again = lateBusy; lateRun += 1;
     // A chat's load still in flight ends first: it marks its chat loaded when done, which would land on the emptied stub. One
     // asked for meanwhile (a chat opened) gets the gate instead, so none reads up to the old cursor; the reset clears it.
     let open; const gate = new Promise(res => { open = res; }), flying = outer.S.sessions.map(s => s.loading).filter(Boolean);
@@ -1128,17 +1131,55 @@ async function loadChat() {
     caughtUp(listed); outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
     lastTwo();
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
+    if (again) late();
     return true;
   };
   // O249: the open chats not shown load after the list draws, shown ones first, one read at a time so the shown chat's
   // read is not shared with the rest over a slow link. Their asks were there before launch, so the bell's notices start
   // only when all are in (S.loaded; bell-notice.mjs counts the first draw after as old).
   // ponytail: an ask that comes in while they load counts as old too: it is on the bell, without its notice.
+  // A jump (O251) makes them stubs again; one that cuts a late() short starts it over. After late() is done, a jump leaves
+  // the chats not shown as stubs until opened, as O251 does, so a wake stays one step.
+  let lateRun = 0, lateBusy = false;
   const late = async () => {
-    outer.S.loaded = false;
+    const run = ++lateRun; lateBusy = true; outer.S.loaded = false;
     const shown = new Set(outer.S.open), open = outer.S.sessions.filter(s => s.stub && !s.hidden).sort((a, b) => shown.has(b.id) - shown.has(a.id));
-    for (const s of open) { if (outer.lifetime.signal.aborted) return; try { await history(s); } catch (e) { console.error('chat history', e); } }
-    outer.S.loaded = true; outer.renderCards();
+    for (const s of open) { if (outer.lifetime.signal.aborted || run !== lateRun) return; try { await history(s); } catch (e) { console.error('chat history', e); } }
+    if (run === lateRun) { lateBusy = false; outer.S.loaded = true; outer.renderCards(); }
+  };
+  // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.
+  const take = (ev, ended, answered_) => {
+    const created = ev.type === 'created' && !replaying;
+    // A malformed stored event is skipped, never thrown: it would fail again on every replay.
+    let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
+    // A7: a worker an agent started never takes the screen from the chat being read; it is listed under its parent.
+    // window-10: nor does the lead chat this window's Start sprint makes; the project page keeps the press's answer.
+    if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation);
+    // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
+    if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
+    if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
+    if (ev.type === 'answered') answered_.push(ev.conversation);
+    // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
+    // ponytail: its images are not returned; attach them again.
+    const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && outer.S.sessions.find(s => s.id === ev.conversation);
+    if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
+    // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
+    const closed = !replaying && ev.type === 'closed' && outer.S.sessions.find(s => s.id === ev.conversation && !s.hidden);
+    if (closed) { closed.hidden = true; untab(closed.id); }
+  };
+  // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
+  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
+  // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
+  const behind = (s, ev) => {
+    if (s.behind) return void s.behind.push(ev);
+    s.behind = [ev];
+    history(s, ev.cursor - 1).then(() => {
+      const evs = s.behind || [], ended = [], answered_ = []; s.behind = null;
+      for (const e of evs) take(e, ended, answered_);
+      settle(ended, answered_);
+      try { outer.renderTabs(); renderChats(new Set([s.id])); } catch (e) { console.error('chat paint', e); }
+    }, (e) => console.error('chat history', e));
   };
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
@@ -1155,24 +1196,8 @@ async function loadChat() {
     if (!replaying && r.body.events.length >= 500 && await jump()) continue;
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
-      const created = ev.type === 'created' && !replaying, stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
-      if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
-      // A malformed stored event is skipped, never thrown: it would fail again on every replay.
-      let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
-      // A7: a worker an agent started never takes the screen from the chat being read; it is listed under its parent.
-      // window-10: nor does the lead chat this window's Start sprint makes; the project page keeps the press's answer.
-      if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation);
-      // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
-      if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
-      if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
-      if (ev.type === 'answered') answered_.push(ev.conversation);
-      // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
-      // ponytail: its images are not returned; attach them again.
-      const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && outer.S.sessions.find(s => s.id === ev.conversation);
-      if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
-      // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
-      const closed = !replaying && ev.type === 'closed' && outer.S.sessions.find(s => s.id === ev.conversation && !s.hidden);
-      if (closed) { closed.hidden = true; untab(closed.id); }
+      const stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
+      if (stub) behind(stub, ev); else take(ev, ended, answered_);
     }
     outer.liveChat.cursor = r.body.cursor; if (!replaying && r.body.events.length) sprintStale = true;
     if (replaying && (r.body.more || r.body.events.length < 500)) {
@@ -1181,8 +1206,7 @@ async function loadChat() {
       outer.moveReloaded();
       late();
     }
-    // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
-    else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
+    else if (!replaying) settle(ended, answered_);
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }

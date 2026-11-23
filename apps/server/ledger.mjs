@@ -264,8 +264,10 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         }
         // O249: only the newest slash-command list is used (chat-view.mjs, phone.ts), and each is about 70 KB: a busy chat's
         // tail carried ten of them, 0.7 MB of a launch read over a remote. The older ones in the span stay out.
-        const span = statements.span.all(id, from, top), last = span.findLastIndex((e) => e.type === 'update' && e.data.includes(COMMANDS));
-        events.push(...span.filter((e, i) => i === last || e.type !== 'update' || !e.data.includes(COMMANDS)));
+        // The top-level kind only: a tool's input or output may hold the same words (parsed only for a row that does).
+        const commands = (e) => { if (e.type !== 'update' || !e.data.includes(COMMANDS)) return false; try { return JSON.parse(e.data)?.sessionUpdate === 'available_commands_update'; } catch { return false; } };
+        const span = statements.span.all(id, from, top), last = span.findLastIndex(commands);
+        events.push(...span.filter((e, i) => i === last || !commands(e)));
         if (cut) {
           more[id] = from;
           events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ...(last < 0 ? [['update', COMMANDS]] : []), ...(user ? [] : [['user', '']])]

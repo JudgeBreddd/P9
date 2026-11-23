@@ -253,6 +253,8 @@ const connection = acp.connectAgent(stream, {
           content: [{ type: 'content', content: { type: 'image', mimeType: 'image/png', data: 'A'.repeat(400000) } }] } });
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands: Array.from({ length: 300 }, (_, j) => ({ name: 'cmd' + j, description: 'x'.repeat(220) })) } });
       }
+      // Last, a tool whose output holds the same words as a command list's kind, nested: it is a tool call, not a list.
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'heavy-decoy', title: 'grep', kind: 'search', status: 'completed', rawOutput: { sessionUpdate: 'available_commands_update' } } });
       await say('heavy done'); return { stopReason: 'end_turn' };
     }
     // Images the way the real adapters send them (threat model row 26): Codex's image generation as a finished tool call

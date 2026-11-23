@@ -96,9 +96,13 @@ test('O249 a busy chat does not hold the chat list back over a slow link', { tim
   await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'heavy 8' }); await ended(instance, heavy);
   // Only the newest slash-command list comes in a chat's tail (ledger.tail): eight came before, 0.5 MB of nothing.
   const tail = await call(instance, '/chat/events?after=0&tail=200&only=' + heavy);
-  assert.equal(tail.events.filter((e) => e.data?.sessionUpdate === 'available_commands_update').length, 1, 'one slash-command list in the tail');
+  const lists = tail.events.filter((e) => e.data?.sessionUpdate === 'available_commands_update');
+  assert.equal(lists.length, 1, 'one slash-command list in the tail');
+  assert.equal(lists[0].data.availableCommands?.length, 300, 'the list kept is the real one, not the tool whose output names its kind');
+  assert.ok(tail.events.some((e) => e.data?.toolCallId === 'heavy-decoy'), 'the tool call naming the kind stays');
+  let id;
   for (let i = 0; i < 11; i += 1) {
-    const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Chat ' + i })).conversation;
+    id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Chat ' + i })).conversation;
     await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello ' + i }); await ended(instance, id);
   }
   const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
@@ -121,6 +125,16 @@ test('O249 a busy chat does not hold the chat list back over a slow link', { tim
   for (const e of link.log) console.log(`O249 ${String(e.at).padStart(6)} -> ${String(e.done == null ? 'open' : e.done).padStart(6)} ms ${String(e.bytes).padStart(8)} B  ${e.req}`);
   // The busy chat's ~3.5 MB alone is 14 s at 2 Mbit/s; the list and the shown chat are a few small reads after the window starts.
   assert.ok(drawn < 10000, `the list and the shown chat drew ${drawn} ms after launch; a busy chat's events must not come first`);
+  // Review round 1: the busy chat is still loading after the list (late(), ~13 s of history at 2 Mbit/s). An event from it
+  // meanwhile waits for that load on its own; the shown chat's reply does not wait behind it.
+  await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'hello busy' });
+  await new Promise((r) => setTimeout(r, 500));
+  const asked = Date.now();
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello again' });
+  await page.locator('#chats').getByText('echo:hello again', { exact: false }).first().waitFor({ timeout: 120000 });
+  const replied = Date.now() - asked;
+  console.log(`O249 the shown chat's reply drew ${replied} ms after its prompt, while the busy chat loaded`);
+  assert.ok(replied < 6000, `the shown chat's reply drew ${replied} ms after its prompt; it waited behind the busy chat's history`);
   // It still loads, after: opened, its last reply shows.
   await page.locator(`#navList .row[data-chat="${heavy}"]`).click();
   await page.locator('#chats').getByText('heavy done', { exact: false }).first().waitFor({ timeout: 120000 });
