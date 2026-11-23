@@ -348,10 +348,12 @@ function bindDefaults() {
     m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
     outer.saveStarts(a, 'mode', m); // O137: the daemon's copy, which a worker started under Unrestricted starts in (not what the Unrestricted switch sets)
   }; });
-  // O133: saved in the daemon; one it did not take shows what is kept again.
+  // O133: saved in the daemon; one it did not take shows what is kept again. N6-2: a row drawn again while the save was out
+  // (Settings reopened, or the agents' lists arrived) showed the value from before it, so once it answers the rows are drawn again.
   outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = async () => {
     const a = el.dataset.defaultModel || el.dataset.defaultEffort, kind = el.dataset.defaultModel ? 'model' : 'effort';
     if (!await outer.saveStarts(a, kind, el.value)) el.value = kind === 'model' ? outer.defaultModel(a) : outer.defaultEffort(a);
+    refreshDefaults();
   }; });
 }
 // O47: the agents' lists arrived while Settings is open. Only the defaults rows are drawn again, never the page: a full
