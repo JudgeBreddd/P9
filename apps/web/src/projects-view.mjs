@@ -264,7 +264,7 @@ export function installProjects(o, api) {
     if (cur?.sprints?.find(x => x.lead === lead)?.prep === false) {
       const [m, r] = await Promise.all([loadSv(), call('sprintStatus', { sprint: lead }).catch(() => ({}))]);
       if (n !== svN) return;
-      if (m && r.status === 200) { sv = { lead, draw: opts => m.statusHtml(r.body, esc, opts) }; renderPage(); if (r.body.closed) return; } // a closed sprint's record does not change: read once
+      if (m && r.status === 200) { sv = { lead, draw: opts => m.statusHtml(r.body, esc, opts, o) }; renderPage(); if (r.body.closed) return; } // a closed sprint's record does not change: read once
     }
     setTimeout(() => { if (n !== svN) return; svFor = ''; if (spPage === lead && !page.hidden) loadView(); }, 5000);
   }
@@ -360,6 +360,9 @@ export function installProjects(o, api) {
         r => { const c = r.body?.cleaned; if (c) cleaned.set(lead, c.skipped ?? cleanText({ status: 200, body: c })); }); // what Close cleaned up, as Clean up says it
       svClosing = ''; if (said === null) return; svSaid = said;
       await back(id, lead); o.loadProjects(); renderPage(); if (spPage === lead) loadView(); return; }
+    // O233: a closed sprint's Save press (sprint-view.mjs, applyPress), then its page is read again.
+    if (k === 'spapply') { if (svClosing || !svMod) return; svClosing = b.dataset.lead; svSaid = ''; renderPage();
+      svSaid = await svMod.applyPress(b); svClosing = ''; renderPage(); return loadView(); }
     if (k === 'spscripts') return openScripts(b.dataset.lead);
     if (k === 'sppause' || k === 'spresume' || k === 'spmerge') { b.disabled = true; const id = cur.id, r = await call(k === 'spmerge' ? 'standingMerge' : k === 'sppause' ? 'pauseSprint' : 'resumeSprint', { sprint: b.dataset.lead, ...(k === 'spmerge' && { on: b.checked }) }, { quiet: true });
       if (r.status !== 200) failed(r);

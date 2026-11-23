@@ -549,6 +549,89 @@ test('712: old workers clear out of the sprint box: archived ones leave it, a st
   console.log('PASS 712: archived worker off the card; one stopped cleared by its x; a stopped ready row has an x; Clear 3 stopped took two plain and one ready; archived in the daemon; still gone after a reload; clearing another worker left the pinned report, clearing its own worker closed it; text box on screen');
 });
 
+// O235 (owner, nightly 12): Clear on a closed sprint's card archived its workers but the lead chat stayed listed, though Close
+// had stopped every chat of the sprint. On a closed sprint, Clear takes the lead too once no worker is left on the card; on an
+// open sprint it keeps the lead (712). Real daemon, a started sprint, the lead's own open_chat for the workers, Close by the route.
+test('O235: on a closed sprint, Clear archives the stopped workers and then the lead, so no chat of it is listed; an open sprint keeps its lead', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 20, workers: [] });
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  // Start refuses a role whose model P9 has not seen, so one chat reads the model list first.
+  const warm = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${warm}/prompt`, 'POST', { text: 'config' });
+  await until(async () => (await events(instance, warm)).some((e) => e.data?.content?.text?.startsWith('config:')), 'the model list');
+  const repo = path.join(instance.workspace, 'repo'); mkdirSync(repo);
+  execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']); writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  execFileSync('git', ['-C', repo, 'add', '-A']); execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'a']);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Cleared', work: { kind: 'new', parent: '', name: 'cleared' } })).project.id;
+  const sp = await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Cleared' }), sprint = sp.sprint;
+  const role = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  writeFileSync(path.join(sp.folder, 'sprint.md'), '# Plan\n\n- [ ] a1: the piece. Role: w1.\n');
+  writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
+  writeFileSync(path.join(sp.folder, 'roles/lead.work.md'), 'mcp');
+  writeFileSync(path.join(sp.folder, 'hooks.json'), JSON.stringify({ scripts: [] }));
+  const hooks = (await call(instance, '/projects/' + project)).project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks }); assert.equal(started.status, 200, JSON.stringify(started));
+  writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: ['lead', 'w1', 'w2', 'w3', 'w4'].map(role) }));
+  const L = await tools(t, instance, sprint), kids = [];
+  for (const key of ['w1', 'w2', 'w3', 'w4']) { const made = await L.tool('open_chat', { text: 'first', key }); assert.ok(made.chat && !made.error, JSON.stringify(made)); await L.done(made.chat); kids.push(made.chat); }
+  // Two stopped workers left on the card, the way 712 makes them: a close archives (O132), so each comes back unarchived.
+  for (const id of kids.slice(0, 2)) { assert.equal((await L.tool('stop_chat', { chat: id, close: true })).action, 'stopped');
+    assert.equal((await L.tool('archive_chat', { chat: id, archived: false })).action, 'unarchived'); }
+
+  const { app, page, errors } = await launch(t, instance);
+  const nav = (id) => page.locator(`#navList [data-chat="${id}"]`);
+  await nav(sprint).first().click({ timeout: 20000 });
+  const pane = page.locator(`.pane[data-id="${sprint}"]`), card = pane.locator('.sprint'), clear = card.locator('[data-sprint-clear="*"]');
+  await card.locator(`[data-sprint-open="${kids[2]}"]`).waitFor({ state: 'attached', timeout: 20000 });
+  if (await card.getAttribute('data-folded') === 'true') await card.locator('[data-sprint-fold]').click();
+  // Open sprint: Clear takes the two stopped workers and keeps the lead (712 as it was).
+  await clear.filter({ hasText: /^Clear 2 stopped$/ }).click({ timeout: 5000 });
+  await until(async () => !(await card.locator(`[data-sprint-open="${kids[0]}"]`).count()) && !(await card.locator(`[data-sprint-open="${kids[1]}"]`).count()), 'the stopped workers left the card');
+  assert.equal(await nav(sprint).count() > 0, true, 'an open sprint\'s Clear took its lead');
+  assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === sprint).archived, false, 'an open sprint\'s lead was archived');
+
+  // Close by the route (as another window or an agent would): it stops w3, w4 and the lead. The open window learns the
+  // sprint is closed, so the card's Clear says the lead goes too.
+  const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {}); assert.equal(closed.status, 200, JSON.stringify(closed));
+  await clear.filter({ hasText: 'Clear 2 stopped and this chat' }).waitFor({ timeout: 20000 });
+  // One worker's own x on a closed sprint clears that worker only: the lead stays, and Clear now names the one left.
+  await card.locator(`[data-sprint-clear="${kids[2]}"]`).click({ timeout: 5000 });
+  await clear.filter({ hasText: 'Clear 1 stopped and this chat' }).waitFor({ timeout: 20000 });
+  assert.equal(await nav(sprint).count() > 0, true, 'a worker\'s x took the closed sprint\'s lead');
+  assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === sprint).archived, false, 'a worker\'s x archived the lead');
+  await shot(page, 'o235-closed');
+  // Reviewer fix 1: the lead's archive refused (500), then rejected, after the worker's went. The worker stays cleared, the lead
+  // stays listed, the failure shows, and the card keeps a Clear for the lead; the third press goes through.
+  await app.evaluate(({ ipcMain }, lead) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let n = 0;
+    ipcMain.handle('p9:chat', (e, action, body) => { if (action === 'archiveChat' && body?.id === lead && n < 2) { n += 1; if (n === 1) return { status: 500, body: { error: 'test-held' } }; throw new Error('test-rejected'); } return h(e, action, body); }); }, sprint);
+  await clear.click();
+  await page.locator('#toasts .toast', { hasText: 'test-held' }).waitFor({ timeout: 20000 });
+  const retry = clear.filter({ hasText: /^Clear this chat$/ });
+  await retry.waitFor({ timeout: 20000 });
+  assert.equal(await nav(kids[3]).count(), 0, 'the worker came back after the lead\'s archive failed');
+  assert.equal(await nav(sprint).count() > 0, true, 'the lead left the list though its archive failed');
+  await retry.click();
+  await page.locator('#toasts .toast', { hasText: 'A chat could not be archived. Press Clear again.' }).waitFor({ timeout: 20000 });
+  await retry.waitFor({ timeout: 20000 });
+  assert.equal(await nav(sprint).count() > 0, true, 'the lead left the list though its archive was rejected');
+  assert.equal((await call(instance, '/chat')).conversations.find((c) => c.id === sprint).archived, false, 'a failed archive archived the lead');
+  await shot(page, 'o235-retry');
+  await retry.click();
+  const left = async () => { for (const id of [sprint, ...kids]) if (await nav(id).count()) return id; return null; };
+  await until(async () => !(await left()), 'a chat of the closed sprint is still listed');
+  const kept = (await call(instance, '/chat')).conversations.filter((c) => [sprint, ...kids].includes(c.id) && !c.archived).map((c) => c.id);
+  assert.deepEqual(kept, [], 'chats of the closed sprint not archived in the daemon');
+  await shot(page, 'o235-cleared');
+  await page.reload();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  assert.equal(await left(), null, 'a chat of the closed sprint came back after a reload');
+  assert.deepEqual(errors, []);
+  console.log('PASS O235: open sprint: Clear 2 stopped kept the lead; closed by the route, one worker x kept the lead; Clear 1 stopped and this chat archived the worker, a refused then rejected archive kept it listed with a toast and Clear this chat, the third press archived it; none listed, also after a reload');
+});
+
 // window-3 (row "A sprint never ends": the closed probe worker's report was still drawn above the message box):
 // a worker archived anywhere but its own card row (archive_chat, the sidebar, another window) left its report pinned above the box,
 // because the pinned report looked only at this browser's closed list. Archived is the daemon's word, so every window drops it.

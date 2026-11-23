@@ -93,6 +93,13 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const ACP_ASK = ACP;
 // O109: the line on a kept message P9 sends again after a restart that cut its sending short.
 const REPEAT = '[P9: P9 restarted while this message was being sent, so it may have reached you already.]';
+// O231: the CLI ends any call it cuts short with the words below, the user's Stop or not. Claude's adapter injects a steer
+// at once and the CLI aborts the running call for it; a restart or another chat's stop_chat cuts a turn too. None of those
+// is the user's stop, so the agent's next text says what cut it: a steer carries STEERED, and the next prompt after a cut
+// P9 made carries CUT (cut-by:<chat> in prefs, so a restart keeps it until then; the user's own Stop leaves none).
+const CUT_WORDS = '"The user doesn\'t want to take this action right now. STOP what you are doing and wait for the user"';
+const STEERED = `[P9: this message was steered into your running turn. If a tool call of yours just ended with ${CUT_WORDS}, this message is what cut it short: that result is not a stop from the user. Act on this message.]\n\n`;
+const CUT = (by) => `[P9: your last turn was cut short by ${by}, not by the user. A tool call that ended then with ${CUT_WORDS} came from that: it is not a stop from the user.]\n\n`;
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : Object.hasOwn(ACP_ASK, provider) ? ACP_ASK[provider] : 1); // hasOwn: a built-in name ('constructor') is not an agent
 // O194: _meta advertises claude-agent-acp's opt-in asyncTasks capability (its air-extension.js), so the adapter marks a
 // run it starts with no prompt. Codex and an ACP 2 start (acp-v2.mjs keeps only elicitation) never see it.
@@ -577,6 +584,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // and every message it holds. Absent: not paused.
   // ponytail: in memory only; after a P9 restart there is no check left and a held message goes out (SECURITY.md § Pause sprint).
   const heldAuthority = new Map();
+  // O235: a closed sprint's lead says so in the list, so its card's Clear takes the lead too (projects.mjs closed(), same pref).
+  const closedOf = (lead) => !!db.prepare('SELECT 1 FROM prefs WHERE key = ?').get('sprint-close:' + lead);
   const pausedOf = (lead) => {
     const value = ID.test(lead ?? '') ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('paused:' + lead)?.value : undefined;
     if (value === undefined) return null;
@@ -835,6 +844,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // these hashes, keeps the framing as the sending chat's. Either way "[P9:" in the text is quoted, so it cannot pass
   // as a block of P9's own. Its writer: the last write through P9 if the file still has that text, else unknown.
   const keptPref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? 'null'); } catch { return null; } };
+  // O231: what cut a chat's last turn, if not the user (CUT above); taken by its next prompt.
+  const cutBy = (id, by) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('cut-by:' + id, JSON.stringify(by));
+  const takeCut = (id) => { const by = keptPref('cut-by:' + id); db.prepare('DELETE FROM prefs WHERE key = ?').run('cut-by:' + id); return typeof by === 'string' ? by : null; };
   const approved = (sprint, name, raw) => typeof raw === 'string' && typeof keptPref('sprint-start:' + sprint)?.files?.[name] === 'string' && keptPref('sprint-start:' + sprint).files[name] === hashOf(raw);
   const writerOf = (sprint, name, raw) => { const w = keptPref(writerKey(sprint, name)); return w && w.hash === hashOf(raw) && typeof w.by === 'string' ? w.by : 'unknown (changed outside P9\'s Setup tools)'; };
   const wrote = (sprint, name, text, by) => MARKED.test(name) && db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(writerKey(sprint, name), JSON.stringify({ by, hash: hashOf(text) }));
@@ -1147,6 +1159,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (conversation.state === 'turn') { emit(conversation.id, 'interrupted', { reason: 'daemon-restart' }); cut.add(conversation.id); }
     setState(conversation.id, 'cleanup-failed');
   }
+  for (const id of cut) cutBy(id, 'a P9 restart');
   const recovered = sweep().then((result) => {
     if (result === 'stopped') for (const { id } of leftover) db.prepare("UPDATE conversations SET state = 'stopped' WHERE id = ? AND state = 'cleanup-failed'").run(id);
   });
@@ -1415,7 +1428,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const rules = rulesFor(row(id), body);
     if (rules?.started) sending.set(id, rules.start);
     const user = () => ({ text: body.text, ...shown(images), steered: true, ...(held?.length && { held }), ...(rules && { rules: rules.hash }), ...sender(body), ...(notes.has(body) && { info: true }), ...(repeats.has(body) && { repeat: true }) });
-    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(id, body.text, images)],
+    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: [...(fromFor(body) ? [{ type: 'text', text: fromFor(body) }] : []), { type: 'text', text: STEERED }, ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(id, body.text, images)],
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
     try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { if (rules?.started) startLost(id); return refused(409, 'turn-running'); }
@@ -1569,7 +1582,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit, sprintFiles,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
-      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id); // O48, A7, daemon-5, O214
+      db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id, 'cut-by:' + id); // O48, A7, daemon-5, O214, O231
       gauges.delete(id); parked.delete(id);
       if (attachDir && ID.test(id) && rootOk()) rmSync(path.join(attachDir, id), { recursive: true, force: true }); // A2 step 1: this chat's folder only
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
@@ -1663,7 +1676,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // named: the title stays over the agent's (the user's rename, or O172 a sprint chat's role name, as the title update above).
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1 || !!key || sprintFiles.exists(c.id), waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(profile && { profile }) }; }),
+      .map(({ key, ...c }) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null, s = sprintOf(c.id), queue = queueOf(c.parent, key, s, plans); return { ...c, ...s, ...(queue && { queue }), archived: c.archived === 1, sent: c.sent === 1, named: c.named === 1 || !!key || sprintFiles.exists(c.id), waiting: c.waiting === 1, preview: preview(c.id), askable: api.askable(c.id), ...((pausedOf(c.id) || pausedOf(c.parent)) && { paused: true }), ...(closedOf(c.id) && { sprintClosed: true }), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -1856,7 +1869,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (told.length) keepWaiting(id);
       // With notes in front, the message itself says who sent it too (O109): the user's is not left to read as the last note's.
       const shared = told.length > 0 && !mixed.has(body);
-      const prompt = bare ? [...again(body), ...blocks(id, body.text, [])] : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(id, shared && fromFor(body) ? quoted(body.text) : body.text, images)];
+      const cutLine = bare ? null : takeCut(id);
+      const prompt = bare ? [...again(body), ...blocks(id, body.text, [])] : [...told.map((n) => ({ type: 'text', text: (fromFor(n) ? fromFor(n) + quoted(n.text) : n.text) + '\n\n' })), ...(shared && !fromFor(body) ? [{ type: 'text', text: lineFor(body) }] : []), ...(note ? [{ type: 'text', text: note }] : []), ...(cutLine ? [{ type: 'text', text: CUT(cutLine) }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...(fromFor(body) ? [{ type: 'text', text: fromFor(body) + (solo ? ASK_NOTE : '') }] : []), ...(rules ? [{ type: 'text', text: rules.text }] : []), ...again(body), ...blocks(id, shared && fromFor(body) ? quoted(body.text) : body.text, images)];
       if (rules?.started) sending.set(id, rules.start);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
       // the reply's model_usage, compactions included) when the reply has it.
@@ -1872,6 +1886,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // A decline is a cancel the user chose, so it ends the same way; any other failure still shows its error.
           if (session.planDeclined === turn && /\[ede_diagnostic\][^]*stop_reason=tool_use/.test(String(error?.message))) return done({ stopReason: 'cancelled' });
           untake(id, turn); // O214: a failed turn is not a message that arrived
+          if (cutLine && !keptPref('cut-by:' + id)) cutBy(id, cutLine); // not read: the next prompt says it
           if (session.turn === turn) for (const hook of turnFailedHooks) { try { hook(id, turn, Boolean(solo)); } catch {} }
           if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
@@ -1912,10 +1927,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       emit(id, 'answered', { request: body.request, answer, ...(from && { from }) });
       return { status: 200, ok: true };
     },
-    async cancel(id) {
+    // by: what cut it when not the user (stop_chat names the chat), said with the chat's next prompt (O231).
+    async cancel(id, by) {
       const session = ID.test(id) && live.get(id);
       if (!session?.turn) return refused(409, 'no-turn');
       for (const pending of session.pending.values()) pending.resolve(null);
+      if (typeof by === 'string') cutBy(id, by);
       await session.agent.cancel({ sessionId: session.sessionId });
       return { status: 200, ok: true };
     },

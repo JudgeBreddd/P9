@@ -110,7 +110,7 @@ export function setupRoutes(outer) {
     if (!outer.settings) {
       outer.settings = disk.parsed ?? paths;
       outer.settingsInvalid = false;
-      outer.server.mission = outer.mission = createMission({ workspace: outer.workspace, recovery: outer.recovery, settings: outer.settings, instance: outer.instance, lifecycle: outer.lifecycle, allowed: outer.allowed, drafts: outer.drafts, loose: outer.loose });
+      outer.server.mission = outer.mission = createMission({ workspace: outer.workspace, recovery: outer.recovery, settings: outer.settings, instance: outer.instance, lifecycle: outer.lifecycle, allowed: outer.allowed, drafts: outer.drafts, lastRuns: outer.lastRuns, loose: outer.loose });
     }
     return c.json({ created, settings: true }, 201);
   });
@@ -309,7 +309,10 @@ export function setupRoutes(outer) {
   // script. No phone route. An agent has the tools instead (sprint_script_save, _remove, _add, run_sprint_script).
   const scriptStatus = (r) => (!r.error ? 200 : r.error === 'unknown-sprint' || r.error === 'unknown-script' ? 404 : ['script-not-approved', 'sprint-file-changed', 'scripts-changed', 'sprint-not-started', 'too-many-scripts'].includes(r.error) ? 409 : r.error === 'not-saved' ? 500 : 400);
   // Sprint View's numbers, desktop only: the answer the sprint_status tool gives an agent.
-  outer.app.get('/sprints/:id/status', async (c) => { const result = await outer.mcp.ownerScripts.status(c.req.param('id')); return c.json(result, scriptStatus(result)); });
+  // O233: a closed sprint's page also gets its copy's change and the yes's digest; the tool's answer does not.
+  outer.app.get('/sprints/:id/status', async (c) => { const id = c.req.param('id'), result = await outer.mcp.ownerScripts.status(id);
+    if (result?.closed) result.copy = await outer.chat.workers.change(id, (result.items ?? []).map((i) => i.review?.commit)).catch(() => ({ applied: false, refused: 'copy-unreadable' }));
+    return c.json(result, scriptStatus(result)); });
   outer.app.get('/sprint-scripts', (c) => c.json(outer.mcp.ownerScripts.library(c.req.query('sprint'))));
   // The owner's switch and Approve (S20, "Scripts added after Start"): desktop only, and no agent tool does either.
   outer.app.post('/sprint-scripts/allow', async (c) => {

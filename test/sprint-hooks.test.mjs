@@ -800,7 +800,9 @@ test('Close sprint: a before-close script refuses it, the close_sprint tool asks
 
   // The record: the status as it stood, each chat marked stopped, and the same answer from the tool and the route, twice.
   const kept = await status(), fromTool = await P.tool('sprint_status', { sprint });
-  assert.deepEqual(fromTool, kept);
+  // O240: the page's route adds copy (O233: the copy's change; null for a sprint with no copy), and the tool leaves it out.
+  const { copy, ...page } = kept;
+  assert.deepEqual([fromTool, copy], [page, null]);
   assert.deepEqual([kept.closed, kept.done, kept.items, kept.sprint, kept.workers.map((w) => [w.key, w.chat, w.state])],
     [done.closed, before.done, before.items, before.sprint, [['lead', sprint, 'stopped'], ['w1', w1.chat, 'stopped']]], JSON.stringify(kept).slice(0, 600));
   assert.ok(Number.isInteger(kept.running_ms) && kept.running_ms >= before.running_ms && !Number.isNaN(Date.parse(kept.closed.at)), JSON.stringify([kept.running_ms, kept.closed]));

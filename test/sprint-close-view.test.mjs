@@ -111,3 +111,18 @@ test('Sprint close view: a P9 write that someone changed since is partial, named
   assert.ok(!view.lines.some((l) => /Nothing was written/i.test(l)), 'no "nothing was written" when P9 wrote a.txt');
   assert.equal(read(path.join(source, 'a.txt')), 'mine\n', 'the owner\'s newer bytes are kept');
 });
+
+// O233 (the count, Lead's A): a reviewed commit on the copy's main line is P9's own merge evidence (the copy answers,
+// never fetched); a commit there that no review names is counted as unnamed for the closed page, never as an item merged.
+test('Sprint close view: a reviewed commit on the copy\'s main counts as merged; a commit no review names is said as unnamed', { timeout: 60000 }, async (t) => {
+  const { copy, workers } = await copied(t);
+  write(path.join(copy, 'a.txt'), 'two\n'); g(copy, 'add', 'a.txt'); g(copy, 'commit', '-qm', 'reviewed');
+  const reviewed = g(copy, 'rev-parse', 'HEAD');
+  assert.equal(await workers.repoOf(ID), 'copy');
+  assert.deepEqual([...await workers.merged(ID, [reviewed, 'f'.repeat(40)])], [[reviewed, true], ['f'.repeat(40), false]]);
+  assert.equal((await workers.change(ID, [])).unnamed, 1, 'no review names it');
+  assert.equal((await workers.change(ID, [reviewed])).unnamed, 0, 'the review names it');
+  write(path.join(copy, 'b.txt'), 'new\n'); g(copy, 'add', 'b.txt'); g(copy, 'commit', '-qm', 'not reviewed');
+  assert.equal((await workers.change(ID, [reviewed, 'f'.repeat(40)])).unnamed, 1, 'only the later commit; a commit the copy does not have is ignored');
+  assert.equal(await workers.change('0123abcd-0000-4000-8000-0000000000ff'), null, 'no copy, nothing to show');
+});

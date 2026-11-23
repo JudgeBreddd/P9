@@ -39,6 +39,40 @@ const planView = (s, plan, row, esc) => `<div data-sv-planview${planOpen.has(s.s
       ${[...s.phases.map((p, k) => [p.title, plan.filter(i => i.phase === k)]), ['Outside every phase', plan.filter(i => i.phase == null)]].filter(([t, is], k) => is.length || k < s.phases.length)
         .map(([t, is]) => `<h4>${esc(t)}</h4>${is.length ? `<ul class="sv-items">${is.map(i => row(i, 'data-sv-pitem')).join('')}</ul>` : '<p class="hint">No items in this phase.</p>'}`).join('')}
       ${s.phases.some(p => typeof p.text === 'string') ? '<h3>Each phase in full</h3>' : ''}${s.phases.map(p => typeof p.text === 'string' ? `<section class="sv-ptext" data-sv-phasetext><h4>${esc(p.title)}</h4>${p.text ? `<pre>${esc(p.text)}</pre>` : p.truncated ? '' : '<p class="hint">Nothing is written under this heading.</p>'}${p.truncated ? '<p class="hint">Cut at 4000 characters here; the rest is in sprint.md.</p>' : ''}</section>` : '').join('')}</div>`;
+// I3 worker window: Model or effort under a chat's row moves it to another model or effort from its next turn. It goes as a
+// message you send that chat (its own pick path, chat.mjs prompt), queued, so a running turn keeps its own and the message
+// waits for its end (O133). The page cannot call send_chat: that is the lead's path (#436), open only to a worker's parent.
+// o: the shell's agent lists (projects-view.mjs). picks: per chat, open or not, the values picked and what came back, kept
+// across the 5 s redraws; this module's own listeners, so the startup JS carries none of it.
+const picks = new Map(), pk = id => picks.get(id) ?? (picks.set(id, {}), picks.get(id));
+const flat = xs => xs.flatMap(x => Array.isArray(x.options) ? flat(x.options) : [[x.value, x.name]]);
+function repick(w, o, esc) {
+  const k = pk(w.chat), a = w.profile ? 'claude' : w.provider, ep = o.lastPickers[a]?.find(p => o.pickerKind(p) === 'effort');
+  const sel = (kind, opts, now, pick = now, more = '') => opts.length ? `<label class="set-pick">${kind[0].toUpperCase() + kind.slice(1)}<select data-slot="input" data-sv-r="${kind}" data-now="${esc(now ?? '')}"${more}${k.busy ? ' disabled' : ''} aria-label="${esc(`${w.key ?? w.title} ${kind}`)}">${(now && !opts.some(([v]) => v === now) ? [[now, now], ...opts] : opts).map(([v, n]) => `<option value="${esc(v)}"${v === pick ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '';
+  // data-now: what it runs on, so Send compares against that, not against a pick kept across a redraw.
+  // A provider profile chat keeps the model it started on (SECURITY.md § Delegate, I3): effort only.
+  const body = (w.profile ? '' : sel('model', flat(o.lastModels[a]?.options ?? []), w.model, k.model ?? w.model))
+    + (ep ? sel('effort', flat(ep.options ?? []), w.effort, k.effort ?? w.effort, ` data-id="${esc(ep.id)}"`) : '');
+  return `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-sv-pick aria-expanded="${!!k.open}" title="Moves this chat to another model or effort from its next turn, with a message from you">Model or effort</button>`
+    + `<div class="sv-repick" data-sv-repick${k.open ? '' : ' hidden'}>${body ? body + `<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-sv-apply${k.busy ? ' disabled' : ''}>Send with a message</button>` : `<span class="hint">Start one ${esc(o.names[a] ?? a)} chat first: its models and efforts are listed here after that.</span>`}<span class="hint" data-sv-rsaid role="status">${esc(k.said ?? '')}</span></div>`;
+}
+globalThis.document?.addEventListener('change', e => { const x = e.target.closest?.('[data-sv-r]'), id = x?.closest('li[data-key]')?.dataset.key; if (id) pk(id)[x.dataset.svR] = x.value; });
+globalThis.document?.addEventListener('click', e => {
+  const b = e.target.closest?.('[data-sv-pick], [data-sv-apply]'), li = b?.closest('li[data-key]'); if (!li) return;
+  const k = pk(li.dataset.key), f = li.querySelector('[data-sv-repick]'), said = t => { k.said = t; f.querySelector('[data-sv-rsaid]').textContent = t; };
+  if (b.dataset.svPick !== undefined) { k.open = f.hidden; f.hidden = !k.open; return b.setAttribute('aria-expanded', k.open); }
+  // Only what you picked and changed is sent: a select showing what the chat runs on, or with none known only its first option,
+  // sends nothing. While a send is out the picks are disabled (kept through the redraw by busy), so the 202's clear loses no newer pick.
+  const got = x => x && k[x.dataset.svR] !== undefined && x.value !== x.dataset.now ? x.value : '', mx = f.querySelector('[data-sv-r="model"]'), ef = f.querySelector('[data-sv-r="effort"]'), m = got(mx), e2 = got(ef);
+  if (!m && !e2) return said('Pick another model or effort first.');
+  const to = [mx?.value, ef?.value].filter(Boolean).join(' · ');
+  const lock = on => { b.disabled = k.busy = on; f.querySelectorAll('[data-sv-r]').forEach(x => { x.disabled = on; }); };
+  lock(true); said('Sending…');
+  window.p9.chat('prompt', { id: li.dataset.key, when: 'queue', text: `You now run on ${to} (changed by the owner in the Sprint View), from this turn on. Carry on with your work.`,
+    ...(m && { model: m }), ...(e2 && { config: { [ef.dataset.id]: e2 } }) })
+    .then(r => r.status === 202 ? (delete k.model, delete k.effort, `Sent: ${to} from its next turn.`) : `Not sent: ${r.body?.error || r.status}.`, e => `Not sent: ${e?.message || e}.`)
+    .then(t => { said(t); lock(false); });
+});
 // Close sprint: the closed page's words and the press (projects-view.mjs), here with the button statusHtml draws so the
 // shell's startup JS does not carry them. closePress answers null for a Cancel, '' for closed, else why it was refused;
 // out() is called once the press is going out.
@@ -53,7 +87,7 @@ export async function closePress(b, confirmIt, call, out, got) { // got(answer):
   const r = await call('closeSprint', { sprint: lead }, { quiet: true }).catch(() => ({})); got?.(r);
   return said(r);
 }
-export function statusHtml(s, esc, opts = {}) {
+export function statusHtml(s, esc, opts = {}, o = null) {
   // O164 part (3) FIX1: owner lines leave the worker counts and the Plan list only where the record has its owner
   // projection (s.owner); a record saved before it keeps every row as it stood.
   const d = s.done, legacy = d.merged === undefined, dn = d.merged ?? d.passed ?? 0, plan = s.owner ? s.items.filter(i => i.role !== 'owner') : s.items,
@@ -78,17 +112,38 @@ export function statusHtml(s, esc, opts = {}) {
       <dl class="sv-facts">${facts.map(([k, t, v]) => `<div><dt>${t}</dt><dd data-sv-fact="${k}">${esc(v)}</dd></div>`).join('')}</dl></div>
     ${end ? `<p class="hint" data-sv-closed>Closed ${esc(when)} by ${end.by === 'owner' ? 'you' : 'a chat\'s agent, on your yes'}. This is its record: everything here is as it stood at Close and no longer changes. Its chats are stopped; its files stay, and so do the worker folders Close kept (work not saved or not yet in the main line).</p>`
       : `<div class="sv-ctl"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}"${opts.closing ? ' disabled' : ''} title="Stops every chat of this sprint, keeps its record, turns its scripts off and removes its finished worker folders (merged, nothing unsaved). An agent does the same with close_sprint, after asking you.">${opts.closing ? 'Closing…' : 'Close sprint'}</button>${opts.said ? `<span class="hint" data-sv-said role="status">${esc(opts.said)}</span>` : ''}</div>`}
+    ${end ? copyHtml(s, esc, opts) : ''}
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
         <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}${w.spent ? ' · ' + usedText(w.spent) : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? (q.next ? 'Next: ' + q.next : q.next === null ? 'All its items passed review' : 'No item taken yet') : 'No items in the plan for this role'))}</span>
-        <span class="tag" data-sv-state>${esc(word)}</span></button></li>`; }).join('')}</ul>
+        <span class="tag" data-sv-state>${esc(word)}</span></button>${!end && o ? repick(w, o, esc) : ''}</li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}
       <ul class="sv-items">${s.owner.items.map(i => `<li data-sv-item="${esc(i.id)}" data-owner="${i.done ? 'closed' : 'open'}"><span class="sv-text">${esc(i.text)}</span>${i.done ? '<span class="tag">Closed by you</span>' : end ? '<span class="tag">Open at Close</span>' : `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-pj="spclose" data-lead="${esc(s.sprint.id)}" data-item="${esc(i.id)}" title="Closes this item. It is yours: no review and no merge is involved, and the plan's box stays as it is.">Close</button>`}</li>`).join('')}</ul></li></ul>` : ''}
     ${plan.length ? `<div data-sv-flat${byPhase(s) && planOpen.has(s.sprint.id) ? ' hidden' : ''}><h3>Plan items</h3><ul class="sv-items">${plan.map(i => row(i)).join('')}</ul></div>${byPhase(s) ? planView(s, plan, row, esc) : ''}` : ''}
   </section>`;
 }
+
+// O233: a closed sprint from a folder with no remote shows its change on its page, with the same preview and yes as the
+// Folder sprints review (sprint-copy-view.mjs): until applied it says the change is not in the owner's folder. A closed page
+// has no Close press, so opts.closing and opts.said serve its Save press.
+const CHANGE = { A: 'added', M: 'changed', D: 'removed' };
+function copyHtml(s, esc, opts) {
+  const c = s.copy, li = items => items.length ? `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p class="sm muted">None.</p>';
+  if (!c) return '';
+  // O233 (the count, Lead's A): an item counts only by P9's own evidence; commits on the copy's main line that no review names are said, not counted.
+  const un = c.unnamed ? `<p class="sm" data-sv-unnamed>The copy's main line has ${c.unnamed} ${c.unnamed === 1 ? 'commit' : 'commits'} since the sprint started that no review names: P9 cannot tie ${c.unnamed === 1 ? 'it' : 'them'} to an item, so the count above leaves ${c.unnamed === 1 ? 'it' : 'them'} out.</p>` : '';
+  if (c.applied) return `<div data-sv-copy="applied"><h3>Your folder</h3>${un}${(c.lines ?? []).map(l => `<p class="sm" role="status">${esc(l)}</p>`).join('')}${c.pending ? ''
+    : `<h3>Written</h3>${li(c.written.map(p => `<code>${esc(p)}</code>`))}${c.rolledBack.length ? `<h3>Rolled back</h3>${li(c.rolledBack.map(p => `<code>${esc(p)}</code>`))}` : ''}${c.left.length ? `<h3>Left or failed</h3>${li(c.left.map(l => `<code>${esc(l.path)}</code>: ${esc(l.reason)}`))}` : ''}`}</div>`;
+  if (c.refused) return `<div data-sv-copy="refused"><h3>Your folder</h3>${un}<p class="sm" role="status">This sprint's change is not in your folder, and P9 cannot show it: ${esc(c.refused)}.</p></div>`;
+  return `<div data-sv-copy="waiting"><h3>Your folder</h3>${un}<p data-sv-copy-say>Not applied: this sprint's change is only in P9's copy, not in ${esc(c.source)}. These are the files that were edited during the sprint. Do you want to save them to your linked project folder?</p>`
+    + li(c.changes.map(x => `${CHANGE[x.status] ?? esc(x.status)} <code>${esc(x.path)}</code>`)) + ((c.left ?? []).length ? `<h3>Not copied from your folder</h3>${li(c.left.map(l => `<code>${esc(l.path)}</code>: ${esc(l.reason)}`))}` : '')
+    + (c.changes.length ? `<p class="sm muted">A file changed since this was shown is refused.</p><div class="sv-ctl"><button type="button" data-slot="button" data-size="sm" data-pj="spapply" data-lead="${esc(s.sprint.id)}" data-shown="${esc(c.shown)}"${opts.closing ? ' disabled' : ''}>${opts.closing ? 'Saving…' : 'Yes, save to my folder'}</button>${opts.said ? `<span class="hint" data-sv-apply-said role="status">${esc(opts.said)}</span>` : ''}</div>` : '') + '</div>';
+}
+// The yes: the change shown (its digest), applied only by the owner's press. Answers '' when applied, else why not.
+export const applyPress = async b => { const r = await Promise.resolve().then(() => window.p9.mission('sprintApply', { id: b.dataset.lead, shown: b.dataset.shown })).catch(e => ({ body: { error: e?.message } }));
+  return r.status === 200 ? '' : 'Not saved: ' + (r.body?.refused || r.body?.detail || r.body?.error || r.status || 'no answer'); };
 
 // H2 (SECURITY.md § Standing merge): the owner's switch, on Sprint Setup; only this page sets it, no agent tool does.
 export const mergeHtml = (sp, esc) => sp.closed ? '' : `<label class="set-pick" data-sp-merge title="On: the lead may merge a PR that passed review, once the sprint's before-merge scripts allow it. Off: the lead is told merge is yours and asks you. A new sprint starts with it off; a sprint made before this switch existed keeps merge on. It binds a lead that reports before it merges (sprint_event), as the sprint rules tell it to; it cannot stop git itself."><input type="checkbox" data-pj="spmerge" data-lead="${esc(sp.lead)}"${sp.merge ? ' checked' : ''}> Standing merge: the lead may merge</label>`;
