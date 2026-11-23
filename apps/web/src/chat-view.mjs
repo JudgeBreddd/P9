@@ -1102,7 +1102,8 @@ async function loadChat() {
     lastTwo();
     // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
     // O249: a stub loads first, so the message goes in the chat's own mode, not the window's default.
-    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(() => turnEnd(s), () => {}) : turnEnd(s);
+    // Events that came for it during that load apply first (behind(), which drains them after: s.drain).
+    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(() => { if (s.behind) s.drain = true; else turnEnd(s); }, () => {}) : turnEnd(s);
   };
   // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
   // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
@@ -1171,13 +1172,15 @@ async function loadChat() {
   const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
-  const behind = (s, ev) => {
-    if (s.behind) return void s.behind.push(ev);
-    s.behind = [ev];
-    history(s, ev.cursor - 1).then(() => {
-      const evs = s.behind || [], ended = [], answered_ = []; s.behind = null;
-      for (const e of evs) take(e, ended, answered_);
-      settle(ended, answered_);
+  // Each poll's events are one batch and settle together, as the loop's do: a stop in a later poll is not applied before an
+  // earlier turn end sends the queue.
+  const behind = (s, evs) => {
+    if (s.behind) return void s.behind.push(evs);
+    s.behind = [evs];
+    history(s, evs[0].cursor - 1).then(() => {
+      const batches = s.behind || []; s.behind = null;
+      for (const b of batches) { const ended = [], answered_ = []; for (const e of b) take(e, ended, answered_); settle(ended, answered_); }
+      if (s.drain) { s.drain = false; if (s.state === 'running' && s.queue.length) turnEnd(s); }
       try { outer.renderTabs(); renderChats(new Set([s.id])); } catch (e) { console.error('chat paint', e); }
     }, (e) => console.error('chat history', e));
   };
@@ -1194,11 +1197,12 @@ async function loadChat() {
     // O251: a full page while live means this window fell behind (a sleep, a dropped link), and drawing every update since,
     // 500 at a time, took minutes over a remote. Jump instead, as a fresh launch would (jump, below).
     if (!replaying && r.body.events.length >= 500 && await jump()) continue;
-    const ended = [], answered_ = [];
+    const ended = [], answered_ = [], held = new Map();
     for (const ev of r.body.events) {
       const stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
-      if (stub) behind(stub, ev); else take(ev, ended, answered_);
+      if (stub) { if (!held.has(stub)) held.set(stub, []); held.get(stub).push(ev); } else take(ev, ended, answered_);
     }
+    for (const [s, evs] of held) behind(s, evs);
     outer.liveChat.cursor = r.body.cursor; if (!replaying && r.body.events.length) sprintStale = true;
     if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;

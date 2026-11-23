@@ -135,9 +135,10 @@ test('O249 a busy chat does not hold the chat list back over a slow link', { tim
   const replied = Date.now() - asked;
   console.log(`O249 the shown chat's reply drew ${replied} ms after its prompt, while the busy chat loaded`);
   assert.ok(replied < 6000, `the shown chat's reply drew ${replied} ms after its prompt; it waited behind the busy chat's history`);
-  // It still loads, after: opened, its last reply shows.
+  // It still loads, after: opened, its history and the reply that came while it loaded both show (behind() kept it).
   await page.locator(`#navList .row[data-chat="${heavy}"]`).click();
   await page.locator('#chats').getByText('heavy done', { exact: false }).first().waitFor({ timeout: 120000 });
+  await page.locator('#chats').getByText('echo:hello busy', { exact: false }).first().waitFor({ timeout: 30000 });
   assert.deepEqual(errors, []);
 });
 

@@ -156,6 +156,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       + "x.type = 'unheld' AND json_extract(CASE WHEN json_valid(x.data) THEN x.data END, '$.id') = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id') OR "
       + "x.type = 'user' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(x.data) THEN x.data ELSE '{}' END, '$.held') AS j WHERE j.value = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id'))))"),
     latest: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1'),
+    // O249: the newest slash-command list before a cursor, by its top-level kind (a tool's output may hold the same words).
+    commands: db.prepare(`SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type = 'update' AND instr(data, '${COMMANDS}') > 0 AND CASE WHEN json_valid(data) THEN json_extract(data, '$.sessionUpdate') END = 'available_commands_update' ORDER BY cursor DESC LIMIT 1`),
     operation: db.prepare('SELECT * FROM operations WHERE id = ?'),
     recent: db.prepare('SELECT COUNT(*) AS n FROM operations WHERE login = ? AND at > ?'),
     begin: db.prepare("INSERT INTO operations (id, login, fingerprint, state, at) VALUES (?, ?, ?, 'running', ?)"),
@@ -270,8 +272,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         events.push(...span.filter((e, i) => i === last || !commands(e)));
         if (cut) {
           more[id] = from;
-          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ...(last < 0 ? [['update', COMMANDS]] : []), ...(user ? [] : [['user', '']])]
-            .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean));
+          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ...(user ? [] : [['user', '']])]
+            .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean), ...(last < 0 ? [statements.commands.get(id, from)].filter(Boolean) : []));
         }
       }
       return { events: events.map(parsed).sort((a, b) => a.cursor - b.cursor), cursor: top, more };
