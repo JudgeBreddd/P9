@@ -3,7 +3,7 @@
 // are in fake-acp-agent.mjs ('shell writes', 'shell many', 'shell big').
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
@@ -13,10 +13,14 @@ const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' 
 const sh = (cwd, ...args) => execFileSync(realGit, ['-C', cwd, ...args], { encoding: 'utf8' });
 
 // proj: a repo with a commit, plus predirty.txt and dirty.txt changed before any turn. plain: a folder outside git.
+// hooked: a repo whose post-index-change hook, fsmonitor and *.tc textconv run the evil script; filtered: one whose
+// filter (clean, smudge) does. The evil script notes each run in its marker file.
+// outer: the workspace and the folder above it are in one repo (sib.txt in the workspace, outside.txt above it), so plain is
+// a subfolder of a larger repo.
 // A git on PATH that waits the seconds in its folder's "sleep" file before "add" (the snapshot's slow step).
-async function start(t) {
-  let bin;
-  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+async function start(t, { outer = false } = {}) {
+  let bin, marker;
+  const instance = await daemon(t, undefined, outer, async ({ workspace }) => {
     const proj = path.join(workspace, 'proj');
     await mkdir(proj); await mkdir(path.join(workspace, 'plain'));
     sh(proj, 'init', '-q'); sh(proj, 'config', 'user.email', 't@example.invalid'); sh(proj, 'config', 'user.name', 't');
@@ -24,6 +28,26 @@ async function start(t) {
     sh(proj, 'add', '-A'); sh(proj, 'commit', '-qm', 'start');
     await writeFile(path.join(proj, 'predirty.txt'), 'before turn\n');
     await writeFile(path.join(proj, 'dirty.txt'), 'dirty, not touched in the turn\n');
+    const evilDir = path.join(workspace, '..', 'evil');
+    marker = path.join(evilDir, 'marker');
+    await mkdir(evilDir);
+    // One script per program, each writing its own name to the marker (and passing its input through).
+    const evil = async (name) => { const f = path.join(evilDir, name); await writeFile(f, `#!/bin/sh\necho ${name} >> '${marker}'\ncat "$@" 2>/dev/null\n`); await chmod(f, 0o755); return f; };
+    const hooked = path.join(workspace, 'hooked'), filtered = path.join(workspace, 'filtered');
+    for (const [dir, files] of [[hooked, [['a.tc', 'tc\n'], ['.gitattributes', '*.tc diff=evil\n']]], [filtered, [['f.txt', 'f\n'], ['.gitattributes', '* filter=evil\n']]]]) {
+      await mkdir(dir); sh(dir, 'init', '-q'); sh(dir, 'config', 'user.email', 't@example.invalid'); sh(dir, 'config', 'user.name', 't');
+      for (const [f, text] of files) await writeFile(path.join(dir, f), text);
+      sh(dir, 'add', '-A'); sh(dir, 'commit', '-qm', 'start');
+    }
+    sh(hooked, 'config', 'core.fsmonitor', await evil('fsmonitor')); sh(hooked, 'config', 'diff.evil.textconv', await evil('textconv'));
+    await writeFile(path.join(hooked, '.git/hooks/post-index-change'), `#!/bin/sh\nexec '${await evil('hook')}'\n`); await chmod(path.join(hooked, '.git/hooks/post-index-change'), 0o755);
+    sh(filtered, 'config', 'filter.evil.clean', await evil('filter-clean')); sh(filtered, 'config', 'filter.evil.smudge', await evil('filter-smudge'));
+    if (outer) {
+      const top = path.join(workspace, '..');
+      await writeFile(path.join(top, 'outside.txt'), 'out\n'); await writeFile(path.join(workspace, 'sib.txt'), 'sib\n');
+      sh(top, 'init', '-q'); sh(top, 'config', 'user.email', 't@example.invalid'); sh(top, 'config', 'user.name', 't');
+      sh(top, 'add', '--', 'outside.txt', path.relative(top, path.join(workspace, 'sib.txt'))); sh(top, 'commit', '-qm', 'start');
+    }
     bin = path.join(workspace, '..', 'gitbin'); await mkdir(bin, { recursive: true });
     await writeFile(path.join(bin, 'sleep'), '0');
     await writeFile(path.join(bin, 'git'), `#!/bin/sh\ncase " $* " in *" add -A "*) sleep "$(cat '${bin}/sleep')";; esac\nexec '${realGit}' "$@"\n`);
@@ -37,7 +61,7 @@ async function start(t) {
   const ended = async (id, n) => { for (const end = Date.now() + 30000; Date.now() < end; await new Promise((r) => setTimeout(r, 200))) { const all = await events(id); if (all.filter((e) => e.type === 'turn-end').length >= n) return all; } assert.fail('no turn-end'); };
   const chat = async (folder) => (await call('/chat', 'POST', { provider: 'claude', folder })).conversation;
   const shells = (all) => all.filter((e) => e.type === 'update' && e.data.title === 'Shell edits');
-  return { call, ended, chat, shells, bin };
+  return { call, ended, chat, shells, bin, marker };
 }
 
 test('MC-15 a turn\'s shell edits come as one Shell edits call: changed, new, deleted, moved, binary; not the edit calls\' own files', { timeout: 90000 }, async (t) => {
@@ -80,6 +104,14 @@ test('MC-15 Shell edits caps the files and the hunks; a folder outside git adds 
   assert.equal(path.basename(big.data.content[0].path), 'big.txt'); assert.equal(big.data.content[0]._meta.added, true);
   assert.deepEqual(big.data.content[0]._meta.hunks, [], 'a file past the hunk budget is listed with no rows');
   assert.ok(JSON.stringify(big.data).length < 64 * 1024, 'the event stays under the event limit');
+  // 40 files 3 folders of 200 characters down: their paths (in content and locations) and hunks come to more than 64 KB.
+  await call('/chat/' + id + '/prompt', 'POST', { text: 'shell deep' });
+  const deep = shells(await ended(id, 3))[2];
+  assert.ok(!('truncated' in deep.data), 'not cut down to a truncated event');
+  assert.ok(JSON.stringify(deep.data).length < 64 * 1024, 'paths counted: the event stays under the event limit');
+  assert.ok(deep.data.content.length >= 1 && deep.data.content.length < 40, 'the files that fit');
+  assert.equal(deep.data.content[0]._meta.hunks.length, 1, 'the first keeps its rows');
+  assert.deepEqual(deep.data.locations.map((l) => l.path), deep.data.content.map((c) => c.path));
   const plain = await chat('plain');
   await call('/chat/' + plain + '/prompt', 'POST', { text: 'shell many' }); // writes only: the folder has none of shell writes' files
   const out = await ended(plain, 1);
@@ -106,4 +138,32 @@ test('MC-15 a slow snapshot is given up after its limit, and a Stop while it run
   const last = after.slice(after.findLastIndex((e) => e.type === 'user'));
   assert.equal(last.find((e) => e.type === 'turn-end').data.stopReason, 'cancelled');
   assert.ok(!last.some((e) => e.type === 'update' && e.data.sessionUpdate === 'agent_message_chunk'), 'the agent got no prompt');
+});
+
+test('MC-15 no program the repo configures runs: hook, fsmonitor, textconv; a repo with a filter is skipped', { timeout: 90000 }, async (t) => {
+  const { call, ended, chat, shells, marker } = await start(t);
+  const id = await chat('hooked');
+  await call('/chat/' + id + '/prompt', 'POST', { text: 'shell tc' });
+  const found = shells(await ended(id, 1));
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0].data.content.map((c) => path.basename(c.path)).sort(), ['a.tc', 'note.txt']);
+  assert.deepEqual(found[0].data.content.find((c) => c.path.endsWith('a.tc'))._meta.hunks[0].rows, [['del', 'tc'], ['add', 'changed tc']], 'the file itself, not its textconv');
+  const ran = () => readFile(marker, 'utf8').catch(() => '');
+  assert.equal(await ran(), '', 'no hook, fsmonitor or textconv ran');
+  const f = await chat('filtered');
+  await call('/chat/' + f + '/prompt', 'POST', { text: 'shell many' });
+  const out = await ended(f, 1);
+  assert.equal(await ran(), '', 'no filter ran');
+  assert.equal(shells(out).length, 0, 'a filter is configured: no snapshot, nothing added');
+  assert.ok(!out.some((e) => e.type === 'error'), 'and no error');
+});
+
+test('MC-15 a chat folder inside a larger repo: files changed outside the folder are never listed or read', { timeout: 90000 }, async (t) => {
+  const { call, ended, chat, shells } = await start(t, { outer: true });
+  const id = await chat('plain');
+  await call('/chat/' + id + '/prompt', 'POST', { text: 'shell outside' });
+  const all = await ended(id, 1), found = shells(all);
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0].data.content.map((c) => path.basename(c.path)), ['in.txt']);
+  assert.ok(!JSON.stringify(all).includes('SECRET'), 'sib.txt (in the workspace) and outside.txt (above it) are not in any event');
 });
