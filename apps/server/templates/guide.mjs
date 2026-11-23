@@ -66,6 +66,8 @@ If the card's own code stops with an error, the card shows only that error, not 
 
 // The first message of a build chat: a fixed line, then the guide.
 // From + Add (finding 4): the build goes into a new scratch space. The name passed spaceName, so it holds no words or path parts.
-export const buildPrompt = (space) => (space === undefined ? BUILD_PROMPT
-  : BUILD_PROMPT + '\n\nBuild it as a new scratch space named ' + space + ': pass space "' + space + '" on every Mission tool call that writes. Leave Main and every other space as they are.');
+// MC-17: base, the template the new space starts from ({ title, about }); the chat starts knowing what it is for.
+export const buildPrompt = (space, base) => (space === undefined ? BUILD_PROMPT
+  : BUILD_PROMPT + '\n\nBuild it as a new scratch space named ' + space + ': pass space "' + space + '" on every Mission tool call that writes. Leave Main and every other space as they are.'
+    + (base ? '\n\nThe space starts from the template ' + base.title + (base.about ? ' (' + base.about + ')' : '') + ': its sections are in place. Read them with describe_mission, then ask me what to change and fill in, not what to build from scratch. If a section reads a folder P9 cannot read yet (an Obsidian vault, say), ask me for it and add it with allow_folder.' : ''));
 export const BUILD_PROMPT = 'I want to set up Mission Control in P9. Follow this guide: ask me what I want on it first, then build it with P9\'s Mission tools.\n\n' + GUIDE;

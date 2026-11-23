@@ -440,17 +440,45 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
         : { ...disk, notes_roots: { ...disk.notes_roots, vault: real }, page_schemes: [...new Set([...(disk.page_schemes ?? []), 'obsidian'])] }));
     return done.error ? c.json(done, done.error === 'settings-invalid' ? 503 : 409) : c.json({ vault: real }, 201);
   });
+  // MC-17 fixes 1-2: spaces /mission/build added whose chat then did not start, { space: template }, kept beside the settings
+  // (as mission-allowed.json) so a retry after a daemon restart still starts the chat there.
+  const unstartedFile = settingsFile && path.join(path.dirname(settingsFile), 'build-unstarted.json');
+  const unstartedRead = () => (unstartedFile ? readAsset(unstartedFile, 'utf8').then(JSON.parse).then((v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}), () => ({})) : {});
+  const unstartedSave = async (v) => { if (unstartedFile) { await writeFile(unstartedFile + '.tmp', JSON.stringify(v) + '\n', { mode: 0o600 }); await rename(unstartedFile + '.tmp', unstartedFile); } };
+  // Fix 3: every change runs in one chain and re-reads the file inside it, so overlapping builds never write a stale copy or share the .tmp.
+  let unstartedQueue = Promise.resolve();
+  const unstartedChange = (change) => { const run = unstartedQueue.then(async () => { const next = change(await unstartedRead()); if (next) await unstartedSave(next); }); unstartedQueue = run.catch(() => {}); return run; };
   api.post('/mission/build', async (c) => {
     // space (threat model row 72): + Add builds into a new scratch space; one that exists is never named, so never rewritten.
     // MC-1: mode, the start mode the window shows on its pill, so the build runs in what the pill says. Without one (an older
     // window, the phone) the agent's default runs and the chat's mode event says which (chat.mjs tellMode).
-    const { provider, space, mode, ...rest } = (await json(c)) ?? {};
+    // MC-17: template, a template the new space starts from (space required); confirm, the user's second click under File protection.
+    const { provider, space, mode, template, confirm, ...rest } = (await json(c)) ?? {};
     if (Object.keys(rest).length || !AGENT_IDS.includes(provider) || (space !== undefined && !draftAt(drafts, space))
-      || (mode !== undefined && !chat.modeNames(provider).includes(mode))) return reply(c, { status: 400, error: 'request-refused' });
-    if (space !== undefined && (await draftNames(drafts)).includes(space)) return reply(c, { status: 409, error: 'space-exists' });
-    const made = await chat.create({ provider, title: 'Build Mission Control' });
-    const sent = await chat.prompt(made.conversation, { text: buildPrompt(space), ...(mode && { mode }) });
-    return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation, ...(space === undefined ? {} : { space }) } : sent);
+      || (mode !== undefined && !chat.modeNames(provider).includes(mode)) || (template !== undefined && (typeof template !== 'string' || space === undefined))
+      || (confirm !== undefined && typeof confirm !== 'boolean')) return reply(c, { status: 400, error: 'request-refused' });
+    // MC-17 fix 1: a space this route added whose chat then did not start is kept, named in the refusal (kept), and a retry with
+    // the same template starts the chat there instead of adding it again (only while the space is there).
+    const unstarted = await unstartedRead(), names = space === undefined ? [] : await draftNames(drafts);
+    const retry = template !== undefined && Object.hasOwn(unstarted, space) && unstarted[space] === template && names.includes(space);
+    if (space !== undefined && !retry && names.includes(space)) return reply(c, { status: 409, error: 'space-exists' });
+    const base = template === undefined ? undefined : [...TEMPLATES, ...await mcp.userTemplates()].find((entry) => entry.name === template);
+    if (template !== undefined && !retry) {
+      if (!base) return reply(c, { status: 404, error: 'unknown-template' });
+      const { error, ...result } = await mcp.install(template, space, confirm);
+      if (error) return reply(c, { status: error === 'registry-read-only' ? 403 : 400, error, ...result });
+      await unstartedChange((now) => ({ ...now, [space]: template }));
+    }
+    const kept = template !== undefined;
+    const failed = (error) => { if (!kept) throw error; return { status: 500, error: 'chat-not-started' }; };
+    // Test home only (test/helpers.mjs sets P9_TEST_HOME, so a shipped daemon never takes it): while a build-chat-fails file is
+    // there (empty, or listing this build's space), its chat does not start, so a test can fail it after the template is in.
+    const testFail = !!process.env.P9_TEST_HOME && await readAsset(path.join(process.env.P9_TEST_HOME, 'build-chat-fails'), 'utf8').then((v) => !v.trim() || v.split('\n').includes(space), () => false);
+    const made = testFail ? { status: 500, error: 'chat-not-started' } : await chat.create({ provider, title: 'Build Mission Control' }).catch(failed);
+    const sent = made.status === 201 ? await chat.prompt(made.conversation, { text: buildPrompt(space, base), ...(mode && { mode }) }).catch(failed) : made;
+    if (sent.status !== 202) return reply(c, kept ? { ...sent, space, kept: true } : sent);
+    if (kept) await unstartedChange(({ [space]: done, ...rest }) => (done === undefined ? null : rest));
+    return reply(c, { status: 201, conversation: made.conversation, ...(space === undefined ? {} : { space }) });
   });
   // The space picker (threat model row 71): Main (null) or a scratch space that is there, recorded as settings.space_name.
   api.post('/mission/space', async (c) => {

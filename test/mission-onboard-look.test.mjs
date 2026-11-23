@@ -2,7 +2,7 @@
 // a dark and a light theme, and the phone at 390x844. The shots are evidence; the asserts check what each button opened.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, _electron } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root, versionSeen } from './helpers.mjs';
@@ -107,6 +107,7 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.click('#mission [data-template="homelab"]');
   await phone.locator('#mission [data-preview] [data-choose="homelab"]').waitFor({ timeout: 10000 });
   await phone.locator('#mission [data-preview] [data-preview-back]').waitFor();
+  assert.equal(await phone.locator('#mission [data-preview] [data-build]').count(), 0, 'MC-17: the phone preview offers no agent build');
   await settled(phone); shot('f4-preview-phone', await phone.screenshot());
   assert.deepEqual(await spaces(), [], 'a phone preview writes no file');
   await phone.click('#mission [data-preview-back]');
@@ -166,4 +167,42 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await page.click('#fMission [data-choose="blank"]');
   await page.locator('#fMission [data-group="Start here"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-onboard]').count(), 0);
+
+  // MC-17: a template preview leads into the build. Each agent's button there adds the template to a new space (File protection
+  // asks with a second click, as Choose does), opens the build chat and shows the space, so the user steers from its sections.
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space=""]').click();
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 15000 });
+  const builds = await page.locator('#fMission [data-onboard] [data-build]').count();
+  await page.click('#fMission [data-template="homelab"]');
+  await page.locator('#fMission [data-preview] [data-build="claude"][data-from="homelab"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#fMission [data-preview] [data-build]').count(), builds, 'one build button per agent, as on the card');
+  await settled(page); shot('mc17-preview-desktop', await page.screenshot());
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#fMission [data-onboard-note]:has-text("File protection is on")').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdl[open]').count(), 0, 'the first click under File protection opens no chat');
+  assert.ok(!(await server.desk('/mission')).body.spaces.includes('homelab-2'), 'and writes no space');
+  // Fix 1: the template goes in but the chat does not start (while the test home has a build-chat-fails file): the toast says so,
+  // the space is kept (an immediate retry starts its chat there: the daemon test).
+  await writeFile(path.join(server.directory, 'build-chat-fails'), '');
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#toasts :text("homelab-2 added, but its chat did not start")').waitFor({ timeout: 15000 });
+  await rm(path.join(server.directory, 'build-chat-fails'));
+  assert.equal(await page.locator('#mdl[open]').count(), 0, 'a failed start opens no chat');
+  assert.ok((await server.desk('/mission')).body.spaces.includes('homelab-2'), 'the added space is kept');
+  // Fix 2: the daemon no longer holds homelab-2 for a retry (its record is gone, as after a lost file): the 409 drops the page's
+  // kept name with a toast, homelab-2 stays as it is, and the next click builds into a new space.
+  await rm(path.join(server.directory, '.config/p9/build-unstarted.json'), { force: true });
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#toasts :text("homelab-2 is kept as it is")').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#mdl[open]').count(), 0, 'the 409 opens no chat');
+  await page.click('#fMission [data-preview] [data-build="claude"]');
+  await page.locator('#mdlBody[data-kind="chat"]').waitFor({ timeout: 15000 });
+  await page.keyboard.press('Escape');
+  await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab-3', null, { timeout: 15000 });
+  await page.locator('#fMission [data-group="Services"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-preview], #fMission [data-onboard]').count(), 0);
+  assert.ok((await server.desk('/mission')).body.spaces.includes('homelab-2'), 'homelab-2 is kept');
+  console.log('PASS MC-17: the preview builds from the template; a failed start keeps homelab-2, a stale retry builds homelab-3');
 });

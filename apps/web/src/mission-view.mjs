@@ -401,11 +401,20 @@ function bindSpaceForm(pop) {
 function bindOnboard(root) {
   root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72).
-    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(outer.live.adding ? { space: freeName('new-space', outer.live.spaces || []) } : {}) });
+    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72). MC-17: from a
+    // template preview the daemon adds the template to a new space first; File protection asks for a second click, as Choose does.
+    const from = b.dataset.from, kept = from && outer.live.kept?.from === from ? outer.live.kept.space : 0;
+    const space = kept || (from || outer.live.adding ? freeName(from || 'new-space', outer.live.spaces || []) : 0);
+    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(space ? { space } : {}), ...(from ? { template: from, confirm: !!b.dataset.armed } : {}) });
     b.disabled = false;
+    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; root.querySelector('[data-onboard-note]').textContent = 'File protection is on. Click again to add the template.'; return; }
+    // MC-17 fix 1: the space was added but its chat did not start: it shows in the Space menu, and a retry starts the chat there.
+    // Fix 2: the daemon no longer holds that space for a retry (or it was deleted): a 409 drops it, so the next click builds anew.
+    if (kept && r.status === 409) { outer.live.kept = null; outer.toast({ kind: 'chat', txt: 'Space ' + space + ' is kept as it is. Click ' + b.textContent + ' again to build into a new space.', level: 'bad' }, true); return; }
+    if (r.body?.kept) { outer.live.kept = { from, space }; refreshMission(1); outer.toast({ kind: 'chat', txt: 'Space ' + space + ' added, but its chat did not start (' + (r.body.error || r.status) + '). Click ' + b.textContent + ' again to retry.', level: 'bad' }, true); return; }
+    if (from && r.status === 201) { outer.live.kept = null; await window.p9.mission('space', { name: space }); }
     if (r.status === 201 && r.body.space) {
-      outer.live.adding = false; outer.renderMission();
+      outer.live.adding = false; outer.live.preview = null; from ? refreshMission() : outer.renderMission();
       outer.toast({ kind: 'chat', txt: (outer.names[b.dataset.build] ?? b.dataset.build) + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
     }
     if (r.status === 201) outer.openModal({ kind: 'chat', id: r.body.conversation });
