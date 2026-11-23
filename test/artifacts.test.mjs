@@ -480,6 +480,22 @@ test('MC-13 MC-14 the Changes tab counts lines over a file\'s writes and says Cr
   assert.match(await (await frame()).locator('pre').textContent(), /@@ Edit 1 of 2 @@[\s\S]*@@ Edit 2 of 2 @@/, 'the diff view steps through both writes');
 });
 
+// MC-15: the Changes tab says shell edits are listed only in a git folder (the page cannot tell which folders are), under the
+// list; the Artifacts tab does not.
+test('MC-15 the Changes tab says files changed through the shell are listed only in a git folder', { timeout: 120000 }, async (t) => {
+  const { page, show } = await chatDesktop(t, [['mc13 writes', 'mc13 done']]);
+  const { button } = await show();
+  await button.click();
+  const tabs = page.locator('#side .cf-tabs [role=tab]'), foot = page.locator('#side .cf-foot');
+  await tabs.nth(1).click();
+  await page.locator('#side .cf-item[data-cf-file]').first().waitFor({ timeout: 8000 });
+  assert.equal(await foot.textContent(), 'Files changed through the shell are listed only when this chat\'s folder is in a git repository.');
+  assert.ok(await foot.isVisible(), 'shown under the list');
+  await tabs.nth(0).click();
+  await page.locator('#side .cf-tabs [aria-selected=true]', { hasText: 'Artifacts' }).waitFor({ timeout: 8000 });
+  assert.equal(await foot.count(), 0, 'not on the Artifacts tab');
+});
+
 // MC-13: the list is a chunk loaded on the panel's first open. A load that fails after another panel took the side leaves
 // that panel alone (Reviewer, #495); one that fails while the list is shown says so, and the next open loads it.
 test('MC-13 a Changes list that failed to load comes back on the next open', { timeout: 120000 }, async (t) => {
