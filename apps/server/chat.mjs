@@ -806,6 +806,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // a live marked run every step streams an update (a reply or thought chunk, a tool call), and an open tool call already
   // holds the run, so a silent gap that long means the mark was lost; it caps a lost mark at 5 min instead of until the
   // next prompt. The fallback drops the mark, so a late end mark ends nothing a second time.
+  // O252's test widens the turn start snapshot's window (test homes only).
+  const SHELL_START_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SHELL_START_MS) > 0 ? Number(process.env.P9_SHELL_START_MS) : 0;
   const UNPROMPTED_MARK_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_MARK_MS) > 0 ? Number(process.env.P9_UNPROMPTED_MARK_MS) : 300000;
   const quiet = (session, id) => {
     clearTimeout(session.quiet);
@@ -1448,6 +1450,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   async function steer(id, body, images, held) {
     const session = live.get(id);
     if (!session?.turn || !session.steering || session.stopping || session.solo) return refused(409, 'turn-running'); // nothing joins a turn that answers another chat
+    // O252: the turn reads as running from its user event, but its prompt goes only after the start snapshot (up to 3 s); a
+    // steer before that met an agent with no turn and was refused. It waits for the prompt (queued right after the snapshot).
+    const turn = session.turn;
+    await session.starting;
+    if (session.turn !== turn || session.stopping) return refused(409, 'turn-running');
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session, body);
@@ -1896,7 +1903,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       decline(id, session, body);
       const turn = session.turn = randomUUID();
       // MC-15: the folder's state as the turn starts; Shell edits at its end are what changed since (shell-edits.mjs).
-      const shellFrom = shellStart(session.cwd), edits = session.turnEdits = { calls: new Map(), named: new Set() };
+      const shellFrom = SHELL_START_MS ? wait(SHELL_START_MS).then(() => shellStart(session.cwd)) : shellStart(session.cwd), edits = session.turnEdits = { calls: new Map(), named: new Set() };
+      session.starting = shellFrom; // O252: the prompt goes when this settles; a steer meanwhile waits for it (steer)
       act(id);
       // O176: a prompted turn ends the unprompted run; the agent's next one has a new ID (ownRun), never the old one back.
       session.unprompted = null;

@@ -835,8 +835,8 @@ test('Delegate: sprint rules ride with every message a parent\'s agent sends its
   // Into a running turn (steered): the same block.
   await a.tool('send_chat', { chat: made.chat, text: 'slow' });
   await until(instance, (event) => event.conversation === made.chat && event.type === 'user' && event.data.text === 'slow');
-  // The user event comes before the turn's start snapshot (MC-15) and the prompt reach the agent; a steer before that is refused
-  // (failed twice on CI). The agent logs the prompt's rules after it took the turn, so wait for that line.
+  // The agent logs the prompt's rules after it took the turn; wait for that line so sent() counts it (O252 made a steer
+  // during the start snapshot wait for the prompt instead of being refused).
   for (const end = Date.now() + 15000; sent().length < 3 && Date.now() < end;) await pause(50);
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'nudge', when: 'steer' })).sent, 'into its running turn');
   assert.equal(sent().length, 4, 'a steered message carried no rules');
