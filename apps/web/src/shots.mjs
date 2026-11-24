@@ -29,16 +29,17 @@ export function shotWatcher(root, get, landed) {
 }
 
 // The desktop's: one watcher per chat's scroller (.hist), fetched over the bridge from whichever machine the window is on,
-// into the chat's own s.shots; render(Set of chat ids) redraws those chats. A paint after the store's size changed drops the pictures
-// the chat's events no longer name (a tool's replaced picture), so a chat holds at most its events' pictures, and a chat
-// whose store did not change (text only, or streaming) is not scanned.
+// into the chat's own s.shots; render(Set of chat ids) redraws those chats. Each paint of a chat holding pictures drops the
+// ones its events no longer name (a tool's replaced picture), so a chat holds at most its events' pictures; a chat holding
+// none (text only) is not scanned. ponytail: the scan is the chat's loaded events per paint; exact tracking would sit in
+// chat-view's tool update, which is startup code at its byte budget.
 export function installShots(render) {
-  const watchers = new WeakMap(), kept = new WeakMap(); // kept: a chat's store size at its last pruning
+  const watchers = new WeakMap();
   const get = (id, shot) => window.p9.chat('shot', { id, shot }).then((r) => (r.status === 200 ? r.body : r.status === 404 ? null : Promise.reject(r.status)));
   return { watch: (s, h) => {
     let w = watchers.get(h); if (!w) watchers.set(h, w = shotWatcher(h, get, (id) => render(new Set([id]))));
     const got = s.shots ||= new Map();
-    if (got.size !== (kept.get(got) ?? 0)) { const named = new Set(s.events.flatMap((e) => e.images || [])); for (const key of got.keys()) if (!named.has(key)) got.delete(key); kept.set(got, got.size); }
+    if (got.size) { const named = new Set(s.events.flatMap((e) => e.images || [])); for (const key of got.keys()) if (!named.has(key)) got.delete(key); }
     w(s.id, got, h);
   } };
 }

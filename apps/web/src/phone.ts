@@ -375,7 +375,8 @@ const attached = new Map<string, Attached[]>(), sentCache = new Map<string, stri
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
 // The watcher is the desktop's (shots.mjs); shots holds the open chat's pictures (shotsOf): opening another drops the loaded
-// ones but keeps those still fetching, so going back to a chat waits for its fetch instead of starting a second.
+// ones it does not draw and keeps those still fetching, so going back to a chat uses (or waits for) the fetch it started.
+// Keys cannot clash across chats: a place's cursor is the event log's, one for every chat.
 let shotWatch: ((id: string, got: Map<string, string | undefined>, list: HTMLElement) => void) | undefined, shotsOf = '';
 const shots = new Map<string, string | undefined>();
 const shotGot = (src: string) => shots.get(src) || '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotGot(src) ? 1 : 0).join('')).join('');
@@ -1405,7 +1406,11 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
 });
 // A screen of the chat's own scroller ahead; 'not-found' (request's error for a 404): the picture is gone, not fetched again.
 function watchShots(id: string, list: HTMLElement) {
-  if (id !== shotsOf) { for (const [key, src] of shots) if (src !== undefined) shots.delete(key); shotsOf = id; }
+  if (id !== shotsOf) {
+    const drawn = new Set([...list.querySelectorAll<HTMLElement>('[data-shot]')].map((img) => 'shot:' + img.dataset.shot));
+    for (const [key, src] of shots) if (src !== undefined && !drawn.has(key)) shots.delete(key);
+    shotsOf = id;
+  }
   (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place, AbortSignal.timeout?.(120000))
     .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, shots, list);
 }

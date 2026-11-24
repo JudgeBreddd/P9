@@ -183,6 +183,7 @@ export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) &&
   : typeof b.shot === 'string' && /^\d{1,15}\/\d{1,2}$/.test(b.shot) ? 'shot:' + b.shot : null) || null; // O249: shot: a place, fetched when seen (agentImgs)
 export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 // A place (shot:) draws as an empty img[data-shot] until the window fetches it (got: its data: address once fetched).
+/** @param {string[] | undefined} list @param {string} who @param {(src: string) => string} [got] */
 export const agentImgs = (list, who, got = () => '') => list?.length ? `<div class="agent-imgs">${list.map(src => src.startsWith('shot:')
   ? `<img data-shot="${src.slice(5)}"${got(src) ? ` src="${got(src)}"` : ''} alt="Image from ${esc(who)}">` : `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
 // O191: a provider profile's chats (/usage profiles), outside the Claude totals; its cost is the adapter's estimate, never a
