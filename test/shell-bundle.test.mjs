@@ -20,7 +20,8 @@ const dist = path.join(root, 'apps/web/dist');
 // O124: the budget counts only scripts parsed before the shell is usable (the terminal chunk loads after it since O118), set
 // to the measured 0 B-spread size; lower it when startup JS shrinks, never raise it to fit a change. 499551: O124 on a8ed192
 // (dev space x5, 0 spread; all parsed JS with the idle terminal chunk was 838879, against the old budget 858744).
-const BUDGET = 499551;
+// 493708: O249 (#513), the Mission edit form loading on its first open (-7.0 KB) less #513's launch and queue code (+1.2 KB).
+const BUDGET = 493708;
 // ponytail: warm median of four launches against one fixed line (O124). 300: CI's measured median 221 ms plus a 79 ms margin
 // (about a third, for runner noise); CI x5 on 2edeb22, runs 691347 932428 226241 467595 763484, warm medians 221 233 226 217
 // 221 (spread 217-233; dev space x5 median 123). Lower it when startup gets faster, never raise it to fit a change.

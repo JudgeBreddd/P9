@@ -1,7 +1,7 @@
 // Mission Control's page: sections, windows, the space menu, notes and file modals. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { tileLevel, tileAnswer, tileHtml, quickNoteHtml, linkHtml, quickNotePath, quickNoteWords } from './data-tiles.mjs';
 import { esc, limitItems, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImageError, md } from './helpers.mjs';
-import { editItems, editorModal } from './mission-editor.mjs';
+import { editItems } from './mission-files.mjs';
 import { freeName, templateWords } from './onboarding.mjs';
 import { checklistHtml, checklistAnswer, checklistAction } from './checklist.mjs';
 import { partOrder, PARTS } from '../../../packages/protocol/index.mjs';
@@ -827,6 +827,7 @@ function sectionBody(m, body, g, o) {
   fillWidgets(body, back);
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
+let editor = null; // mission-editor.mjs once loaded
 function missionModal(m, body, row) {
   if (m.kind === 'win') {
     const w = outer.wins[m.id]; if (!w || (w.show && !w.show() && !m.any)) return outer.closeModal(); // any: the panel's Usage button opens it whatever the space shows
@@ -951,7 +952,10 @@ function missionModal(m, body, row) {
     outer.$('#mdlFoot [data-guide-edit]').onclick = () => outer.openModal({ kind: 'medit', items: editItems(outer.M) });
   } else if (m.kind === 'medit') {
     outer.$('#mdlT').textContent = 'Edit names and icons';
-    editorModal(m, body, outer.$('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => outer.M.art, esc, toast: outer.toast, again: () => outer.S.modal === m && outer.renderModal(),
+    // The form's code loads on its first open (shell-bundle.test.mjs BUDGET); after that it draws at once, so renderModal's scroll restore still holds.
+    if (!editor) { body.innerHTML = '<p class="muted">Loading the edit form…</p>'; import('./mission-editor.mjs').then(x => { editor = x; outer.S.modal === m && outer.renderModal(); },
+      () => outer.toast({ kind: 'not loaded', txt: 'P9 could not load the edit form. Close it and try again.', level: 'warn' })); return true; }
+    editor.editorModal(m, body, outer.$('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => outer.M.art, esc, toast: outer.toast, again: () => outer.S.modal === m && outer.renderModal(),
       reload: async keep => { await refreshMission(); if (keep) outer.S.modal === m && outer.renderModal(); else outer.openModal({ kind: 'medit', items: editItems(outer.M) }); } });
   } else return false;
   return true;
