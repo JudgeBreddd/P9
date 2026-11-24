@@ -218,7 +218,9 @@ export async function createDesktop({ state, open } = {}) {
   const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
-  const devPorts = Object.fromEntries(Object.entries(saved?.devPorts && typeof saved.devPorts === 'object' ? saved.devPorts : {}).filter(([h, p]) => named(h) && Number.isInteger(p) && p > 1023 && p < 65536)); // O250, listenRelay
+  // O250, listenRelay: host -> its editor ports, the one in use first. No prototype: a host may be named constructor.
+  const devPorts = Object.assign(Object.create(null), Object.fromEntries(Object.entries(saved?.devPorts && typeof saved.devPorts === 'object' ? saved.devPorts : {})
+    .map(([h, ports]) => [h, Array.isArray(ports) ? ports.filter(p => Number.isInteger(p) && p > 1023 && p < 65536) : []]).filter(([h, ports]) => named(h) && ports.length)));
   // The agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
   // after connecting; the install there sends none, and fetchAgents below asks that daemon for these once connected.
   // agentsAgain: the machine menu's AI agents item asks again on this remote (this launch only).
@@ -1142,8 +1144,9 @@ export async function createDesktop({ state, open } = {}) {
   let relay = null;
   // O250: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>, so each remote keeps the port
   // it got first (devPorts, in p9-server.json), and no two remotes get the same one. A new remote's starts at one picked from its
-  // name, the next 19 if taken or kept for another remote, any last. ponytail: a kept port in use by something else at a
-  // start is given up for a new one, and that start opens the editor empty.
+  // name, the next 19 if taken or kept for another remote, any last. A kept port in use by something else at a start is
+  // given up for a new one (that start opens the editor empty) and stays kept, so no other remote opens onto its place.
+  // ponytail: up to 8 ports per remote.
   const listenRelay = async (socket, host, old) => {
     old?.ready.then(l => l.close(), () => {});
     await old?.ready.catch(() => {});
@@ -1153,28 +1156,37 @@ export async function createDesktop({ state, open } = {}) {
       far.on('error', () => client.destroy());
       client.on('error', () => far.destroy());
     });
-    const others = new Set(Object.entries(devPorts).filter(([h]) => h !== host).map(([, p]) => p));
+    const kept = devPorts[host] ?? [], others = new Set(Object.entries(devPorts).flatMap(([h, ports]) => h === host ? [] : ports));
     const near = 20000 + createHash('sha256').update(String(host)).digest().readUInt16BE(0) % 12000;
     let refused = null;
-    for (const port of [devPorts[host], ...Array.from({ length: 20 }, (_, i) => near + i).filter(p => !others.has(p)), 0].filter(p => p !== undefined)) {
+    for (const port of [...kept, ...Array.from({ length: 20 }, (_, i) => near + i).filter(p => !others.has(p)), 0, 0, 0]) {
       refused = await new Promise(resolve => listener.once('error', resolve).listen(port, '127.0.0.1', () => resolve(null)));
+      // Any port (0) can be another remote's kept one: the system knows only the ports listened on now.
+      if (!refused && others.has(listener.address().port)) { refused = new Error('port-kept'); await new Promise(resolve => listener.close(resolve)); }
       if (!refused) break;
     }
     if (refused) throw refused;
     const port = listener.address().port;
-    if (host && devPorts[host] !== port) { devPorts[host] = port; keepServer(); }
+    if (host && kept[0] !== port) {
+      devPorts[host] = [port, ...kept.filter(p => p !== port)].slice(0, 8);
+      keepServer().catch(error => console.error('p9: the editor port was not saved, the next start may open the editor empty:', error.message));
+    }
     return listener;
   };
+  // The remote as the open began: an answer landing after a switch is that remote's, so it binds nothing and opens nothing.
   const serverEditor = async () => {
-    const asked = await daemonRequest(state, 'POST', '/dev/editor', {}, undefined, 60000).catch(error => error);
+    const host = serverHost, at = state, moved = () => Object.assign(new Error('daemon-unavailable'), { server: host });
+    const asked = await daemonRequest(at, 'POST', '/dev/editor', {}, undefined, 60000).catch(error => error);
+    if (serverHost !== host) throw moved();
     if (asked instanceof Error || asked.status === 404) throw new Error(asked.message === 'bad-response' || asked.status === 404 ? 'server-old' : 'daemon-unavailable');
     const { body } = asked;
-    if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: serverHost });
-    const socket = forwardPath(state, 'editor');
+    if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: host });
+    const socket = forwardPath(at, 'editor');
     // Set before any wait: an open that overlaps this one shares its listener instead of binding a second one.
-    if (relay?.socket !== socket) relay = { socket, ready: listenRelay(socket, serverHost, relay) };
+    if (relay?.socket !== socket) relay = { socket, ready: listenRelay(socket, host, relay) };
     const mine = relay, port = await mine.ready.then(l => l.address().port, error => { if (relay === mine) relay = null; throw error; });
-    return { port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
+    if (serverHost !== host) throw moved();
+    return { port, token: body.token, commit: body.commit, data: body.data, server: host };
   };
   const openDev = () => dev ??= trackOpen((async () => {
     // FIX2: a newer open (reopenDev) owns the page from here; an older one still running when it ends writes nothing.

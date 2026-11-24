@@ -1639,6 +1639,7 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   // opens on the port the editor first got (review: a fallback port given back at the next start lost the place).
   const holder = createServer().listen(20000 + createHash('sha256').update('test-host').digest().readUInt16BE(0) % 12000, '127.0.0.1');
   await once(holder, 'listening');
+  t.after(() => holder.close());
   const launch = async () => {
     app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
     const mine = app, proc = app.process();
@@ -1678,7 +1679,7 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   await kept(dev, 'before');
   const first = (await dev.evaluate(() => window.p9dev.config())).port;
   assert.notEqual(first, holder.address().port, 'the taken port is passed over');
-  await new Promise(resolve => holder.close(resolve));
+  holder.close();
   // Chat focus for a while, then back.
   await shell.keyboard.press('Control+1');
   await sleep(10000);
