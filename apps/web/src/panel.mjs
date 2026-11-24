@@ -89,12 +89,12 @@ export function installPanel(o, { focus, stopChat, busy }) {
     : st === 'needs' ? `<span class="mk mk-needs" title="${LABEL.needs}">${I.hand}</span>` : st === 'failed' ? `<span class="mk mk-failed" title="${LABEL.failed}">${svg.x}</span>`
     : st === 'unread' ? `<span class="mk mk-unread" title="${LABEL.unread}"></span>` : '';
   // Builder's build fix 1: a row's state mark takes the time's place; the time shows on hover and focus (panel.css).
-  let menuAnchor = null; // the More whose menu is open: a redraw draws it expanded, a click on it closes the menu
+  let menuFor = null; // the chat whose menu is open: its More (whichever node a redraw left) reads expanded, a click on it closes the menu
   const chatRow = (s, depth = 0) => { const st = stateOf(s, busy(s)), cur = shown().includes(s.id), m = mark(st, s);
     return `<div class="rowwrap" data-key="${esc(s.id)}"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
       + (P.q && snip(s) && !s.title.toLowerCase().includes(P.q.toLowerCase()) ? `<div class="snip">${hl(snip(s))}</div>` : '')
       + (live(s) ? `<button class="rstop" data-key="stop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
-      + `<button class="more" data-key="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="${menuAnchor?.dataset.more === s.id}" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
+      + `<button class="more" data-key="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="${menuFor === s.id}" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
   // A7: a zone's rows with each worker under the chat that started it (nested, above).
   const tree = (rows, q) => nested(rows, P.subs, shown(), !!q);
   const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-key="subs:${esc(e.fold)}" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} workers</span></button>`;
@@ -166,13 +166,13 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (o.S.focus !== 'chat') o.setFocus('chat'); focus(id); };
 
   // ---- Row menu: Stop first on a live chat, then Move to project and Remove from project. ----
-  function closeMenu(back) { document.querySelector('.lp-menu')?.remove(); menuAnchor?.setAttribute('aria-expanded', 'false'); if (back) menuAnchor?.focus(); menuAnchor = null; }
+  function closeMenu(back) { const a = menuFor && nav.querySelector(`[data-more="${CSS.escape(menuFor)}"]`); document.querySelector('.lp-menu')?.remove(); a?.setAttribute('aria-expanded', 'false'); if (back) a?.focus(); menuFor = null; }
   function openMenu(html, at, anchor) {
     closeMenu();
     const m = document.createElement('div'); m.className = 'lp-menu'; m.setAttribute('role', 'menu'); m.innerHTML = html; document.body.append(m);
     const r = m.getBoundingClientRect();
     m.style.left = Math.max(8, Math.min(at.x, innerWidth - r.width - 8)) + 'px'; m.style.top = Math.max(8, Math.min(at.y, innerHeight - r.height - 8)) + 'px';
-    menuAnchor = anchor; anchor?.setAttribute('aria-expanded', 'true');
+    menuFor = anchor?.dataset.more ?? null; anchor?.setAttribute('aria-expanded', 'true');
     m.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
   }
   function chatMenu(id, at, anchor) {
@@ -259,7 +259,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     const t = e.target;
     const st = t.closest('[data-stop]'); if (st) { const s = find(st.dataset.stop); return s && stopChat(s); } // keyed to its row, held while pressed
     const more = t.closest('[data-more]');
-    if (more) { if (menuAnchor?.dataset.more === more.dataset.more) return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
+    if (more) { if (menuFor === more.dataset.more) return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
     const sub = t.closest('[data-subs]'); if (sub) { P.subs[sub.dataset.subs] = sub.getAttribute('aria-expanded') !== 'true'; return renderPanel(); }
     const sm = t.closest('[data-showmore]'); if (sm) { P.more[sm.dataset.showmore] = !P.more[sm.dataset.showmore]; return renderPanel(); }
     const tog = t.closest('[data-toggle]'), pr = t.closest('[data-proj]');

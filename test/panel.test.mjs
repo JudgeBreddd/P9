@@ -220,7 +220,7 @@ test('O247 a click on a sidebar row made while the list re-sorts still opens tha
   const [, pressed, last] = await rows();
   await page.locator(`#navList .row[data-chat="${last}"]`).click();
   await until(async () => (await shown()) === last, 'the last chat shown first');
-  await page.evaluate(() => { const now = () => performance.now(); addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId, downAt: now() }; }, true); addEventListener('click', (e) => { Object.assign(window.__ids, { click: e.pointerId, at: now() }); }, true); addEventListener('pointercancel', (e) => { Object.assign(window.__ids, { cancel: e.pointerId, cancelAt: now() }); }, true); window.__watch = (sel, attr, value) => { delete window.__ids.seen; const mo = new MutationObserver(() => { if (document.querySelector(sel)?.getAttribute(attr) === value) { window.__ids.seen = now(); mo.disconnect(); } }); mo.observe(document.body, { subtree: true, childList: true, attributes: true }); }; });
+  await page.evaluate(() => { const now = () => performance.now(); addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId, downAt: now() }; }, true); addEventListener('click', (e) => { Object.assign(window.__ids, { click: e.pointerId, at: now() }); }, true); addEventListener('pointerup', (e) => { Object.assign(window.__ids, { upAt: now() }); }, true); addEventListener('pointercancel', (e) => { Object.assign(window.__ids, { cancel: e.pointerId, cancelAt: now() }); }, true); window.__watch = (sel, attr, value) => { delete window.__ids.seen; const mo = new MutationObserver(() => { if (document.querySelector(sel)?.getAttribute(attr) === value) { window.__ids.seen = now(); mo.disconnect(); } }); mo.observe(document.body, { subtree: true, childList: true, attributes: true }); }; });
   const box = await page.locator(`#navList .row[data-chat="${pressed}"]`).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -238,7 +238,7 @@ test('O247 a click on a sidebar row made while the list re-sorts still opens tha
   // The click ended the hold, not the 500 ms fallback after the release: the list re-sorted right after the click.
   let ids = await page.evaluate(() => window.__ids);
   assert.equal(ids.click, ids.down, 'the click carries its press\'s pointer id');
-  assert.ok(ids.seen - ids.at < 300, 're-sorted ' + Math.round(ids.seen - ids.at) + ' ms after the click, not on the fallback');
+  assert.ok(ids.seen >= ids.at && ids.seen - ids.upAt < 500, 're-sorted ' + Math.round(ids.seen - ids.upAt) + ' ms after the release, after its click and before the fallback');
 
   // More, pressed while the list re-sorts: its menu opens, the redraw after keeps it drawn expanded, and a second click closes it.
   const more = page.locator(`#navList [data-more="${pressed}"]`);
@@ -256,7 +256,7 @@ test('O247 a click on a sidebar row made while the list re-sorts still opens tha
   await page.locator('.lp-menu').waitFor({ timeout: 5000 });
   await until(async () => (await state()) === 'running', 'the list redraws after the More click');
   ids = await page.evaluate(() => window.__ids);
-  assert.ok(ids.seen - ids.at < 300, 'More: redrawn right after its click');
+  assert.ok(ids.seen >= ids.at && ids.seen - ids.upAt < 500, 'More: redrawn after its click and before the fallback');
   assert.equal(await more.getAttribute('aria-expanded'), 'true', 'the redraw keeps More drawn expanded while its menu is open');
   await more.click();
   await until(async () => (await page.locator('.lp-menu').count()) === 0, 'a second click on More closes its menu');

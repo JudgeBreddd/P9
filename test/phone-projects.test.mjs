@@ -299,7 +299,7 @@ test('O247 phone: a tap held while the chat list redraws still opens the chat', 
     await until(async () => Number(await page.evaluate(() => localStorage.getItem('p9-cursor'))) >= after, 'the phone took in the prompt');
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
   };
-  await page.evaluate(() => { const now = () => performance.now(); addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId, downAt: now() }; }, true); addEventListener('click', (e) => { Object.assign(window.__ids, { click: e.pointerId, at: now() }); }, true); addEventListener('pointercancel', (e) => { Object.assign(window.__ids, { cancel: e.pointerId, cancelAt: now() }); }, true); window.__watch = (sel, attr, value) => { delete window.__ids.seen; const mo = new MutationObserver(() => { if (document.querySelector(sel)?.getAttribute(attr) === value) { window.__ids.seen = now(); mo.disconnect(); } }); mo.observe(document.body, { subtree: true, childList: true, attributes: true }); }; });
+  await page.evaluate(() => { const now = () => performance.now(); addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId, downAt: now() }; }, true); addEventListener('click', (e) => { Object.assign(window.__ids, { click: e.pointerId, at: now() }); }, true); addEventListener('pointerup', (e) => { Object.assign(window.__ids, { upAt: now() }); }, true); addEventListener('pointercancel', (e) => { Object.assign(window.__ids, { cancel: e.pointerId, cancelAt: now() }); }, true); window.__watch = (sel, attr, value) => { delete window.__ids.seen; const mo = new MutationObserver(() => { if (document.querySelector(sel)?.getAttribute(attr) === value) { window.__ids.seen = now(); mo.disconnect(); } }); mo.observe(document.body, { subtree: true, childList: true, attributes: true }); }; });
   let [x, y] = await middle(tapped);
   await touch('touchStart', x, y);
   await prompted(busy); // its row turns to "Working…": the list redraws
@@ -311,7 +311,7 @@ test('O247 phone: a tap held while the chat list redraws still opens the chat', 
   await until(async () => (await page.evaluate(() => window.__ids.seen)) !== undefined, 'the list redrew after the tap');
   const ids = await page.evaluate(() => window.__ids);
   assert.equal(ids.click, ids.down, 'the tap\'s click carries its touch\'s pointer id');
-  assert.ok(ids.seen - ids.at < 300, 'redrawn ' + Math.round(ids.seen - ids.at) + ' ms after the tap\'s click, not on the fallback');
+  assert.ok(ids.seen >= ids.at && ids.seen - ids.upAt < 500, 'redrawn ' + Math.round(ids.seen - ids.upAt) + ' ms after the lift, after its click and before the fallback');
   await page.evaluate(() => history.back());
   await until(async () => (await run(busy)) === 'working', 'the list redrew after the tap');
   // A finger that scrolls instead of tapping. The browser takes the touch (pointercancel): the list scrolls, redraws while the

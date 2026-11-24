@@ -114,6 +114,17 @@ test('panel: help with no project, Show more, Ctrl Tab, Split, drag with Undo, w
   assert.equal(await page.locator('.lp-ghost').count(), 0, 'blur ends the drag');
   await page.mouse.up(); await page.waitForTimeout(500);
   assert.equal((await conv(instance, first))?.project ?? null, null, 'a release after blur moves nothing');
+  // Another window moves the chat while its menu is open: the More drawn in the new place reads open; Escape closes the menu, and that More reads closed and gets focus.
+  await page.locator(`#navList .more[data-more="${first}"]`).click();
+  await page.locator('.lp-menu').waitFor({ timeout: 5000 });
+  assert.equal((await call(instance, '/chat/' + first + '/project', 'POST', { project: big })).status, 200);
+  await until(async () => (await zoneOf(page, first)) === big, 'the other window\'s move redrew the row under Big');
+  const moreBtn = page.locator(`#navList .more[data-more="${first}"]`);
+  assert.equal(await moreBtn.getAttribute('aria-expanded'), 'true', 'the redrawn More reads open while its menu is');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.lp-menu').count(), 0, 'Escape closes the menu');
+  assert.equal(await moreBtn.getAttribute('aria-expanded'), 'false', 'the More in its new place reads closed');
+  assert.ok(await moreBtn.evaluate((el) => el === document.activeElement), 'focus goes back to the More in its new place');
 
   // Width: the grip's End key makes it widest; a restart keeps it.
   await page.locator('#nav .p-grip').focus();
