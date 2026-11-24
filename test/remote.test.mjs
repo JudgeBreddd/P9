@@ -11,7 +11,7 @@ import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root, openFiles, shellReady } from './helpers.mjs';
 import { execFile, execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { connectServer, forwardPath, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
@@ -246,7 +246,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
-  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {}, noKey: [], agents: {} });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {}, noKey: [], agents: {}, devPorts: {} });
 });
 
 // Rows I1 and I2 in the window: the Temporary or Always on question (U6), the status line with Make it always on, the admin password window
@@ -1619,4 +1619,98 @@ test('ssh-missing, and a dropped connection is a notification', { timeout: 10000
   assert.match(shell, /'ssh-missing': 'This computer has no ssh program[^']*Try again\.'/);
   await rm(runtime, { recursive: true, force: true });
   console.log('PASS ssh-missing: a missing ssh program names itself; drops notify');
+});
+
+// O250: the editor keeps its place. Files open and a folder expanded in the server's Dev Focus are still there after time in
+// Chat focus, after going to This computer and back to the remote (not closed), after P9 there restarts (an update, an idle
+// stop), and after P9 here restarts: the workbench keeps them per workspace, and the workspace is the same each time.
+test('O250 Dev Focus on a remote keeps its open files and file tree through Chat focus, This computer and back, and restarts', { skip, timeout: 420000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const remote = await editorDaemon(t, editor), local = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile); await mkdir(path.join(remote.workspace, 'sub'));
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host', remotes: ['test-host'] }));
+  for (const name of ['a.txt', 'b.txt', 'sub/inner.txt']) await writeFile(path.join(remote.workspace, name), name + '\n');
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: editor.host };
+  delete env.ELECTRON_RUN_AS_NODE;
+  let app, shell;
+  // The port the remote's name picks is taken by something else at the first open, then freed: the restart below still
+  // opens on the port the editor first got (review: a fallback port given back at the next start lost the place).
+  const holder = createServer().listen(20000 + createHash('sha256').update('test-host').digest().readUInt16BE(0) % 12000, '127.0.0.1');
+  await once(holder, 'listening');
+  t.after(() => holder.close());
+  const launch = async () => {
+    app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+    const mine = app, proc = app.process();
+    t.after(async () => { await Promise.race([mine.close(), sleep(15000)]); proc.kill(); });
+    shell = await app.firstWindow();
+    await badge('Remote · test-host');
+  };
+  const badge = text => shell.locator('#serverBadge', { hasText: text }).waitFor({ timeout: 30000 });
+  // Dev Focus shown, on the remote's editor and ready (not the page it replaces, nor the unavailable page).
+  const devFocus = async () => {
+    await shell.keyboard.press('Control+2');
+    for (let i = 0; ; i++) {
+      const dev = app.windows().find(page => page.url().startsWith('p9://dev/'));
+      const on = await dev?.evaluate(async () => window.devFocusReady && (await window.p9dev.config()).server).catch(() => null);
+      if (on === 'test-host') return dev;
+      if (i === 240) assert.fail('Dev Focus did not open on the remote: ' + await dev?.locator('#cause').textContent().catch(() => ''));
+      await sleep(500);
+    }
+  };
+  // What the editor shows: its tabs, and the file tree's rows (inner.txt only while sub is expanded).
+  const place = d => d.evaluate(() => ({ tabs: window.devFocus.v.window.tabGroups.all.flatMap(g => g.tabs.map(tab => tab.label)).sort(),
+    tree: [...document.querySelectorAll('.explorer-folders-view .monaco-list-row')].map(row => row.textContent.trim()).filter(Boolean) }));
+  const want = { tabs: ['a.txt', 'b.txt'], tree: ['a.txt', 'b.txt', 'note.txt', 'sub', 'inner.txt'] };
+  const kept = async (d, what) => {
+    let got;
+    for (let i = 0; i < 60; i++) { got = await place(d).catch(() => null); if (got && want.tabs.every(x => got.tabs.includes(x)) && want.tree.every(x => got.tree.includes(x))) return; await sleep(500); }
+    assert.fail(what + ': the editor lost its place, it shows ' + JSON.stringify(got));
+  };
+  await launch();
+  let dev = await devFocus();
+  await dev.evaluate(async () => {
+    const { v, open, root } = window.devFocus;
+    await open('a.txt'); await open('b.txt');
+    await v.commands.executeCommand('workbench.view.explorer');
+    await v.commands.executeCommand('revealInExplorer', v.Uri.joinPath(v.Uri.parse(root.toString()), 'sub', 'inner.txt'));
+  });
+  await kept(dev, 'before');
+  const first = (await dev.evaluate(() => window.p9dev.config())).port;
+  assert.notEqual(first, holder.address().port, 'the taken port is passed over');
+  holder.close();
+  // Chat focus for a while, then back.
+  await shell.keyboard.press('Control+1');
+  await sleep(10000);
+  await kept(dev = await devFocus(), 'after Chat focus');
+  // This computer, then the remote again (it was left running, not closed).
+  await shell.keyboard.press('Control+1');
+  await shell.locator('#serverBadge').click();
+  await shell.locator('#serverPop [data-server-go=""]').click();
+  await badge('Local');
+  await shell.locator('#serverBadge').click();
+  await shell.locator('#serverPop [data-server-go="test-host"]').click();
+  await badge('Remote · test-host');
+  await kept(dev = await devFocus(), 'after This computer and back');
+  // P9 there restarts while Chat focus is shown (its stop ends the editor); back in Dev Focus the page loads onto the new editor.
+  const port = (await dev.evaluate(() => window.p9dev.config())).port;
+  await shell.keyboard.press('Control+1');
+  remote.child.kill('SIGTERM');
+  await once(remote.child, 'exit');
+  const second = await restart(t, remote, 'state-2');
+  await rm(path.join(s.server, 'p9-foundation'), { recursive: true, force: true });
+  await symlink(second.state, path.join(s.server, 'p9-foundation'));
+  const fresh = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 120000 });
+  await devFocus(); // shown again: it asks P9 there for its editor, and a new one loads a new page
+  dev = await fresh;
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
+  await kept(dev, 'after P9 on the remote restarted');
+  // P9 here restarts (an install, a reboot).
+  await app.close();
+  await launch();
+  dev = await devFocus();
+  const now = (await dev.evaluate(() => window.p9dev.config())).port;
+  await kept(dev, 'after P9 here restarted (editor port ' + port + ', now ' + now + ')');
+  assert.equal(now, first, 'the editor port the remote first got, though the one its name picks is free now');
 });
