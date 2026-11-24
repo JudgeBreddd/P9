@@ -548,14 +548,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // P8: a signed-out Codex has no plan figure (its old sessions would show one months old) and is named signed out. Claude
   // is left out: on a Mac its login is in the Keychain, so a missing credentials file says nothing.
   // One answer for the page and for a sprint script's input (sprint-hooks.mjs). look = false (the usage history's tick)
-  // takes each poll's last answer and starts no read. O244: each window carries its projected % at the reset.
+  // takes each poll's last answer and starts no read, and leaves the projection to the tick. O244: each window carries
+  // its projected % at the reset.
   const usageNow = async (look = true) => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
     const limits = await planLimits({ home: os.homedir(), polled: Object.fromEntries(Object.entries(polls).map(([id, poll]) => [id, look ? poll.look() : poll.peek?.() ?? null])), live: { claude: claudeLive } });
     const on = await signedIn(), signedOut = CATALOG.filter((a) => a.usage.hideSignedOut && !on[a.id]).map((a) => a.id);
     const all = { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut };
-    return { ...usage, ...(contexts && { contexts }), limits: history ? history.annotate(all) : all };
+    return { ...usage, ...(contexts && { contexts }), limits: look && history ? history.annotate(all) : all };
   };
   // O244 (b): a row per provider and window every 10 min in usage-limits.db beside the ledger (P9_USAGE_HISTORY_MS: tests).
   const history = ownership && startUsageHistory({ file: path.join(ownership, 'usage-limits.db'), read: async () => (await usageNow(false)).limits,

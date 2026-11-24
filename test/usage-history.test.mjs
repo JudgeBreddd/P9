@@ -75,3 +75,46 @@ test('O244: through the daemon, /usage and plan_usage carry the projection and a
   for (let i = 0; i < 40 && count() < 1; i += 1) await new Promise((resolve) => setTimeout(resolve, 250));
   assert.ok(count() >= 1, 'a tick after the look wrote codex rows');
 });
+
+test('O244: the base is the same window and was fresh; a reading is written once; null resets and per-model windows are kept; a failed read recovers; peek starts no read', async () => {
+  const { startUsageHistory } = await load();
+  assert.equal(typeof startUsageHistory, 'function', 'usage-history.mjs records plan use');
+  const f = await file(), at = { now: T0 - 60 * MIN };
+  let reading, fail = false;
+  const history = startUsageHistory({ file: f, read: async () => { if (fail) throw new Error('down'); return reading; }, everyMs: 0, now: () => at.now, log: () => {} });
+  // 61 min before T0: the window before this one (it resets 30 min before T0, at 90%), and a week reading already 15 min old.
+  reading = { third: { fiveHour: { usedPercent: 90, resetsAt: T0 - 30 * MIN, windowMins: 300 }, asOf: T0 - 61 * MIN },
+    late: { sevenDay: { usedPercent: 0, resetsAt: T0 + 100 * HOUR, windowMins: 10080 }, asOf: T0 - 75 * MIN } };
+  assert.equal(await history.tick(), 2);
+  assert.equal(await history.tick(), 0, 'the same readings again write nothing');
+  fail = true;
+  assert.equal(await history.tick(), 0, 'a read that throws writes nothing');
+  fail = false;
+  at.now = T0;
+  reading = { third: { fiveHour: { usedPercent: 40, resetsAt: T0 + 3 * HOUR, windowMins: 300 }, sevenDay: { usedPercent: 7, resetsAt: null, windowMins: 10080 },
+    models: [{ name: 'big', usedPercent: 5, resetsAt: T0 + 100 * HOUR, windowMins: 10080 }], asOf: T0 },
+    late: { sevenDay: { usedPercent: 10, resetsAt: T0 + 100 * HOUR, windowMins: 10080 }, asOf: T0 } };
+  const shown = history.annotate(reading);
+  assert.equal(shown.third.fiveHour.projected, 100, 'the last window\'s 90% is not this window\'s base: the window average');
+  assert.equal(shown.late.sevenDay.projected, 24.7, 'a base that was 15 min old when written is not used: the window average');
+  assert.equal(shown.third.sevenDay.projected, null, 'no reset, no projection');
+  assert.equal(shown.third.models[0].projected, 12.4, 'a per-model window is projected too');
+  assert.equal(await history.tick(), 4, 'after the failure the next tick writes again: the null-reset and per-model windows too');
+  // A reading taken before its window reset, looked at after: no live projection.
+  at.now = T0 + 4 * HOUR;
+  assert.equal(history.annotate(reading).third.fiveHour.projected, null);
+  history.close();
+  const db = new DatabaseSync(f, { readOnly: true });
+  const rows = db.prepare('SELECT provider, win, resets_at, projected_pct, pace FROM limits WHERE as_of = ? ORDER BY provider, win').all(T0).map((r) => ({ ...r }));
+  db.close();
+  assert.deepEqual(rows.map((r) => [r.provider, r.win, r.resets_at === null, r.projected_pct, r.pace]), [
+    ['late', 'sevenDay', false, 24.7, 'headroom'], ['third', 'fiveHour', false, 100, 'on'], ['third', 'models.big', false, 12.4, 'headroom'], ['third', 'sevenDay', true, null, null]]);
+  // The tick reads polls with peek(): the last answer, and no read started.
+  const { createPoll } = await import('../apps/server/claude-usage.mjs');
+  let reads = 0;
+  const poll = createPoll({ name: 'test', read: async () => { reads += 1; return {}; }, log: () => {} });
+  assert.equal(poll.peek?.(), null, 'peek answers the last reading, none yet');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(reads, 0, 'peek starts no read');
+  await poll.close();
+});
