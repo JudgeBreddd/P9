@@ -80,7 +80,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, free, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
+  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, sentImgs, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
@@ -1276,7 +1276,7 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
   // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.
-  if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
@@ -1292,14 +1292,13 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
   return r;
 };
 // A refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
-// 2026-10-24: one refused because a turn runs is queued instead, and shown and kept as queued.
+// O255: one sent mid-turn the daemon could not put in the turn waits in its hold (202), so a refusal is final here too.
+// O255: a chat's prompts go one at a time (lines), so one slow to arrive (a big file, a slow link) is not passed by the next.
+const lines = {};
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
-liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = true; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && (await import('./attach.mjs')).attachBody(images)) }).finally(() => { s.sending = false; }); if (r.status === 202) return renderChats(); s.images = [...images, ...(s.images || [])].slice(0, 8);
-  // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
-  // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
-  if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift({ t: text, at: Date.now() }); keepQueue(s); setTimeout(() => { if (!s.prompted && free(s) && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
+liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = true; renderTabs(); renderChats(); const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => { s.sending = false; }); if (r.status === 202) { if (r.body?.held && images.length) sentImgs.set(r.body.held, images); return renderChats(); } s.images = [...images, ...(s.images || [])].slice(0, 8);
   s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {

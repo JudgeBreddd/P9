@@ -14,7 +14,7 @@ export const chip = () => `<span class="hint" role="group" aria-label="Send whil
   + button('data-cancel', 'Cancel', 'Esc', 'Stop this turn; your text stays in the box') + '</span>';
 
 // The messages the daemon holds for this turn, above the local queue (which is only for an agent without steering).
-export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="${esc(h.id)}"><span>${h.when === 'queue' ? 'Queued' : 'After this step'}: ${esc(h.text)}</span><button title="Take it back into the box" data-unhold="${esc(h.id)}">${svg.x}</button></div>`).join('');
+export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="${esc(h.id)}"><span>${h.when === 'queue' ? 'Queued' : 'After this step'}: ${esc(h.text)}</span><button title="Send this now (stops this turn)" data-unhold="${esc(h.id)}" data-now>${svg.bolt}</button><button title="Take it back into the box" data-unhold="${esc(h.id)}">${svg.x}</button></div>`).join('');
 
 // O109: everything waiting (held, then the local queue) is one strip, "N queued", so 30 waiting messages cannot push the box
 // off the screen. Open while it is short (up to 3), shut past that; the user's own open or shut (s.queueOpen) wins.
@@ -23,10 +23,6 @@ export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="$
 // the local queue (an agent without steering, { t, at }) alike. One kept by an older build has no time and adds to the count only.
 export const strip = (s, since, local) => { const n = (s.held?.length ?? 0) + s.queue.length, at = Math.min(...[...(s.held ?? []), ...s.queue].map(h => h.at || Infinity));
   return `<details class="queue" data-queue${s.queueOpen ?? n <= 3 ? ' open' : ''}><summary>${n} queued${at < Infinity ? ', oldest waiting ' + since(at) : ''}</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
-
-// O125: a local queue read back from storage: { t, at } items; a bare string from an older build is { t } (no time);
-// anything else is dropped.
-export const keptItems = q => Array.isArray(q) ? q.map(x => typeof x === 'string' ? { t: x } : x).filter(x => typeof x?.t === 'string' && (x.at === undefined || Number.isFinite(x.at))) : [];
 
 // What a key in the box does while a turn runs: 'steer', 'queue', 'cancel', or null (the box keeps the key).
 export const turnKey = e => e.shiftKey || e.altKey || e.ctrlKey || e.metaKey ? null : { Enter: 'steer', Tab: 'queue', Escape: 'cancel' }[e.key] ?? null;

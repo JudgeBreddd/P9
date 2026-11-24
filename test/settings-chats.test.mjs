@@ -967,7 +967,7 @@ test('Interrupt and send: a queued message sent with the bolt, or Ctrl+Enter, re
   await slowTurn(1);
   await box.fill('queued one'); await box.press('Enter');
   await pane.locator('.queue .q', { hasText: 'queued one' }).waitFor();
-  await pane.locator('.queue [data-qnow="0"]').click();
+  await pane.locator('.queue [data-now]').click();
   await agentSaid('echo:queued one');
   // Ctrl+Enter on a new message while the agent works.
   await slowTurn(2);

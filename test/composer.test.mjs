@@ -127,7 +127,7 @@ for (const provider of ['claude', 'codex']) {
     await started(instance, id, 'tool-1');
     await send('one'); await send('two');
     await until(async () => (await rows.count()) === 2, 'both held', 5000);
-    await rows.filter({ hasText: 'one' }).locator('[data-unhold]').click();
+    await rows.filter({ hasText: 'one' }).locator('[data-unhold]:not([data-now])').click();
     await until(async () => (await box.inputValue()) === 'one', 'one back in the box', 5000);
     await box.click(); await page.keyboard.press('Escape');
     await until(async () => (await box.inputValue()) === 'two\none', 'two back in the box after the cancel', 10000);

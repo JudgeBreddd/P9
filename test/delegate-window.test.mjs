@@ -415,7 +415,7 @@ test('O109: 30 queued messages, a sprint card and a worker report leave the comp
   // Open: all of them listed, each with its Take back, and the box still on screen.
   await pane.locator('.queue > summary').click();
   assert.equal(await pane.locator('.queue').evaluate((el) => el.open), true);
-  assert.equal(await pane.locator('.queue [data-unhold]').count(), waiting);
+  assert.equal(await pane.locator('.queue [data-unhold]:not([data-now])').count(), waiting);
   await onScreen('open');
   // After a reload, the same.
   await page.reload();

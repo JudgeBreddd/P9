@@ -82,7 +82,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
     input({ rules: { type: 'string', maxLength: MAX_RULES } })],
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
-      + 'or queue (after the running turn). An agent without steering cannot take a message into its running turn: while it works, auto and steer are refused (turn-running) and only queue reaches it. It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
+      + 'or queue (after the running turn). An agent without steering cannot take a message into its running turn: while it works, auto and steer wait for that turn\'s end, as queue does. It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends. '
       + 'when: note passes information on and asks for nothing (a result, a branch that is ready, something you found): it never starts a turn, the chat reads it in its running turn '
       + 'or with its next message, and it also reaches your parent, whatever mode either of you is in. At most ' + NOTE_MAX + ' characters. Use a note to share context; use the others to ask for work. Your worker\'s turn end reaches you from P9 as such a note by default, or as a message that starts your turn when Settings > Notices says so (see wait_chat). '
       + 'key (not with a note) gives a worker you started, reused for another role, that role\'s key first, so this message carries roles/<key>.rules.md; a worker in its own worktree keeps its key.',
@@ -1064,7 +1064,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...re, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller).finally(() => place?.release());
     // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
     if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
-    if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'Its agent cannot take a message into its running turn now. Send it with when: queue: it runs when the turn ends.' }) };
+    if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'It cannot take a message now: a run it started itself, or a Stop ending its turn. Send it again once that ends.' }) };
     return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn', ...(sent.held && { held: sent.held }), ...(args.replaces !== undefined && { replaced: sent.replaced ?? null }) };
   }
 
