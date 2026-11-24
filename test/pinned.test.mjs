@@ -46,8 +46,6 @@ async function chat(instance, provider, folder) {
   const id = (await call(instance, '/chat', 'POST', { provider, ...(folder && { folder }) })).conversation;
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   await until(async () => (await said(instance, id, 'connected')).length, provider + ' connected');
-  // The hello turn ends first: a prompt sent while it still runs is steered into it, not run as its own turn.
-  await until(async () => (await said(instance, id, 'turn-end')).length, provider + ' hello answered');
   return { id, session: (await said(instance, id, 'connected'))[0].data.session };
 }
 // The terminal's line holds the command; the shell has not run it (a run would start claude or print "not found").
@@ -91,10 +89,14 @@ test('PH5 Hand off: the Claude chat stops, a P9 terminal opens in its folder wit
 test('AR1/AR2 strip: the plan and a pinned card sit above the composer, HTML shows as text, an unpinned card stays gone on replay; Hand off from the window', { timeout: 150000 }, async (t) => {
   const { instance, tmux } = await start(t);
   const { id, session } = await chat(instance, 'claude');
+  // Each prompt here needs its own turn: one sent while the turn before it still runs is steered into it or held.
+  const ended = (n, what) => until(async () => (await said(instance, id, 'turn-end')).length >= n, what);
+  await ended(1, 'hello answered');
   const sent = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'plan' });
-  assert.equal(sent.status, 202, 'the plan prompt did not start a turn: ' + JSON.stringify(sent));
+  assert.ok(sent.turn, 'the plan prompt did not start its own turn: ' + JSON.stringify(sent));
   await until(async () => (await said(instance, id, 'update')).some((e) => e.data.sessionUpdate === 'plan'), 'plan sent', 15000,
     async () => JSON.stringify((await call(instance, '/chat/events?after=0&only=' + id)).events.map((e) => [e.type, e.data?.sessionUpdate ?? e.data?.status ?? e.data?.text?.slice?.(0, 40)])));
+  await ended(2, 'plan answered');
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'mcp' });
   let entry;
   await until(async () => (entry = (await said(instance, id, 'update')).find((e) => e.data.content?.text?.startsWith('mcp:'))), 'mcp entry');
