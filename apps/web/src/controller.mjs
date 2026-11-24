@@ -30,12 +30,12 @@ export function mountShell({ askAdmin } = {}) {
   const outer = { get $() { return $; }, get CTP() { return CTP; }, get FRAME() { return FRAME; }, get FX() { return FX; }, get IND() { return IND; },
     get M() { return M; }, get PET_ROLES() { return PET_ROLES; }, get S() { return S; },
     get SP() { return SP; }, get WIZ_ERR() { return WIZ_ERR; }, get XFER_SETTINGS() { return XFER_SETTINGS; },
-    get addHalos() { return addHalos; }, get agentLock() { return agentLock; }, set agentLock(v) { agentLock = v; }, get attrs() { return attrs; },
+    get addHalos() { return addHalos; }, get agentLock() { return agentLock; }, set agentLock(v) { agentLock = v; setEdits++; }, get attrs() { return attrs; },
     get bottoms() { return bottoms; }, get busy() { return busy; }, get applyMode() { return applyMode; }, get modeShown() { return modeShown; }, get cardList() { return cardList; }, get chatImgs() { return chatImgs; },
     get chatOn() { return chatOn; }, get closeModal() { return closeModal; }, get closedChats() { return closedChats; },
     get danChat() { return danChat; }, get dataNote() { return dataNote; }, get defaultMode() { return defaultMode; }, get dirty() { return dirty; },
     get edSave() { return edSave; }, set edSave(v) { edSave = v; }, get editorHtml() { return editorHtml; },
-    get fileProtect() { return fileProtect; }, set fileProtect(v) { fileProtect = v; }, get files() { return files; }, get focus() { return focus; },
+    get fileProtect() { return fileProtect; }, set fileProtect(v) { fileProtect = v; setEdits++; }, get files() { return files; }, get focus() { return focus; },
     get focusNames() { return focusNames; }, get focusOn() { return focusOn; }, get fx() { return fx; },
     get fxFiles() { return fxFiles; }, set fxFiles(v) { fxFiles = v; }, get fxSky() { return fxSky; },
     get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
@@ -48,13 +48,13 @@ export function mountShell({ askAdmin } = {}) {
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
     get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
     get looseOk() { return looseOk; }, get maintain() { return maintain; }, get mdOf() { return mdOf; }, get mdl() { return mdl; },
-    get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; },
+    get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; setEdits++; },
     get missionLive() { return missionLive; }, get modals() { return modals; }, get morph() { return morph; },
     get moveDlg() { return moveDlg; }, get moveReloaded() { return moveReloaded; }, get names() { return names; },
     get needsLabel() { return needsLabel; }, get newSession() { return newSession; }, get lastAgent() { return lastAgent; }, get noteModal() { return noteModal; },
     get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; },
     get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
-    get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
+    get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; setEdits++; },
     get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get loadProjects() { return panel.loadProjects; },
     get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
     get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get keepPlace() { return keepPlace; }, get renderMission() { return renderMission; },
@@ -70,9 +70,9 @@ export function mountShell({ askAdmin } = {}) {
     get spaceMenuHtml() { return spaceMenuHtml; }, set spaceMenuHtml(v) { spaceMenuHtml = v; },
     get spacePop() { return spacePop; }, set spacePop(v) { spacePop = v; }, get startMode() { return startMode; },
     get startTurn() { return startTurn; }, get still() { return still; }, get sync() { return sync; },
-    get termGreeting() { return termGreeting; }, set termGreeting(v) { termGreeting = v; }, get tickPets() { return tickPets; },
+    get termGreeting() { return termGreeting; }, set termGreeting(v) { termGreeting = v; setEdits++; }, get tickPets() { return tickPets; },
     get toast() { return toast; }, get topAt() { return topAt; }, set topAt(v) { topAt = v; }, get tree() { return tree; },
-    get updates() { return updates; }, set updates(v) { updates = v; },
+    get updates() { return updates; }, set updates(v) { updates = v; setEdits++; },
     get updatesTimer() { return updatesTimer; }, set updatesTimer(v) { updatesTimer = v; }, get usage() { return usage; },
     get usageNow() { return usageNow; }, get usageRows() { return usageRows; },
     get usageSoon() { return usageSoon; }, set usageSoon(v) { usageSoon = v; }, get view() { return view; }, get walkthrough() { return walkthrough; },
@@ -96,7 +96,7 @@ export function mountShell({ askAdmin } = {}) {
   // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
   // probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
   // ~/.ssh/config hosts never saved or used are not asked.
-  const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
+  const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-not-answering': ['wait', 'Not answering'], 'server-dropped': ['wait', 'Connecting…'] };
   adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (sample data is never part of the app).
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
@@ -983,6 +983,8 @@ let setPage = 'General';
 // typed value starts with it), or the machine menu's remove. That save came after the read went out. A kept read is
 // applied, and an open dialog is drawn again: nothing in it has focus then, and the scroll stays. The reads first go out
 // once the window knows its server. ponytail: a late read takes focus off a page's name button (the nav is drawn again).
+// #517 review 3: a Settings save writes its answer through outer's setters (above), so one landing after a reopen's read
+// went out makes that read stale too, and the save's value stays.
 let setEdits = 0;
 $('#setBody').onfocusin = e => e.target.dataset.setPage || setEdits++;
 const setLoad = () => {

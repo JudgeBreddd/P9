@@ -100,7 +100,7 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   // A change made while Settings' reads are still on the link stays: those reads went out before its save.
   await page.click('#setBtn'); await page.locator('#setDlg[open] #setGreeting:checked').waitFor({ timeout: 5000 }); await page.uncheck('#setGreeting');
   step('greeting off');
-  await Promise.race([full, new Promise((r, j) => setTimeout(() => j(new Error('the busy chat not down in 60 s: ' + JSON.stringify(down))), 60000))]);
+  await Promise.race([full, new Promise((r, j) => setTimeout(() => j(new Error('the busy chat not down in 60 s: ' + JSON.stringify(down))), 60000).unref())]);
   step('busy chat down ' + JSON.stringify(down)); assert.ok(down.status === 200 && down.bytes > 3e6, 'the busy chat came down the link');
   // The editor opened behind the full link is usable: it waited out the link instead of showing "unavailable".
   if (editor) {
@@ -125,7 +125,7 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   if (editor) {
     const dev = app.windows().find((p) => p.url().startsWith('p9://dev/'));
     const text = await Promise.race([dev.evaluate(async () => (await window.devFocus.open('note.txt')).document.getText()),
-      new Promise((r, j) => setTimeout(() => j(new Error('the editor did not open note.txt in 60 s; the editor page said: ' + devSaid.slice(-12).join(' | '))), 60000))]);
+      new Promise((r, j) => setTimeout(() => j(new Error('the editor did not open note.txt in 60 s; the editor page said: ' + devSaid.slice(-12).join(' | '))), 60000).unref())]);
     assert.equal(text, 'original', 'the editor opens the remote\'s file after the link drains');
   }
   console.log('O248 ms from click to open, 300 ms RTT, 2 Mbit/s: link full ' + JSON.stringify(busy) + '; after ' + JSON.stringify(settled) + '; ssh logins while full: ' + logins);

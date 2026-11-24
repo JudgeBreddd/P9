@@ -574,7 +574,7 @@ export async function createDesktop({ state, open } = {}) {
       }
       const job = agentsJob?.host === serverHost && (agentsJob.phase !== 'done' || Date.now() - agentsJob.at < 30000) ? agentsJob : null;
       if (job) there.agents = { phase: job.phase, names: job.names, ...(job.error && { error: job.error }) };
-      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? (server ? 'server-not-answering' : 'server-connecting'), ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
     }
     try {
       const h = state && await health(state);
