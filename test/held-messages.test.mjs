@@ -367,8 +367,9 @@ test('O255: a steer with a new mode goes in when the agent steers, and otherwise
   let after = [], at = -1;
   for (let i = 0; i < 100; i += 1) { after = await events(instance, steers.conversation); at = after.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('phone in plan')); if (after.slice(at).some((e) => e.type === 'turn-end')) break; await pause(100); }
   fs.rmSync(go);
+  assert.ok(at >= 0 && after.slice(at).some((e) => e.type === 'turn-end'), 'the phone message\'s turn did not end');
   assert.equal(after.filter((e) => e.type === 'mode').at(-1)?.data?.name, 'Plan', 'the phone message did not run in Plan');
-  assert.ok(after.slice(at).some((e) => e.type === 'update'), 'the agent did not answer the phone message');
+  assert.ok(after.slice(at).some((e) => String(e.data?.content?.text).includes('echo:phone in plan')), 'the agent did not answer the phone message');
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
   const waits = await agent(t, instance);
   await gated(waits.conversation);
@@ -381,4 +382,26 @@ test('O255: a steer with a new mode goes in when the agent steers, and otherwise
   const mine = await events(instance, waits.conversation);
   assert.equal(await lastMode(), 'Plan', 'the waiting steer ran in the old mode: ' + JSON.stringify(mine.filter((e) => ['mode', 'user', 'held', 'turn-end'].includes(e.type)).map((e) => [e.type, e.data?.name ?? String(e.data?.text ?? '').slice(0, 30)])));
   console.log('PASS O255 steer mode: a next pick steered in, a phone mode pick waited; without steering it waited and the next turn ran in Plan');
+});
+
+// O255 round 8: Plan picked mid-turn in a Codex chat and then taken back. The message sent with Plan picked and the one sent
+// after the pick was taken back (it leaves the plan switch out) are not joined, and the second does not run in Plan.
+test('O255: in a Codex chat, a message sent after a Plan pick was taken back does not join or run in Plan with the one sent before', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const go = path.join(instance.workspace, 'go');
+  const { conversation: chat } = await agent(t, instance, { provider: 'codex' });
+  let c = (await call(instance, '/chat/events?after=0')).body.cursor;
+  assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202);
+  await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating', c);
+  const mode = (await events(instance, chat)).filter((e) => e.type === 'mode').at(-1)?.data?.name;
+  for (const body of [{ text: 'config', when: 'queue', mode, next: true, config: { collaboration_mode: 'plan' } }, { text: 'config', when: 'queue', mode, next: false }]) {
+    const r = await call(instance, `/chat/${chat}/prompt`, 'POST', body); assert.equal(r.status, 202, JSON.stringify(r));
+  }
+  fs.writeFileSync(go, '');
+  let said = [];
+  for (let i = 0; i < 150 && said.length < 2; i += 1) { said = (await events(instance, chat)).filter((e) => /collaboration_mode=/.test(String(e.data?.content?.text))).map((e) => e.data.content.text.match(/collaboration_mode=(\w+)/)[1]); await pause(100); }
+  fs.rmSync(go);
+  assert.deepEqual(said, ['plan', 'default'], 'the two were joined, or the second ran in Plan');
+  console.log('PASS O255 codex plan taken back: the message sent with Plan ran in Plan, the one sent after it was taken back ran with Plan off, as two turns');
 });

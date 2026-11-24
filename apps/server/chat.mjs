@@ -1511,6 +1511,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   function hold(id, session, body, images, when, repicks = false, was = []) {
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
+    // O255: a held message that leaves Codex's plan switch out goes as it was when sent, never joined to (or run after, in) one
+    // sent with Plan picked: an empty pick means the session's, which that one may have changed by the time this goes.
+    for (const p of session.pickers ?? []) if (p.category === 'collaboration_mode' && body.config?.[p.id] === undefined) body.config = { ...body.config, [p.id]: p.current };
     const item = { id: randomUUID(), body, images, allowed: captureAuthority(), was };
     const old = waitingReplace(session, body);
     // FIX2: a replacement takes the replaced message's place and delivery: queued stays queued (never steered in now).
