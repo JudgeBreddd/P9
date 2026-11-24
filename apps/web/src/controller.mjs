@@ -978,10 +978,15 @@ let settings = { name: '', zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, fi
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
 let setPage = 'General';
+// O248: only the first open waits for the reads; a later one shows at once with what the last read, and draws again when its
+// read lands. Not after an edit in Settings (input): the read went out before that save, and a redraw would lose typed text.
+// ponytail: it redraws even when nothing changed (same text, so nothing moves); a tabbed-to box loses its focus.
+let setRead, setEdits = 0;
+$('#setBody').addEventListener('input', () => setEdits++);
 $('#setBtn').onclick = async () => {
   // The reads go out together (window-4, O16): one after another, each daemon call is a round trip over a remote's tunnel.
-  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null);
-  [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = await Promise.all([
+  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null), edits = setEdits;
+  const read = Promise.all([
     window.p9?.listPets ? window.p9.listPets().catch(() => null) : pets,
     window.p9?.chat ? status(liveChat.call('lock'), 'on') : agentLock,
     window.p9?.fileProtection ? status(window.p9.fileProtection(), 'on') : fileProtect,
@@ -989,8 +994,10 @@ $('#setBtn').onclick = async () => {
     window.p9?.server ? window.p9.server().catch(() => null) : null,
     window.p9?.chat ? window.p9.chat('missionFiles', {}).then(r => r?.status === 200 ? r.body : null, () => null) : missionFiles,
     window.p9?.updates ? window.p9.updates().catch(() => null) : null,
-    loadStarts()]); // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
-  petMode = null; renderSettings(); $('#setDlg').showModal();
+    loadStarts()]) // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
+    .then(v => { if (edits < setEdits) return; [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = v; if (setRead && $('#setDlg').open) renderSettings(); });
+  if (!setRead) await read;
+  petMode = null; renderSettings(); $('#setDlg').showModal(); setRead = 1;
 };
 $('#setClose').onclick = () => $('#setDlg').close();
 addEventListener('keydown', e => {
@@ -1375,24 +1382,25 @@ function serverMenu() {
   badge.hidden = false; badge.setAttribute('aria-haspopup', 'menu');
   badge.innerHTML = esc(host ? 'Remote · ' + host : 'Local') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   badge.title = 'This window works on ' + (host || 'this computer') + '. Click to pick another machine.';
-  serverPop ??= popover(badge, $('#serverPop'), () => { const pop = $('#serverPop'); pop.style.left = Math.max(8, Math.min(badge.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; renderServerMenu(); });
+  serverPop ??= popover(badge, $('#serverPop'), () => { const pop = $('#serverPop'); renderServerMenu(); pop.style.left = Math.max(8, Math.min(badge.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; });
 }
-async function renderServerMenu() {
-  const pop = $('#serverPop'), { host, last, remotes, all } = machines(), probed = h => h !== host && (remotes.includes(h) || h === last), s = host ? await window.p9.getStatus().catch(() => ({})) : {};
+// O248: the menu draws at once from what this window knows; the remote in use's state fills in when its check answers, as the
+// probed ones do (it waited on that check first, so over a slow link the menu opened empty).
+function renderServerMenu() {
+  const pop = $('#serverPop'), { host, last, remotes, all } = machines(), probed = h => h !== host && (remotes.includes(h) || h === last);
   const row = (h, [dot, say], current) => '<div class="srv-row"><button class="item" role="menuitem" data-server-go="' + esc(h ?? '') + '"' + (current ? ' aria-current="true"' : '')
     + '><span class="srv-dot" data-s="' + dot + '"></span>' + esc(h ?? 'This computer') + '<span class="muted">' + say + '</span></button>'
     + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
   pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
-    + all.map(h => row(h, h === host ? SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable'] : probed(h) ? ['wait', 'Checking…'] : ['off', ''], h === host)).join('')
-    + '<hr data-slot="separator" style="margin:6px 0">' + (host && s.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
+    + all.map(h => row(h, h === host ? SERVER_STATE[serverInfo?.connected ? 'ok' : 'server-connecting'] : probed(h) ? ['wait', 'Checking…'] : ['off', ''], h === host)).join('')
+    + '<hr data-slot="separator" style="margin:6px 0">' + (host && serverInfo?.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
     + (host ? '<button class="item" role="menuitem" id="serverDisconnect" title="Back to this computer, and P9 on ' + esc(host) + ' turns off. Pick another machine above to leave it running.">Disconnect and turn off P9 on ' + esc(host) + '</button>' : '')
     + '<button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
   pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
   pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
-  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => {
-    const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
-    if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
-  }, () => {}));
+  const put = (h, [dot, say]) => { const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'); if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; } };
+  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => put(h, PROBE_STATE[st] ?? PROBE_STATE.unreachable), () => {}));
+  if (host) window.p9.getStatus().then(s => put(host, SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable']), () => {});
   // U9, O8: back to this computer like This computer above, and P9 on the remote is turned off (This computer leaves it running).
   if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); (window.p9.serverOff ?? (() => window.p9.server(null)))(); };
   // The after-connect window again with only the agents question (shell-start.ts), now rather than at the next poll.

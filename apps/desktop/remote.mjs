@@ -211,12 +211,15 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   const save = c => writeFile(path.join(state, 'desktop.json'), JSON.stringify({ ...c, socketPath }), { mode: 0o600 });
   await save(credentials);
   // A restarted server daemon has new credentials, so its /health answers 401; the forward itself survives (one ssh channel per
-  // connection). A failed /health re-reads them, one read at a time, and asks once more.
+  // connection). A 401 re-reads them, one read at a time, and asks once more. O248: only a 401: a slow link's late answer
+  // (then a 2 s timeout) started an ssh login each time, and the machine menu and Dev Focus waited 15-20 s on it. 10 s, as
+  // every other daemon request has: a dead daemon still fails at once (the forward closes).
   let reading = null;
-  const check = () => health(state).catch(async () => {
+  const check = () => health(state, 10000).catch(async (error) => {
+    if (error.status !== 401) throw error;
     reading ??= readServer(host, ssh).then(r => save(r.credentials)).finally(() => { reading = null; });
     await reading;
-    return health(state);
+    return health(state, 10000);
   });
   // Not -N: over a password login's control master (row 78) an ssh -N hands its forwards to the master and exits at once, so
   // the tunnel looked dead and P9 never connected. A session waiting on stdin keeps this ssh alive for as long as the
@@ -249,8 +252,9 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   const close = async () => { closed = true; if (!exited) child.kill(); unrelay(); await cancel(); await rm(state, { recursive: true, force: true }); };
   // Before ready, the loop below sees exited and closes (awaited); only a drop removes the folder here.
   child.on('exit', () => { exited = true; unrelay(); if (!closed && ready) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); onDrop(); } });
-  // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon.
-  for (let i = 0; i < 60; i++) {
+  // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon
+  // (a deadline: a check can take up to 10 s).
+  for (const end = Date.now() + 15000; Date.now() < end;) {
     if (exited || signal?.aborted) break;
     if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check, background, slim }; }
     await new Promise(resolve => setTimeout(resolve, 250));

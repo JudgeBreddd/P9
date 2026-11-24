@@ -64,6 +64,7 @@ if (!tunnel) {
   process.exit(run.status ?? 255);
 }
 process.umask(0o177);
+const bps = Number(process.env.FAKE_SSH_BPS) || 0, link = { up: 0, down: 0 };
 for (const forward of forwards) {
   // 127.0.0.1:<port>:<remote> is a loopback port (P9 on Windows); <local>:<remote> a Unix socket.
   const parts = forward.split(':'), tcp = parts.length === 3, remote = parts.at(-1), local = tcp ? Number(parts[1]) : parts[0];
@@ -72,10 +73,14 @@ for (const forward of forwards) {
     const far = net.connect(remote);
     // FAKE_SSH_DELAY_MS: each chunk, each way, arrives that much later (a real tunnel's latency; pets-load.test.mjs).
     const delay = Number(process.env.FAKE_SSH_DELAY_MS) || 0;
-    const relay = (from, to) => delay ? from.on('data', d => setTimeout(() => to.write(d), delay)).on('end', () => setTimeout(() => to.end(), delay)) : from.pipe(to);
-    relay(socket, far); relay(far, socket);
-    far.on('error', () => socket.destroy());
-    socket.on('error', () => far.destroy());
+    // FAKE_SSH_BPS: bytes a second each way, shared by every forwarded socket, as one ssh connection carries all its channels:
+    // a chunk waits for the ones sent before it on any socket (remote-switcher.test.mjs).
+    const wait = way => { if (!bps) return delay; const now = Date.now(); return delay + Math.max(0, link[way] - now); };
+    const relay = (from, to, way) => delay || bps ? from.on('data', d => { if (bps) link[way] = Math.max(link[way], Date.now()) + d.length * 1000 / bps; setTimeout(() => to.write(d), wait(way)); }).on('end', () => setTimeout(() => to.end(), wait(way))) : from.pipe(to);
+    relay(socket, far, 'up'); relay(far, socket, 'down');
+    // A close comes after what was sent before it, as ssh delivers a channel's data before its close.
+    far.on('error', () => setTimeout(() => socket.destroy(), wait('down')));
+    socket.on('error', () => setTimeout(() => far.destroy(), wait('up')));
   });
   if (tcp) listener.listen(local, '127.0.0.1'); else listener.listen(local);
 }

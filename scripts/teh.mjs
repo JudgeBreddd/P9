@@ -27,9 +27,10 @@ async function withCredentials(state, send) {
   return send(credentials);
 }
 
-export const health = (state) => withCredentials(state, (credentials) => new Promise((resolve, reject) => {
+// timeout: 2 s on this machine; a remote's check passes more (O248: a busy slow link answers later, and is not down).
+export const health = (state, timeout = 2000) => withCredentials(state, (credentials) => new Promise((resolve, reject) => {
     const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: '/health',
-      headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}` }, timeout: 2000 }, (res) => {
+      headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}` }, timeout }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { body += chunk; });
