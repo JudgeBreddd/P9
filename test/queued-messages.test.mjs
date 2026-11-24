@@ -155,6 +155,8 @@ test('An agent that cannot take a message mid-turn: it waits queued, is kept acr
   await chat.send('first');
   await until(async () => (await chat.queued()).length === 1, 'first queued');
   await chat.send('second');
+  // The strip is the daemon's hold now (O255), so it shows after the daemon's answer.
+  await until(async () => (await chat.queued()).length === 2, 'second queued');
   assert.deepEqual(await chat.queued(), ['Queued: first', 'Queued: second']);
   await app.close();
   ({ app, page } = await launch()); chat = await open(page);

@@ -1798,10 +1798,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof body?.text !== 'string' || !imagesOk(images) || !filesOk(files) || images.length - photos(images).length + files.length > MAX_FILES || (files.length && !attachDir) || (!body.text.trim() && !images.length && !files.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (files.some((file) => file.data.length > MAX_FILE)) { release(); return { status: 413, error: 'file-too-large', message: 'A file is over 6 MiB (8 MiB as sent); nothing was sent.' }; }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
-      // O255: next is the window's mid-turn mode pick, what the message runs in. A steer of it still goes into the running turn
-      // (repicks), which keeps its mode; the phone's and agents' mode picks wait for the turn's end, as before.
-      if (body.next != null && !Object.hasOwn(MODES[conversation.provider], body.next)) { release(); return refused(400, 'request-refused'); }
-      if (body.next) body.mode = body.next;
+      // O255: next (the window): its mode and Codex's plan switch are a mode picked mid-turn, what it runs in if it waits. A steer
+      // of it still goes into the running turn (repicks), which keeps its mode; the phone's and agents' mode picks wait for the turn's end.
+      if (body.next !== undefined && typeof body.next !== 'boolean') { release(); return refused(400, 'request-refused'); }
       if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue' && body.when !== 'now') { release(); return refused(400, 'request-refused'); }
       if (body.replaces !== undefined && (typeof body.replaces !== 'string' || body.replaces.length > 64)) { release(); return refused(400, 'request-refused'); }
       if (body.placed !== undefined && body.placed !== true) { release(); return refused(400, 'request-refused'); }
@@ -1863,7 +1862,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // O133 mode half: a mode is set by the next prompt too (want below), so one other than the session's waits the same
           // way. Under the agent lock every prompt runs narrow whatever it picks, so there a mode pick changes nothing.
           const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
-            || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v))
+            || (Array.isArray(picks) && picks.some(([k, v]) => { const p = session.pickers?.find((x) => x.id === k); return p?.current !== v && !(body.next && p?.category === 'collaboration_mode'); }))
             || (!locked && !body.next && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
           if (session?.turn && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks, held ?? []);

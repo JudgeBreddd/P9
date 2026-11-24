@@ -959,7 +959,7 @@ const toolText = content => (content || []).filter(c => c.type === 'content' && 
 const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // O255: a live chat's waiting messages are the daemon's (s.held, from its events), one list for every window and the phone;
 // s.queue is only a demo chat's. One an older build queued in this window (localStorage p9-queue:) goes into the box, until a send from that chat.
-const oldQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); if (!Array.isArray(q)) return {}; const draft = q.map(x => x?.t ?? x).filter(t => typeof t == 'string' && t).join('\n'); return draft ? { draft } : {}; } catch { return {}; } };
+const oldQueue = id => { try { const draft = JSON.parse(localStorage.getItem('p9-queue:' + id)).map(x => x.t ?? x).filter(String).join('\n'); return draft ? { draft } : {}; } catch { return {}; } }; // not a list (or none): nothing
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created, ...oldQueue(id) });
 // E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
@@ -1265,5 +1265,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, loadChat, keepPlace, sentImgs, takenBack };
+  return { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, loadChat, keepPlace, sentImgs, takenBack };
 }

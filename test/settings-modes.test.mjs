@@ -400,6 +400,9 @@ test('MC-4: Unrestricted moves open Codex chats out of Plan: an idle one at once
   await open(busy);
   assert.equal(await mode(busy), 'Full access', 'the running chat shows Full access as queued');
   assert.equal(await pane(busy).locator('[data-pill="Mode"] .mode-q').count(), 1, 'queued, not applied mid-turn');
+  // O255: a message sent now with the pick waiting goes as the next turn sets it: Full access, and Plan off for the agent.
+  const now = async (id, text) => { await pane(id).locator('.composer textarea').click(); await page.keyboard.type(text); await page.keyboard.press('Control+Enter'); };
+  await now(busy, 'config'); await said(busy, 'collaboration_mode=default'); await idle(busy);
   // Idle: out of Plan at once; the agent is told so with the next message.
   await open(still);
   assert.equal(await mode(still), 'Full access', 'MC-4: the idle chat left Plan for Full access');
@@ -413,7 +416,11 @@ test('MC-4: Unrestricted moves open Codex chats out of Plan: an idle one at once
   // Off: both back to Codex's start mode.
   await unrestricted(false);
   for (const id of ids) { await open(id); assert.equal(await mode(id), 'Auto review', 'off puts the chat back in its start mode'); }
-  console.log('PASS MC-4 Codex Plan: idle out at once, running queued to the turn end, off restores');
+  // O255, the other way: Plan picked mid-turn goes with a message sent now (Codex's Plan is a pick, not a mode the daemon knows).
+  await send(busy, 'slow'); await page.locator('#navList .rowwrap:has([data-busy]) .row[data-chat="' + busy + '"]').waitFor({ timeout: 15000 });
+  await open(busy); await choose(page, pane(busy), 'Mode', 'Plan');
+  await now(busy, 'config'); await said(busy, 'collaboration_mode=plan');
+  console.log('PASS MC-4 Codex Plan: idle out at once, running queued to the turn end, off restores; a send with the pick waiting goes as the next turn sets it, both ways');
 });
 
 test('Pick: the workspace folder itself and a folder outside get their own refusals, in Settings and in the setup wizard (BL6)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {

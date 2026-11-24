@@ -350,7 +350,7 @@ test('O255: a steer with a new mode goes in when the agent steers, and otherwise
   const steers = await agent(t, instance);
   await gated(steers.conversation);
   // The window's mid-turn pick (next): the steer goes into this turn.
-  const nudge = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'nudge in plan', when: 'steer', next: 'Plan' });
+  const nudge = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'nudge in plan', when: 'steer', mode: 'Plan', next: true });
   assert.ok(nudge.status < 300, JSON.stringify(nudge));
   assert.deepEqual((await held(steers.conversation, 'nudge in plan')).filter((e) => e.data.when === 'queue'), [], 'a steer that picks a mode was queued for a new turn instead of steered in');
   const now = async () => (await call(instance, '/chat/events?after=0')).body.cursor;
@@ -362,11 +362,17 @@ test('O255: a steer with a new mode goes in when the agent steers, and otherwise
   const phone = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'phone in plan', when: 'steer', mode: 'Plan' });
   assert.equal(phone.status, 202, JSON.stringify(phone));
   assert.equal((await held(steers.conversation, 'phone in plan')).at(-1)?.data?.when, 'queue', 'the phone picked Plan mid-turn and it went into the wider turn');
-  c = await now(); fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'user' && String(e.data?.text).includes('phone in plan'), c); fs.rmSync(go);
+  c = await now(); fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'user' && String(e.data?.text).includes('phone in plan'), c);
+  // Its turn runs in Plan and the agent answers it.
+  let after = [], at = -1;
+  for (let i = 0; i < 100; i += 1) { after = await events(instance, steers.conversation); at = after.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('phone in plan')); if (after.slice(at).some((e) => e.type === 'turn-end')) break; await pause(100); }
+  fs.rmSync(go);
+  assert.equal(after.filter((e) => e.type === 'mode').at(-1)?.data?.name, 'Plan', 'the phone message did not run in Plan');
+  assert.ok(after.slice(at).some((e) => e.type === 'update'), 'the agent did not answer the phone message');
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
   const waits = await agent(t, instance);
   await gated(waits.conversation);
-  const later = await call(instance, `/chat/${waits.conversation}/prompt`, 'POST', { text: 'later in plan', when: 'steer', next: 'Plan' });
+  const later = await call(instance, `/chat/${waits.conversation}/prompt`, 'POST', { text: 'later in plan', when: 'steer', mode: 'Plan', next: true });
   assert.equal(later.status, 202, 'no steering: it waits for the turn end ' + JSON.stringify(later));
   fs.writeFileSync(go, '');
   await until(instance, (e) => e.conversation === waits.conversation && e.type === 'user' && String(e.data?.text).includes('later in plan'));

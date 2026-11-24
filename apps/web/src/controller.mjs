@@ -80,7 +80,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, sentImgs, takenBack, loadChat, keepPlace } = installChat(outer);
+  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, sentImgs, takenBack, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
@@ -1299,12 +1299,15 @@ const lines = {};
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
 liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
-  // Its mode and picks as they were when it was sent (next, the mid-turn mode pick: a steer that goes in keeps the turn's mode, what waits takes next), not when its place in the line comes (a pick changed meanwhile is the next message's).
-  const stops = s.stops, body = { id: s.id, text, mode: s.mode, next: s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: { ...s.pick } }) };
+  // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
+  // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
+  // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
+  const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
+  const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
   const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
-  if (r.status === 202) { const held = r.body?.held; const back = takenBack.get(held); if (back) s.images = [...images, ...(s.images || [])]; else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
-  s.images = [...images, ...(s.images || [])]; // all of them: a box over the limit is refused when sent, and keeps its files
+  if (r.status === 202) { const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
+  keep(); // all of them: a box over the limit is refused when sent, and keeps its files
   s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
