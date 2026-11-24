@@ -27,13 +27,15 @@ async function withCredentials(state, send) {
   return send(credentials);
 }
 
-export const health = (state) => withCredentials(state, (credentials) => new Promise((resolve, reject) => {
+// timeout: 2 s on this machine; a remote's check passes more (O248: a busy slow link answers later, and is not down).
+export const health = (state, timeout = 2000) => withCredentials(state, (credentials) => new Promise((resolve, reject) => {
     const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: '/health',
-      headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}` }, timeout: 2000 }, (res) => {
+      headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}` }, timeout }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(Object.assign(new Error('unhealthy'), { status: res.statusCode })));
+      res.on('close', () => { if (!res.complete) reject(new Error('dropped')); }); // a tunnel gone mid-answer: no end comes
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
@@ -47,8 +49,8 @@ export const AGENT_START_MS = 90_000;
 // A 401 is not a result: the request was refused before it did anything, so it is sent again with desktop.json read again.
 export async function daemonRequest(state, method, route, body, op = randomUUID(), timeout = 10000) {
   const data = body === undefined ? undefined : JSON.stringify(body);
-  return withCredentials(state, (credentials) => new Promise((resolve, reject) => {
-    const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout,
+  return withCredentials(state, (credentials) => { const send = (first) => new Promise((resolve, reject) => {
+    const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout, ...((!first || method !== 'GET') && { agent: false }),
       headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}`, 'x-p9-csrf': credentials.csrf,
         ...(method === 'GET' ? {} : { 'x-p9-op': op }), ...(data ? { 'content-type': 'application/json' } : {}) } }, (res) => {
       let text = '';
@@ -61,10 +63,15 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
         try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); }
       });
     });
-    req.on('error', reject);
+    // O248: a kept-alive socket the daemon closed while idle looks open until that close arrives, late on a busy remote link.
+    // The request never reached the daemon, so it goes once more (same op id), as Node's docs advise, on a socket of its own:
+    // the pool's other idle sockets were closed in the same quiet spell, and their closes are just as late. Only a read goes
+    // again: a change always goes on a socket of its own (agent: false above), as a reset after the daemon took it is not
+    // "never reached", and sent again it could answer outcome-unknown while the first still runs.
+    req.on('error', (error) => first && req.reusedSocket && error.code === 'ECONNRESET' ? send(false).then(resolve, reject) : reject(error));
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(data);
-  })).catch((error) => {
+  }); return send(true); }).catch((error) => {
     // Still refused with desktop.json just read: the 401 as it was before the cache, a reply and not an error.
     if (error?.status === 401 && error.reply !== undefined) { try { return { status: 401, body: JSON.parse(error.reply) }; } catch { throw Object.assign(new Error('bad-response'), { status: 401 }); } }
     throw error;

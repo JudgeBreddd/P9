@@ -50,7 +50,7 @@ test('D20: after connecting, slow and failed requests show no layer and no note;
       assert.equal(await page.locator('dialog#connecting[open]').count(), 0, 'the full layer opened: ' + why);
       assert.equal(await page.locator('#reconnecting').count(), 0, 'a title-bar note showed: ' + why);
       assert.equal(await label.textContent(), 'Connected to test-host', 'the label changed: ' + why);
-      assert.equal(await page.locator('.toast.bad').count(), 0, 'an error toast showed: ' + why);
+      assert.deepEqual(await page.locator('.toast.bad').allTextContents(), [], 'an error toast showed: ' + why);
     }
   };
   // Slow: the remote daemon stops answering in time (stopped, not gone), so every health check times out.

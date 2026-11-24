@@ -30,12 +30,12 @@ export function mountShell({ askAdmin } = {}) {
   const outer = { get $() { return $; }, get CTP() { return CTP; }, get FRAME() { return FRAME; }, get FX() { return FX; }, get IND() { return IND; },
     get M() { return M; }, get PET_ROLES() { return PET_ROLES; }, get S() { return S; },
     get SP() { return SP; }, get WIZ_ERR() { return WIZ_ERR; }, get XFER_SETTINGS() { return XFER_SETTINGS; },
-    get addHalos() { return addHalos; }, get agentLock() { return agentLock; }, set agentLock(v) { agentLock = v; }, get attrs() { return attrs; },
+    get addHalos() { return addHalos; }, get agentLock() { return agentLock; }, set agentLock(v) { agentLock = v; setEdits++; }, get attrs() { return attrs; },
     get bottoms() { return bottoms; }, get busy() { return busy; }, get applyMode() { return applyMode; }, get modeShown() { return modeShown; }, get cardList() { return cardList; }, get chatImgs() { return chatImgs; },
     get chatOn() { return chatOn; }, get closeModal() { return closeModal; }, get closedChats() { return closedChats; },
     get danChat() { return danChat; }, get dataNote() { return dataNote; }, get defaultMode() { return defaultMode; }, get dirty() { return dirty; },
     get edSave() { return edSave; }, set edSave(v) { edSave = v; }, get editorHtml() { return editorHtml; },
-    get fileProtect() { return fileProtect; }, set fileProtect(v) { fileProtect = v; }, get files() { return files; }, get focus() { return focus; },
+    get fileProtect() { return fileProtect; }, set fileProtect(v) { fileProtect = v; setEdits++; }, get files() { return files; }, get focus() { return focus; },
     get focusNames() { return focusNames; }, get focusOn() { return focusOn; }, get fx() { return fx; },
     get fxFiles() { return fxFiles; }, set fxFiles(v) { fxFiles = v; }, get fxSky() { return fxSky; },
     get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
@@ -48,13 +48,13 @@ export function mountShell({ askAdmin } = {}) {
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
     get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
     get looseOk() { return looseOk; }, get maintain() { return maintain; }, get mdOf() { return mdOf; }, get mdl() { return mdl; },
-    get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; },
+    get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; setEdits++; },
     get missionLive() { return missionLive; }, get modals() { return modals; }, get morph() { return morph; },
     get moveDlg() { return moveDlg; }, get moveReloaded() { return moveReloaded; }, get names() { return names; },
     get needsLabel() { return needsLabel; }, get newSession() { return newSession; }, get lastAgent() { return lastAgent; }, get noteModal() { return noteModal; },
     get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; },
     get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
-    get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
+    get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; setEdits++; },
     get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get loadProjects() { return panel.loadProjects; },
     get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
     get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get keepPlace() { return keepPlace; }, get renderMission() { return renderMission; },
@@ -70,7 +70,7 @@ export function mountShell({ askAdmin } = {}) {
     get spaceMenuHtml() { return spaceMenuHtml; }, set spaceMenuHtml(v) { spaceMenuHtml = v; },
     get spacePop() { return spacePop; }, set spacePop(v) { spacePop = v; }, get startMode() { return startMode; },
     get startTurn() { return startTurn; }, get still() { return still; }, get sync() { return sync; },
-    get termGreeting() { return termGreeting; }, set termGreeting(v) { termGreeting = v; }, get tickPets() { return tickPets; },
+    get termGreeting() { return termGreeting; }, set termGreeting(v) { termGreeting = v; setEdits++; }, get tickPets() { return tickPets; },
     get toast() { return toast; }, get topAt() { return topAt; }, set topAt(v) { topAt = v; }, get tree() { return tree; },
     get updates() { return updates; }, set updates(v) { updates = v; },
     get updatesTimer() { return updatesTimer; }, set updatesTimer(v) { updatesTimer = v; }, get usage() { return usage; },
@@ -978,18 +978,31 @@ let settings = { name: '', zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, fi
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
 let setPage = 'General';
-$('#setBtn').onclick = async () => {
+// O248: each open waits for its reads at most 0.5 s, so a busy link does not hold the dialog. Each open reads again: a read
+// sent before it can miss a change made elsewhere since (O133), and a newer read drops it. A read is dropped after an edit: focus in Settings other than on a page's name (a click or a
+// typed value starts with it), or the machine menu's remove. That save came after the read went out. A kept read is
+// applied, and an open dialog is drawn again: nothing in it has focus then, and the scroll stays. The reads first go out
+// once the window knows its server. ponytail: a late read takes focus off a page's name button (the nav is drawn again).
+// #517 review 3: a Settings save writes its answer through outer's setters (above), so one landing after a reopen's read
+// went out makes that read stale too, and the save's value stays. Not updates: the updater's own poll writes it.
+let setEdits = 0;
+$('#setBody').onfocusin = e => e.target.dataset.setPage || setEdits++;
+const setLoad = () => {
   // The reads go out together (window-4, O16): one after another, each daemon call is a round trip over a remote's tunnel.
-  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null);
-  [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = await Promise.all([
+  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null), edits = ++setEdits;
+  return Promise.all([
     window.p9?.listPets ? window.p9.listPets().catch(() => null) : pets,
-    window.p9?.chat ? status(liveChat.call('lock'), 'on') : agentLock,
+    window.p9?.chat ? status(liveChat.call('lock', {}, { quiet: true }), 'on') : agentLock, // quiet: it goes out on every load (Settings shows the unknown)
     window.p9?.fileProtection ? status(window.p9.fileProtection(), 'on') : fileProtect,
     window.p9?.terminal ? status(window.p9.terminal('greeting', {}), 'show') : termGreeting,
     window.p9?.server ? window.p9.server().catch(() => null) : null,
     window.p9?.chat ? window.p9.chat('missionFiles', {}).then(r => r?.status === 200 ? r.body : null, () => null) : missionFiles,
     window.p9?.updates ? window.p9.updates().catch(() => null) : null,
-    loadStarts()]); // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
+    loadStarts()]) // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
+    .then(v => { if (edits < setEdits) return; [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = v; if ($('#setDlg').open) renderSettings(); });
+};
+$('#setBtn').onclick = async () => {
+  await new Promise(r => setLoad().then(r, setTimeout(r, 500))); // the read, or 0.5 s
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
 $('#setClose').onclick = () => $('#setDlg').close();
@@ -1364,7 +1377,7 @@ moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.ma
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); setLoad(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
 const PROBE_STATE = { p9: ['ok', 'P9 running'], 'no-p9': ['warn', 'P9 not running'], unreachable: ['bad', 'Unreachable'] };
 // The remote in use and the last one used come first, even when neither list holds them (the old badge's one click went to last).
 const machines = () => { const { host = null, last = null, hosts = [], remotes = [] } = serverInfo ?? {}; return { host, last, remotes, all: [...new Set([host, last, ...remotes, ...hosts])].filter(Boolean) }; };
@@ -1375,24 +1388,26 @@ function serverMenu() {
   badge.hidden = false; badge.setAttribute('aria-haspopup', 'menu');
   badge.innerHTML = esc(host ? 'Remote · ' + host : 'Local') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   badge.title = 'This window works on ' + (host || 'this computer') + '. Click to pick another machine.';
-  serverPop ??= popover(badge, $('#serverPop'), () => { const pop = $('#serverPop'); pop.style.left = Math.max(8, Math.min(badge.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; renderServerMenu(); });
+  serverPop ??= popover(badge, $('#serverPop'), () => { const pop = $('#serverPop'); renderServerMenu(); pop.style.left = Math.max(8, Math.min(badge.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; });
 }
-async function renderServerMenu() {
-  const pop = $('#serverPop'), { host, last, remotes, all } = machines(), probed = h => h !== host && (remotes.includes(h) || h === last), s = host ? await window.p9.getStatus().catch(() => ({})) : {};
+// O248: the menu draws at once; the remote in use's state fills in when its check answers, as the probed ones do (it
+// waited on that check first, so over a slow link the menu opened empty).
+function renderServerMenu() {
+  const pop = $('#serverPop'), { host, last, remotes, all } = machines(), probed = h => h !== host && (remotes.includes(h) || h === last);
   const row = (h, [dot, say], current) => '<div class="srv-row"><button class="item" role="menuitem" data-server-go="' + esc(h ?? '') + '"' + (current ? ' aria-current="true"' : '')
     + '><span class="srv-dot" data-s="' + dot + '"></span>' + esc(h ?? 'This computer') + '<span class="muted">' + say + '</span></button>'
     + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
   pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
-    + all.map(h => row(h, h === host ? SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable'] : probed(h) ? ['wait', 'Checking…'] : ['off', ''], h === host)).join('')
-    + '<hr data-slot="separator" style="margin:6px 0">' + (host && s.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
+    + all.map(h => row(h, h === host || probed(h) ? ['wait', 'Checking…'] : ['off', ''], h === host)).join('')
+    + '<hr data-slot="separator" style="margin:6px 0">' + (host && serverInfo.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
     + (host ? '<button class="item" role="menuitem" id="serverDisconnect" title="Back to this computer, and P9 on ' + esc(host) + ' turns off. Pick another machine above to leave it running.">Disconnect and turn off P9 on ' + esc(host) + '</button>' : '')
     + '<button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
   pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
-  pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
-  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => {
-    const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
-    if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
-  }, () => {}));
+  pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { setEdits++; serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
+  // Each check fills the row it started on: after a close and reopen, an older check's answer lands on the old, gone rows.
+  const put = (h, say) => { const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'); return x => [b.querySelector('.srv-dot').dataset.s, b.querySelector('.muted').textContent] = say(x); };
+  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(put(h, st => PROBE_STATE[st] ?? PROBE_STATE.unreachable), () => {}));
+  if (host) window.p9.getStatus().then(put(host, s => SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable']), () => {});
   // U9, O8: back to this computer like This computer above, and P9 on the remote is turned off (This computer leaves it running).
   if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); (window.p9.serverOff ?? (() => window.p9.server(null)))(); };
   // The after-connect window again with only the agents question (shell-start.ts), now rather than at the next poll.

@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request } from 'node:http';
-import { connectServer, forwardPath, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
+import { connectServer, forwardPath, restartServer, sshHosts, READ, REREAD } from '../apps/desktop/remote.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
 import { EDITOR_COMMIT, EDITOR_DOWNLOADS } from '../apps/desktop/editor-host.mjs';
 import { editorFor } from './editor-fixture.mjs';
@@ -127,6 +127,10 @@ test('Server mode: a lost tunnel is a drop, and a restarted server daemon is fou
   assert.notEqual(second.credentials.cookie, instance.credentials.cookie);
   assert.equal((await server.check()).status, 'ok');
   assert.equal(JSON.parse(await readFile(path.join(server.state, 'desktop.json'), 'utf8')).cookie, second.credentials.cookie);
+  // #517 review 5: that 401's re-read is REREAD, which starts no P9 there (remote-keep.test.mjs runs it on a stopped one), so
+  // a Disconnect and turn off landing while it runs stays off. The connect's own read is READ.
+  const scripts = (await s.calls()).map(c => c.argv.at(-1));
+  assert.deepEqual([scripts.filter(a => a === READ).length, scripts.filter(a => a === REREAD).length], [1, 1], 'one READ at the connect, one REREAD at the 401');
   // The ssh process ends (lid closed, network gone): onDrop runs and the folder goes.
   process.kill((await s.calls()).find(c => c.argv.includes('-L')).pid, 'SIGTERM');
   await Promise.race([dropped, new Promise((_, reject) => setTimeout(() => reject(new Error('no onDrop')), 5000))]);
@@ -1238,7 +1242,7 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 }); // not the badge: a window that asked while the tunnel came up reloads once it answers (shell-start.ts), and a key pressed before that is lost
   const devPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   let opened = devPage();
   await shell.keyboard.press('Control+2');
@@ -1311,7 +1315,7 @@ test('O19 Dev Focus left open on a remote that went away and came back: the edit
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   const devPage = (timeout = 60000) => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout });
   const ready = async dev => {
     await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
@@ -1358,7 +1362,7 @@ test('O19 Dev Focus opened while the remote is away says so, then opens by itsel
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   const devPage = (timeout = 60000) => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout });
   // The remote goes away (its P9 stops, the tunnel drops), then Dev Focus is opened: its page says it cannot reach it.
   remote.child.kill('SIGTERM');
@@ -1394,7 +1398,7 @@ test('O19 FIX1 Dev Focus whose failed open is still loading when the remote come
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   // The remote goes away (its P9 stops, the tunnel drops).
   remote.child.kill('SIGTERM');
   await once(remote.child, 'exit');
@@ -1447,7 +1451,7 @@ test('O19 FIX2 an older Dev Focus open still running while a newer one is shown:
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   // Open A: its page load is held in main, so A is still running.
   await app.evaluate(({ webContents }) => {
     const proto = Object.getPrototypeOf(webContents.getAllWebContents()[0]), load = proto.loadURL;
@@ -1645,7 +1649,8 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
     const mine = app, proc = app.process();
     t.after(async () => { await Promise.race([mine.close(), sleep(15000)]); proc.kill(); });
     shell = await app.firstWindow();
-    await badge('Remote · test-host');
+    // Connected, not the badge: a window that asked while the tunnel came up reloads once it answers, and eats a key pressed before.
+    await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   };
   const badge = text => shell.locator('#serverBadge', { hasText: text }).waitFor({ timeout: 30000 });
   // Dev Focus shown, on the remote's editor and ready (not the page it replaces, nor the unavailable page).
