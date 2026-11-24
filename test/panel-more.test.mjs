@@ -96,6 +96,35 @@ test('panel: help with no project, Show more, Ctrl Tab, Split, drag with Undo, w
   await page.locator('.lp-toast button', { hasText: 'Undo' }).click();
   await until(async () => (await conv(instance, first))?.project == null, 'Undo moved it back');
   await until(async () => (await zoneOf(page, first)) === '', 'listed under Chats again');
+  // The drop goes to the zone under the release, not the last move's: dragged onto Big, released over the chat pane, it stays.
+  const [a0, b0] = await centre(page.locator(`#navList .row[data-chat="${first}"]`));
+  await page.mouse.move(a0, b0); await page.mouse.down();
+  await page.mouse.move(a0 + 10, b0 - 10, { steps: 3 }); await page.mouse.move(x1, y1, { steps: 8 });
+  await page.locator('.lp-ghost .to', { hasText: 'Move to Big' }).waitFor({ timeout: 5000 });
+  const [px, py] = await centre(page.locator('#chats'));
+  await page.evaluate(([x, y]) => dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, isPrimary: true, pointerType: 'mouse', clientX: x, clientY: y })), [px, py]);
+  await page.mouse.up(); await page.waitForTimeout(500);
+  assert.equal((await conv(instance, first))?.project ?? null, null, 'a release off every project moves nothing');
+  assert.equal(await page.locator('.lp-ghost').count(), 0, 'the drag ended');
+  // The window losing focus mid-drag puts the row back: a release over Big afterwards moves nothing.
+  await page.mouse.move(a0, b0); await page.mouse.down();
+  await page.mouse.move(a0 + 10, b0 - 10, { steps: 3 }); await page.mouse.move(x1, y1, { steps: 8 });
+  await page.locator('.lp-ghost .to', { hasText: 'Move to Big' }).waitFor({ timeout: 5000 });
+  await page.evaluate(() => dispatchEvent(new Event('blur')));
+  assert.equal(await page.locator('.lp-ghost').count(), 0, 'blur ends the drag');
+  await page.mouse.up(); await page.waitForTimeout(500);
+  assert.equal((await conv(instance, first))?.project ?? null, null, 'a release after blur moves nothing');
+  // Another window moves the chat while its menu is open: the More drawn in the new place reads open; Escape closes the menu, and that More reads closed and gets focus.
+  await page.locator(`#navList .more[data-more="${first}"]`).click();
+  await page.locator('.lp-menu').waitFor({ timeout: 5000 });
+  assert.equal((await call(instance, '/chat/' + first + '/project', 'POST', { project: big })).status, 200);
+  await until(async () => (await zoneOf(page, first)) === big, 'the other window\'s move redrew the row under Big');
+  const moreBtn = page.locator(`#navList .more[data-more="${first}"]`);
+  assert.equal(await moreBtn.getAttribute('aria-expanded'), 'true', 'the redrawn More reads open while its menu is');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.lp-menu').count(), 0, 'Escape closes the menu');
+  assert.equal(await moreBtn.getAttribute('aria-expanded'), 'false', 'the More in its new place reads closed');
+  assert.ok(await moreBtn.evaluate((el) => el === document.activeElement), 'focus goes back to the More in its new place');
 
   // Width: the grip's End key makes it widest; a restart keeps it.
   await page.locator('#nav .p-grip').focus();

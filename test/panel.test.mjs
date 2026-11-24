@@ -172,14 +172,16 @@ test('open chats keep their place and Stop follows the row during a reorder', { 
   const box = await stop.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
+  // O247: Beta stops while Stop is pressed. The list keeps its order until the release, so the press stops Gamma, the chat
+  // it was made on, at the first try, and never a row that moved under the pointer.
   await call(instance, `/chat/${b}/stop`, 'POST', {});
-  await until(async () => (await rows())[0] === c, 'Beta drops below open chats');
+  await until(async () => (await conv(instance, b))?.state === 'stopped', 'Beta stopped');
+  await page.waitForTimeout(500); // the event reaches the window (local socket)
+  assert.equal(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('[data-stop]')?.dataset.stop, [box.x + box.width / 2, box.y + box.height / 2]), c, 'Gamma\'s Stop is still under the pointer');
   await page.mouse.up();
-  await page.waitForTimeout(500);
-  assert.equal((await conv(instance, a)).state, 'turn', 'a moving row never stops Alpha by accident');
-  await page.locator(`#navList .rstop[data-stop="${c}"]`).click();
-  await until(async () => (await conv(instance, c))?.state === 'stopped', 'the displayed Gamma row stops Gamma');
-  assert.equal((await conv(instance, a)).state, 'turn', 'Alpha remains open');
+  await until(async () => (await conv(instance, c))?.state === 'stopped', 'the first press stops Gamma');
+  assert.equal((await conv(instance, a)).state, 'turn', 'a pressed row never stops Alpha by accident');
+  await until(async () => (await rows())[0] === a, 'the list re-sorts after the release: open Alpha first');
   assert.deepEqual(errors, []);
 });
 
@@ -198,4 +200,67 @@ test('open project chats keep their place when activity arrives', { timeout: 120
   await call(instance, `/chat/${b}/prompt`, 'POST', { text: 'slow' });
   await until(async () => (await rows()).join() === [a, b].join(), 'idle project chat stays above newly opened chat');
   assert.deepEqual(errors, []);
+});
+
+// O247: a click on a sidebar row made while the list re-sorts still opens that chat. Before, a chat starting a turn moved to
+// the top while the mouse was down: the rows under it were taken out and put back (or slid under the pointer), and the click
+// went nowhere. Now the list waits for the press to end (press-hold.mjs), then re-sorts.
+test('O247 a click on a sidebar row made while the list re-sorts still opens that chat', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const make = async (title) => {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' }); await ended(instance, id);
+    await call(instance, `/chat/${id}/stop`, 'POST', {}); return id;
+  };
+  for (const name of ['One', 'Two', 'Three']) await make(name);
+  const { page, errors } = await launch(t, instance);
+  const rows = () => page.locator('#navList [data-zone=""] .row[data-chat]').evaluateAll((els) => els.map((el) => el.dataset.chat));
+  const shown = () => page.evaluate(() => document.querySelector('#chats > .pane')?.dataset.id ?? null);
+  await until(async () => (await rows()).length === 3, 'three rows');
+  const [, pressed, last] = await rows();
+  await page.locator(`#navList .row[data-chat="${last}"]`).click();
+  await until(async () => (await shown()) === last, 'the last chat shown first');
+  await page.evaluate(() => { const now = () => performance.now(); addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId, downAt: now() }; }, true); addEventListener('click', (e) => { Object.assign(window.__ids, { click: e.pointerId, at: now() }); }, true); addEventListener('pointerup', (e) => { Object.assign(window.__ids, { upAt: now() }); }, true); addEventListener('pointercancel', (e) => { Object.assign(window.__ids, { cancel: e.pointerId, cancelAt: now() }); }, true); window.__watch = (sel, attr, value) => { delete window.__ids.seen; const mo = new MutationObserver(() => { if (document.querySelector(sel)?.getAttribute(attr) === value) { window.__ids.seen = now(); mo.disconnect(); } }); mo.observe(document.body, { subtree: true, childList: true, attributes: true }); }; });
+  const box = await page.locator(`#navList .row[data-chat="${pressed}"]`).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // The bottom chat starts a turn: it goes to the top, and the pressed row (second) would move down one.
+  await call(instance, `/chat/${last}/prompt`, 'POST', { text: 'slow' });
+  // The window has the update when the shown chat draws the prompt; the list holds its order while the button is down.
+  await until(async () => page.locator('#chats > .pane').evaluate((el) => el.textContent.includes('slow')), 'the window got the turn');
+  await page.waitForTimeout(300);
+  assert.notEqual((await rows())[0], last, 'the list waits while the row is pressed');
+  const top = '#navList [data-zone=""] .row[data-chat]';
+  await page.evaluate(([sel, id]) => window.__watch(sel, 'data-chat', id), [top, last]);
+  await page.mouse.up();
+  await until(async () => (await shown()) === pressed, 'the pressed chat opened, not ' + await shown());
+  await until(async () => (await rows())[0] === last, 'the list re-sorts once the press ends');
+  // The click ended the hold, not the 500 ms fallback after the release: the list re-sorted right after the click.
+  let ids = await page.evaluate(() => window.__ids);
+  assert.equal(ids.click, ids.down, 'the click carries its press\'s pointer id');
+  assert.ok(ids.seen >= ids.at && ids.seen - ids.upAt < 500, 're-sorted ' + Math.round(ids.seen - ids.upAt) + ' ms after the release, after its click and before the fallback');
+
+  // More, pressed while the list re-sorts: its menu opens, the redraw after keeps it drawn expanded, and a second click closes it.
+  const more = page.locator(`#navList [data-more="${pressed}"]`);
+  await page.locator(`#navList .row[data-chat="${pressed}"]`).hover(); // More shows on the row's hover
+  const mb = await more.boundingBox();
+  await page.mouse.move(mb.x + mb.width / 2, mb.y + mb.height / 2);
+  await page.mouse.down();
+  const row = `#navList .row[data-chat="${pressed}"]`, state = () => page.locator(row).getAttribute('data-s');
+  await page.evaluate((sel) => window.__watch(sel, 'data-s', 'running'), row);
+  await call(instance, `/chat/${pressed}/prompt`, 'POST', { text: 'slow too' }); // its row turns to Running (and moves up)
+  await until(async () => page.locator('#chats > .pane').evaluate((el) => el.textContent.includes('slow too')), 'the window got the second turn');
+  await page.waitForTimeout(300);
+  assert.notEqual(await state(), 'running', 'the list waits while More is pressed');
+  await page.mouse.up();
+  await page.locator('.lp-menu').waitFor({ timeout: 5000 });
+  await until(async () => (await state()) === 'running', 'the list redraws after the More click');
+  ids = await page.evaluate(() => window.__ids);
+  assert.ok(ids.seen >= ids.at && ids.seen - ids.upAt < 500, 'More: redrawn after its click and before the fallback');
+  assert.equal(await more.getAttribute('aria-expanded'), 'true', 'the redraw keeps More drawn expanded while its menu is open');
+  await more.click();
+  await until(async () => (await page.locator('.lp-menu').count()) === 0, 'a second click on More closes its menu');
+  assert.equal(await more.getAttribute('aria-expanded'), 'false');
+  assert.deepEqual(errors, []);
+  console.log('PASS O247: a press held while the sidebar re-sorted still opened the pressed chat; the list re-sorted after');
 });

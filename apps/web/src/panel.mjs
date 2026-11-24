@@ -6,6 +6,7 @@
 import { svg, esc, dragBar } from './helpers.mjs';
 import { agentIcon } from './agent-icons.mjs';
 import { installProjects } from './projects-view.mjs';
+import { pressHold } from './press-hold.mjs';
 
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
 export const PANEL_ICONS = {
@@ -58,6 +59,7 @@ export const searcher = (call, apply) => { let n = 0;
     if (my === n && r?.status === 200) apply(q, r.body.matches); }; };
 export function installPanel(o, { focus, stopChat, busy }) {
   const $ = s => document.querySelector(s), nav = $('#nav'), list = $('#navList'), strip = $('#rBots'), body = nav.parentElement;
+  const held = pressHold(nav, renderPanel, o.lifetime.signal);
   const key = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
   // open: the projects shown open; null until one is toggled, when every project is open.
   const P = { q: '', found: null, more: {}, subs: {}, open: (k => k ? new Set(JSON.parse(k)) : null)(localStorage.getItem('p9-panel-open')), collapsed: localStorage.getItem('p9-panel-collapsed') === '1',
@@ -87,14 +89,15 @@ export function installPanel(o, { focus, stopChat, busy }) {
     : st === 'needs' ? `<span class="mk mk-needs" title="${LABEL.needs}">${I.hand}</span>` : st === 'failed' ? `<span class="mk mk-failed" title="${LABEL.failed}">${svg.x}</span>`
     : st === 'unread' ? `<span class="mk mk-unread" title="${LABEL.unread}"></span>` : '';
   // Builder's build fix 1: a row's state mark takes the time's place; the time shows on hover and focus (panel.css).
+  let menuFor = null; // the chat whose menu is open: its More (whichever node a redraw left) reads expanded, a click on it closes the menu
   const chatRow = (s, depth = 0) => { const st = stateOf(s, busy(s)), cur = shown().includes(s.id), m = mark(st, s);
-    return `<div class="rowwrap"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
+    return `<div class="rowwrap" data-key="${esc(s.id)}"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
       + (P.q && snip(s) && !s.title.toLowerCase().includes(P.q.toLowerCase()) ? `<div class="snip">${hl(snip(s))}</div>` : '')
-      + (live(s) ? `<button class="rstop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
-      + `<button class="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
+      + (live(s) ? `<button class="rstop" data-key="stop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
+      + `<button class="more" data-key="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="${menuFor === s.id}" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
   // A7: a zone's rows with each worker under the chat that started it (nested, above).
   const tree = (rows, q) => nested(rows, P.subs, shown(), !!q);
-  const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} workers</span></button>`;
+  const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-key="subs:${esc(e.fold)}" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} workers</span></button>`;
   function renderList() {
     const q = P.q.toLowerCase(), hit = t => !q || String(t).toLowerCase().includes(q), all = ordered(listedChats(o.S.sessions)), ps = projects();
     const groups = ps.map(p => ({ p, kids: all.filter(s => s.project === p.id && (hit(s.title) || snip(s) || hit(p.name))) })).filter(g => hit(g.p.name) || g.kids.length);
@@ -106,52 +109,24 @@ export function installPanel(o, { focus, stopChat, busy }) {
       // A search opens every project with a match, closed ones too (point 5). The count is the chats the row lists when
       // open (listedChats, as the New project offer), not the daemon's count, which takes in hidden and archived chats too.
       const open = isOpen(p.id) || !!q, ents = tree(kids, q), { count: roots, rows } = cutTree(ents, !!q || !!P.more[p.id]), cut = !q && roots > 5, gone = p.found === false;
-      return `<div data-zone="${esc(p.id)}"><div class="rowwrap"><button class="row proj" data-proj="${esc(p.id)}" aria-expanded="${open}" aria-current="${o.S.view?.kind === 'project' && o.S.view.id === p.id && o.S.focus === 'chat'}" title="${esc(p.name)}${gone ? ' · folder not found' : ''}"${gone ? ' data-missing' : ''}><span class="chev" data-toggle="${esc(p.id)}">${svg.chev}</span><span class="fold">${gone ? I.alert : I.folder}</span><span class="t">${hl(p.name)}</span><span class="n">${all.filter(s => s.project === p.id).length}</span></button>`
+      return `<div data-zone="${esc(p.id)}" data-key="z:${esc(p.id)}"><div class="rowwrap"><button class="row proj" data-proj="${esc(p.id)}" aria-expanded="${open}" aria-current="${o.S.view?.kind === 'project' && o.S.view.id === p.id && o.S.focus === 'chat'}" title="${esc(p.name)}${gone ? ' · folder not found' : ''}"${gone ? ' data-missing' : ''}><span class="chev" data-toggle="${esc(p.id)}">${svg.chev}</span><span class="fold">${gone ? I.alert : I.folder}</span><span class="t">${hl(p.name)}</span><span class="n">${all.filter(s => s.project === p.id).length}</span></button>`
         + `<button class="padd" data-newin="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}">${svg.plus}</button></div>`
         + (open ? `<div class="kids">${rows.map(treeRow).join('')}${cut ? `<button class="row showmore" data-showmore="${esc(p.id)}">${P.more[p.id] ? 'Show fewer' : `Show ${roots - 5} more`}</button>` : ''}${kids.length ? '' : '<p class="none">No chats yet.</p>'}</div>` : '') + '</div>';
     }).join('');
-    if (!q || general.length) h += `<div data-zone=""><div class="sh"><h3>Chats <span class="n">${general.length || ''}</span></h3></div>${tree(general, q).map(treeRow).join('')}</div>`;
+    if (!q || general.length) h += `<div data-zone="" data-key="z:"><div class="sh"><h3>Chats <span class="n">${general.length || ''}</span></h3></div>${tree(general, q).map(treeRow).join('')}</div>`;
     if (q && !groups.length && !general.length) h = `<p class="none">Nothing matches “${esc(P.q)}”.</p>`;
     // Archived projects and chats: one row at the end, to their page (projects-view.mjs), where Unarchive puts one back.
     const na = (o.S.projects || []).filter(p => p.archived).length + o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden)).length;
     if (!q && na && o.openArchived) h += `<button class="row arch" data-archived aria-current="${o.S.view?.kind === 'archived' && o.S.focus === 'chat'}"><span class="t">Archived</span><span class="n">${na}</span></button>`;
-    // Keep each existing row node with its chat when the order changes, including keyboard focus.
-    const draft = document.createElement('template'); draft.innerHTML = h;
-    for (const zone of draft.content.querySelectorAll('[data-zone]')) {
-      const existing = [...list.querySelectorAll('[data-zone]')].find(x => x.dataset.zone === zone.dataset.zone);
-      if (!existing) continue;
-      const target = existing.querySelector('.kids') ?? existing;
-      const source = zone.querySelector('.kids') ?? zone;
-      // A7: a fold row ("Show 4 workers") is keyed too. Left out, it stayed in front of the rows moved here, so morph (by
-      // position) turned each kept row into the next chat's: a click or keyboard focus on a row went to another chat.
-      const keyOf = x => x.matches('.row.subs') ? 'subs:' + x.dataset.subs : x.querySelector('.row[data-chat]')?.dataset.chat;
-      const rowsOf = el => [...el.querySelectorAll(':scope > .rowwrap, :scope > .row.subs')].filter(keyOf);
-      const wanted = rowsOf(source), old = new Map(rowsOf(target).map(x => [keyOf(x), x]));
-      const ids = new Set(wanted.map(keyOf));
-      for (const [id, row] of old) if (!ids.has(id)) row.remove();
-      let anchor = target.querySelector(':scope > .showmore, :scope > .none');
-      for (const wantedRow of wanted.reverse()) {
-        const id = keyOf(wantedRow), row = old.get(id) ?? wantedRow.cloneNode(true);
-        if (row.nextSibling !== anchor || row.parentNode !== target) target.insertBefore(row, anchor);
-        anchor = row;
-      }
-    }
+    // Each row, fold row and zone is keyed (data-key), and a row's Stop and More: morph keeps a row's node with its chat when
+    // the order changes, and keyboard focus with it (a focused More never becomes the Stop drawn in front of it). A7: by position, a fold row ("Show 4 workers") in front of moved rows turned each kept row into
+    // the next chat's, so a click or keyboard focus went to another chat.
     o.morph(list, h);
   }
   // Builder's build fix 2: the strip's marks are bigger than the mock's 12 px (panel.css .bm), so the hand and the cross read apart.
   function renderStrip() {
     const html = ordered(stripChats(o.S.sessions)).map(s => { const st = stateOf(s, busy(s));
-      return `<button class="bot" data-chat="${esc(s.id)}" data-agent="${esc(s.agent)}" data-s="${st}"${busy(s) ? ' data-busy' : ''} aria-label="${esc(title(s))} · ${LABEL[st] || 'Idle'}" aria-current="${shown().includes(s.id)}">${agentIcon(s.agent)}<span class="bm">${st === 'needs' ? I.hand : st === 'failed' ? svg.x : ''}</span></button>`; }).join('');
-    const draft = document.createElement('template'); draft.innerHTML = html;
-    const wanted = [...draft.content.children], old = new Map([...strip.children].map(node => [node.dataset.chat, node]));
-    const ids = new Set(wanted.map(node => node.dataset.chat));
-    for (const [id, node] of old) if (!ids.has(id)) node.remove();
-    let anchor = null;
-    for (const next of wanted.reverse()) {
-      const node = old.get(next.dataset.chat) ?? next.cloneNode(true);
-      if (node.nextSibling !== anchor || node.parentNode !== strip) strip.insertBefore(node, anchor);
-      anchor = node;
-    }
+      return `<button class="bot" data-key="${esc(s.id)}" data-chat="${esc(s.id)}" data-agent="${esc(s.agent)}" data-s="${st}"${busy(s) ? ' data-busy' : ''} aria-label="${esc(title(s))} · ${LABEL[st] || 'Idle'}" aria-current="${shown().includes(s.id)}">${agentIcon(s.agent)}<span class="bm">${st === 'needs' ? I.hand : st === 'failed' ? svg.x : ''}</span></button>`; }).join('');
     o.morph(strip, html);
   }
   // O200: searched: the newest chat activity the last search saw; a chat used since (a new message) searches again.
@@ -176,8 +151,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     col.title = P.narrow ? (shut ? 'Open the panel over the chat (Ctrl B)' : 'Close the panel (Ctrl B)') : (shut ? 'Expand the panel (Ctrl B)' : 'Collapse the panel (Ctrl B)');
     col.setAttribute('aria-label', col.title.replace(/ \(.*/, '')); col.setAttribute('aria-pressed', String(shut));
     nav.toggleAttribute('data-nochat', !document.querySelector('#chats > .pane')); // the foot's terminal button stands in for the pane's
-    if (!shut) renderList();
-    renderStrip();
+    if (!held()) { if (!shut) renderList(); renderStrip(); } // O247: not under a press (press-hold.mjs)
     if (P.moved) setTimeout(() => { P.moved = null; });
     o.renderPage?.(); // the project page or the chats (projects-view.mjs)
   }
@@ -192,14 +166,13 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (o.S.focus !== 'chat') o.setFocus('chat'); focus(id); };
 
   // ---- Row menu: Stop first on a live chat, then Move to project and Remove from project. ----
-  let menuAnchor = null;
-  function closeMenu(back) { document.querySelector('.lp-menu')?.remove(); menuAnchor?.setAttribute('aria-expanded', 'false'); if (back) menuAnchor?.focus(); menuAnchor = null; }
+  function closeMenu(back) { const a = menuFor && nav.querySelector(`[data-more="${CSS.escape(menuFor)}"]`); document.querySelector('.lp-menu')?.remove(); a?.setAttribute('aria-expanded', 'false'); if (back) a?.focus(); menuFor = null; }
   function openMenu(html, at, anchor) {
     closeMenu();
     const m = document.createElement('div'); m.className = 'lp-menu'; m.setAttribute('role', 'menu'); m.innerHTML = html; document.body.append(m);
     const r = m.getBoundingClientRect();
     m.style.left = Math.max(8, Math.min(at.x, innerWidth - r.width - 8)) + 'px'; m.style.top = Math.max(8, Math.min(at.y, innerHeight - r.height - 8)) + 'px';
-    menuAnchor = anchor; anchor?.setAttribute('aria-expanded', 'true');
+    menuFor = anchor?.dataset.more ?? null; anchor?.setAttribute('aria-expanded', 'true');
     m.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
   }
   function chatMenu(id, at, anchor) {
@@ -235,9 +208,9 @@ export function installPanel(o, { focus, stopChat, busy }) {
 
   // ---- Drag a chat row onto a project, or onto Chats (pointer events: the same on touch, and it shows in screenshots). ----
   let drag = null;
-  list.addEventListener('pointerdown', e => { const r = e.target.closest('.row[data-chat]'); if (r && e.button === 0) drag = { id: r.dataset.chat, x: e.clientX, y: e.clientY, on: false, row: r }; });
-  addEventListener('pointermove', e => {
-    if (!drag) return;
+  list.addEventListener('pointerdown', e => { const r = e.target.closest('.row[data-chat]'); if (r && e.button === 0 && !drag) drag = { id: r.dataset.chat, pid: e.pointerId, x: e.clientX, y: e.clientY, on: false, row: r }; });
+  const over = e => {
+    if (drag?.pid !== e.pointerId) return; // only the pointer that started the drag moves it
     if (!drag.on) {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
       drag.on = true; closeMenu(); document.body.classList.add('lp-dragging'); drag.row.setAttribute('data-dragging', '');
@@ -251,16 +224,22 @@ export function installPanel(o, { focus, stopChat, busy }) {
     drag.to = to !== undefined && to !== (projectOf(s, projects())?.id || '') ? to : undefined;
     if (drag.to !== undefined) (drag.to ? z.querySelector('.row.proj') : z.querySelector('h3')).setAttribute('data-drop', '');
     drag.ghost.querySelector('.to').innerHTML = drag.to === undefined ? 'Drop on a project' : `Move to <b>${esc(drag.to ? projects().find(p => p.id === drag.to)?.name : 'Chats')}</b>`;
-  }, { signal: o.lifetime.signal });
-  const endDrag = () => {
-    const d = drag; drag = null; if (!d?.on) return;
+  };
+  addEventListener('pointermove', over, { signal: o.lifetime.signal });
+  // A cancel (the browser took the touch for a scroll) or the window losing focus puts the row back; only a release drops it,
+  // on the zone under it then (a project can open under a pointer that stopped moving).
+  const endDrag = e => {
+    if (!drag || e.type !== 'blur' && drag.pid !== e.pointerId) return; // another finger's release does not drop it
+    if (drag.on && e.type === 'pointerup') over(e);
+    const d = drag; drag = null; if (!d.on) return;
     d.ghost.remove(); document.body.classList.remove('lp-dragging');
     document.querySelectorAll('#navList [data-drop], #navList [data-dragging]').forEach(x => { x.removeAttribute('data-drop'); x.removeAttribute('data-dragging'); });
     P.noclick = true; setTimeout(() => { P.noclick = false; }); // the click that ends a drag does not also open the chat
-    if (d.to !== undefined) move(d.id, d.to);
+    if (d.to !== undefined && e.type === 'pointerup') move(d.id, d.to);
   };
   addEventListener('pointerup', endDrag, { signal: o.lifetime.signal });
   addEventListener('pointercancel', endDrag, { signal: o.lifetime.signal });
+  addEventListener('blur', endDrag, { signal: o.lifetime.signal });
 
   // ---- The strip's title card: on hover and on keyboard focus. Pointer first; otherwise the focused icon keeps its card. ----
   const tip = document.createElement('div'); tip.className = 'lp-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true; document.body.append(tip);
@@ -275,14 +254,12 @@ export function installPanel(o, { focus, stopChat, busy }) {
   for (const ev of ['pointerover', 'pointerout', 'focusin', 'focusout']) strip.addEventListener(ev, e => setTimeout(() => tipFor(e)));
 
   // ---- Clicks, the menu's keys, search ----
-  let pressedStop = null;
-  nav.addEventListener('pointerdown', e => { pressedStop = e.target.closest?.('[data-stop]')?.dataset.stop ?? null; });
   nav.addEventListener('click', e => {
     if (P.noclick) return;
     const t = e.target;
-    const st = t.closest('[data-stop]'); if (st) { const id = st.dataset.stop; if (e.detail && pressedStop !== id) return; pressedStop = null; const s = find(id); return s && stopChat(s); }
+    const st = t.closest('[data-stop]'); if (st) { const s = find(st.dataset.stop); return s && stopChat(s); } // keyed to its row, held while pressed
     const more = t.closest('[data-more]');
-    if (more) { if (more.getAttribute('aria-expanded') === 'true') return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
+    if (more) { if (menuFor === more.dataset.more) return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
     const sub = t.closest('[data-subs]'); if (sub) { P.subs[sub.dataset.subs] = sub.getAttribute('aria-expanded') !== 'true'; return renderPanel(); }
     const sm = t.closest('[data-showmore]'); if (sm) { P.more[sm.dataset.showmore] = !P.more[sm.dataset.showmore]; return renderPanel(); }
     const tog = t.closest('[data-toggle]'), pr = t.closest('[data-proj]');
