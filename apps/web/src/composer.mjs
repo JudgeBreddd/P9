@@ -13,8 +13,9 @@ export const chip = () => `<span class="hint" role="group" aria-label="Send whil
   + button('data-when="now"', 'Interrupt', 'Ctrl Enter', 'Stop this turn and send this now')
   + button('data-cancel', 'Cancel', 'Esc', 'Stop this turn; your text stays in the box') + '</span>';
 
-// The messages the daemon holds for this turn, above the local queue (which is only for an agent without steering).
-export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="${esc(h.id)}"><span>${h.when === 'queue' ? 'Queued' : 'After this step'}: ${esc(h.text)}</span><button title="Send this now (stops this turn)" data-unhold="${esc(h.id)}" data-now>${svg.bolt}</button><button title="Take it back into the box" data-unhold="${esc(h.id)}">${svg.x}</button></div>`).join('');
+// The messages the daemon holds for this turn, above a demo chat's local queue. No send-now on a note (it starts no turn)
+// or on one a sprint pause holds (it waits for the resume, outside this turn).
+export const waiting = s => (s.held || []).map(h => `<div class="q" data-held="${esc(h.id)}"><span>${h.when === 'queue' ? 'Queued' : 'After this step'}: ${esc(h.text)}</span>${h.info || h.when === 'pause' ? '' : `<button title="Send this now (stops this turn)" data-unhold="${esc(h.id)}" data-now>${svg.bolt}</button>`}<button title="Take it back into the box" data-unhold="${esc(h.id)}">${svg.x}</button></div>`).join('');
 
 // O109: everything waiting (held, then the local queue) is one strip, "N queued", so 30 waiting messages cannot push the box
 // off the screen. Open while it is short (up to 3), shut past that; the user's own open or shut (s.queueOpen) wins.

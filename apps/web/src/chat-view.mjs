@@ -859,7 +859,7 @@ const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) |
 function sendText(s, t, now, when) {
   const mid = !now && busy(s);
   if (!now && !s.live && busy(s)) { s.queue.push({ t, at: Date.now() }); renderChats(); return; }
-  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length ? 'queue' : 'steer') : undefined);
+  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length || s.sending ? 'queue' : 'steer') : undefined); // one still on its way may be held
 }
 // O255: a live chat's interrupt is the daemon's: it holds the message first, stops the turn, and sends it at that end.
 function interrupt(s, t) {
@@ -890,7 +890,7 @@ function finished(s) {
 // resume the chat). Review round 8: whether a turn runs is the daemon's to say, not this window's guess (an unprompted
 // run's end never reaches it, a refused prompt leaves Working on): the send goes as when 'queue', so the daemon holds it
 // for a turn running there and sends it at that turn's end, and starts it when none runs.
-const turnsOf = new Map(), sentImgs = new Map(); // chat id -> 'user' events applied (cancelTurn); sentImgs: carry
+const turnsOf = new Map(), sentImgs = new Map(), takenBack = new Set(); // chat id -> 'user' events applied (cancelTurn); sentImgs, takenBack: carry (ponytail: takenBack keeps ids of text-only and other windows' take-backs for the page's life; a few bytes each)
 const free = (s) => !['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
 // send false: the turn's artifact and mode change still happen, but no queued message goes (free()).
 function turnEnd(s, send = true) {
@@ -957,8 +957,9 @@ const toolText = content => (content || []).filter(c => c.type === 'content' && 
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
 const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // O255: a live chat's waiting messages are the daemon's (s.held, from its events), one list for every window and the phone;
-// s.queue is only a demo chat's. ponytail: one this window queued before 0.1.9-beta.15 (localStorage p9-queue:) is not sent.
-const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
+// s.queue is only a demo chat's. One an older build queued in this window (localStorage p9-queue:) goes into the box, once.
+const oldQueue = id => { try { const k = 'p9-queue:' + id, q = JSON.parse(localStorage.getItem(k)); if (!Array.isArray(q)) return {}; localStorage.removeItem(k); const draft = q.map(x => typeof x === 'string' ? x : x?.t).filter(t => typeof t === 'string' && t).join('\n'); return draft ? { draft } : {}; } catch { return {}; } };
+const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created, ...oldQueue(id) });
 // E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
 function history(s, until = outer.liveChat.cursor) {
@@ -1015,7 +1016,7 @@ function applyChat(ev, into) {
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
-    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when, at: ev.at }); break;
+    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when, at: ev.at, ...(d.info && { info: true }) }); break;
     // A note from another chat that waits for this chat's next message: shown where it arrived; it started nothing.
     case 'note': s.events.push({ t: 'user', text: d.text, when: new Date(ev.at).toTimeString().slice(0, 5), info: d.from ?? true, fromTitle: d.fromTitle }); break;
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled' && d.why !== 'noted') notice('Not sent (' + d.why + '): ' + d.text); break;
@@ -1195,7 +1196,7 @@ async function loadChat() {
   const carry = (ev) => {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
-    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []].slice(0, 8); }
+    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); if (!sentImgs.has(ev.data.id)) takenBack.add(ev.data.id); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) sentImgs.delete(h);
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.
@@ -1263,5 +1264,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, loadChat, keepPlace, sentImgs };
+  return { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, loadChat, keepPlace, sentImgs, takenBack };
 }

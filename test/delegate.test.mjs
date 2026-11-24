@@ -1636,7 +1636,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   // 'slow' turn that step steers into (CI: the steer met an idle chat, reason mode-failed, at the assertion below).
   await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data?.text?.startsWith('[p9] D1 passed review'));
   await a.done(made.chat);
-  // Finding 4: an agent without steering (Claude's on ACP 2) cannot take a steer into its running turn; O255: it waits for the turn's end.
+  // Finding 4: an agent without steering (the stand-in agent with its no-steering file) cannot take a steer into its running turn; O255: it waits for the turn's end.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
   assert.equal((await a.tool('archive_chat', { chat: made.chat, archived: false })).action, 'unarchived'); // O132: closed is archived; back first
