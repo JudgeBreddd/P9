@@ -15,6 +15,7 @@ import { onboardCard, spacePicker, templateWords, previewCard, freeName } from '
 import { FILE_PROTECTION_RISK, partOrder } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
+import { pressHold } from './press-hold.mjs';
 
 type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: Record<string, Limits | null> & { signedOut?: string[] }; profiles?: { id: string; name: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; turns: number }[] };
@@ -638,7 +639,9 @@ function markRead(id: string) {
   const item = state.conversations.find((entry) => entry.id === id); if (!item) return;
   const mark = rowInfo(item).last.slice(0, 60); if (read[id] !== mark) { read[id] = mark; keepRead(); }
 }
+const listHeld = pressHold(one('#chatList'), renderList); // O247: not redrawn under a tap (press-hold.mjs)
 function renderList() {
+  if (listHeld()) return;
   let seeded = false;
   const found = digest(), row = (item: Json) => {
     const id = String(item.id), info = rowInfo(item, found), run = info.run, mark = info.last.slice(0, 60), stopped = !isOpen(item);

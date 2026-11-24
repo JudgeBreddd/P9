@@ -199,3 +199,35 @@ test('open project chats keep their place when activity arrives', { timeout: 120
   await until(async () => (await rows()).join() === [a, b].join(), 'idle project chat stays above newly opened chat');
   assert.deepEqual(errors, []);
 });
+
+// O247: a click on a sidebar row made while the list re-sorts still opens that chat. Before, a chat starting a turn moved to
+// the top while the mouse was down: the rows under it were taken out and put back (or slid under the pointer), and the click
+// went nowhere. Now the list waits for the press to end (press-hold.mjs), then re-sorts.
+test('O247 a click on a sidebar row made while the list re-sorts still opens that chat', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const make = async (title) => {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' }); await ended(instance, id);
+    await call(instance, `/chat/${id}/stop`, 'POST', {}); return id;
+  };
+  for (const name of ['One', 'Two', 'Three']) await make(name);
+  const { page, errors } = await launch(t, instance);
+  const rows = () => page.locator('#navList [data-zone=""] .row[data-chat]').evaluateAll((els) => els.map((el) => el.dataset.chat));
+  const shown = () => page.evaluate(() => document.querySelector('#chats > .pane')?.dataset.id ?? null);
+  await until(async () => (await rows()).length === 3, 'three rows');
+  const [, pressed, last] = await rows();
+  await page.locator(`#navList .row[data-chat="${last}"]`).click();
+  await until(async () => (await shown()) === last, 'the last chat shown first');
+  const box = await page.locator(`#navList .row[data-chat="${pressed}"]`).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // The bottom chat starts a turn: it goes to the top, and the pressed row (second) would move down one.
+  await call(instance, `/chat/${last}/prompt`, 'POST', { text: 'slow' });
+  await until(async () => (await conv(instance, last)).state === 'turn', 'the bottom chat running');
+  await page.waitForTimeout(500); // the event reaches the window (local socket); the press stays under the hold's 2 s cap
+  await page.mouse.up();
+  await until(async () => (await shown()) === pressed, 'the pressed chat opened, not ' + await shown());
+  await until(async () => (await rows())[0] === last, 'the list re-sorts once the press ends');
+  assert.deepEqual(errors, []);
+  console.log('PASS O247: a press held while the sidebar re-sorted still opened the pressed chat; the list re-sorted after');
+});

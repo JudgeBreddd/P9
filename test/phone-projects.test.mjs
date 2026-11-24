@@ -257,3 +257,39 @@ test('O210: the phone shows a project\'s sprints, and Ask to start / close types
   assert.deepEqual(await page.evaluate(() => [document.querySelector('#sheetTitle').textContent, document.querySelector('#sheetBody').innerHTML]), ['Other', '<p id="otherSheet">another picker</p>'], 'a late failure for Empty replaced another sheet');
   await page.unroute('**/projects/' + empty, hold2);
 });
+
+// O247: a tap on a chat row made while the list redraws still opens that chat. Before, any change to a row (another chat
+// starting a turn reads "Working…") rewrote the whole list under the finger, and the tap went nowhere until tried again.
+test('O247 phone: a tap held while the chat list redraws still opens the chat', { timeout: 180000 }, async (t) => {
+  const server = await remoteDaemon(t, { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] });
+  const chat = async (title) => {
+    const r = await call(server, '/chat', { provider: 'claude', title }); assert.equal(r.status, 201, JSON.stringify(r));
+    await call(server, '/chat/' + r.conversation + '/prompt', { text: 'hello' });
+    await until(async () => (await call(server, '/chat/events?after=0&only=' + r.conversation)).events.some((e) => e.type === 'turn-end'), title + ' answered');
+    return r.conversation;
+  };
+  const tapped = await chat('Tapped'), busy = await chat('Busy');
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const device = await passkeyDevice(browser, server, 'phone-o247');
+  const session = await enrollDevice(server, device);
+  const { page, context } = device;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  await context.addInitScript(() => { Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }); if (navigator.serviceWorker) navigator.serviceWorker.register = async () => undefined; });
+  await page.goto(server.origin + '/phone/');
+  await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
+  await page.reload();
+  await page.waitForSelector(`#chatList .row[data-chat="${tapped}"]`);
+  const box = await page.locator(`#chatList .row[data-chat="${tapped}"]`).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await call(server, '/chat/' + busy + '/prompt', { text: 'slow' }); // its row turns to "Working…": the list redraws
+  await new Promise((resolve) => setTimeout(resolve, 900)); // the phone's long poll returns at once with the new event; under the hold's 2 s cap
+  await page.mouse.up();
+  await until(async () => page.evaluate(() => location.hash), 'a chat opened');
+  assert.equal(await page.evaluate(() => decodeURIComponent(location.hash)), '#chat=' + tapped, 'the tapped chat opened');
+  await page.evaluate(() => history.back());
+  await until(async () => (await page.locator(`#chatList .row[data-chat="${busy}"]`).getAttribute('data-run').catch(() => '')) === 'working', 'the list redrew after the tap');
+  console.log('PASS O247 phone: a tap held while the list redrew opened the tapped chat; the list redrew after');
+});
