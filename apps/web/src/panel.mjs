@@ -208,9 +208,9 @@ export function installPanel(o, { focus, stopChat, busy }) {
 
   // ---- Drag a chat row onto a project, or onto Chats (pointer events: the same on touch, and it shows in screenshots). ----
   let drag = null;
-  list.addEventListener('pointerdown', e => { const r = e.target.closest('.row[data-chat]'); if (r && e.button === 0) drag = { id: r.dataset.chat, x: e.clientX, y: e.clientY, on: false, row: r }; });
-  addEventListener('pointermove', e => {
-    if (!drag) return;
+  list.addEventListener('pointerdown', e => { const r = e.target.closest('.row[data-chat]'); if (r && e.button === 0 && !drag) drag = { id: r.dataset.chat, pid: e.pointerId, x: e.clientX, y: e.clientY, on: false, row: r }; });
+  const over = e => {
+    if (drag?.pid !== e.pointerId) return; // only the pointer that started the drag moves it
     if (!drag.on) {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
       drag.on = true; closeMenu(); document.body.classList.add('lp-dragging'); drag.row.setAttribute('data-dragging', '');
@@ -224,10 +224,14 @@ export function installPanel(o, { focus, stopChat, busy }) {
     drag.to = to !== undefined && to !== (projectOf(s, projects())?.id || '') ? to : undefined;
     if (drag.to !== undefined) (drag.to ? z.querySelector('.row.proj') : z.querySelector('h3')).setAttribute('data-drop', '');
     drag.ghost.querySelector('.to').innerHTML = drag.to === undefined ? 'Drop on a project' : `Move to <b>${esc(drag.to ? projects().find(p => p.id === drag.to)?.name : 'Chats')}</b>`;
-  }, { signal: o.lifetime.signal });
-  // A cancel (the browser took the touch for a scroll) puts the row back; only a release drops it.
+  };
+  addEventListener('pointermove', over, { signal: o.lifetime.signal });
+  // A cancel (the browser took the touch for a scroll) puts the row back; only a release drops it, on the zone under it then
+  // (a project can open under a pointer that stopped moving).
   const endDrag = e => {
-    const d = drag; drag = null; if (!d?.on) return;
+    if (drag?.pid !== e.pointerId) return; // another finger's release does not drop it
+    if (drag.on && e.type === 'pointerup') over(e);
+    const d = drag; drag = null; if (!d.on) return;
     d.ghost.remove(); document.body.classList.remove('lp-dragging');
     document.querySelectorAll('#navList [data-drop], #navList [data-dragging]').forEach(x => { x.removeAttribute('data-drop'); x.removeAttribute('data-dragging'); });
     P.noclick = true; setTimeout(() => { P.noclick = false; }); // the click that ends a drag does not also open the chat
