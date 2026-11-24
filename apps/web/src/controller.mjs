@@ -72,7 +72,7 @@ export function mountShell({ askAdmin } = {}) {
     get startTurn() { return startTurn; }, get still() { return still; }, get sync() { return sync; },
     get termGreeting() { return termGreeting; }, set termGreeting(v) { termGreeting = v; setEdits++; }, get tickPets() { return tickPets; },
     get toast() { return toast; }, get topAt() { return topAt; }, set topAt(v) { topAt = v; }, get tree() { return tree; },
-    get updates() { return updates; }, set updates(v) { updates = v; setEdits++; },
+    get updates() { return updates; }, set updates(v) { updates = v; },
     get updatesTimer() { return updatesTimer; }, set updatesTimer(v) { updatesTimer = v; }, get usage() { return usage; },
     get usageNow() { return usageNow; }, get usageRows() { return usageRows; },
     get usageSoon() { return usageSoon; }, set usageSoon(v) { usageSoon = v; }, get view() { return view; }, get walkthrough() { return walkthrough; },
@@ -984,7 +984,7 @@ let setPage = 'General';
 // applied, and an open dialog is drawn again: nothing in it has focus then, and the scroll stays. The reads first go out
 // once the window knows its server. ponytail: a late read takes focus off a page's name button (the nav is drawn again).
 // #517 review 3: a Settings save writes its answer through outer's setters (above), so one landing after a reopen's read
-// went out makes that read stale too, and the save's value stays.
+// went out makes that read stale too, and the save's value stays. Not updates: the updater's own poll writes it.
 let setEdits = 0;
 $('#setBody').onfocusin = e => e.target.dataset.setPage || setEdits++;
 const setLoad = () => {

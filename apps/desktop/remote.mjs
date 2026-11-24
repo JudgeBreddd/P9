@@ -216,13 +216,14 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // every other daemon request has: a dead daemon still fails at once (the forward closes).
   // ms bounds the whole check, the 401's ssh read and the second ask included (the request's own timeout is per quiet spell:
   // a trickling answer runs past it). ponytail: a check given up on still ends on its request's own timeout, unseen. A re-read
-  // that lands after the tunnel closed saves nothing: the folder may be a newer connection's by then.
+  // that lands after the tunnel closed saves nothing (the folder may be a newer connection's by then), and none starts or runs
+  // on after it: its READ can start a stopped P9 there, so a late 401 would bring it back after Disconnect and turn off.
   let reading = null;
   const check = (ms = 10000) => {
     let timer;
     return Promise.race([health(state, ms).catch(async (error) => {
-      if (error.status !== 401) throw error;
-      reading ??= readServer(host, ssh).then(r => closed || save(r.credentials)).finally(() => { reading = null; });
+      if (error.status !== 401 || closed) throw error;
+      reading ??= readServer(host, ssh, ended.signal).then(r => closed || save(r.credentials)).finally(() => { reading = null; });
       await reading;
       return health(state, ms);
     }), new Promise((resolve, reject) => { timer = setTimeout(reject, ms, new Error('timeout')); })]).finally(() => clearTimeout(timer));
@@ -255,9 +256,10 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   child.on('error', () => {}); // the abort's AbortError; exit follows
   child.stdin.on('error', () => {});
   let closed = false, exited = false, ready = false;
+  const ended = new AbortController();
   const close = async () => { closed = true; if (!exited) child.kill(); unrelay(); await cancel(); await rm(state, { recursive: true, force: true }); };
   // Before ready, the loop below sees exited and closes (awaited); only a drop removes the folder here.
-  child.on('exit', () => { exited = true; unrelay(); if (!closed && ready) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); onDrop(); } });
+  child.on('exit', () => { exited = true; ended.abort(); unrelay(); if (!closed && ready) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); onDrop(); } });
   // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon
   // (a deadline: a check can take up to 10 s).
   for (const end = Date.now() + 15000; Date.now() < end;) {

@@ -563,7 +563,8 @@ export async function createDesktop({ state, open } = {}) {
     // savedWorkspace: the saved folder was not there at the daemon's start, so it runs on the default (apps/server/main.mjs).
     // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
     if (serverHost) {
-      const h = await server?.check().catch(() => null);
+      // A check that answers after a switch is the old connection's: not ok for the new one.
+      const was = server, h = await server?.check().then(r => was === server && r, () => null);
       // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
       const there = { ...keeper.status(serverHost, !!server?.background), ...(server?.slim && { slim: true }), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
       // The agents: asked when this remote has no choice yet (or the machine menu asked again); a stored choice is fetched once per
