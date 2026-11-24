@@ -1581,7 +1581,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (!list || (session.turn && session.halt === session.turn) || notes.has(list.find((x) => x.id === at).body)) return refused(409, 'not-held');
     const [item] = list.splice(list.findIndex((x) => x.id === at), 1);
     nows.add(item.body); session.queued.unshift(item); markKept(id, item.id, { now: true }); // a restart sends it first (resumeLeft)
-    if (!session.turn) { drain(id, session); return { status: 200, ok: true }; }
+    if (!session.turn) { if (row(id)?.state !== 'turn') drain(id, session); return { status: 200, ok: true }; } // starting: first at its end
     try { await api.cancel(id, undefined, true); } catch { nows.delete(item.body); markKept(id, item.id, { now: undefined }); return refused(502, 'cancel-failed'); }
     return { status: 200, ok: true };
   }
@@ -1849,7 +1849,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try {
           // O255: after the user's Stop nothing new joins this turn or waits behind it (its end hands back what waits); a note
           // goes on to steer(), whose 409 parks it.
-          if (session?.turn && session.halt === session.turn && !notes.has(body)) return refused(409, 'turn-running');
+          if (session?.turn && session.halt === session.turn && !notes.has(body)) return refused(409, 'turn-stopping'); // not turn-running: the phone would queue it
           // O255: the daemon keeps every waiting message (the window keeps none): one with no way into the turn (no steering,
           // or the turn ending meanwhile) waits for its end; one sent now waits first and stops the turn.
           // During a turn that answers another chat, everything waits for its end.
@@ -2013,7 +2013,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         // Nor after a turn that answered another chat: its asker has the reply, and it was not the parent's task.
         else if (!more && !session.stopping && ended?.stopReason !== 'cancelled') for (const hook of settledHooks) { try { hook(id, Boolean(ended)); } catch {} }
-        drain(id, session, ended?.stopReason === 'cancelled');
+        drain(id, session, ended?.stopReason === 'cancelled' || session.halt === turn); // a Stop as it ended: still stopped
       });
       return { status: 202, turn };
     },
@@ -2062,7 +2062,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof by === 'string') cutBy(id, by);
       if (!now) { session.halt = session.turn; for (const item of [...session.held, ...session.queued]) if (nows.delete(item.body)) markKept(id, item.id, { now: undefined }); }
       session.cut = session.turn; // MC-15: a Stop while the turn's start snapshot runs sends no prompt
-      await session.agent.cancel({ sessionId: session.sessionId });
+      try { await session.agent.cancel({ sessionId: session.sessionId }); } catch (error) { if (!now && session.halt === session.turn) session.halt = null; throw error; } // the turn runs on: sends wait again
       return { status: 200, ok: true };
     },
     // CP1: the x on a message still waiting in this turn. Gone already (sent, or handed back at the turn's end): 409.

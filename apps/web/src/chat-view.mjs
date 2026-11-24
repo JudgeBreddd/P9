@@ -858,6 +858,7 @@ const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) |
 // Review round 9: one typed while an earlier message waits in the daemon's hold goes behind it ('queue'), not past it by steering.
 function sendText(s, t, now, when) {
   const mid = !now && busy(s);
+  localStorage.removeItem('p9-queue:' + s.id); // oldQueue's text was in the box: it is this send now, or let go
   if (!now && !s.live && busy(s)) { s.queue.push({ t, at: Date.now() }); renderChats(); return; }
   (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length || s.sending ? 'queue' : 'steer') : undefined); // one still on its way may be held
 }
@@ -890,7 +891,7 @@ function finished(s) {
 // resume the chat). Review round 8: whether a turn runs is the daemon's to say, not this window's guess (an unprompted
 // run's end never reaches it, a refused prompt leaves Working on): the send goes as when 'queue', so the daemon holds it
 // for a turn running there and sends it at that turn's end, and starts it when none runs.
-const turnsOf = new Map(), sentImgs = new Map(), takenBack = new Set(); // chat id -> 'user' events applied (cancelTurn); sentImgs, takenBack: carry (ponytail: takenBack keeps ids of text-only and other windows' take-backs for the page's life; a few bytes each)
+const turnsOf = new Map(), sentImgs = new Map(), takenBack = new Map(); // chat id -> 'user' events applied (cancelTurn); sentImgs, takenBack: carry (takenBack: id -> its files go back, for a 202 that comes after the event. ponytail: ids whose 202 never comes here, other windows' and text-only ones, stay for the page's life; a few bytes each)
 const free = (s) => !['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
 // send false: the turn's artifact and mode change still happen, but no queued message goes (free()).
 function turnEnd(s, send = true) {
@@ -957,8 +958,8 @@ const toolText = content => (content || []).filter(c => c.type === 'content' && 
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
 const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // O255: a live chat's waiting messages are the daemon's (s.held, from its events), one list for every window and the phone;
-// s.queue is only a demo chat's. One an older build queued in this window (localStorage p9-queue:) goes into the box, once.
-const oldQueue = id => { try { const k = 'p9-queue:' + id, q = JSON.parse(localStorage.getItem(k)); if (!Array.isArray(q)) return {}; localStorage.removeItem(k); const draft = q.map(x => typeof x === 'string' ? x : x?.t).filter(t => typeof t === 'string' && t).join('\n'); return draft ? { draft } : {}; } catch { return {}; } };
+// s.queue is only a demo chat's. One an older build queued in this window (localStorage p9-queue:) goes into the box, until a send from that chat.
+const oldQueue = id => { try { const k = 'p9-queue:' + id, q = JSON.parse(localStorage.getItem(k)); if (!Array.isArray(q)) return {}; const draft = q.map(x => x?.t ?? x).filter(t => typeof t == 'string' && t).join('\n'); return draft ? { draft } : {}; } catch { return {}; } };
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created, ...oldQueue(id) });
 // E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
@@ -1156,7 +1157,7 @@ async function loadChat() {
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
     for (const s of outer.S.sessions) {
-      const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
+      const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, images: s.images, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, stubOf(c), keep);
     }
@@ -1196,8 +1197,8 @@ async function loadChat() {
   const carry = (ev) => {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
-    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); if (!sentImgs.has(ev.data.id)) takenBack.add(ev.data.id); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
-    if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) sentImgs.delete(h);
+    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); if (!sentImgs.has(ev.data.id)) takenBack.set(ev.data.id, true); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
+    if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.
   const take = (ev, ended, answered_) => {

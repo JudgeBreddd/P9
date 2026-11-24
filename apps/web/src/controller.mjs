@@ -1300,10 +1300,10 @@ const lines = {};
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
 liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
   // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
-  const body = { id: s.id, text, mode: s.mode, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: { ...s.pick } }) };
-  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => { s.sending = Math.max(0, (s.sending || 0) - 1); });
+  const stops = s.stops, body = { id: s.id, text, mode: s.modeNext || s.mode, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: { ...s.pick } }) };
+  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box.
-  if (r.status === 202) { const held = r.body?.held; if (held && takenBack.delete(held)) s.images = [...images, ...(s.images || [])]; else if (held && images.length) sentImgs.set(held, images); return renderChats(); }
+  if (r.status === 202) { const held = r.body?.held; const back = takenBack.get(held); if (back) s.images = [...images, ...(s.images || [])]; else if (back === undefined && held && images.length) sentImgs.set(held, images); takenBack.delete(held); return renderChats(); }
   s.images = [...images, ...(s.images || [])]; // all of them: a box over the limit is refused when sent, and keeps its files
   s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
@@ -1321,7 +1321,8 @@ liveChat.answer = (s, vals) => {
   liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'accept', content: Object.fromEntries(content) } });
 };
 liveChat.decline = s => { const q = s.events.find(e => e.t === 'question'); if (q) liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'decline' } }); };
-liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id, ...(close && { close }) }); };
+// s.stops: a new one each Stop, so a send still in this chat's line from before it goes back to the box (liveChat.prompt).
+liveChat.stop = (s, close) => { s.state = 'stopping'; s.stops = {}; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id, ...(close && { close }) }); };
 // A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
 const picDlg = $('#picDlg');
 addEventListener('click', e => {

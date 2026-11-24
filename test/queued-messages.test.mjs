@@ -195,6 +195,13 @@ test('O255: queued messages wait in the daemon: a second window sees them, a rel
   await attach(a.page, chatA.pane, 'two.txt'); await chatA.send('second');
   await until(async () => (await chatA.queued()).length === 2, 'second queued');
   assert.equal(await chatA.pane.locator('.attach').count(), 0, 'each file went with its message: none is back in the box');
+  // Take back (the x): the message and its own file come back into the box; the box is then emptied for what follows.
+  await attach(a.page, chatA.pane, 'three.txt'); await chatA.send('third');
+  await until(async () => (await chatA.queued()).length === 3, 'third queued');
+  await chatA.pane.locator('.queue [data-held]', { hasText: 'third' }).locator('[data-unhold]:not([data-now])').click();
+  await until(async () => (await chatA.queued()).length === 2, 'third taken back');
+  assert.deepEqual([await chatA.pane.locator('.composer textarea').inputValue(), (await chatA.pane.locator('.attach .att-file').allInnerTexts()).map((x) => x.split('\n')[0])], ['third', ['three.txt']], 'take-back gives the message its file back');
+  await chatA.pane.locator('.attach [data-unattach]').click(); await chatA.pane.locator('.composer textarea').fill('');
   const b = await launch('-b'), chatB = await open(b.page);
   await until(async () => (await chatB.queued()).length === 2, 'the second window shows both queued');
   await a.page.reload(); await a.page.locator('#rChat').waitFor(); chatA = await open(a.page);
