@@ -79,8 +79,11 @@ export const sshFailure = (err, windows = WINDOWS || process.env.P9_SSH_KEYS_ONL
 // service's desktop.json and the background marker there, READ starts P9 with its start script first (it does nothing while
 // one runs) and reads the folder that one uses. So every connect, a reconnect too, starts a P9 that stopped when idle.
 const RUN = '"$HOME/.local/share/p9/run"';
-export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; b=' + RUN + '; if [ ! -e "$r/p9-foundation/desktop.json" ] && [ -f "$b/background" ]; then r="$b"; sh "$b/start" up >&2 || true; fi; '
+// REREAD: the same read that starts nothing, for the credentials again after a 401 (#517 review 4: a Disconnect and turn
+// off landing while it runs stays off).
+const read = up => 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; b=' + RUN + '; if [ ! -e "$r/p9-foundation/desktop.json" ] && [ -f "$b/background" ]; then r="$b";' + (up ? ' sh "$b/start" up >&2 || true;' : '') + ' fi; '
   + 'printf "%s\\n" "$r"; if [ "$r" = "$b" ] && grep -qx slim=1 "$b/start" 2>/dev/null; then echo slim; fi; cat "$r/p9-foundation/desktop.json" 2>/dev/null; exit 0';
+export const READ = read(true), REREAD = read(false);
 
 // The machine menu's state for a saved remote that is not in use: is a P9 running there? It checks desktop.json exists, never
 // reads it (the cookie stays there). Fixed argv, no shell here, BatchMode, 4 s to connect, 8 s in all; only three words come back.
@@ -100,9 +103,9 @@ export async function sshHosts(file = path.join(os.homedir(), '.ssh', 'config'))
 // Where a host's forward lives: the same path on every reconnect, so main's state folder stays valid across a drop.
 export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir()) => path.join(runtime, 'p9-server', host);
 
-function readServer(host, ssh, signal) {
+function readServer(host, ssh, signal, script = READ) {
   // 60 s: a background start waits up to 30 s for its daemon.
-  return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536, signal }, (error, out, err) => {
+  return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, script], { timeout: 60000, maxBuffer: 65536, signal }, (error, out, err) => {
     // No ssh program on this computer: said as such, not as an unreachable remote.
     if (error) return reject(error.code === 'ENOENT' ? new Error('ssh-missing') : sshFailure(err));
     // U8: a slim line before the JSON marks the Temporary remote's small P9 (remote-install.mjs slimScript).
@@ -216,14 +219,14 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // every other daemon request has: a dead daemon still fails at once (the forward closes).
   // ms bounds the whole check, the 401's ssh read and the second ask included (the request's own timeout is per quiet spell:
   // a trickling answer runs past it). ponytail: a check given up on still ends on its request's own timeout, unseen. A re-read
-  // that lands after the tunnel closed saves nothing (the folder may be a newer connection's by then), and none starts or runs
-  // on after it: its READ can start a stopped P9 there, so a late 401 would bring it back after Disconnect and turn off.
+  // that lands after the tunnel closed saves nothing (the folder may be a newer connection's by then), none starts or runs
+  // on after it, and it starts no P9 there (REREAD).
   let reading = null;
   const check = (ms = 10000) => {
     let timer;
     return Promise.race([health(state, ms).catch(async (error) => {
       if (error.status !== 401 || closed) throw error;
-      reading ??= readServer(host, ssh, ended.signal).then(r => closed || save(r.credentials)).finally(() => { reading = null; });
+      reading ??= readServer(host, ssh, ended.signal, REREAD).then(r => closed || save(r.credentials)).finally(() => { reading = null; });
       await reading;
       return health(state, ms);
     }), new Promise((resolve, reject) => { timer = setTimeout(reject, ms, new Error('timeout')); })]).finally(() => clearTimeout(timer));

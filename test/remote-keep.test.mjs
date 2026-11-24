@@ -12,7 +12,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { stage, bash, nodeLog, stopDaemon } from './install-runtime.test.mjs';
 import { createKeeper } from '../apps/desktop/keep.mjs';
-import { READ, remoteMode, restartServer, startServer, stopServer } from '../apps/desktop/remote.mjs';
+import { READ, REREAD, remoteMode, restartServer, startServer, stopServer } from '../apps/desktop/remote.mjs';
 import { watchIdle } from '../apps/server/idle.mjs';
 import { daemon, fixture, root } from './helpers.mjs';
 
@@ -101,6 +101,12 @@ test('READ at a connect starts a background daemon that stopped when idle, and r
   const s = await background(t);
   await stopDaemon(s);
   assert.ok(await until(() => !existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json'))), 'stopped');
+  // #517 review 4: the credential re-read after a 401 (connectServer's check) starts nothing: a Disconnect and turn off
+  // that lands while it runs stays off.
+  const again = await sh(s, ['-c', REREAD], { ...s.env, XDG_RUNTIME_DIR: s.run });
+  assert.equal(again.code, 0, again.out);
+  assert.equal(again.out.split('\n')[0], s.runDir);
+  assert.equal(await starts(s), 1, 'the re-read started no daemon');
   const { code, out } = await sh(s, ['-c', READ], { ...s.env, XDG_RUNTIME_DIR: s.run });
   assert.equal(code, 0, out);
   assert.equal(out.split('\n')[0], s.runDir);
