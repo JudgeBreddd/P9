@@ -11,7 +11,7 @@ import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root, openFiles, shellReady } from './helpers.mjs';
 import { execFile, execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { connectServer, forwardPath, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
@@ -1635,6 +1635,10 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: editor.host };
   delete env.ELECTRON_RUN_AS_NODE;
   let app, shell;
+  // The port the remote's name picks is taken by something else at the first open, then freed: the restart below still
+  // opens on the port the editor first got (review: a fallback port given back at the next start lost the place).
+  const holder = createServer().listen(20000 + createHash('sha256').update('test-host').digest().readUInt16BE(0) % 12000, '127.0.0.1');
+  await once(holder, 'listening');
   const launch = async () => {
     app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
     const mine = app, proc = app.process();
@@ -1672,6 +1676,9 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
     await v.commands.executeCommand('revealInExplorer', v.Uri.joinPath(v.Uri.parse(root.toString()), 'sub', 'inner.txt'));
   });
   await kept(dev, 'before');
+  const first = (await dev.evaluate(() => window.p9dev.config())).port;
+  assert.notEqual(first, holder.address().port, 'the taken port is passed over');
+  await new Promise(resolve => holder.close(resolve));
   // Chat focus for a while, then back.
   await shell.keyboard.press('Control+1');
   await sleep(10000);
@@ -1702,5 +1709,7 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   await app.close();
   await launch();
   dev = await devFocus();
-  await kept(dev, 'after P9 here restarted (editor port ' + port + ', now ' + (await dev.evaluate(() => window.p9dev.config())).port + ')');
+  const now = (await dev.evaluate(() => window.p9dev.config())).port;
+  await kept(dev, 'after P9 here restarted (editor port ' + port + ', now ' + now + ')');
+  assert.equal(now, first, 'the editor port the remote first got, though the one its name picks is free now');
 });

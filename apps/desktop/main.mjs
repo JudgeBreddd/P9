@@ -218,6 +218,7 @@ export async function createDesktop({ state, open } = {}) {
   const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
+  const devPorts = Object.fromEntries(Object.entries(saved?.devPorts && typeof saved.devPorts === 'object' ? saved.devPorts : {}).filter(([h, p]) => named(h) && Number.isInteger(p) && p > 1023 && p < 65536)); // O250, listenRelay
   // The agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
   // after connecting; the install there sends none, and fetchAgents below asks that daemon for these once connected.
   // agentsAgain: the machine menu's AI agents item asks again on this remote (this launch only).
@@ -235,7 +236,7 @@ export async function createDesktop({ state, open } = {}) {
   let serverSaving = Promise.resolve();
   const keepServer = () => serverSaving = serverSaving.catch(() => {}).then(() => {
     const wrote = openOn;
-    return writeFile(serverFile + '.tmp', JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, ...(openOn !== null && { openOn }) }), { mode: 0o600 })
+    return writeFile(serverFile + '.tmp', JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, devPorts, ...(openOn !== null && { openOn }) }), { mode: 0o600 })
       .then(() => rename(serverFile + '.tmp', serverFile)).then(() => { openOnKept = wrote; });
   });
   // The download runs on the remote (POST /setup/agents-fetch); the page shows its phase from p9:get-status.
@@ -1139,33 +1140,41 @@ export async function createDesktop({ state, open } = {}) {
   // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the
   // token check are the same as with a local editor host, which listens on 127.0.0.1 too. One relay, for the current server.
   let relay = null;
+  // O250: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>, so each remote keeps the port
+  // it got first (devPorts, in p9-server.json), and no two remotes get the same one. A new remote's starts at one picked from its
+  // name, the next 19 if taken or kept for another remote, any last. ponytail: a kept port in use by something else at a
+  // start is given up for a new one, and that start opens the editor empty.
+  const listenRelay = async (socket, host, old) => {
+    old?.ready.then(l => l.close(), () => {});
+    await old?.ready.catch(() => {});
+    const listener = net.createServer(client => {
+      const far = net.connect(socket);
+      client.pipe(far).pipe(client);
+      far.on('error', () => client.destroy());
+      client.on('error', () => far.destroy());
+    });
+    const others = new Set(Object.entries(devPorts).filter(([h]) => h !== host).map(([, p]) => p));
+    const near = 20000 + createHash('sha256').update(String(host)).digest().readUInt16BE(0) % 12000;
+    let refused = null;
+    for (const port of [devPorts[host], ...Array.from({ length: 20 }, (_, i) => near + i).filter(p => !others.has(p)), 0].filter(p => p !== undefined)) {
+      refused = await new Promise(resolve => listener.once('error', resolve).listen(port, '127.0.0.1', () => resolve(null)));
+      if (!refused) break;
+    }
+    if (refused) throw refused;
+    const port = listener.address().port;
+    if (host && devPorts[host] !== port) { devPorts[host] = port; keepServer(); }
+    return listener;
+  };
   const serverEditor = async () => {
     const asked = await daemonRequest(state, 'POST', '/dev/editor', {}, undefined, 60000).catch(error => error);
     if (asked instanceof Error || asked.status === 404) throw new Error(asked.message === 'bad-response' || asked.status === 404 ? 'server-old' : 'daemon-unavailable');
     const { body } = asked;
     if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: serverHost });
     const socket = forwardPath(state, 'editor');
-    if (relay?.socket !== socket) {
-      relay?.server.close();
-      const listener = net.createServer(client => {
-        const far = net.connect(socket);
-        client.pipe(far).pipe(client);
-        far.on('error', () => client.destroy());
-        client.on('error', () => far.destroy());
-      });
-      // O250: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>. A new port each start of P9
-      // opened it empty, so each server gets the same port every time: one picked from its name, the next 19 if taken, any last.
-      // ponytail: two servers whose names pick the same port share it; the one opened second gets the next free one.
-      const near = 20000 + createHash('sha256').update(String(serverHost)).digest().readUInt16BE(0) % 12000;
-      let refused = null;
-      for (const port of [...Array.from({ length: 20 }, (_, i) => near + i), 0]) {
-        refused = await new Promise(resolve => listener.once('error', resolve).listen(port, '127.0.0.1', () => resolve(null)));
-        if (!refused) break;
-      }
-      if (refused) throw refused;
-      relay = { socket, server: listener, port: listener.address().port };
-    }
-    return { port: relay.port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
+    // Set before any wait: an open that overlaps this one shares its listener instead of binding a second one.
+    if (relay?.socket !== socket) relay = { socket, ready: listenRelay(socket, serverHost, relay) };
+    const mine = relay, port = await mine.ready.then(l => l.address().port, error => { if (relay === mine) relay = null; throw error; });
+    return { port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
   };
   const openDev = () => dev ??= trackOpen((async () => {
     // FIX2: a newer open (reopenDev) owns the page from here; an older one still running when it ends writes nothing.
