@@ -1858,9 +1858,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // mid-turn was steered in and the chat stayed on Sonnet, with no config event). A mode other than the session's too.
           // O133 mode half: a mode is set by the next prompt too (want below), so one other than the session's waits the same
           // way. Under the agent lock every prompt runs narrow whatever it picks, so there a mode pick changes nothing.
+          // O255: not an explicit steer. It goes into the turn in the turn's mode; one that waits after all keeps its mode for the next turn.
           const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
             || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v))
-            || (!locked && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
+            || (!locked && body.when !== 'steer' && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
           if (session?.turn && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks, held ?? []);
           if (solo) return refused(409, 'turn-running');

@@ -339,3 +339,30 @@ test('O73 FIX1: a waiting message keeps the title its sender had when it sent it
   fs.writeFileSync(go(), '');
   assert.equal((await sentAs('queued three')).fromTitle, 'Fourth');
 });
+
+// O255 round 4: an explicit steer that picks another mode goes into the turn when the agent can steer (the turn keeps
+// its mode), and when it cannot, it waits and the next turn runs in the mode it picked, not the old, wider one.
+test('O255: a steer with a new mode goes in when the agent steers, and otherwise waits and runs in that mode', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const go = path.join(instance.workspace, 'go'), held = async (chat, text) => (await events(instance, chat)).filter((e) => e.type === 'held' && String(e.data?.text).includes(text));
+  const gated = async (chat) => { assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202); await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating'); };
+  const steers = await agent(t, instance);
+  await gated(steers.conversation);
+  const nudge = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'nudge in plan', when: 'steer', mode: 'Plan' });
+  assert.ok(nudge.status < 300, JSON.stringify(nudge));
+  assert.deepEqual((await held(steers.conversation, 'nudge in plan')).filter((e) => e.data.when === 'queue'), [], 'a steer that picks a mode was queued for a new turn instead of steered in');
+  fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'turn-end'); fs.rmSync(go);
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
+  const waits = await agent(t, instance);
+  await gated(waits.conversation);
+  const later = await call(instance, `/chat/${waits.conversation}/prompt`, 'POST', { text: 'later in plan', when: 'steer', mode: 'Plan' });
+  assert.equal(later.status, 202, 'no steering: it waits for the turn end ' + JSON.stringify(later));
+  fs.writeFileSync(go, '');
+  await until(instance, (e) => e.conversation === waits.conversation && e.type === 'user' && String(e.data?.text).includes('later in plan'));
+  const lastMode = async () => (await events(instance, waits.conversation)).filter((e) => e.type === 'mode').at(-1)?.data?.name;
+  for (let i = 0; i < 100 && (await lastMode()) !== 'Plan'; i += 1) await pause(100);
+  const mine = await events(instance, waits.conversation);
+  assert.equal(await lastMode(), 'Plan', 'the waiting steer ran in the old mode: ' + JSON.stringify(mine.filter((e) => ['mode', 'user', 'held', 'turn-end'].includes(e.type)).map((e) => [e.type, e.data?.name ?? String(e.data?.text ?? '').slice(0, 30)])));
+  console.log('PASS O255 steer mode: steered in with its mode pick ignored; without steering it waited and the next turn ran in Plan');
+});
