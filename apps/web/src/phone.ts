@@ -138,8 +138,8 @@ function csrfToken() {
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
 const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
   for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); fillLoose(agents); }, () => {});
-async function request(path: string) {
-  const response = await fetch(path, { cache: 'no-store' });
+async function request(path: string, signal?: AbortSignal) {
+  const response = await fetch(path, { cache: 'no-store', signal });
   if (response.status === 401) toLogin();
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
@@ -1404,7 +1404,7 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
 // A screen of the chat's own scroller ahead; 'not-found' (request's error for a 404): the picture is gone, not fetched again.
 function watchShots(id: string, list: HTMLElement) {
   if (id !== shotsOf) { shots = new Map(); shotsOf = id; }
-  (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place)
+  (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place, AbortSignal.timeout(120000))
     .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, shots, list);
 }
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).

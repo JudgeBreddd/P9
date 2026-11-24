@@ -4,32 +4,40 @@
 import { imgSrc } from './helpers.mjs';
 
 // One observer for one scroller (root). watch(id, got, list) watches list's placeholders of chat id, letting the last list's
-// go; a picture lands in got (a Map, its src shot:<place> -> data: address, '' when gone: 404, or data that is not a picture). A place is a
-// ledger cursor, so it names one picture across chats. got belongs to the chat (the desktop's session, the phone's open
-// chat), so pictures go with their chat: no cap, at most what the chat's events held inline before O249.
-// A placeholder stays watched until its picture lands, so a failed fetch tries again when it next comes into view or the
-// chat redraws. One with no answer in 120 s lets a new try start, but still lands if its answer comes (a slow link is not
-// thrown away). get(id, place) resolves {mimeType, data}, null when gone, or rejects; landed(id) redraws.
-// The margin is fixed pixels (about a screen and a half), not a percentage.
+// go. got belongs to the chat (the desktop's session, the phone's open chat), keyed by the picture's src (shot:<place>, a
+// ledger cursor, so one picture across chats): undefined while its fetch is out, so a second one for it cannot start, from
+// any scroller showing that chat; then a data: address, or '' when gone (404, or data that is not a picture). A failed
+// fetch, or a reply with no data (a body cut off), clears its key, so it tries again when it next comes into view or the
+// chat redraws. get(id, place) resolves {mimeType, data}, null when gone, or rejects, and ends on its own
+// (the desktop's socket timeout, the phone's 120 s abort); landed(id) redraws. The margin is fixed pixels, about a screen
+// and a half, not a percentage.
 export function shotWatcher(root, get, landed) {
-  const busy = new Set(), of = new WeakMap();
+  const of = new WeakMap();
   const seen = new IntersectionObserver((hits) => hits.forEach(({ isIntersecting, target }) => {
     const [id, got] = of.get(target) ?? [], place = target.dataset.shot, key = 'shot:' + place;
-    if (!isIntersecting || !got || !target.isConnected || got.has(key) || busy.has(place)) return; // isConnected: queued before a redraw
-    busy.add(place);
-    const done = get(id, place).then((image) => {
+    if (!isIntersecting || !got || !target.isConnected || got.has(key)) return; // isConnected: queued before a redraw
+    got.set(key, undefined);
+    get(id, place).then((image) => {
+      if (image && typeof image.data != 'string') throw 0;
       const src = image && imgSrc({ type: 'image', mimeType: image.mimeType, data: image.data });
-      got.set(key, src || ''); if (src) landed(id);
-    });
-    Promise.race([done, new Promise((ok) => setTimeout(ok, 120000))]).catch(() => {}).finally(() => busy.delete(place));
+      if (got.has(key)) { got.set(key, src || ''); if (src) landed(id); }
+    }).catch(() => { if (got.get(key) === undefined) got.delete(key); });
   }), { root, rootMargin: '1000px 0px' });
-  return (id, got, list) => { seen.disconnect(); list.querySelectorAll('img[data-shot]:not([src])').forEach((img) => { of.set(img, [id, got]); seen.observe(img); }); };
+  return (id, got, list) => {
+    seen.disconnect(); list.querySelectorAll('img[data-shot]:not([src])').forEach((img) => { of.set(img, [id, got]); seen.observe(img); });
+  };
 }
 
 // The desktop's: one watcher per chat's scroller (.hist), fetched over the bridge from whichever machine the window is on,
-// into the chat's own s.shots; render(Set of chat ids) redraws those chats.
+// into the chat's own s.shots; render(Set of chat ids) redraws those chats. Each paint drops the pictures the chat's events
+// no longer name (a tool's replaced picture), so a chat holds at most its events' pictures.
 export function installShots(render) {
   const watchers = new WeakMap();
   const get = (id, shot) => window.p9.chat('shot', { id, shot }).then((r) => (r.status === 200 ? r.body : r.status === 404 ? null : Promise.reject(r.status)));
-  return { watch: (s, h) => { let w = watchers.get(h); if (!w) watchers.set(h, w = shotWatcher(h, get, (id) => render(new Set([id])))); w(s.id, s.shots ||= new Map(), h); } };
+  return { watch: (s, h) => {
+    let w = watchers.get(h); if (!w) watchers.set(h, w = shotWatcher(h, get, (id) => render(new Set([id]))));
+    const got = s.shots ||= new Map(), named = new Set(s.events.flatMap((e) => e.images || []));
+    for (const key of got.keys()) if (!named.has(key)) got.delete(key);
+    w(s.id, got, h);
+  } };
 }
