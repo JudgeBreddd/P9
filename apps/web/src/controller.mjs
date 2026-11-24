@@ -6,9 +6,8 @@ import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
-import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
+import { PATH_KEYS, missionKeys, missionShown, missionValue, editItems } from './mission-files.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
-import { editorModal, editItems } from './mission-editor.mjs';
 import { tileHtml, tileLevel, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
@@ -18,7 +17,7 @@ import { createSide } from './side.mjs';
 import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 import { installMission } from './mission-view.mjs';
-import { installChat } from './chat-view.mjs';
+import { installChat, askKey } from './chat-view.mjs';
 import { installPanel } from './panel.mjs';
 import { installSettings } from './settings-view.mjs';
 import { installCards } from './cards-modal.mjs';
@@ -82,7 +81,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
+  const { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, free, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
@@ -314,7 +313,7 @@ function renderTabs() {
 function cardList(all) {
   const asks = S.sessions.filter(s => s.pending);
   const cards = [];
-  if (asks.length) cards.push({ key: 'asks:' + asks.map(s => s.id + s.pending).join(), quiet: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
+  if (asks.length) cards.push({ key: 'asks:' + asks.map(askKey).join(), quiet: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
   // Only _tyler/ items that arrive while the app is open get a card; the ones already there, and the ones
   // he skips, wait quietly in the Notification Center. Running chats are robot heads in the panel (panel.mjs).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
@@ -1277,7 +1276,7 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
 liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = true; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && (await import('./attach.mjs')).attachBody(images)) }).finally(() => { s.sending = false; }); if (r.status === 202) return renderChats(); s.images = [...images, ...(s.images || [])].slice(0, 8);
   // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
   // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
-  if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift({ t: text, at: Date.now() }); keepQueue(s); setTimeout(() => { if (!s.prompted && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
+  if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift({ t: text, at: Date.now() }); keepQueue(s); setTimeout(() => { if (!s.prompted && free(s) && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
   s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {

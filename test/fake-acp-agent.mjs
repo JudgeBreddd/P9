@@ -244,6 +244,19 @@ const connection = acp.connectAgent(stream, {
       await say('Glad she turned out just how you wanted!');
       return { stopReason: 'end_turn' };
     }
+    // O249: a busy chat as a real one is: each step a tool call whose result is a ~400 KB screenshot (base64 'A's: any
+    // base64 passes the image check), then a fresh slash-command list of ~70 KB, as the adapters resend it.
+    const heavy = /^heavy (\d+)$/.exec(text);
+    if (heavy) {
+      for (let i = 0; i < Number(heavy[1]); i += 1) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'heavy-' + i, title: 'Read shot' + i + '.png', kind: 'read', status: 'completed',
+          content: [{ type: 'content', content: { type: 'image', mimeType: 'image/png', data: 'A'.repeat(400000) } }] } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands: Array.from({ length: 300 }, (_, j) => ({ name: 'cmd' + j, description: 'x'.repeat(220) })) } });
+      }
+      // Last, a tool whose output holds the same words as a command list's kind, nested: it is a tool call, not a list.
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'heavy-decoy', title: 'grep', kind: 'search', status: 'completed', rawOutput: { sessionUpdate: 'available_commands_update' } } });
+      await say('heavy done'); return { stopReason: 'end_turn' };
+    }
     // Images the way the real adapters send them (threat model row 26): Codex's image generation as a finished tool call
     // with the image (and its saved path as uri), Claude's image in a reply, and an image known only by its address.
     if (text === 'images') {
@@ -479,6 +492,8 @@ const connection = acp.connectAgent(stream, {
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }
+    // Review round 8 (O249): a turn that fails after a while, with no end of its own (the daemon's prompt-error path).
+    if (text === 'slow fail') { await say('working'); await new Promise((resolve) => setTimeout(resolve, 4000)); throw new Error('slow fail'); }
     if (text === 'slow') {
       cancelled.delete(sessionId);
       await say('working');

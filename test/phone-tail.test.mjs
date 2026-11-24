@@ -31,6 +31,22 @@ test('O251: the tail read keeps a message still held from early in a long turn',
   assert.deepEqual(ledger.tail([BIG], at, 5).events.filter((event) => event.type === 'held').map((event) => event.data.id), ['h1'], 'held at the earlier cursor');
 });
 
+// O249: the slash-command list from before the cut is found by its top-level kind; a later tool whose output holds the same
+// words is not taken for it.
+test('O249: the tail read carries the real slash-command list from before the cut, not a tool naming its kind', () => {
+  const ledger = openLedger(':memory:'), add = (type, data) => ledger.append(BIG, type, data);
+  add('user', { text: 'go' });
+  add('update', { sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'a' }, { name: 'b' }] });
+  add('update', { sessionUpdate: 'tool_call', toolCallId: 'decoy', title: 'grep', rawOutput: { sessionUpdate: 'available_commands_update' } });
+  for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 't' + i, title: 'step' });
+  const result = ledger.tail([BIG], undefined, 5);
+  assert.ok(result.more[BIG] > 0, 'both are older than the kept blocks');
+  const lists = result.events.filter((event) => event.data?.sessionUpdate === 'available_commands_update');
+  assert.equal(lists.length, 1, 'one list');
+  assert.equal(lists[0].data.availableCommands?.length, 2, 'the real list');
+  assert.ok(!result.events.some((event) => event.data?.toolCallId === 'decoy'), 'the tool is before the cut and stays out');
+});
+
 // P20: the tail read counts blocks as the phone draws them: a run of streamed chunks is one block, bookkeeping
 // updates are none, and the latest message from the user comes along when the kept blocks hold none (O251).
 test('P20: the tail read counts a chunk run as one block and carries the latest message', () => {

@@ -87,12 +87,77 @@ test('remote speed: the window over a slow link, how long until the chats show, 
   assert.deepEqual(errors, []);
 });
 
+// O249: a remote with a busy chat (MBs of screenshots and repeated slash-command lists) drew empty boxes for ~45 s, because
+// launch replayed every open chat before it drew the list. The list should draw in a few round trips, whatever a chat holds.
+test('O249 a busy chat does not hold the chat list back over a slow link', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // The busy chat first, so the two newest (the ones shown at launch) are small: the list must not wait on any chat's events.
+  const heavy = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Busy' })).conversation;
+  await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'heavy 8' }); await ended(instance, heavy);
+  // Only the newest slash-command list comes in a chat's tail (ledger.tail): eight came before, 0.5 MB of nothing.
+  const tail = await call(instance, '/chat/events?after=0&tail=200&only=' + heavy);
+  const lists = tail.events.filter((e) => e.data?.sessionUpdate === 'available_commands_update');
+  assert.equal(lists.length, 1, 'one slash-command list in the tail');
+  assert.equal(lists[0].data.availableCommands?.length, 300, 'the list kept is the real one, not the tool whose output names its kind');
+  assert.ok(tail.events.some((e) => e.data?.toolCallId === 'heavy-decoy'), 'the tool call naming the kind stays');
+  let id;
+  for (let i = 0; i < 11; i += 1) {
+    id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Chat ' + i })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello ' + i }); await ended(instance, id);
+  }
+  const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
+  const sock = path.join(slow, 'daemon.sock');
+  const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
+  await writeFile(path.join(slow, 'desktop.json'), JSON.stringify({ ...creds, socketPath: sock }), { mode: 0o600 });
+  const link = await slowLink(path.join(instance.state, 'daemon.sock'), sock, RTT, t);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const start = Date.now(); // not from Chat live: before the fix that came only when the whole replay had arrived
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', slow, '--user-data-dir=' + path.join(slow, 'profile')], env, chromiumSandbox: true, timeout: 60000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((r) => setTimeout(r, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 1400, height: 900 }).catch(() => {});
+  await page.locator('#navList .row[data-chat]').nth(11).waitFor({ timeout: 120000 });
+  await page.locator('#chats').getByText('echo:hello 10', { exact: false }).first().waitFor({ timeout: 120000 });
+  const drawn = Date.now() - start;
+  console.log(`O249 rtt ${RTT} ms, ${BPS * 8 / 1e6} Mbit/s: 12 chats listed and the shown chat drawn ${drawn} ms after launch`);
+  for (const e of link.log) console.log(`O249 ${String(e.at).padStart(6)} -> ${String(e.done == null ? 'open' : e.done).padStart(6)} ms ${String(e.bytes).padStart(8)} B  ${e.req}`);
+  // The busy chat's ~3.5 MB alone is 14 s at 2 Mbit/s; the list and the shown chat are a few small reads after the window starts.
+  assert.ok(drawn < 10000, `the list and the shown chat drew ${drawn} ms after launch; a busy chat's events must not come first`);
+  // Review round 1: the busy chat is still loading after the list (late(), ~13 s of history at 2 Mbit/s). An event from it
+  // meanwhile waits for that load on its own; the shown chat's reply does not wait behind it.
+  await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'hello busy' });
+  await new Promise((r) => setTimeout(r, 500));
+  const asked = Date.now();
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello again' });
+  await page.locator('#chats').getByText('echo:hello again', { exact: false }).first().waitFor({ timeout: 120000 });
+  const replied = Date.now() - asked;
+  console.log(`O249 the shown chat's reply drew ${replied} ms after its prompt, while the busy chat loaded`);
+  assert.ok(replied < 6000, `the shown chat's reply drew ${replied} ms after its prompt; it waited behind the busy chat's history`);
+  // Self-review: an ask that comes in while the busy chat still loads shows its notice; before, every notice waited for all
+  // the background loads (late()), about 13 s more here.
+  const askAt = Date.now();
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'ask' });
+  await page.locator('#toasts .toast', { hasText: 'needs you' }).first().waitFor({ timeout: 8000 });
+  console.log(`O249 an ask's notice showed ${Date.now() - askAt} ms after it came, while the busy chat loaded`);
+  // It still loads, after: opened, its history and the reply that came while it loaded both show (behind() kept it).
+  await page.locator(`#navList .row[data-chat="${heavy}"]`).click();
+  await page.locator('#chats').getByText('heavy done', { exact: false }).first().waitFor({ timeout: 120000 });
+  await page.locator('#chats').getByText('echo:hello busy', { exact: false }).first().waitFor({ timeout: 30000 });
+  assert.deepEqual(errors, []);
+});
+
 // O251: back after time away. The window was open, its machine slept (the link held), one chat worked meanwhile; on wake the
 // window should draw that chat's current state in one step, not page through every update the chat streamed meanwhile.
 test('O251 back after time away: the window draws the current state in one step, not every update since', { timeout: 300000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Worker' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' }); await ended(instance, id);
+  // A second chat shown beside it (split), stopped while away: its stopped event is in the skipped gap, so the list hides it
+  // and its pane closes (review round 8 self-review: that close was lost once).
+  const other = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Other' })).conversation;
+  await call(instance, `/chat/${other}/prompt`, 'POST', { text: 'hello' }); await ended(instance, other);
   const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
   const sock = path.join(slow, 'daemon.sock');
   const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
@@ -109,10 +174,13 @@ test('O251 back after time away: the window draws the current state in one step,
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 120000 });
   await page.locator(`#navList .row[data-chat="${id}"]`).click();
   await page.locator('#chatPane, .stage').getByText('hello', { exact: false }).first().waitFor({ timeout: 30000 }).catch(() => {});
+  await page.locator(`section.pane[data-id="${id}"] [data-tool=split]`).click({ timeout: 10000 });
+  await page.locator(`section.pane[data-id="${other}"]`).waitFor({ timeout: 30000 });
   await new Promise((r) => setTimeout(r, 2000));
   link.hold();
   const N = 1500;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'stream ' + N }); await ended(instance, id);
+  assert.equal((await call(instance, `/chat/${other}/stop`, 'POST')).status, 200);
   // A chat made while away: its created event is in the skipped gap, so its row comes from the list.
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Made away' })).status < 300, true);
   const gap = (await call(instance, '/chat/events?after=0&only=&tail=1')).cursor; // a tail of no chats answers with the newest cursor
@@ -127,6 +195,7 @@ test('O251 back after time away: the window draws the current state in one step,
   }
   assert.ok(drawn, 'the chat shows its current state after wake');
   await page.locator('#navList .row', { hasText: 'Made away' }).first().waitFor({ timeout: 15000 });
+  await page.locator(`section.pane[data-id="${other}"]`).waitFor({ state: 'detached', timeout: 15000 });
   const took = Date.now() - t1;
   const after = link.log.slice(mark), pages = after.filter((e) => /^GET \/chat\/events/.test(e.req));
   console.log(`O251 rtt ${RTT} ms, ${BPS * 8 / 1e6} Mbit/s: ${3 * N} updates streamed while away (ledger cursor ${gap}); current state drawn ${took} ms after wake; ${after.length} requests, ${pages.length} event reads, ${after.reduce((a, e) => a + e.bytes, 0)} bytes`);

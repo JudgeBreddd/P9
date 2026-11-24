@@ -230,3 +230,20 @@ test('Profile: main-thread time idle, with a question open, while a 2,100-event 
   assert.ok(out.pendingAtLength.task < 3, 'a pending question in a 2,100-event chat costs under 30%: ' + out.pendingAtLength.task + ' s');
   assert.ok(out.after.task < 1, 'an idle 2,100-event chat costs under 10%: ' + out.after.task + ' s');
 });
+
+// Review round 8 (O249): a turn that ends in an error has no turn-end after it. A message queued behind it went only with the
+// next turn or a click; it goes at the error now, as at a turn end.
+test('A message queued behind a turn that fails goes when the failure comes', { timeout: 120000 }, async (t) => {
+  const { instance, id, launch, open, users, ends } = await setup(t, 'failq', ['no-steering']);
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(), chat = await open(page);
+  await chat.send('slow fail');
+  await chat.pane.getByText('working', { exact: true }).waitFor({ timeout: 15000 });
+  await chat.send('first');
+  await until(async () => (await chat.queued()).length === 1, 'first queued');
+  await until(async () => (await said(instance, id, 'error')).length === 1, 'the turn failed');
+  await until(async () => (await users()).includes('first'), 'first sent after the failure', 10000);
+  await until(async () => (await chat.queued()).length === 0, 'queue empty');
+  assert.deepEqual(await users(), ['hello', 'slow fail', 'first']);
+  console.log('PASS failed turn: the message queued behind a turn that ended in an error went at the error');
+});

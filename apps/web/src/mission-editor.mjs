@@ -7,16 +7,6 @@
 // when another edit changed the file meanwhile but none of these fields, the daemon saves it anyway; it refuses only a real clash.
 const KINDS = { scripts: 'button', apps: 'app', pages: 'link', sections: 'section' };
 
-// The rows for what Mission holds now: M is the controller's mission state ([title, desc, terminal, id, icon] apps,
-// [title, url, id, icon] pages, {id, title, icon} sections, {id, title, icon, section} buttons). A section is keyed by its id (W-C): titles may repeat.
-// Buttons come last: registry scripts, then each space button, which names its section.
-export const editItems = (M) => [
-  ...M.apps.map((a) => ({ kind: 'apps', key: a[3], title: a[0], icon: a[4] || '' })),
-  ...M.pages.map((p) => ({ kind: 'pages', key: p[2], title: p[0], icon: p[3] || '' })),
-  ...(M.space || []).map((s) => ({ kind: 'sections', key: s.id, title: s.title, icon: s.icon || '' })),
-  ...(M.buttons || []).map((b) => ({ kind: 'scripts', key: b.id, title: b.title, icon: b.icon || '', ...(b.section ? { section: b.section } : {}) })),
-];
-
 const WORDS = { 'hash-conflict': 'The file changed since this form opened. Nothing was saved.', 'registry-read-only': 'File protection is on, so P9 did not write it.',
   'duplicate-section': 'Another section already has that id.', 'ambiguous-section': '', 'bad-json': 'That is not a JSON object.', 'invalid-record': '', 'unknown-id': 'It is no longer in the file.', 'unknown-section': 'It is no longer in the file.',
   'picture-too-big': 'That picture is over 256 KB.', 'picture-type': 'Use a PNG, JPEG, WebP, ICO or SVG picture.', 'picture-unreadable': 'P9 could not read that file.' };

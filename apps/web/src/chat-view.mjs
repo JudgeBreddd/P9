@@ -8,6 +8,10 @@ import { LABEL, projectOf } from './panel.mjs'; import { fillLoose } from './sec
 // The two button looks repeated in the pane's markup, written once (they cost bytes in the startup JS each time).
 const GH = 'data-slot="button" data-variant="ghost" data-size="sm"', OL = 'data-slot="button" data-variant="outline" data-size="sm"';
 
+// The ask a chat waits on, by its request (bell-notice.mjs: one its history loaded is old).
+export const askId = s => s.events.findLast(e => e.request !== undefined && (e.t === 'approval' || e.t === 'question'))?.request;
+// The bell's key for a chat's ask (controller.mjs cardList, bell-notice.mjs): by request, so a new ask of the same kind is new.
+export const askKey = s => s.id + (askId(s) ?? s.pending);
 export function installChat(outer) {
 const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
 const pinKey = art => art.sid + '\n' + art.title;
@@ -618,8 +622,8 @@ function pane(s, i, bare) {
       ${bare ? '' : tools()}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get(), shelved)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? esc(outer.names[s.agent]) + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.readonly ? '' : meters(s)}
-      ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="${loading(s) ? 'Loading this chat…' : 'Interrupt and send this now'}" data-qnow="${j}"${loading(s) ? ' disabled' : ''}>${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
@@ -785,7 +789,7 @@ function paint(root, ss, only) {
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
-    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [q] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, q.t); });
+    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { if (loading(s)) return; const [q] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, q.t); });
     // The Mode, Model and Effort pills each open their menu (#pillMenu, outside the panes; the pill menu code above pane).
     p.querySelectorAll('[data-pill]').forEach(b => b.onclick = () => PM.btn === b ? closePill() : openPill(b, s, b.dataset.pill));
     p.querySelector('[data-attach]').onclick = () => pickImages(s);
@@ -834,11 +838,15 @@ async function addImages(s, files) {
   renderChats();
 }
 // The composer's send (go) and an artifact's Send comments (item 19) share it: queued behind a running turn, or sent.
-const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved');
+// Review round 8: not while the chat loads (stub, or events buffered behind its load): it would send in the default mode, or
+// steer into a turn it does not know of yet. The box keeps the text; Send says why.
+const loading = s => !!(s.stub || s.behind);
+const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || loading(s) || s.state === 'moving' || s.state === 'moved');
+// Review round 9: one typed while an earlier message waits in the daemon's hold goes behind it ('queue'), not past it by steering.
 function sendText(s, t, now, when) {
   const mid = !now && busy(s);
   if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push({ t, at: Date.now() }); keepQueue(s); renderChats(); return; }
-  (now ? interrupt : outer.startTurn)(s, t, mid ? when || 'steer' : undefined);
+  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length ? 'queue' : 'steer') : undefined);
 }
 // An interrupt-and-send message was lost: the daemon refuses a prompt while the cancelled turn is
 // still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
@@ -850,7 +858,9 @@ function interrupt(s, t) {
 function cancelTurn(s, quiet) {
   // CP7: no turn to cancel (it ended, or its end never came) means idle: the chat stops showing working and an
   // interrupt's message, queued first, goes now.
-  if (s.live) { if (!quiet) outer.liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn') { s.working = s.prompted = false; turnEnd(s); } }); return; }
+  // Review rounds 7-8: a turn started since the cancel (its count moved, or a prompt still in flight) keeps its Working
+  // state and sends the queue at its end. The count is kept outside the chat, so a jump's rebuild cannot set it back.
+  if (s.live) { const t = turnsOf.get(s.id); if (!quiet) outer.liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn' && turnsOf.get(s.id) === t && !s.sending) { s.working = s.prompted = false; turnEnd(s, free(s)); } }); return; }
   s.turn = (s.turn || 0) + 1; s.streaming = false; // stale timers see a new turn number and stop
   s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress'));
   if (!quiet) s.events.push({t:'notice', text:'Turn cancelled.'});
@@ -865,10 +875,17 @@ function finished(s) {
   s.done = true; outer.keepUnseen();
   if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(outer.names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); outer.openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
 }
-function turnEnd(s) {
+// Every queued-message send that is not the person's own click asks free(): not stopped or moving (the daemon would
+// resume the chat). Review round 8: whether a turn runs is the daemon's to say, not this window's guess (an unprompted
+// run's end never reaches it, a refused prompt leaves Working on): the send goes as when 'queue', so the daemon holds it
+// for a turn running there and sends it at that turn's end, and starts it when none runs.
+const turnsOf = new Map(); // chat id -> 'user' events applied (cancelTurn)
+const free = (s) => !['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
+// send false: the turn's artifact and mode change still happen, but no queued message goes (free()).
+function turnEnd(s, send = true) {
   autoArtifact(s);
   if (s.modeNext) { setMode(s, s.modeNext); s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + modeNow(s) + '.'}); }
-  if (s.queue.length) { const { t } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
+  if (send && s.queue.length) { const { t } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t, 'queue'); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -935,7 +952,7 @@ const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c =>
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
 const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return keptItems(q); } catch { return []; } };
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
-// E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
+// E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
 function history(s, until = outer.liveChat.cursor) {
   return s.loading ||= (async () => {
@@ -945,7 +962,12 @@ function history(s, until = outer.liveChat.cursor) {
       // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
+      const was = s.state; // review round 9: a Stop clicked while this loads stays; history is older than it
       for (const ev of r.body.events) try { applyChat(ev); } catch {}
+      if (was === 'stopping') s.state = was;
+      // An ask loaded from history was there before: it goes to the bell without its notice (bell-notice.mjs). Review round
+      // 8: by its request, so a new ask of the same kind after it was answered is new.
+      s.pendingOld = askId(s);
       if (r.body.more) { tailed(s, r.body); break; }
       after = r.body.cursor;
       if (r.body.events.length < 500) break;
@@ -982,7 +1004,7 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -1047,7 +1069,10 @@ function applyChat(ev, into) {
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
     case 'turn-end': settle(); s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
-    case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
+    // Review rounds 8-10: an error that ends a prompt (ends: the daemon's prompt-error and refused-setting paths, which send no
+    // turn-end) closes the turn the same way. Any other (a refused hand-off mid-turn) keeps the turn and its ask; it clears
+    // Working as before, which the agent's next output sets again, and an older ledger's errors (no ends) still clear it.
+    case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; if (d.ends && s.prompted && !into) { settle(); return s; } break;
     // N1: the daemon's word on a chat's project, title, archive and removal, for every window (apps/server/projects.mjs).
     case 'project': s.project = d.project ?? null; s.folderAsked = false; break;
     case 'renamed': s.title = d.title; s.named = true; break;
@@ -1063,9 +1088,11 @@ function applyChat(ev, into) {
 }
 async function loadChat() {
   if (!window.p9?.chat) return;
-  // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
-  // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
-  let replaying = true, scope = null, listed = [];
+  // O249: launch reads no chat's events before the list draws: a tail of no chats answers with the newest cursor (as jump()
+  // does), every chat comes from the list as a stub, the shown ones load their newest blocks (renderChats -> history), and
+  // the other open chats load after, one at a time (late, below). Before, launch replayed every open chat first (E2, P20),
+  // and a busy chat's screenshots held the whole window empty for 45 s over a remote.
+  let replaying = true, scope = null;
   // O47: the list reply carries each agent's lists; while the daemon reads them fresh, ask again until it is done.
   let asking = false;
   const lists = async body => { if (!outer.takeLists(body?.lists) || asking) return; asking = true;
@@ -1079,7 +1106,7 @@ async function loadChat() {
   // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
   // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.
   // A chat from the daemon's list, not loaded yet (its events read when opened). O251: the launch and jump() both make them.
-  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived });
+  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, askable: !!c.askable });
   const lastTwo = () => { if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id); };
   const caughtUp = (listed) => {
     // Tabs keep the order the chats were made in; History sorts by last used.
@@ -1099,20 +1126,29 @@ async function loadChat() {
     outer.closedChats.clear(); localStorage.removeItem('eh-closed-chats');
     lastTwo();
     // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
-    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+    // O249: a stub loads first, so the message goes in the chat's own mode, not the window's default.
+    // Events that came for it during that load apply first (behind(), which drains them after: s.drain).
+    // Into a turn running now (another window's), the daemon holds it for that turn's end (turnEnd sends as 'queue').
+    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(unlessJumped(() => { if (s.behind) s.drain = true; else if (free(s)) turnEnd(s); }), () => {}) : free(s) && turnEnd(s);
   };
   // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
   // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
   // the box, the queue, an unseen mark; tabs follow the list as at launch (caughtUp: a stopped chat's is closed). The gap's finishes are summed: a chat not shown that was used in the
   // gap gets one unseen mark, not a notice per turn. False when the daemon did not answer, so the page is drawn as before.
-  const jump = async () => {
+  const jumpNow = async (page) => {
     const head = await window.p9.chat('events', { after: 0, only: [], tail: TAIL }), l = await window.p9.chat('list', {});
     if (head.status !== 200 || l.status !== 200) return false;
+    // A late() still loading stops at its next chat (it would take the gate below and skip that chat) and starts over at the end.
+    const again = lateBusy; lateRun += 1;
     // A chat's load still in flight ends first: it marks its chat loaded when done, which would land on the emptied stub. One
     // asked for meanwhile (a chat opened) gets the gate instead, so none reads up to the old cursor; the reset clears it.
     let open; const gate = new Promise(res => { open = res; }), flying = outer.S.sessions.map(s => s.loading).filter(Boolean);
     for (const s of outer.S.sessions) s.loading = gate;
     try { await Promise.all(flying.map(p => p.catch(() => {}))); } finally { outer.setTimeout(open, 0); }
+    jumps += 1;
+    // Review round 7: what the skipped events do in this window only (a take-back's text to the box, a failure's mark) is
+    // kept: the buffered ones, then the page's. The list cannot carry them.
+    const skipped = [...outer.S.sessions.flatMap(s => s.behind || []), ...page];
     const listed = l.body.conversations || [], by = new Map(listed.map(c => [c.id, c])), shown = new Set(outer.S.open);
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
@@ -1123,16 +1159,82 @@ async function loadChat() {
     }
     outer.liveChat.cursor = head.body.cursor; outer.keepUnseen();
     // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
-    caughtUp(listed); outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
+    caughtUp(listed);
+    for (const ev of skipped) carry(ev); // after caughtUp, so a chat made in the gap gets its own too
+    outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
     lastTwo();
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
+    if (again) late();
     return true;
+  };
+  // Review round 6: a chat's history callback (behind(), the launch drain) that comes while a jump is in flight waits for it.
+  // The page that set off the jump is not applied yet (a stop in it), so the callback would see the old state and send a
+  // queued message into a chat stopped meanwhile. A jump that rebuilt the chats drops the callback (its caughtUp sends kept
+  // messages from the list's state); one that did not runs it after the page is applied.
+  let jumps = 0, jumping = null;
+  const jump = (page) => (jumping ||= jumpNow(page).finally(() => { jumping = null; }));
+  const unlessJumped = (f) => { const g = jumps; return () => { const go = () => { if (g === jumps) f(); }; return jumping ? jumping.then(go) : go(); }; };
+  // O249: the open chats not shown load after the list draws, shown ones first, one read at a time so the shown chat's
+  // read is not shared with the rest over a slow link. Their asks were there before launch: history marks them old, so
+  // they go to the bell with no notice, while an ask that comes in meanwhile still shows its notice (self-review).
+  // A jump (O251) makes them stubs again; one that cuts a late() short starts it over. After late() is done, a jump leaves
+  // the chats not shown as stubs until opened, as O251 does, so a wake stays one step.
+  let lateRun = 0, lateBusy = false;
+  const late = async () => {
+    const run = ++lateRun; lateBusy = true;
+    const shown = new Set(outer.S.open), open = outer.S.sessions.filter(s => s.stub && !s.hidden).sort((a, b) => shown.has(b.id) - shown.has(a.id));
+    for (const s of open) { if (outer.lifetime.signal.aborted || run !== lateRun) return; try { await history(s); } catch (e) { console.error('chat history', e); } }
+    if (run === lateRun) lateBusy = false;
+  };
+  // What a live event leaves in this window only, never from a replay (history): N1, failed (a red cross on the row and the
+  // strip) until it is seen; CP1, a held message taken back goes into the box, as typed (the box keeps its own draft).
+  // ponytail: a taken-back message's images are not returned; attach them again.
+  const carry = (ev) => {
+    const s = outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return;
+    if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
+    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) s.draft = ev.data.text + (s.draft ? '\n' + s.draft : '');
+  };
+  // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.
+  const take = (ev, ended, answered_) => {
+    const created = ev.type === 'created' && !replaying;
+    // A malformed stored event is skipped, never thrown: it would fail again on every replay.
+    let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
+    // A7: a worker an agent started never takes the screen from the chat being read; it is listed under its parent.
+    // window-10: nor does the lead chat this window's Start sprint makes; the project page keeps the press's answer.
+    if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation);
+    if (!replaying) carry(ev);
+    if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
+    if (ev.type === 'answered') answered_.push(ev.conversation);
+    // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
+    const closed = !replaying && ev.type === 'closed' && outer.S.sessions.find(s => s.id === ev.conversation && !s.hidden);
+    if (closed) { closed.hidden = true; untab(closed.id); }
+  };
+  // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
+  // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
+  // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
+  // the same poll): the daemon would resume it.
+  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
+  // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
+  // Review rounds 2-3: every buffered event applies first, so a send uses the chat's mode as it is now; then at most one
+  // queued message goes (one turn end, or the launch drain, s.drain), and none to a chat stopped meanwhile, which the
+  // daemon would resume.
+  const behind = (s, evs) => {
+    if (s.behind) return void s.behind.push(...evs);
+    s.behind = [...evs];
+    history(s, evs[0].cursor - 1).then(unlessJumped(() => {
+      const buffered = s.behind || [], ended = [], answered_ = [], drain = s.drain; s.behind = null; s.drain = false;
+      for (const e of buffered) take(e, ended, answered_);
+      const end = ended.length ? [ended.at(-1)] : [];
+      settle(end, answered_);
+      if (drain && !end.length && s.state === 'running' && free(s) && s.queue.length) turnEnd(s);
+      try { outer.renderTabs(); renderChats(new Set([s.id])); } catch (e) { console.error('chat paint', e); }
+    }), (e) => console.error('chat history', e));
   };
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { lists(l.body); listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
-    // P20: the first replay reads each open chat's newest blocks only (tailed, above).
+    if (l?.status === 200) { lists(l.body); scope = { only: [] }; }
     const tail = replaying && scope?.only && !outer.liveChat.cursor ? { tail: TAIL } : {};
     const r = scope ? await window.p9.chat('events', { after: outer.liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
@@ -1141,41 +1243,24 @@ async function loadChat() {
     if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); if (waitingNew) { const a = waitingNew; waitingNew = null; newSession(...a); } }
     // O251: a full page while live means this window fell behind (a sleep, a dropped link), and drawing every update since,
     // 500 at a time, took minutes over a remote. Jump instead, as a fresh launch would (jump, below).
-    if (!replaying && r.body.events.length >= 500 && await jump()) continue;
-    // A tail can leave out a chat's created event, so its tab comes from the list.
-    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), archived: c.archived, parent: c.parent ?? null });
-    const ended = [], answered_ = [];
+    if (!replaying && r.body.events.length >= 500 && await jump(r.body.events)) continue;
+    const ended = [], answered_ = [], held = new Map();
     for (const ev of r.body.events) {
-      const created = ev.type === 'created' && !replaying, stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
-      if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
-      // A malformed stored event is skipped, never thrown: it would fail again on every replay.
-      let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
-      // A7: a worker an agent started never takes the screen from the chat being read; it is listed under its parent.
-      // window-10: nor does the lead chat this window's Start sprint makes; the project page keeps the press's answer.
-      if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation);
-      // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
-      if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
-      if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
-      if (ev.type === 'answered') answered_.push(ev.conversation);
-      // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
-      // ponytail: its images are not returned; attach them again.
-      const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && outer.S.sessions.find(s => s.id === ev.conversation);
-      if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
-      // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
-      const closed = !replaying && ev.type === 'closed' && outer.S.sessions.find(s => s.id === ev.conversation && !s.hidden);
-      if (closed) { closed.hidden = true; untab(closed.id); }
+      // Review round 7: and while its buffer waits (a jump in flight), so nothing newer applies before it.
+      const stub = outer.S.sessions.find(s => s.id === ev.conversation && (s.stub || s.behind));
+      if (stub) { if (!held.has(stub)) held.set(stub, []); held.get(stub).push(ev); } else take(ev, ended, answered_);
     }
+    for (const [s, evs] of held) behind(s, evs);
     outer.liveChat.cursor = r.body.cursor; if (!replaying && r.body.events.length) sprintStale = true;
-    if (r.body.more) for (const s of outer.S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
     if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
       caughtUp(await list());
       outer.moveReloaded();
+      late();
     }
-    // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
-    else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
+    else if (!replaying) settle(ended, answered_);
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace };
+  return { ART, free, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace };
 }

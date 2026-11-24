@@ -1874,34 +1874,34 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (want && (want !== session.mode || session.modeWaits)) {
         // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
         try { await Promise.race([setMode(session, conversation.provider, want, !solo), wait(5000).then(() => { throw new Error('timeout'); })]); }
-        catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.' }); return refused(500, 'mode-failed'); }
+        catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
       }
       if (!solo) session.back = undefined;
       // MC-3: a prompt with no mode, or with the one the session is already in, set none; the pill learns it here once.
       if (!solo && !session.told && session.mode) tellMode(session, conversation.provider);
       if (body.model && body.model !== session.models?.current) {
         if (!session.models?.options.some((o) => o.value === body.model)) {
-          if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.' }); return refused(400, 'model-unknown');
+          if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.', ends: true }); return refused(400, 'model-unknown');
         }
         try {
           const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'model', value: body.model }), wait(5000).then(() => { throw new Error('timeout'); })]);
           if (!models(session, id, result?.configOptions)) { session.models.current = body.model; emit(id, 'config', configOf(session)); }
-        } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'The model could not be set; nothing was sent.' }); return refused(500, 'model-failed'); }
+        } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'The model could not be set; nothing was sent.', ends: true }); return refused(500, 'model-failed'); }
       }
       // After the model: a model switch can change the effort list. A refused or failed setting stops the turn, like Model.
       for (const [configId, value] of picks) {
         const o = session.pickers?.find((x) => x.id === configId);
         if (value === o?.current) continue;
         if (!o?.options.some((x) => x.value === value)) {
-          if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.' }); return refused(400, 'config-unknown');
+          if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.', ends: true }); return refused(400, 'config-unknown');
         }
         try {
           const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }), wait(5000).then(() => { throw new Error('timeout'); })]);
           if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); }
-        } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.' }); return refused(500, 'config-failed'); }
+        } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
       }
       if (photos(images).length && !session.capabilities.promptCapabilities?.image) {
-        if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not take images; nothing was sent.' }); return refused(400, 'images-unsupported');
+        if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not take images; nothing was sent.', ends: true }); return refused(400, 'images-unsupported');
       }
       // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
@@ -1953,7 +1953,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           untake(id, turn); // O214: a failed turn is not a message that arrived
           if (cutLine && !keptPref('cut-by:' + id)) cutBy(id, cutLine); // not read: the next prompt says it
           if (session.turn === turn) for (const hook of turnFailedHooks) { try { hook(id, turn, Boolean(solo)); } catch {} }
-          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
+          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session), ends: true }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null; session.turnEdits = null;

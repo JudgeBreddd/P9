@@ -19,3 +19,14 @@ export const missionValue = (k, text) => {
   if (k === 'notes_roots') return Object.fromEntries(text.split('\n').filter(l => l.trim()).map(l => { const i = l.indexOf('='); return i < 0 ? [l.trim(), ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
   return text;
 };
+
+// Kept here, not in mission-editor.mjs, so that form loads only when it opens (shell-bundle.test.mjs BUDGET).
+// The rows for what Mission holds now: M is the controller's mission state ([title, desc, terminal, id, icon] apps,
+// [title, url, id, icon] pages, {id, title, icon} sections, {id, title, icon, section} buttons). A section is keyed by its id (W-C): titles may repeat.
+// Buttons come last: registry scripts, then each space button, which names its section.
+export const editItems = (M) => [
+  ...M.apps.map((a) => ({ kind: 'apps', key: a[3], title: a[0], icon: a[4] || '' })),
+  ...M.pages.map((p) => ({ kind: 'pages', key: p[2], title: p[0], icon: p[3] || '' })),
+  ...(M.space || []).map((s) => ({ kind: 'sections', key: s.id, title: s.title, icon: s.icon || '' })),
+  ...(M.buttons || []).map((b) => ({ kind: 'scripts', key: b.id, title: b.title, icon: b.icon || '', ...(b.section ? { section: b.section } : {}) })),
+];
