@@ -805,6 +805,8 @@ export async function createDesktop({ state, open } = {}) {
     // A worker's notes file (SECURITY.md § Sprint files): read-only; the daemon builds the name from the chat's parent and key.
     notes: ({ id: chat, ...rest }) => uuid(chat) && !Object.keys(rest).length && ['GET', `/chat/${chat}/notes`],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
+    // O249: an agent's picture by its place in the events (the daemon's shot: "cursor/n"), fetched when it scrolls into view.
+    shot: ({ id: chat, shot, ...rest }) => uuid(chat) && !Object.keys(rest).length && typeof shot === 'string' && /^\d{1,15}\/\d{1,2}$/.test(shot) && ['GET', `/chat/${chat}/shots/${shot}`],
     lock: () => ['GET', '/agent-lock'],
     agents: (body) => !Object.keys(body).length && ['GET', '/agents'], // CAT-1e: the catalog the setup wizard reads
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and

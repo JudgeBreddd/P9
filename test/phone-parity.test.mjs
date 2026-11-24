@@ -116,7 +116,8 @@ test('P9: the phone shows the agent\'s own pictures and real links, and loads no
   page.on('request', (request) => { const url = request.url(); if (!url.startsWith(server.origin) && !url.startsWith('data:')) remote.push(url); });
   await newChat(page, 'claude');
   await send(page, 'images');
-  await page.waitForFunction(() => document.querySelectorAll('#events .agent-imgs img').length === 2, null, { timeout: 15000 });
+  // O249: each picture is fetched when it scrolls into view; these are in view.
+  await page.waitForFunction(() => [...document.querySelectorAll('#events .agent-imgs img')].filter((img) => img.src && img.complete && img.naturalWidth).length === 2, null, { timeout: 15000 });
   const sources = await page.$$eval('#events .agent-imgs img', (list) => list.map((img) => [img.src.slice(0, 22), img.naturalWidth, img.naturalHeight]));
   assert.deepEqual(sources, [['data:image/png;base64,', 320, 200], ['data:image/png;base64,', 120, 90]]);
   // A tap opens it full screen; another tap closes it.
@@ -132,6 +133,7 @@ test('P9: the phone shows the agent\'s own pictures and real links, and loads no
   assert.equal(await folded.evaluate((el) => el.querySelector(':scope > details').open), false, 'the fold opened itself');
   assert.equal(await folded.locator('.agent-imgs img').count(), 1, 'the image is missing or shown twice');
   assert.equal(await folded.locator('.agent-imgs img').isVisible(), true, 'the image is hidden in the closed fold');
+  await folded.locator('.agent-imgs img[src]').waitFor({ timeout: 15000 });
   assert.deepEqual(await folded.locator('.agent-imgs img').evaluate(async (img) => { await img.decode(); return [img.src.slice(0, 22), img.naturalWidth, img.naturalHeight]; }), ['data:image/png;base64,', 200, 100]);
   await folded.scrollIntoViewIfNeeded();
   await shot(page, 'phone-folded-tool-image');

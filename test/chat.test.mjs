@@ -375,10 +375,12 @@ test('agent images: kept with their own data only; SVG, remote, bad alphabet, ov
   const id = await create(instance, 'codex');
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'images hostile' })).status, 202);
   const { hit } = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.toolCallId === 'bad-1');
-  const shown = hit.data.content.map(({ content }) => content.type === 'image' ? Object.keys(content).join() + ':' + content.mimeType + ':' + content.data.length : content.text.trim().slice(0, 16));
+  // O249: events give each image as its place; its data comes from the shot route.
+  const data = await Promise.all(hit.data.content.map(async ({ content }) => content.type === 'image' ? JSON.parse((await call(instance, `/chat/${id}/shots/${content.shot}`)).text).data : ''));
+  const shown = hit.data.content.map(({ content }, n) => content.type === 'image' ? Object.keys(content).join() + ':' + content.mimeType + ':' + data[n].length : content.text.trim().slice(0, 16));
   const note = '[image not shown';
-  assert.deepEqual(shown, ['type,mimeType,data:image/png:' + hit.data.content[0].content.data.length, note, note, note, note, ...Array(3).fill(shown[0]), note]);
-  assert.ok(hit.data.content[0].content.data.length > 50 && !JSON.stringify(hit.data).includes('example.com'));
+  assert.deepEqual(shown, ['type,mimeType,shot:image/png:' + data[0].length, note, note, note, note, ...Array(3).fill(shown[0]), note]);
+  assert.ok(data[0].length > 50 && !JSON.stringify(hit.data).includes('example.com'));
   console.log('PASS agent images: 4 PNGs kept as sent, SVG, remote-only, bad alphabet, 8 MiB+ and the fifth image each a note, no address kept');
 });
 
@@ -389,10 +391,10 @@ test('agent images from disk: an opened image file named only by its path is rea
   const { hit } = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.toolCallId === 'view-1');
   const { hit: chunk } = await until(instance, (event) => event.conversation === id && event.type === 'update' && event.data.content?.type === 'image' && !event.data.toolCallId);
   const shown = hit.data.content.map(({ content }) => content.type === 'image' ? Object.keys(content).join() + ':' + content.mimeType : content.type);
-  assert.deepEqual(shown, ['type,mimeType,data:image/png', 'type,mimeType,data:image/png', ...Array(5).fill('resource_link')]);
-  const file = await readFile(hit.data.title.slice('View Image '.length));
-  assert.equal(hit.data.content[0].content.data, file.toString('base64'), 'the file\'s own bytes');
-  assert.equal(chunk.data.content.data, file.toString('base64'), 'a reply\'s link to the image too');
+  assert.deepEqual(shown, ['type,mimeType,shot:image/png', 'type,mimeType,shot:image/png', ...Array(5).fill('resource_link')]);
+  const file = await readFile(hit.data.title.slice('View Image '.length)), shot = async (b) => JSON.parse((await call(instance, `/chat/${id}/shots/${b.shot}`)).text).data;
+  assert.equal(await shot(hit.data.content[0].content), file.toString('base64'), 'the file\'s own bytes');
+  assert.equal(await shot(chunk.data.content), file.toString('base64'), 'a reply\'s link to the image too');
   assert.ok(!JSON.stringify(hit.data).includes('hunter2'), 'the non-image file is never read into the chat');
   console.log('PASS agent images from disk: path and file:// read as PNG, reply link read, fake.png, 6 MiB+, folder, FIFO and relative path left as links');
 });

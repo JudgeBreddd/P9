@@ -22,7 +22,6 @@ import { installPanel } from './panel.mjs';
 import { installSettings } from './settings-view.mjs';
 import { installCards } from './cards-modal.mjs';
 import { installFiles } from './files-view.mjs';
-import { installMove } from './move-fx.mjs';
 
 // The admin password window (shell-start.ts, row I2), for row 61 on a remote.
 let adminAsk = null;
@@ -86,7 +85,17 @@ export function mountShell({ askAdmin } = {}) {
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
-  const { leave, onMove, moveReloaded, SERVER_STATE } = installMove(outer);
+  // O249: the send-to-server move loads on its first use (the startup JS budget); its calls wait for it, in order. A failed
+  // load is let go, so the next call tries again; a click on Send to remote says so in the chat.
+  let move; const mv = () => (move ??= import('./move-fx.mjs').then(m => m.installMove(outer), e => { move = null; throw e; }));
+  const leave = s => mv().then(m => m.leave(s), () => { s.events.push({ t: 'notice', text: 'Could not load the move. Reload the window (Ctrl R) and try again.' }); renderChats(); });
+  const onMove = e => mv().then(m => m.onMove(e), () => {}), moveReloaded = () => void ((localStorage.getItem('p9-after-move') || outer.S.sessions.some(s => s.live && s.state === 'moving')) && mv().then(m => m.moveReloaded(), () => {})); // only after a move
+  // The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
+  // each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
+  // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
+  // probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
+  // ~/.ssh/config hosts never saved or used are not asked.
+  const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
   adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (sample data is never part of the app).
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
@@ -1297,7 +1306,7 @@ liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(
 // A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
 const picDlg = $('#picDlg');
 addEventListener('click', e => {
-  const i = e.target.closest?.('.user-imgs img[src], .agent-imgs img'); if (!i) return;
+  const i = e.target.closest?.('.user-imgs img[src], .agent-imgs img[src]'); if (!i) return;
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();

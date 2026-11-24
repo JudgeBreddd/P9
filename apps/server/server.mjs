@@ -598,6 +598,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/askable', async (c) => (c.get('device') ? c.json({ error: 'desktop-only' }, 403) : reply(c, chat.setAskable(c.req.param('id'), await json(c)))));
   api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'), await json(c))));
   api.get('/chat/:id/images/:hash', async (c) => reply(c, await chat.image(c.req.param('id'), c.req.param('hash'))));
+  api.get('/chat/:id/shots/:cursor/:n', (c) => reply(c, chat.shot(c.req.param('id'), c.req.param('cursor'), c.req.param('n'))));
   api.get('/terminals', async (c) => {
     try { return c.json({ terminals: await terminals.list() }); } catch (error) {
       if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503);

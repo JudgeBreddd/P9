@@ -372,7 +372,9 @@ type Block = { kind: string; text: string; at?: string; id?: unknown; status?: s
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
-let sentLanded = 0; // photos fetched into sentCache: the list key counts these, since a landing photo leaves sentCache.size as it was
+let sentLanded = 0; // photos fetched into sentCache or shotCache: the list key counts these, since a landing photo leaves the size as it was
+// O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots); '' while fetching or gone.
+const shotCache = new Map<string, string>(), shotGot = (src: string) => shotCache.get(src) ?? '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotCache.get(src) ? 1 : 0).join('')).join('');
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
 // answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
 // for a multi choice); an empty optional field is left out of the answer.
@@ -487,7 +489,7 @@ function foldBlocks(now: Folded, events: Json[]) {
   }
 }
 // P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
-const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span>${block.exit ? `<span class="exit">${escape(block.exit)}</span>` : ''}</summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
+const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span>${block.exit ? `<span class="exit">${escape(block.exit)}</span>` : ''}</summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent', shotGot) : ''}</article>`;
 // O73: a message another chat's agent sent names that chat (its title when it sent, else now, else "a deleted chat"; P9's
 // own notes say P9), as the desktop window does; the user's own messages have no heading.
 // The block keeps who sent it, not the heading: a title looked up now follows a rename or a deletion (itemsOf signs it).
@@ -500,7 +502,7 @@ function whoSent(data?: Json) {
 function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') { const who = whoSent(block.who); return `<article data-kind="user" class="msg user"${who ? ' data-from' : ''}>${who ? `<div class="who">${escape(who)}</div>` : ''}${escape(block.text)}${block.files?.length ? `<div class="sent-files">📎 ${escape(block.files.join(', '))}</div>` : ''}${sentImgs(openId, block.sent)}</article>`; }
-  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
+  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent', shotGot)}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
   if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
@@ -538,10 +540,10 @@ function itemsOf(blocks: Block[]) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
     if (j - i >= 2) {
       const run = blocks.slice(i, j + 1);
-      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, '', () => JSON.stringify(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'failed' || block.exit) ? 'failed' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
+      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, shotsIn(run), () => JSON.stringify(run) + shotsIn(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'failed' || block.exit) ? 'failed' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent', shotGot)}</article>` });
       i = j;
     } else {
-      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion() + (whoSent(block.who) ?? '');
+      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + shotsIn([block]) + codeColoursVersion() + (whoSent(block.who) ?? '');
       out.push({ key: 'b' + block.at, sig: sign('b' + block.at, [block], extra, () => JSON.stringify(block) + extra), html: () => blockHtml(block) });
     }
   }
@@ -746,7 +748,7 @@ function render() {
       if (box.bottom > edge) { hold = { key: node.dataset.key, top: box.top }; break; }
     }
   }
-  patch(events, shown);
+  patch(events, shown); watchShots(picked, events);
   const info = phoneFolders.get(picked);
   if (!info && !phoneFoldersLoading.has(picked)) {
       phoneFoldersLoading.add(picked);
@@ -1397,6 +1399,20 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
 });
+let seen: IntersectionObserver | undefined; const shotChat = new WeakMap<Element, string>();
+function watchShots(id: string, list: HTMLElement) {
+  seen ??= new IntersectionObserver((hits) => hits.forEach(({ isIntersecting, target }) => {
+    const place = (target as HTMLElement).dataset.shot!, key = 'shot:' + place, chat = shotChat.get(target);
+    if (!isIntersecting || !chat || shotCache.has(key)) return;
+    seen!.unobserve(target); shotCache.set(key, '');
+    request('/chat/' + encodeURIComponent(chat) + '/shots/' + place).then((image) => {
+      const src = imgSrc({ type: 'image', mimeType: image.mimeType, data: image.data });
+      if (src) { shotCache.set(key, src); sentLanded += 1; render(); }
+    }, (error) => { if (error?.message !== 'not-found') shotCache.delete(key); });
+  }), { root: one('#chatBody'), rootMargin: '100% 0px' }); // a screen of the chat's own scroller ahead
+  seen.disconnect(); // a redrawn list's (or another chat's) old imgs are let go
+  list.querySelectorAll('img[data-shot]:not([src])').forEach((img) => { if (!shotCache.has('shot:' + (img as HTMLElement).dataset.shot)) { shotChat.set(img, id); seen!.observe(img); } });
+}
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
 function sentImgs(id: string, hashes?: string[]) {
   if (!hashes?.length) return '';
@@ -1591,7 +1607,7 @@ one('#events').addEventListener('click', (event) => { const button = (event.targ
 // P9: a tap on an agent's image opens it full screen; any tap closes it.
 const picture = document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'picture', onclick: () => picture.close() }));
 addEventListener('click', (event) => {
-  const image = (event.target as Element).closest?.('.agent-imgs img, .user-imgs img') as HTMLImageElement | null; if (!image) return;
+  const image = (event.target as Element).closest?.('.agent-imgs img[src], .user-imgs img') as HTMLImageElement | null; if (!image) return;
   picture.replaceChildren(Object.assign(document.createElement('img'), { src: image.src, alt: image.alt })); picture.showModal();
 });
 one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };

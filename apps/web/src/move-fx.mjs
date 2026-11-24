@@ -128,11 +128,5 @@ function moveReloaded() {
     if (r.yes) leave(left);
   }, 6000);
 }
-// The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
-// each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
-// the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
-// probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
-// ~/.ssh/config hosts never saved or used are not asked.
-const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
-  return { leave, onMove, moveReloaded, SERVER_STATE };
+  return { leave, onMove, moveReloaded };
 }
