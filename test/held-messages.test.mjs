@@ -346,17 +346,27 @@ test('O255: a steer with a new mode goes in when the agent steers, and otherwise
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const go = path.join(instance.workspace, 'go'), held = async (chat, text) => (await events(instance, chat)).filter((e) => e.type === 'held' && String(e.data?.text).includes(text));
-  const gated = async (chat) => { assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202); await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating'); };
+  const gated = async (chat) => { const { cursor } = (await call(instance, '/chat/events?after=0')).body; assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202); await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating', cursor); };
   const steers = await agent(t, instance);
   await gated(steers.conversation);
-  const nudge = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'nudge in plan', when: 'steer', mode: 'Plan' });
+  // The window's mid-turn pick (next): the steer goes into this turn.
+  const nudge = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'nudge in plan', when: 'steer', next: 'Plan' });
   assert.ok(nudge.status < 300, JSON.stringify(nudge));
   assert.deepEqual((await held(steers.conversation, 'nudge in plan')).filter((e) => e.data.when === 'queue'), [], 'a steer that picks a mode was queued for a new turn instead of steered in');
-  fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'turn-end'); fs.rmSync(go);
+  const now = async () => (await call(instance, '/chat/events?after=0')).body.cursor;
+  let c = await now(); fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'turn-end', c); fs.rmSync(go);
+  const first = await events(instance, steers.conversation), gate = first.findIndex((e) => e.type === 'user' && e.data?.text === 'gate'), end = first.findIndex((e, i) => i > gate && e.type === 'turn-end');
+  assert.ok(first.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('nudge in plan')) > -1 && first.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('nudge in plan')) < end, 'the steer was not delivered in the running turn: ' + JSON.stringify(first.map((e) => e.type)));
+  // The phone's mode pick (mode, no next) still waits for the turn's end, which sets it.
+  await gated(steers.conversation);
+  const phone = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'phone in plan', when: 'steer', mode: 'Plan' });
+  assert.equal(phone.status, 202, JSON.stringify(phone));
+  assert.equal((await held(steers.conversation, 'phone in plan')).at(-1)?.data?.when, 'queue', 'the phone picked Plan mid-turn and it went into the wider turn');
+  c = await now(); fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'user' && String(e.data?.text).includes('phone in plan'), c); fs.rmSync(go);
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
   const waits = await agent(t, instance);
   await gated(waits.conversation);
-  const later = await call(instance, `/chat/${waits.conversation}/prompt`, 'POST', { text: 'later in plan', when: 'steer', mode: 'Plan' });
+  const later = await call(instance, `/chat/${waits.conversation}/prompt`, 'POST', { text: 'later in plan', when: 'steer', next: 'Plan' });
   assert.equal(later.status, 202, 'no steering: it waits for the turn end ' + JSON.stringify(later));
   fs.writeFileSync(go, '');
   await until(instance, (e) => e.conversation === waits.conversation && e.type === 'user' && String(e.data?.text).includes('later in plan'));
@@ -364,5 +374,5 @@ test('O255: a steer with a new mode goes in when the agent steers, and otherwise
   for (let i = 0; i < 100 && (await lastMode()) !== 'Plan'; i += 1) await pause(100);
   const mine = await events(instance, waits.conversation);
   assert.equal(await lastMode(), 'Plan', 'the waiting steer ran in the old mode: ' + JSON.stringify(mine.filter((e) => ['mode', 'user', 'held', 'turn-end'].includes(e.type)).map((e) => [e.type, e.data?.name ?? String(e.data?.text ?? '').slice(0, 30)])));
-  console.log('PASS O255 steer mode: steered in with its mode pick ignored; without steering it waited and the next turn ran in Plan');
+  console.log('PASS O255 steer mode: a next pick steered in, a phone mode pick waited; without steering it waited and the next turn ran in Plan');
 });
