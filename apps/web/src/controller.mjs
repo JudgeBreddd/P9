@@ -80,19 +80,17 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, free, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
+  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, free, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
   // O249: the send-to-server move loads on its first use (the startup JS budget); its calls wait for it, in order. A click
-  // freezes the chat at once, as the move itself does (s.leaving), so nothing is sent while it loads. A failed load is let go,
-  // so the next call tries again, and the chat says so once.
-  let move; const mv = () => (move ??= import('./move-fx.mjs').then(m => m.installMove(outer), e => { move = null; throw e; }));
-  const NO_MOVE = 'Could not load the move. Reload the window (Ctrl R) and try again.';
-  const noMove = s => { if (s && s.events.at(-1)?.text !== NO_MOVE) { s.events.push({ t: 'notice', text: NO_MOVE }); renderChats(); } };
-  const leave = s => { if (s.leaving) return; s.leaving = true; renderChats(); mv().then(m => { s.leaving = false; m.leave(s); }, () => { s.leaving = false; noMove(s); }); };
-  const onMove = e => mv().then(m => m.onMove(e), () => noMove(outer.S.sessions.find(s => s.id === e.id))), moveReloaded = () => void ((localStorage.getItem('p9-after-move') || outer.S.sessions.some(s => s.live && s.state === 'moving')) && mv().then(m => m.moveReloaded(), () => {})); // only after a move
+  // freezes the chat at once, as the move itself does (s.leaving), so nothing is sent while it loads. A failed load says so
+  // (noLoad) on each call; it is not tried again (local file: P9 was updated under this window, and a reload fixes it).
+  let move; const mv = () => (move ??= import('./move-fx.mjs').then(m => m.installMove(outer)));
+  const leave = s => { if (s.leaving) return; s.leaving = true; renderChats(); mv().finally(() => { s.leaving = false; }).then(m => m.leave(s), () => noLoad(s.id)); };
+  const onMove = e => mv().then(m => m.onMove(e), () => noLoad(e.id)), moveReloaded = () => void ((localStorage.getItem('p9-after-move') || outer.S.sessions.some(s => s.live && s.state === 'moving')) && mv().then(m => m.moveReloaded(), () => noLoad())); // only after a move
   // The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
   // each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
   // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are

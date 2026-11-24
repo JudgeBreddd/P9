@@ -182,7 +182,7 @@ test('O249 screenshots: reads carry no image data, the window fetches each pictu
   const sock = path.join(slow, 'daemon.sock');
   const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
   await writeFile(path.join(slow, 'desktop.json'), JSON.stringify({ ...creds, socketPath: sock }), { mode: 0o600 });
-  await slowLink(path.join(instance.state, 'daemon.sock'), sock, RTT, t);
+  const link = await slowLink(path.join(instance.state, 'daemon.sock'), sock, RTT, t);
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', slow, '--user-data-dir=' + path.join(slow, 'profile')], env, chromiumSandbox: true, timeout: 60000 });
   const proc = app.process();
@@ -191,16 +191,22 @@ test('O249 screenshots: reads carry no image data, the window fetches each pictu
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
   await page.setViewportSize({ width: 1400, height: 900 }).catch(() => {});
   await page.locator(`#navList .row[data-chat="${pics}"]`).click();
+  // This chat's picture requests over the link (its cursors come after the busy chat's, whose pictures may load at launch).
+  const asked = () => link.log.filter((e) => Number(/\/shots\/(\d+)\//.exec(e.req)?.[1]) >= Number(place.split('/')[0])).length;
   const imgs = page.locator(`#chats img[alt^="Image from"]`);
   await imgs.nth(1).waitFor({ state: 'attached', timeout: 60000 });
   // Opened at its end, the pictures are more than a screen above: they stay placeholders, nothing fetched, until scrolled to.
   await page.waitForTimeout(3000);
-  assert.deepEqual(await imgs.evaluateAll((list) => list.map((el) => el.hasAttribute('src'))), [false, false], 'pictures out of reach are not fetched');
+  const above = await imgs.evaluateAll((list) => list.map((el) => el.closest('.hist').getBoundingClientRect().top - el.getBoundingClientRect().bottom));
+  assert.ok(above.every((px) => px > 1000), `both pictures sit more than the 1000 px margin above the view: ${above}`);
+  assert.equal(asked(), 0, 'no picture asked for over the link before it comes near the view');
+  assert.deepEqual(await imgs.evaluateAll((list) => list.map((el) => el.hasAttribute('src'))), [false, false], 'pictures out of reach are not drawn');
   for (let i = 0; i < 2; i += 1) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await page.waitForFunction((el) => el.complete && el.naturalWidth > 0, await imgs.nth(i).elementHandle(), { timeout: 30000 });
   }
   assert.deepEqual(await imgs.evaluateAll((list) => list.map((el) => el.naturalWidth)), [320, 120], 'the tool\'s picture and the reply\'s');
+  assert.equal(asked(), 2, 'each picture asked for once');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o249-shots ' + (await page.locator(`#chats .pane[data-id="${pics}"]`).screenshot()).toString('base64'));
   assert.deepEqual(errors, []);
 });
