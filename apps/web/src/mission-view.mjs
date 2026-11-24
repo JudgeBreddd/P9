@@ -954,7 +954,9 @@ function missionModal(m, body, row) {
     outer.$('#mdlT').textContent = 'Edit names and icons';
     // The form's code loads on its first open (shell-bundle.test.mjs BUDGET); after that it draws at once, so renderModal's scroll restore still holds.
     if (!editor) { body.innerHTML = '<p class="muted">Loading the edit form…</p>'; import('./mission-editor.mjs').then(x => { editor = x; outer.S.modal === m && outer.renderModal(); },
-      () => outer.toast({ kind: 'not loaded', txt: 'P9 could not load the edit form. Close it and try again.', level: 'warn' })); return true; }
+      () => { if (outer.S.modal !== m) return; // a failed load stays failed for this page, so the way out is a reload
+        body.innerHTML = '<p>P9 could not load the edit form.</p><button data-slot="button" data-variant="outline" data-reload>Reload the window</button>';
+        body.querySelector('[data-reload]').onclick = () => location.reload(); }); return true; }
     editor.editorModal(m, body, outer.$('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => outer.M.art, esc, toast: outer.toast, again: () => outer.S.modal === m && outer.renderModal(),
       reload: async keep => { await refreshMission(); if (keep) outer.S.modal === m && outer.renderModal(); else outer.openModal({ kind: 'medit', items: editItems(outer.M) }); } });
   } else return false;
