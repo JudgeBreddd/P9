@@ -842,19 +842,17 @@ async function addImages(s, files) {
 // steer into a turn it does not know of yet. The box keeps the text; Send says why.
 const loading = s => !!(s.stub || s.behind);
 const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || loading(s) || s.state === 'moving' || s.state === 'moved');
-// Review round 9: a queued message keeps the attachments it was sent with (took), not the box's later ones; and one typed
-// while an earlier message waits in the daemon's hold goes behind it ('queue'), not past it by steering.
-const took = s => { const images = s.images?.length ? s.images : undefined; s.images = []; return images && { images }; };
+// Review round 9: one typed while an earlier message waits in the daemon's hold goes behind it ('queue'), not past it by steering.
 function sendText(s, t, now, when) {
   const mid = !now && busy(s);
-  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push({ t, at: Date.now(), ...took(s) }); keepQueue(s); renderChats(); return; }
+  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push({ t, at: Date.now() }); keepQueue(s); renderChats(); return; }
   (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length ? 'queue' : 'steer') : undefined);
 }
 // An interrupt-and-send message was lost: the daemon refuses a prompt while the cancelled turn is
 // still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
 function interrupt(s, t) {
   if (!busy(s)) return outer.startTurn(s, t);
-  if (s.live) { s.queue.unshift({ t, at: Date.now(), ...took(s) }); keepQueue(s); cancelTurn(s); renderChats(); return; }
+  if (s.live) { s.queue.unshift({ t, at: Date.now() }); keepQueue(s); cancelTurn(s); renderChats(); return; }
   cancelTurn(s); outer.startTurn(s, t);
 }
 function cancelTurn(s, quiet) {
@@ -887,7 +885,7 @@ const free = (s) => !['stopped', 'stopping', 'moved', 'moving'].includes(s.state
 function turnEnd(s, send = true) {
   autoArtifact(s);
   if (s.modeNext) { setMode(s, s.modeNext); s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + modeNow(s) + '.'}); }
-  if (send && s.queue.length) { const { t, images } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t, 'queue', images || []); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
+  if (send && s.queue.length) { const { t } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t, 'queue'); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -951,9 +949,7 @@ const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c =>
 // O125: each is { t: text, at: when queued }, so the strip's oldest wait counts it; one kept by an older build (a bare
 // string) has no time and still goes.
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
-// ponytail: kept as text only; a queued message's attachments (6 MiB each) would fill storage and lose the whole queue, so
-// over a restart it goes without them.
-const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue.map(({ images, ...q }) => q))) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
+const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
 const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return keptItems(q); } catch { return []; } };
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
 // E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
@@ -1073,9 +1069,10 @@ function applyChat(ev, into) {
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
     case 'turn-end': settle(); s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
-    // Review rounds 8-9: an error that ends a prompt (ends: the daemon's prompt-error and refused-setting paths, which send no
-    // turn-end) closes the turn the same way. Any other (a refused hand-off mid-turn) only shows: the turn and its ask go on.
-    case 'error': s.events.push({ t: 'error', text: d.message }); if (!d.ends) break; s.working = false; if (s.prompted && !into) { settle(); return s; } break;
+    // Review rounds 8-10: an error that ends a prompt (ends: the daemon's prompt-error and refused-setting paths, which send no
+    // turn-end) closes the turn the same way. Any other (a refused hand-off mid-turn) keeps the turn and its ask; it clears
+    // Working as before, which the agent's next output sets again, and an older ledger's errors (no ends) still clear it.
+    case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; if (d.ends && s.prompted && !into) { settle(); return s; } break;
     // N1: the daemon's word on a chat's project, title, archive and removal, for every window (apps/server/projects.mjs).
     case 'project': s.project = d.project ?? null; s.folderAsked = false; break;
     case 'renamed': s.title = d.title; s.named = true; break;
