@@ -13,7 +13,9 @@ const items = c => { const [kind, rest] = c.key.split(/:(.*)/s); return rest.spl
 export function notice(cards, began, toast, go, outer) {
   const bell = cards.filter(c => c.key.includes(':')), old = seen ?? (began ? new Set() : null);
   seen = new Set(bell.flatMap(items)); // before the toast: toast redraws the cards, which calls this again
-  if (old) for (const c of bell) if (items(c).some(i => !old.has(i))) {
+  // An ask its chat's history loaded (chat-view.mjs history: pendingOld) was there before this window: no notice.
+  const before = new Set(outer.S.sessions.filter(s => s.pendingOld && s.pendingOld === s.pending).map(s => 'asks:' + s.id + s.pending));
+  if (old) for (const c of bell) if (items(c).some(i => !old.has(i) && !before.has(i))) {
     toast({ kind: c.sub, txt: c.title, level: 'ok' }, true); // done: the bell row is the kept copy, not an alert
     const f = c.open.kind === 'review' && c.key.slice(8); // 'reviews:<file>', one file
     document.getElementById('toasts').lastElementChild.onclick = () => { const i = f && outer.S.reviews.findIndex(r => r.file === f);

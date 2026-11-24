@@ -135,6 +135,12 @@ test('O249 a busy chat does not hold the chat list back over a slow link', { tim
   const replied = Date.now() - asked;
   console.log(`O249 the shown chat's reply drew ${replied} ms after its prompt, while the busy chat loaded`);
   assert.ok(replied < 6000, `the shown chat's reply drew ${replied} ms after its prompt; it waited behind the busy chat's history`);
+  // Self-review: an ask that comes in while the busy chat still loads shows its notice; before, every notice waited for all
+  // the background loads (late()), about 13 s more here.
+  const askAt = Date.now();
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'ask' });
+  await page.locator('#toasts .toast', { hasText: 'needs you' }).first().waitFor({ timeout: 8000 });
+  console.log(`O249 an ask's notice showed ${Date.now() - askAt} ms after it came, while the busy chat loaded`);
   // It still loads, after: opened, its history and the reply that came while it loaded both show (behind() kept it).
   await page.locator(`#navList .row[data-chat="${heavy}"]`).click();
   await page.locator('#chats').getByText('heavy done', { exact: false }).first().waitFor({ timeout: 120000 });
