@@ -992,7 +992,7 @@ const setLoad = () => {
   const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null), edits = ++setEdits;
   return Promise.all([
     window.p9?.listPets ? window.p9.listPets().catch(() => null) : pets,
-    window.p9?.chat ? status(liveChat.call('lock'), 'on') : agentLock,
+    window.p9?.chat ? status(liveChat.call('lock', {}, { quiet: true }), 'on') : agentLock, // quiet: it goes out on every load (Settings shows the unknown)
     window.p9?.fileProtection ? status(window.p9.fileProtection(), 'on') : fileProtect,
     window.p9?.terminal ? status(window.p9.terminal('greeting', {}), 'show') : termGreeting,
     window.p9?.server ? window.p9.server().catch(() => null) : null,
