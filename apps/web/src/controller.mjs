@@ -18,7 +18,7 @@ import { createSide } from './side.mjs';
 import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 import { installMission } from './mission-view.mjs';
-import { installChat } from './chat-view.mjs';
+import { installChat, askKey } from './chat-view.mjs';
 import { installPanel } from './panel.mjs';
 import { installSettings } from './settings-view.mjs';
 import { installCards } from './cards-modal.mjs';
@@ -314,7 +314,7 @@ function renderTabs() {
 function cardList(all) {
   const asks = S.sessions.filter(s => s.pending);
   const cards = [];
-  if (asks.length) cards.push({ key: 'asks:' + asks.map(s => s.id + s.pending).join(), quiet: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
+  if (asks.length) cards.push({ key: 'asks:' + asks.map(askKey).join(), quiet: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
   // Only _tyler/ items that arrive while the app is open get a card; the ones already there, and the ones
   // he skips, wait quietly in the Notification Center. Running chats are robot heads in the panel (panel.mjs).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
@@ -488,8 +488,8 @@ const chatImgs = new Map();
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
 const bottoms = observe(() => $('.stage').style.setProperty('--chat-bottom', Math.max(0, ...[...$('#chats').querySelectorAll(':scope > .pane > .bottom')].map(b => b.offsetHeight)) + 'px')); // Chat Focus full: the artifact ends above the text box
 const wiredBars = new WeakSet(), view = {}; // 'container:session id' -> { top, pinned, selection }
-function startTurn(s, t, when) {
-  const images = s.images || []; s.images = [];
+function startTurn(s, t, when, given) { // given: a queued message's own attachments (chat-view.mjs turnEnd)
+  const images = given || s.images || []; if (!given) s.images = [];
   if (s.live) return liveChat.prompt(s, t, images, when);
   if (s.state === 'idle') s.state = 'running';
   s.events.push({t:'user', text:t, when: new Date().toTimeString().slice(0,5), images: images.length || undefined}); view['chats:' + s.id] = view['mdlBody:' + s.id] = null;
@@ -1277,7 +1277,7 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
 liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = true; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && (await import('./attach.mjs')).attachBody(images)) }).finally(() => { s.sending = false; }); if (r.status === 202) return renderChats(); s.images = [...images, ...(s.images || [])].slice(0, 8);
   // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
   // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
-  if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift({ t: text, at: Date.now() }); keepQueue(s); setTimeout(() => { if (!s.prompted && free(s) && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
+  if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift({ t: text, at: Date.now(), ...(images.length && { images }) }); keepQueue(s); setTimeout(() => { if (!s.prompted && free(s) && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
   s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {

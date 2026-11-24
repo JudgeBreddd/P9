@@ -3,7 +3,7 @@
 // since the chats loaded shows once as a notice at the bottom right; a click opens it as its card did. The ones there when
 // the window opened go to the bell with no notice. Loaded by renderCards (cards-modal.mjs) with the first such item, so the
 // shell does not carry it at startup.
-import { askId } from './chat-view.mjs';
+import { askId, askKey } from './chat-view.mjs';
 let seen;
 // ponytail: the three bell kinds are the only cards whose key has a ':' ('asks:<chat+ask>,…', 'reviews:<file>,…', 'done:<chat>');
 // a waiting file whose name has a ',' counts as two items, which only means its notice still shows once.
@@ -15,7 +15,7 @@ export function notice(cards, began, toast, go, outer) {
   const bell = cards.filter(c => c.key.includes(':')), old = seen ?? (began ? new Set() : null);
   seen = new Set(bell.flatMap(items)); // before the toast: toast redraws the cards, which calls this again
   // An ask its chat's history loaded (chat-view.mjs history: pendingOld) was there before this window: no notice.
-  const before = new Set(outer.S.sessions.filter(s => s.pendingOld !== undefined && s.pendingOld === askId(s)).map(s => 'asks:' + s.id + s.pending));
+  const before = new Set(outer.S.sessions.filter(s => s.pendingOld !== undefined && s.pendingOld === askId(s)).map(s => 'asks:' + askKey(s)));
   if (old) for (const c of bell) if (items(c).some(i => !old.has(i) && !before.has(i))) {
     toast({ kind: c.sub, txt: c.title, level: 'ok' }, true); // done: the bell row is the kept copy, not an alert
     const f = c.open.kind === 'review' && c.key.slice(8); // 'reviews:<file>', one file
