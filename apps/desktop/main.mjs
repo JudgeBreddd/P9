@@ -1153,7 +1153,16 @@ export async function createDesktop({ state, open } = {}) {
         far.on('error', () => client.destroy());
         client.on('error', () => far.destroy());
       });
-      await new Promise((resolve, reject) => listener.once('error', reject).listen(0, '127.0.0.1', resolve));
+      // O250: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>. A new port each start of P9
+      // opened it empty, so each server gets the same port every time: one picked from its name, the next 19 if taken, any last.
+      // ponytail: two servers whose names pick the same port share it; the one opened second gets the next free one.
+      const near = 20000 + createHash('sha256').update(String(serverHost)).digest().readUInt16BE(0) % 12000;
+      let refused = null;
+      for (const port of [...Array.from({ length: 20 }, (_, i) => near + i), 0]) {
+        refused = await new Promise(resolve => listener.once('error', resolve).listen(port, '127.0.0.1', () => resolve(null)));
+        if (!refused) break;
+      }
+      if (refused) throw refused;
       relay = { socket, server: listener, port: listener.address().port };
     }
     return { port: relay.port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
