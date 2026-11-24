@@ -769,11 +769,11 @@ export async function createDesktop({ state, open } = {}) {
   const chatRoutes = {
     list: () => ['GET', '/chat?lists=fresh'], // O47: with each agent's model lists
     // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
-    // tail (P20, with only): the newest tail blocks of each of those chats.
+    // tail (P20, with only): the newest tail blocks of each of those chats. shots: images as places (O249, chat-view.mjs).
     events: ({ after = 0, wait = 0, only, until, tail }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000
       && (only === undefined || Array.isArray(only) && only.length <= 100 && only.every(uuid)) && (until === undefined || Number.isSafeInteger(until) && until >= 0)
       && (tail === undefined || only !== undefined && Number.isSafeInteger(tail) && tail >= 1 && tail <= 200)
-      && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}${tail === undefined ? '' : '&tail=' + tail}`],
+      && ['GET', `/chat/events?shots=1&after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}${tail === undefined ? '' : '&tail=' + tail}`],
     create: body => ['POST', '/chat', body],
     chatFolder: ({ id: item }) => uuid(item) && ['GET', `/chat/${item}/folder`],
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],

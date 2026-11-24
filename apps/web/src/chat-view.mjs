@@ -263,17 +263,12 @@ function meters(s) {
 }
 const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; outer.chatImgs.set(hash, '');
   window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { outer.chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) outer.chatImgs.delete(hash); }); };
-// O249: an agent's picture comes as its place (shot:) and is fetched once, when it comes within a screen of view; the data is
-// checked as one sent with its data (imgSrc). chatImgs keys it by the place; '' while fetching, and kept '' when gone (404).
-const shotSrc = src => outer.chatImgs.get(src);
-// One observer per chat's scroller (.hist), so "a screen of view" is that scroller's; o.s is the chat it now draws.
-const SEEN = new WeakMap();
-const watchShots = (s, p) => { const h = p.querySelector('.hist'); if (!h) return; let o = SEEN.get(h);
-  if (!o) SEEN.set(h, o = new IntersectionObserver(list => list.forEach(({ isIntersecting, target }) => { if (isIntersecting) { o.unobserve(target); loadShot(o.s, target.dataset.shot); } }), { root: h, rootMargin: '100% 0px' }));
-  o.s = s; o.disconnect(); p.querySelectorAll('img[data-shot]:not([src])').forEach(img => o.observe(img)); }; // disconnect: a redrawn pane's old imgs are let go
-const loadShot = (s, shot) => { const key = 'shot:' + shot; if (!s?.live || outer.chatImgs.has(key)) return; outer.chatImgs.set(key, '');
-  window.p9.chat('shot', { id: s.id, shot }).then(r => { const src = r.status === 200 && imgSrc({ type: 'image', mimeType: r.body.mimeType, data: r.body.data });
-    if (src) { outer.chatImgs.set(key, src); renderChats(new Set([s.id])); } else if (r.status !== 404) outer.chatImgs.delete(key); }, () => outer.chatImgs.delete(key)); };
+// O249: an agent's picture comes as its place (shot:) and is fetched when seen (shots.mjs), which loads with the first chat
+// that has one: startup carries none of it. Until it has loaded, every picture draws as its placeholder.
+let shots, shotsLoad;
+const shotSrc = s => src => shots?.src(s.id, src);
+const watchShots = (s, p) => { const h = p.querySelector('.hist'); if (!h) return; if (shots) return shots.watch(s.id, h);
+  if (h.querySelector('img[data-shot]')) shotsLoad ??= import('./shots.mjs').then(m => { shots = m.installShots(id => renderChats(new Set([id]))); renderChats(); }, () => { shotsLoad = null; }); };
 // O73: a message another chat's agent sent names that chat: its title when it sent (fromTitle), else its title now, else
 // "a deleted chat"; P9's own notes say P9. Drawn apart from the user's own (data-from).
 const sentBy = (id, title) => esc(title || (id === 'p9' ? 'P9' : outer.S.sessions.find(x => x.id === id)?.title) || (typeof id === 'string' ? 'a deleted chat' : 'another chat'));
@@ -284,10 +279,10 @@ function event(e, s) {
     // O109: a worker report scrolls with the chat once it is not the one pinned above the box (closed, or a newer one came).
     case 'report': { const c = s.cards?.get(e.id), on = c && c.text === e.text && s.events.findLast(x => x.t === 'report') === e && !SHUT.get().has(reportKey(s, c)) && !shelved(e.id);
       return on ? '' : `<div class="report" data-report="${esc(e.id)}"><div class="eyebrow">Worker report</div><div class="msg agent">${outer.mdOf(e)}</div></div>`; }
-    case 'agent': return `<div class="msg agent"><div class="who">${esc(outer.names[s.agent])}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent], shotSrc)}</div>`;
+    case 'agent': return `<div class="msg agent"><div class="who">${esc(outer.names[s.agent])}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}</div>`;
     case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
-    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span>${e.exit ? `<span data-slot="badge" data-variant="bad" data-exit>${esc(e.exit)}</span>` : ''}<span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button ${OL} class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent], shotSrc)}`;
+    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span>${e.exit ? `<span data-slot="badge" data-variant="bad" data-exit>${esc(e.exit)}</span>` : ''}<span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button ${OL} class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button ' + OL + ' data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/ is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button ' + OL + ' data-signin>Sign in</button>' : ''}</div>`;
   }

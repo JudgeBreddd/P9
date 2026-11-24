@@ -89,13 +89,17 @@ export const eachImage = (update, fn) => {
   if (Array.isArray(update?.content)) return { ...update, content: update.content.map((i) => (i?.type === 'content' ? { ...i, content: one(i.content) } : one(i))) };
   return update?.content?.type === 'image' ? { ...update, content: one(update.content) } : update;
 };
-// Every read gives an image as its place (shot: "cursor/n"), never its data: the window fetches it when seen (/chat/:id/shots),
-// so a chat of screenshots loads as fast as one without. The stored row keeps the data.
+// An event as a reader that asks for places gets it (chat.events with shots): each image its place (shot: "cursor/n"), not
+// its data, fetched when seen (/chat/:id/shots), so a chat of screenshots loads as fast as one without. A reader that does not
+// ask (a window older than this) gets the data, as before. The stored row keeps the data.
+export const placed = (e) => {
+  if (e.type !== 'update') return e;
+  let any = false; const data = eachImage(e.data, ({ data: _, ...b }, n) => { any = true; return { ...b, shot: e.cursor + '/' + n }; });
+  return any ? { ...e, data } : e;
+};
 const parsed = (row) => {
-  try {
-    const data = JSON.parse(row.data);
-    return { ...row, data: row.type === 'update' && row.data.includes('"type":"image"') ? eachImage(data, ({ data: _, ...b }, n) => ({ ...b, shot: row.cursor + '/' + n })) : data };
-  } catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }
+  try { return { ...row, data: JSON.parse(row.data) }; }
+  catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }
 };
 
 export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {

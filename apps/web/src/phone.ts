@@ -4,7 +4,7 @@ import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileIm
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
-import { svg as desktopIcons } from './helpers.mjs';
+import { svg as desktopIcons } from './helpers.mjs'; import { shotStore, shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillLoose } from './security.mjs';
@@ -271,7 +271,7 @@ let jumps = 0;
 async function pull(extra: string, wait = 0, live = false): Promise<boolean> {
   let batch: Json[];
   do {
-    const sent = jumps, result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
+    const sent = jumps, result = await request('/chat/events?shots=1&after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
     if (sent !== jumps) return false;
     batch = result.events as Json[] ?? [];
     if (live && batch.length === 500) return true;
@@ -294,13 +294,13 @@ async function replay() {
   let scoped = true;
   for (;;) {
     // P20: a chat that is not stopped starts with its newest blocks only; Load earlier reads the ones before.
-    try { if (!scoped) await pull(''); else { const result = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + ids.map(encodeURIComponent).join(',')); take(result, ids); state.cursor = Math.max(state.cursor, Number(result.cursor)); } break; }
+    try { if (!scoped) await pull(''); else { const result = await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + ids.map(encodeURIComponent).join(',')); take(result, ids); state.cursor = Math.max(state.cursor, Number(result.cursor)); } break; }
     // A listed ID the daemon will not take (only a seeded test ledger has one) replays everything, as before.
     catch (error) { if (!scoped || (error as Error).message !== 'request-refused') throw error; scoped = false; }
   }
   if (!scoped) return gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
   // The narrowed events skip the other chats', so a gap is looked for in the whole feed: its first event after the saved cursor.
-  if (state.seen > 0) gapAfter(((await request('/chat/events?after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
+  if (state.seen > 0) gapAfter(((await request('/chat/events?shots=1&after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
   // Listed again after the read: a chat made meanwhile has events below base this read did not take, so it is a stub too.
   state.base = state.cursor;
   const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; // MC-16: a Settings default changed meanwhile
@@ -359,7 +359,7 @@ function history(id: string) {
   if (!state.stubs.has(id)) return Promise.resolve();
   if (!loading.has(id)) loading.set(id, (async () => {
     try {
-      take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
+      take(await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
     } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
     state.stubs.delete(id);
   })().finally(() => loading.delete(id)));
@@ -372,9 +372,11 @@ type Block = { kind: string; text: string; at?: string; id?: unknown; status?: s
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
-let sentLanded = 0; // photos fetched into sentCache or shotCache: the list key counts these, since a landing photo leaves the size as it was
-// O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots); '' while fetching or gone.
-const shotCache = new Map<string, string>(), shotGot = (src: string) => shotCache.get(src) ?? '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotCache.get(src) ? 1 : 0).join('')).join('');
+let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
+// O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
+// The store and watcher are the desktop's (shots.mjs), keyed by chat and place.
+let shotWatch: ((id: string, list: HTMLElement) => void) | undefined;
+const shots = shotStore(), shotGot = (src: string) => (src.startsWith('shot:') && shots.get(openId + '/' + src.slice(5))) || '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotGot(src) ? 1 : 0).join('')).join('');
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
 // answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
 // for a multi choice); an empty optional field is left out of the answer.
@@ -860,7 +862,7 @@ one('#earlier').addEventListener('click', async () => {
   if (!id || from === undefined || button.disabled) return;
   button.disabled = true; button.textContent = 'Loading…';
   try {
-    const page = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1));
+    const page = await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1));
     // O251: a jump meanwhile read the chat again from its newest blocks; a page from before it would skip what lies between.
     if (older.get(id) === from) take(page, [id]);
     button.disabled = false; button.textContent = 'Load earlier';
@@ -1399,19 +1401,10 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
 });
-let seen: IntersectionObserver | undefined; const shotChat = new WeakMap<Element, string>();
+// A screen of the chat's own scroller ahead; 'not-found' (request's error for a 404): the picture is gone, not fetched again.
 function watchShots(id: string, list: HTMLElement) {
-  seen ??= new IntersectionObserver((hits) => hits.forEach(({ isIntersecting, target }) => {
-    const place = (target as HTMLElement).dataset.shot!, key = 'shot:' + place, chat = shotChat.get(target);
-    if (!isIntersecting || !chat || shotCache.has(key)) return;
-    seen!.unobserve(target); shotCache.set(key, '');
-    request('/chat/' + encodeURIComponent(chat) + '/shots/' + place).then((image) => {
-      const src = imgSrc({ type: 'image', mimeType: image.mimeType, data: image.data });
-      if (src) { shotCache.set(key, src); sentLanded += 1; render(); }
-    }, (error) => { if (error?.message !== 'not-found') shotCache.delete(key); });
-  }), { root: one('#chatBody'), rootMargin: '100% 0px' }); // a screen of the chat's own scroller ahead
-  seen.disconnect(); // a redrawn list's (or another chat's) old imgs are let go
-  list.querySelectorAll('img[data-shot]:not([src])').forEach((img) => { if (!shotCache.has('shot:' + (img as HTMLElement).dataset.shot)) { shotChat.set(img, id); seen!.observe(img); } });
+  (shotWatch ??= shotWatcher(one('#chatBody'), shots, (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place)
+    .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, list);
 }
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
 function sentImgs(id: string, hashes?: string[]) {

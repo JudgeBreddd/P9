@@ -24,7 +24,7 @@ import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
-import { counted, eachImage } from './ledger.mjs';
+import { counted, eachImage, placed } from './ledger.mjs';
 import { shellEnd, shellStart } from './shell-edits.mjs';
 import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START } from './agents.mjs';
 
@@ -2291,12 +2291,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).
     // tail (P20, with only): the newest tail blocks of each chat instead (ledger.tail), for the phone.
-    async events(after, waitMs, only, until, tail) {
+    // shots (O249): each image as its place, not its data (ledger.mjs placed), for a window that fetches pictures when seen.
+    async events(after, waitMs, only, until, tail, shots) {
+      const out = (read) => (shots ? { ...read, events: read.events.map(placed) } : read);
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(waitMs) || waitMs < 0) return refused(400, 'request-refused');
       if (only !== undefined || until !== undefined || tail !== undefined) {
         if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))
           || (tail !== undefined && (!Number.isSafeInteger(tail) || tail < 1 || tail > 200))) return refused(400, 'request-refused');
-        return { status: 200, ...(tail === undefined ? ledger.of(only, after, until) : ledger.tail(only, until, tail)) };
+        return { status: 200, ...out(tail === undefined ? ledger.of(only, after, until) : ledger.tail(only, until, tail)) };
       }
       let events = ledger.after(after);
       if (!events.length && waitMs) {
@@ -2307,7 +2309,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         });
         events = ledger.after(after);
       }
-      return { status: 200, events, cursor: events.length ? events.at(-1).cursor : after };
+      return { status: 200, ...out({ events }), cursor: events.length ? events.at(-1).cursor : after };
     },
     // Daemon shutdown: wake every long poll so the server can close, stop every session, and return 'cleanup-failed'
     // if any scope may still hold work (the next start stops leftover scopes again).

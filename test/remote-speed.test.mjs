@@ -156,16 +156,21 @@ test('O249 screenshots: reads carry no image data, the window fetches each pictu
   await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'heavy 8' }); await ended(instance, heavy);
   const pics = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Pictures' })).conversation;
   await call(instance, `/chat/${pics}/prompt`, 'POST', { text: 'images' }); await ended(instance, pics);
-  const tail = await call(instance, '/chat/events?after=0&tail=200&only=' + heavy);
+  // Replies below the pictures, so a window opening the chat at its end has them more than a screen above.
+  for (let i = 0; i < 8; i += 1) { await call(instance, `/chat/${pics}/prompt`, 'POST', { text: 'filler ' + i + '\n\nmore\n\nmore\n\nmore\n\nmore' }); await ended(instance, pics); }
+  const tail = await call(instance, '/chat/events?shots=1&after=0&tail=200&only=' + heavy);
   const size = JSON.stringify(tail).length;
   assert.ok(size < 100_000, `the busy chat's tail is ${size} B; its eight 400 KB screenshots must not ride in it`);
-  for (const read of [tail, await call(instance, '/chat/events?after=0&only=' + heavy), await call(instance, '/chat/events?after=0')]) {
+  for (const read of [tail, await call(instance, '/chat/events?shots=1&after=0&only=' + heavy), await call(instance, '/chat/events?shots=1&after=0')]) {
     assert.ok(!JSON.stringify(read).includes('AAAAAAAAAAAAAAAA'), 'no image data in any read');
   }
   const shot = tail.events.find((e) => e.data?.toolCallId === 'heavy-0')?.data.content[0].content;
   assert.deepEqual(Object.keys(shot ?? {}).sort(), ['mimeType', 'shot', 'type'], 'an image is its place, not its data');
   // The place fetches the picture, from that chat only.
-  const ev = (await call(instance, '/chat/events?after=0&only=' + pics)).events.find((e) => e.data?.toolCallId === 'gen-1');
+  const ev = (await call(instance, '/chat/events?shots=1&after=0&only=' + pics)).events.find((e) => e.data?.toolCallId === 'gen-1');
+  // A reader that does not ask for places (a window older than this) still gets the data.
+  const old = (await call(instance, '/chat/events?after=0&only=' + pics)).events.find((e) => e.data?.toolCallId === 'gen-1');
+  assert.equal(typeof old.data.content[1].content.data, 'string', 'without shots=1 an image keeps its data');
   const place = ev.data.content[1].content.shot;
   const got = await call(instance, `/chat/${pics}/shots/${place}`);
   assert.equal(got.status ?? 200, 200); assert.equal(got.mimeType, 'image/png');
@@ -188,6 +193,9 @@ test('O249 screenshots: reads carry no image data, the window fetches each pictu
   await page.locator(`#navList .row[data-chat="${pics}"]`).click();
   const imgs = page.locator(`#chats img[alt^="Image from"]`);
   await imgs.nth(1).waitFor({ state: 'attached', timeout: 60000 });
+  // Opened at its end, the pictures are more than a screen above: they stay placeholders, nothing fetched, until scrolled to.
+  await page.waitForTimeout(3000);
+  assert.deepEqual(await imgs.evaluateAll((list) => list.map((el) => el.hasAttribute('src'))), [false, false], 'pictures out of reach are not fetched');
   for (let i = 0; i < 2; i += 1) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await page.waitForFunction((el) => el.complete && el.naturalWidth > 0, await imgs.nth(i).elementHandle(), { timeout: 30000 });
