@@ -1145,8 +1145,8 @@ export async function createDesktop({ state, open } = {}) {
   // O250: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>, so each remote keeps the port
   // it got first (devPorts, in p9-server.json), and no two remotes get the same one. A new remote's starts at one picked from its
   // name, the next 19 if taken or kept for another remote, any last. A kept port in use by something else at a start is
-  // given up for a new one (that start opens the editor empty) and stays kept, so no other remote opens onto its place.
-  // ponytail: up to 8 ports per remote.
+  // given up for a new one (that start opens the editor empty) and stays kept for good, so no other remote opens onto its place.
+  // ponytail: no port is ever freed; the list grows only when a kept port is busy at a start (a few bytes each).
   const listenRelay = async (socket, host, old) => {
     old?.ready.then(l => l.close(), () => {});
     await old?.ready.catch(() => {});
@@ -1166,9 +1166,11 @@ export async function createDesktop({ state, open } = {}) {
       if (!refused) break;
     }
     if (refused) throw refused;
+    // Switched to another machine while this bound: the port is not this remote's to keep (serverEditor drops the open).
+    if (serverHost !== host) { listener.close(); throw Object.assign(new Error('daemon-unavailable'), { server: host }); }
     const port = listener.address().port;
     if (host && kept[0] !== port) {
-      devPorts[host] = [port, ...kept.filter(p => p !== port)].slice(0, 8);
+      devPorts[host] = [port, ...kept.filter(p => p !== port)];
       keepServer().catch(error => console.error('p9: the editor port was not saved, the next start may open the editor empty:', error.message));
     }
     return listener;
