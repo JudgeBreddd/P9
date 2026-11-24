@@ -872,7 +872,7 @@ function cancelTurn(s, quiet) {
   // interrupt's message, queued first, goes now.
   // Review rounds 7-8: a turn started since the cancel (its count moved, or a prompt still in flight) keeps its Working
   // state and sends the queue at its end. The count is kept outside the chat, so a jump's rebuild cannot set it back.
-  if (s.live) { const t = turnsOf.get(s.id); if (!quiet) outer.liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn' && turnsOf.get(s.id) === t && !s.sending) { s.working = s.prompted = false; turnEnd(s, free(s)); } }); return; }
+  if (s.live) { const t = turnsOf.get(s.id); if (!quiet) s.stops = {}, outer.liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn' && turnsOf.get(s.id) === t && !s.sending) { s.working = s.prompted = false; turnEnd(s, free(s)); } }); return; }
   s.turn = (s.turn || 0) + 1; s.streaming = false; // stale timers see a new turn number and stop
   s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress'));
   if (!quiet) s.events.push({t:'notice', text:'Turn cancelled.'});
@@ -959,7 +959,7 @@ const toolText = content => (content || []).filter(c => c.type === 'content' && 
 const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // O255: a live chat's waiting messages are the daemon's (s.held, from its events), one list for every window and the phone;
 // s.queue is only a demo chat's. One an older build queued in this window (localStorage p9-queue:) goes into the box, until a send from that chat.
-const oldQueue = id => { try { const k = 'p9-queue:' + id, q = JSON.parse(localStorage.getItem(k)); if (!Array.isArray(q)) return {}; const draft = q.map(x => x?.t ?? x).filter(t => typeof t == 'string' && t).join('\n'); return draft ? { draft } : {}; } catch { return {}; } };
+const oldQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); if (!Array.isArray(q)) return {}; const draft = q.map(x => x?.t ?? x).filter(t => typeof t == 'string' && t).join('\n'); return draft ? { draft } : {}; } catch { return {}; } };
 const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created, ...oldQueue(id) });
 // E2, O249: a chat at launch is only listed (stub); its events load the first time it is shown (or by late() in loadChat), or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
@@ -1157,7 +1157,7 @@ async function loadChat() {
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
     for (const s of outer.S.sessions) {
-      const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, images: s.images, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
+      const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, images: s.images, stops: s.stops, sending: s.sending, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, stubOf(c), keep);
     }
@@ -1197,7 +1197,7 @@ async function loadChat() {
   const carry = (ev) => {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
-    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); if (!sentImgs.has(ev.data.id)) takenBack.set(ev.data.id, true); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
+    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.

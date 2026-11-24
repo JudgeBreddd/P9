@@ -33,7 +33,8 @@ test('O252: a steer waiting on the start snapshot is refused when Stop cuts that
   await pause(300);
   assert.equal((await call(instance, `/chat/${chat}/cancel`, 'POST', {})).status, 200);
   const sent = await steering;
-  assert.equal(sent.body?.error ?? sent.body?.reason, 'turn-running', 'a steer waiting through a Stop was taken: ' + JSON.stringify(sent));
+  // O255: turn-stopping, not turn-running, so the phone keeps it as not sent instead of queuing it after the Stop.
+  assert.equal(sent.body?.error ?? sent.body?.reason, 'turn-stopping', 'a steer waiting through a Stop was taken: ' + JSON.stringify(sent));
   await pause(1500);
   assert.ok(!(await events(instance, chat)).some((e) => e.data?.content?.text === 'got:nudge'), 'the agent answered a steer sent before Stop');
 });

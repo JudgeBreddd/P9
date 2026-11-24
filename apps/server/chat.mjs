@@ -1868,6 +1868,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // (its 409 parks it, note()) and a command (refused during a turn) keep their 409 too. So does one with no prompted
           // turn (an unprompted run): no turn end would send it, and the drain below would steer it again, round and round.
           const turn = session?.turn, steered = await steer(id, body, images, held);
+          if (steered.status === 409 && turn && session?.halt === turn && !notes.has(body)) return refused(409, 'turn-stopping'); // a Stop came while it waited
           if (steered.status !== 409 || !turn || live.get(id) !== session || session.stopping || session.cut === turn || notes.has(body) || commands.has(body)) return steered;
           const r = hold(id, session, body, images, 'queue', repicks, held ?? []);
           if (!session.turn) drain(id, session);
