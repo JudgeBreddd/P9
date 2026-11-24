@@ -92,8 +92,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const chatRow = (s, depth = 0) => { const st = stateOf(s, busy(s)), cur = shown().includes(s.id), m = mark(st, s);
     return `<div class="rowwrap" data-key="${esc(s.id)}"${live(s) ? ' data-live' : ''}${depth ? ` data-depth="${Math.min(depth, 4)}"` : ''}><button class="row" data-chat="${esc(s.id)}" data-s="${st}" aria-current="${cur}" title="${esc(title(s))}${st ? ' · ' + LABEL[st] : ''}"${P.moved === s.id ? ' data-moved' : ''}><span class="dot" data-agent="${esc(s.agent)}"></span><span class="t">${hl(title(s))}</span><span class="tail"${m ? ' data-mark' : ''}>${m}<span class="when">${fmt(when(s))}</span></span></button>`
       + (P.q && snip(s) && !s.title.toLowerCase().includes(P.q.toLowerCase()) ? `<div class="snip">${hl(snip(s))}</div>` : '')
-      + (live(s) ? `<button class="rstop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
-      + `<button class="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
+      + (live(s) ? `<button class="rstop" data-key="stop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
+      + `<button class="more" data-key="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
   // A7: a zone's rows with each worker under the chat that started it (nested, above).
   const tree = (rows, q) => nested(rows, P.subs, shown(), !!q);
   const treeRow = e => e.s ? chatRow(e.s, e.depth) : `<button class="row subs" data-key="subs:${esc(e.fold)}" data-subs="${esc(e.fold)}" data-depth="${Math.min(e.depth, 4)}" aria-expanded="${e.open}"><span class="chev">${svg.chev}</span><span class="t">${e.open ? 'Hide' : 'Show'} ${e.n} workers</span></button>`;
@@ -117,8 +117,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
     // Archived projects and chats: one row at the end, to their page (projects-view.mjs), where Unarchive puts one back.
     const na = (o.S.projects || []).filter(p => p.archived).length + o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden)).length;
     if (!q && na && o.openArchived) h += `<button class="row arch" data-archived aria-current="${o.S.view?.kind === 'archived' && o.S.focus === 'chat'}"><span class="t">Archived</span><span class="n">${na}</span></button>`;
-    // Each row, fold row and zone is keyed (data-key): morph keeps a row's node with its chat when the order changes, and
-    // keyboard focus with it. A7: by position, a fold row ("Show 4 workers") in front of moved rows turned each kept row into
+    // Each row, fold row and zone is keyed (data-key), and a row's Stop and More: morph keeps a row's node with its chat when
+    // the order changes, and keyboard focus with it (a focused More never becomes the Stop drawn in front of it). A7: by position, a fold row ("Show 4 workers") in front of moved rows turned each kept row into
     // the next chat's, so a click or keyboard focus went to another chat.
     o.morph(list, h);
   }
@@ -225,12 +225,13 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (drag.to !== undefined) (drag.to ? z.querySelector('.row.proj') : z.querySelector('h3')).setAttribute('data-drop', '');
     drag.ghost.querySelector('.to').innerHTML = drag.to === undefined ? 'Drop on a project' : `Move to <b>${esc(drag.to ? projects().find(p => p.id === drag.to)?.name : 'Chats')}</b>`;
   }, { signal: o.lifetime.signal });
-  const endDrag = () => {
+  // A cancel (the browser took the touch for a scroll) puts the row back; only a release drops it.
+  const endDrag = e => {
     const d = drag; drag = null; if (!d?.on) return;
     d.ghost.remove(); document.body.classList.remove('lp-dragging');
     document.querySelectorAll('#navList [data-drop], #navList [data-dragging]').forEach(x => { x.removeAttribute('data-drop'); x.removeAttribute('data-dragging'); });
     P.noclick = true; setTimeout(() => { P.noclick = false; }); // the click that ends a drag does not also open the chat
-    if (d.to !== undefined) move(d.id, d.to);
+    if (d.to !== undefined && e.type === 'pointerup') move(d.id, d.to);
   };
   addEventListener('pointerup', endDrag, { signal: o.lifetime.signal });
   addEventListener('pointercancel', endDrag, { signal: o.lifetime.signal });

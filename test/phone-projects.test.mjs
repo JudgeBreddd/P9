@@ -281,15 +281,34 @@ test('O247 phone: a tap held while the chat list redraws still opens the chat', 
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
   await page.reload();
   await page.waitForSelector(`#chatList .row[data-chat="${tapped}"]`);
-  const box = await page.locator(`#chatList .row[data-chat="${tapped}"]`).boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
+  // Real touches (CDP): a finger down, then up, as a phone sends them, with pointer events and the tap's click.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  const middle = async (id) => { const r = await page.locator(`#chatList .row[data-chat="${id}"]`).boundingBox(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+  const run = (id) => page.locator(`#chatList .row[data-chat="${id}"]`).getAttribute('data-run').catch(() => '');
+  // The phone has the update when its event read answers with Busy's turn; a held list still shows Busy idle.
+  const got = (id) => page.waitForResponse(async (r) => r.url().includes('/chat/events') && (await r.text().catch(() => '')).includes(id), { timeout: 30000 });
+  let [x, y] = await middle(tapped);
+  await touch('touchStart', x, y);
+  let heard = got(busy);
   await call(server, '/chat/' + busy + '/prompt', { text: 'slow' }); // its row turns to "Working…": the list redraws
-  await new Promise((resolve) => setTimeout(resolve, 900)); // the phone's long poll returns at once with the new event; under the hold's 2 s cap
-  await page.mouse.up();
+  await heard; await page.waitForTimeout(300);
+  assert.notEqual(await run(busy), 'working', 'the list waits while the finger is down');
+  await touch('touchEnd');
   await until(async () => page.evaluate(() => location.hash), 'a chat opened');
   assert.equal(await page.evaluate(() => decodeURIComponent(location.hash)), '#chat=' + tapped, 'the tapped chat opened');
   await page.evaluate(() => history.back());
-  await until(async () => (await page.locator(`#chatList .row[data-chat="${busy}"]`).getAttribute('data-run').catch(() => '')) === 'working', 'the list redrew after the tap');
-  console.log('PASS O247 phone: a tap held while the list redrew opened the tapped chat; the list redrew after');
+  await until(async () => (await run(busy)) === 'working', 'the list redrew after the tap');
+  // A finger that scrolls instead of tapping: the list redraws once it lifts, and no chat opens.
+  [x, y] = await middle(tapped);
+  await touch('touchStart', x, y);
+  heard = got(tapped);
+  await call(server, '/chat/' + tapped + '/prompt', { text: 'slow' });
+  await heard;
+  for (let i = 1; i <= 6; i++) await touch('touchMove', x, y + i * 15);
+  await touch('touchEnd');
+  await until(async () => (await run(tapped)) === 'working', 'the list redrew after the scroll');
+  assert.equal(await page.evaluate(() => location.hash), '', 'a scroll opens no chat');
+  console.log('PASS O247 phone: a touch held while the list redrew opened the tapped chat; the list redrew after it and after a scroll');
 });

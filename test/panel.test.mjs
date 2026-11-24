@@ -172,14 +172,16 @@ test('open chats keep their place and Stop follows the row during a reorder', { 
   const box = await stop.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
+  // O247: Beta stops while Stop is pressed. The list keeps its order until the release, so the press stops Gamma, the chat
+  // it was made on, at the first try, and never a row that moved under the pointer.
   await call(instance, `/chat/${b}/stop`, 'POST', {});
-  await until(async () => (await rows())[0] === c, 'Beta drops below open chats');
+  await until(async () => (await conv(instance, b))?.state === 'stopped', 'Beta stopped');
+  await page.waitForTimeout(500); // the event reaches the window (local socket)
+  assert.equal(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('[data-stop]')?.dataset.stop, [box.x + box.width / 2, box.y + box.height / 2]), c, 'Gamma\'s Stop is still under the pointer');
   await page.mouse.up();
-  await page.waitForTimeout(500);
-  assert.equal((await conv(instance, a)).state, 'turn', 'a moving row never stops Alpha by accident');
-  await page.locator(`#navList .rstop[data-stop="${c}"]`).click();
-  await until(async () => (await conv(instance, c))?.state === 'stopped', 'the displayed Gamma row stops Gamma');
-  assert.equal((await conv(instance, a)).state, 'turn', 'Alpha remains open');
+  await until(async () => (await conv(instance, c))?.state === 'stopped', 'the first press stops Gamma');
+  assert.equal((await conv(instance, a)).state, 'turn', 'a pressed row never stops Alpha by accident');
+  await until(async () => (await rows())[0] === a, 'the list re-sorts after the release: open Alpha first');
   assert.deepEqual(errors, []);
 });
 
@@ -223,8 +225,10 @@ test('O247 a click on a sidebar row made while the list re-sorts still opens tha
   await page.mouse.down();
   // The bottom chat starts a turn: it goes to the top, and the pressed row (second) would move down one.
   await call(instance, `/chat/${last}/prompt`, 'POST', { text: 'slow' });
-  await until(async () => (await conv(instance, last)).state === 'turn', 'the bottom chat running');
-  await page.waitForTimeout(500); // the event reaches the window (local socket); the press stays under the hold's 2 s cap
+  // The window has the update when the shown chat draws the prompt; the list holds its order while the button is down.
+  await until(async () => page.locator('#chats > .pane').evaluate((el) => el.textContent.includes('slow')), 'the window got the turn');
+  await page.waitForTimeout(300);
+  assert.notEqual((await rows())[0], last, 'the list waits while the row is pressed');
   await page.mouse.up();
   await until(async () => (await shown()) === pressed, 'the pressed chat opened, not ' + await shown());
   await until(async () => (await rows())[0] === last, 'the list re-sorts once the press ends');
