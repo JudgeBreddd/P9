@@ -492,6 +492,8 @@ const connection = acp.connectAgent(stream, {
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }
+    // Review round 8 (O249): a turn that fails after a while, with no end of its own (the daemon's prompt-error path).
+    if (text === 'slow fail') { await say('working'); await new Promise((resolve) => setTimeout(resolve, 4000)); throw new Error('slow fail'); }
     if (text === 'slow') {
       cancelled.delete(sessionId);
       await say('working');

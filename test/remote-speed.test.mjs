@@ -154,6 +154,10 @@ test('O251 back after time away: the window draws the current state in one step,
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Worker' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' }); await ended(instance, id);
+  // A second chat shown beside it (split), stopped while away: its stopped event is in the skipped gap, so the list hides it
+  // and its pane closes (review round 8 self-review: that close was lost once).
+  const other = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Other' })).conversation;
+  await call(instance, `/chat/${other}/prompt`, 'POST', { text: 'hello' }); await ended(instance, other);
   const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
   const sock = path.join(slow, 'daemon.sock');
   const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
@@ -170,10 +174,13 @@ test('O251 back after time away: the window draws the current state in one step,
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 120000 });
   await page.locator(`#navList .row[data-chat="${id}"]`).click();
   await page.locator('#chatPane, .stage').getByText('hello', { exact: false }).first().waitFor({ timeout: 30000 }).catch(() => {});
+  await page.locator(`section.pane[data-id="${id}"] [data-tool=split]`).click({ timeout: 10000 });
+  await page.locator(`section.pane[data-id="${other}"]`).waitFor({ timeout: 30000 });
   await new Promise((r) => setTimeout(r, 2000));
   link.hold();
   const N = 1500;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'stream ' + N }); await ended(instance, id);
+  assert.equal((await call(instance, `/chat/${other}/stop`, 'POST')).status, 200);
   // A chat made while away: its created event is in the skipped gap, so its row comes from the list.
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Made away' })).status < 300, true);
   const gap = (await call(instance, '/chat/events?after=0&only=&tail=1')).cursor; // a tail of no chats answers with the newest cursor
@@ -188,6 +195,7 @@ test('O251 back after time away: the window draws the current state in one step,
   }
   assert.ok(drawn, 'the chat shows its current state after wake');
   await page.locator('#navList .row', { hasText: 'Made away' }).first().waitFor({ timeout: 15000 });
+  await page.locator(`section.pane[data-id="${other}"]`).waitFor({ state: 'detached', timeout: 15000 });
   const took = Date.now() - t1;
   const after = link.log.slice(mark), pages = after.filter((e) => /^GET \/chat\/events/.test(e.req));
   console.log(`O251 rtt ${RTT} ms, ${BPS * 8 / 1e6} Mbit/s: ${3 * N} updates streamed while away (ledger cursor ${gap}); current state drawn ${took} ms after wake; ${after.length} requests, ${pages.length} event reads, ${after.reduce((a, e) => a + e.bytes, 0)} bytes`);
