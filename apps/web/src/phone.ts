@@ -374,8 +374,10 @@ type Attached = { mimeType?: string; data: string; name: string; file?: true }; 
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
-// The watcher is the desktop's (shots.mjs); shots holds the open chat's pictures only (shotsOf), a new Map for each chat.
-let shotWatch: ((id: string, got: Map<string, string>, list: HTMLElement) => void) | undefined, shots = new Map<string, string>(), shotsOf = '';
+// The watcher is the desktop's (shots.mjs); shots holds the open chat's pictures (shotsOf): opening another drops the loaded
+// ones but keeps those still fetching, so going back to a chat waits for its fetch instead of starting a second.
+let shotWatch: ((id: string, got: Map<string, string | undefined>, list: HTMLElement) => void) | undefined, shotsOf = '';
+const shots = new Map<string, string | undefined>();
 const shotGot = (src: string) => shots.get(src) || '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotGot(src) ? 1 : 0).join('')).join('');
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
 // answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
@@ -1403,8 +1405,8 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
 });
 // A screen of the chat's own scroller ahead; 'not-found' (request's error for a 404): the picture is gone, not fetched again.
 function watchShots(id: string, list: HTMLElement) {
-  if (id !== shotsOf) { shots = new Map(); shotsOf = id; }
-  (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place, AbortSignal.timeout(120000))
+  if (id !== shotsOf) { for (const [key, src] of shots) if (src !== undefined) shots.delete(key); shotsOf = id; }
+  (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place, AbortSignal.timeout?.(120000))
     .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, shots, list);
 }
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
