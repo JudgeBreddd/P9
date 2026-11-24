@@ -215,11 +215,11 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // (then a 2 s timeout) started an ssh login each time, and the machine menu and Dev Focus waited 15-20 s on it. 10 s, as
   // every other daemon request has: a dead daemon still fails at once (the forward closes).
   let reading = null;
-  const check = () => health(state, 10000).catch(async (error) => {
+  const check = (ms = 10000) => health(state, ms).catch(async (error) => {
     if (error.status !== 401) throw error;
     reading ??= readServer(host, ssh).then(r => save(r.credentials)).finally(() => { reading = null; });
     await reading;
-    return health(state, 10000);
+    return health(state, ms);
   });
   // Not -N: over a password login's control master (row 78) an ssh -N hands its forwards to the master and exits at once, so
   // the tunnel looked dead and P9 never connected. A session waiting on stdin keeps this ssh alive for as long as the
@@ -256,7 +256,7 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // (a deadline: a check can take up to 10 s).
   for (const end = Date.now() + 15000; Date.now() < end;) {
     if (exited || signal?.aborted) break;
-    if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check, background, slim }; }
+    if (await check(Math.max(1, Math.min(10000, end - Date.now()))).then(h => h.status === 'ok', () => false) && !exited && !signal?.aborted) { ready = true; return { state, host, close, check, background, slim }; }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   await close();

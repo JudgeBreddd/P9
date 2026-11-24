@@ -35,6 +35,7 @@ export const health = (state, timeout = 2000) => withCredentials(state, (credent
       res.setEncoding('utf8');
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(Object.assign(new Error('unhealthy'), { status: res.statusCode })));
+      res.on('close', () => { if (!res.complete) reject(new Error('dropped')); }); // a tunnel gone mid-answer: no end comes
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));

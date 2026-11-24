@@ -53,7 +53,7 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   await page.locator('#serverBadge', { hasText: 'test-host' }).waitFor({ timeout: 120000 });
   await page.locator('#navList .row[data-chat]').nth(3).waitFor({ timeout: 120000 });
 
-  // Each step: the click, then the thing fully open (the menu with every row and the remote in use's state; the dialog
+  // Each step: the click, then the thing fully open (the menu with every row, the remote in use's state still on its way; the dialog
   // open; the focus pane shown), then it is closed again. ms from the click.
   const timed = async (name, click, open, close) => {
     const t0 = Date.now(); await click();
@@ -62,7 +62,7 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   };
   const round = async () => Object.fromEntries([
     await timed('menu', () => page.click('#serverBadge'),
-      () => page.locator('#serverPop [data-server-go="test-host"] .muted', { hasText: 'Connected' }).waitFor({ timeout: 30000 })
+      () => page.locator('#serverPop [data-server-go="test-host"][aria-current]').waitFor({ timeout: 30000 })
         .then(() => page.locator('#serverPop [data-server-go="unreachable-box"]').waitFor({ timeout: 30000 }))
         .then(() => page.locator('#serverPop #serverAdd').waitFor({ timeout: 30000 })),
       () => page.keyboard.press('Escape').then(() => page.locator('#serverPop').waitFor({ state: 'hidden', timeout: 5000 }))),
@@ -75,8 +75,6 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   // The link full: the busy chat's ~3.5 MB (~14 s at 2 Mbit/s) asked through the window's own forward, so every call the
   // clicks make waits behind it, as behind a chat's history or a screenshot coming down.
   const reads = async () => (await readFile(log, 'utf8')).split('\n').filter((l) => l.includes('p9-foundation/desktop.json') && l.includes('printf')).length;
-  // Settings' first open waits for its reads (before it nothing is read); it is opened once here, so the rounds time later opens.
-  await page.click('#setBtn'); await page.locator('#setDlg[open] legend').first().waitFor({ timeout: 30000 }); await page.click('#setClose');
   const before = await reads(), t0 = Date.now(), step = (s) => console.log('O248 step ' + s + ' at ' + (Date.now() - t0) + ' ms');
   // Counted as it comes, so a slow link says how far it got (helpers' http() has a 10 s idle limit and no progress).
   const down = { bytes: 0, first: 0, status: 0 };
@@ -89,15 +87,20 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   await new Promise((r) => setTimeout(r, 500));
   const busy = await round(); step('busy round ' + JSON.stringify(busy));
   await page.click('#serverBadge'); await new Promise((r) => setTimeout(r, 3000)); await page.keyboard.press('Escape'); // past the 2 s other status calls allow
-  const logins = await reads() - before; step('menu after the check timeout, logins ' + logins);
+  step('menu again');
   // A change made while Settings' reads are still on the link stays: those reads went out before its save.
   await page.click('#setBtn'); await page.locator('#setDlg[open] #setGreeting:checked').waitFor({ timeout: 5000 }); await page.uncheck('#setGreeting');
   step('greeting off');
   await Promise.race([full, new Promise((r, j) => setTimeout(() => j(new Error('the busy chat not down in 60 s: ' + JSON.stringify(down))), 60000))]);
   step('busy chat down ' + JSON.stringify(down)); assert.ok(down.status === 200 && down.bytes > 3e6, 'the busy chat came down the link');
+  // Counted after the link drains, and 3 s more: the checks sent while it was full (10 s each) have timed out by now, and an ssh login
+  // on a timeout would have started.
   await new Promise((r) => setTimeout(r, 3000));
+  const logins = await reads() - before; step('logins while full ' + logins);
   assert.equal(await page.isChecked('#setGreeting'), false, 'the greeting stays off after the reads land'); await page.click('#setClose');
   const settled = await round();
+  // With the link free the remote in use's check answers: Connected.
+  await page.click('#serverBadge'); await page.locator('#serverPop [data-server-go="test-host"] .muted', { hasText: 'Connected' }).waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
   await page.click('#setBtn'); assert.equal(await page.locator('#setDlg[open] #setGreeting').isChecked({ timeout: 5000 }), false, 'off on the next open'); await page.click('#setClose');
   console.log('O248 ms from click to open, 300 ms RTT, 2 Mbit/s: link full ' + JSON.stringify(busy) + '; after ' + JSON.stringify(settled) + '; ssh logins while full: ' + logins);
   assert.deepEqual(errors, []);
