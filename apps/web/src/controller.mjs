@@ -96,7 +96,7 @@ export function mountShell({ askAdmin } = {}) {
   // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
   // probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
   // ~/.ssh/config hosts never saved or used are not asked.
-  const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-not-answering': ['wait', 'Not answering'], 'server-dropped': ['wait', 'Connecting…'] };
+  const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
   adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (sample data is never part of the app).
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
