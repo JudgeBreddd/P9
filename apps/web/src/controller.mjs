@@ -978,12 +978,13 @@ let settings = { name: '', zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, fi
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
 let setPage = 'General';
-// O248: each open reads and waits for it at most 0.5 s, so a busy link does not hold the dialog; a read landing later draws
-// again only if something changed, and not after an edit in Settings (a typed value or a click other than on a page's
-// name: that save came after the read went out) or once a newer open has read. The reads first go out once the window knows its server.
-// ponytail: a changed late read redraws the whole dialog (a focused box loses focus; rare, a value changed elsewhere meanwhile).
-let setSeen, setEdits = 0;
-$('#setBody').oninput = $('#setBody').onclick = e => e.target.dataset.setPage || setEdits++;
+// O248: each open waits for its reads at most 0.5 s, so a busy link does not hold the dialog. Each open reads again: a read
+// sent before it can miss a change made elsewhere since (O133), and a newer read drops it. A read is dropped after an edit: focus in Settings other than on a page's name (a click or a
+// typed value starts with it), or the machine menu's remove. That save came after the read went out. A kept read is
+// applied, and an open dialog is drawn again: nothing in it has focus then, and the scroll stays. The reads first go out
+// once the window knows its server. ponytail: a late read takes focus off a page's name button (the nav is drawn again).
+let setEdits = 0;
+$('#setBody').onfocusin = e => e.target.dataset.setPage || setEdits++;
 const setLoad = () => {
   // The reads go out together (window-4, O16): one after another, each daemon call is a round trip over a remote's tunnel.
   const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null), edits = ++setEdits;
@@ -996,10 +997,10 @@ const setLoad = () => {
     window.p9?.chat ? window.p9.chat('missionFiles', {}).then(r => r?.status === 200 ? r.body : null, () => null) : missionFiles,
     window.p9?.updates ? window.p9.updates().catch(() => null) : null,
     loadStarts()]) // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
-    .then(v => { if (edits < setEdits || setSeen == (setSeen = JSON.stringify([v, starts]))) return; [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = v; if ($('#setDlg').open) renderSettings(); });
+    .then(v => { if (edits < setEdits) return; [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = v; if ($('#setDlg').open) renderSettings(); });
 };
 $('#setBtn').onclick = async () => {
-  await new Promise(r => { setLoad().then(r); setTimeout(r, 500); });
+  await new Promise(r => setLoad().then(r, setTimeout(r, 500))); // the read, or 0.5 s
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
 $('#setClose').onclick = () => $('#setDlg').close();
@@ -1396,14 +1397,15 @@ function renderServerMenu() {
     + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
   pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
     + all.map(h => row(h, h === host || probed(h) ? ['wait', 'Checking…'] : ['off', ''], h === host)).join('')
-    + '<hr data-slot="separator" style="margin:6px 0">' + (host && serverInfo?.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
+    + '<hr data-slot="separator" style="margin:6px 0">' + (host && serverInfo.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
     + (host ? '<button class="item" role="menuitem" id="serverDisconnect" title="Back to this computer, and P9 on ' + esc(host) + ' turns off. Pick another machine above to leave it running.">Disconnect and turn off P9 on ' + esc(host) + '</button>' : '')
     + '<button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
   pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
-  pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
-  const put = (h, [dot, say]) => { const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'); if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; } };
-  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => put(h, PROBE_STATE[st] ?? PROBE_STATE.unreachable), () => {}));
-  if (host) window.p9.getStatus().then(s => put(host, SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable']), () => {});
+  pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { setEdits++; serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
+  // Each check fills the row it started on: after a close and reopen, an older check's answer lands on the old, gone rows.
+  const put = (h, say) => { const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'); return x => [b.querySelector('.srv-dot').dataset.s, b.querySelector('.muted').textContent] = say(x); };
+  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(put(h, st => PROBE_STATE[st] ?? PROBE_STATE.unreachable), () => {}));
+  if (host) window.p9.getStatus().then(put(host, s => SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable']), () => {});
   // U9, O8: back to this computer like This computer above, and P9 on the remote is turned off (This computer leaves it running).
   if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); (window.p9.serverOff ?? (() => window.p9.server(null)))(); };
   // The after-connect window again with only the agents question (shell-start.ts), now rather than at the next poll.

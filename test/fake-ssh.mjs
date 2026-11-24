@@ -76,11 +76,24 @@ for (const forward of forwards) {
     // FAKE_SSH_BPS: bytes a second each way, shared by every forwarded socket, as one ssh connection carries all its channels:
     // a chunk waits for the ones sent before it on any socket (remote-switcher.test.mjs).
     const wait = way => { if (!bps) return delay; const now = Date.now(); return delay + Math.max(0, link[way] - now); };
-    const relay = (from, to, way) => delay || bps ? from.on('data', d => { if (bps) link[way] = Math.max(link[way], Date.now()) + d.length * 1000 / bps; setTimeout(() => to.write(d), wait(way)); }).on('end', () => setTimeout(() => to.end(), wait(way))) : from.pipe(to);
-    relay(socket, far, 'up'); relay(far, socket, 'down');
-    // A close comes after what was sent before it, as ssh delivers a channel's data before its close.
-    far.on('error', () => setTimeout(() => socket.destroy(), wait('down')));
-    socket.on('error', () => setTimeout(() => far.destroy(), wait('up')));
+    // One queue per direction, run in arrival order: a timer per chunk could fire out of order (timers start from the loop's
+    // cached time, the wait from Date.now()), and the bytes then came out swapped (a WebSocket's "Invalid frame header").
+    // A close goes through it too: it comes after what was sent before it, as ssh delivers a channel's data before its close.
+    const relay = (from, to, way) => {
+      if (!delay && !bps) { from.pipe(to); return act => act(); }
+      const queue = [];
+      const pump = () => { while (queue[0]?.due <= Date.now()) queue.shift().act(); if (queue.length) setTimeout(pump, queue[0].due - Date.now()); };
+      const send = (act, bytes = 0) => {
+        if (bps) link[way] = Math.max(link[way], Date.now()) + bytes * 1000 / bps;
+        queue.push({ act, due: Date.now() + wait(way) });
+        if (queue.length === 1) setTimeout(pump, wait(way));
+      };
+      from.on('data', d => send(() => to.write(d), d.length)).on('end', () => send(() => to.end()));
+      return send;
+    };
+    const up = relay(socket, far, 'up'), down = relay(far, socket, 'down');
+    far.on('error', () => down(() => socket.destroy()));
+    socket.on('error', () => up(() => far.destroy()));
   });
   if (tcp) listener.listen(local, '127.0.0.1'); else listener.listen(local);
 }

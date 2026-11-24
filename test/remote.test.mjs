@@ -1238,7 +1238,7 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 }); // not the badge: a window that asked while the tunnel came up reloads once it answers (shell-start.ts), and a key pressed before that is lost
   const devPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   let opened = devPage();
   await shell.keyboard.press('Control+2');
@@ -1311,7 +1311,7 @@ test('O19 Dev Focus left open on a remote that went away and came back: the edit
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   const devPage = (timeout = 60000) => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout });
   const ready = async dev => {
     await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
@@ -1358,7 +1358,7 @@ test('O19 Dev Focus opened while the remote is away says so, then opens by itsel
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   const devPage = (timeout = 60000) => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout });
   // The remote goes away (its P9 stops, the tunnel drops), then Dev Focus is opened: its page says it cannot reach it.
   remote.child.kill('SIGTERM');
@@ -1394,7 +1394,7 @@ test('O19 FIX1 Dev Focus whose failed open is still loading when the remote come
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   // The remote goes away (its P9 stops, the tunnel drops).
   remote.child.kill('SIGTERM');
   await once(remote.child, 'exit');
@@ -1447,7 +1447,7 @@ test('O19 FIX2 an older Dev Focus open still running while a newer one is shown:
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   // Open A: its page load is held in main, so A is still running.
   await app.evaluate(({ webContents }) => {
     const proto = Object.getPrototypeOf(webContents.getAllWebContents()[0]), load = proto.loadURL;

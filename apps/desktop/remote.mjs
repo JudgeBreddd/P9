@@ -214,13 +214,18 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // connection). A 401 re-reads them, one read at a time, and asks once more. O248: only a 401: a slow link's late answer
   // (then a 2 s timeout) started an ssh login each time, and the machine menu and Dev Focus waited 15-20 s on it. 10 s, as
   // every other daemon request has: a dead daemon still fails at once (the forward closes).
+  // ms bounds the whole check, the 401's ssh read and the second ask included (the request's own timeout is per quiet spell:
+  // a trickling answer runs past it). ponytail: a check given up on still ends on its request's own timeout, unseen.
   let reading = null;
-  const check = (ms = 10000) => health(state, ms).catch(async (error) => {
-    if (error.status !== 401) throw error;
-    reading ??= readServer(host, ssh).then(r => save(r.credentials)).finally(() => { reading = null; });
-    await reading;
-    return health(state, ms);
-  });
+  const check = (ms = 10000) => {
+    let timer;
+    return Promise.race([health(state, ms).catch(async (error) => {
+      if (error.status !== 401) throw error;
+      reading ??= readServer(host, ssh).then(r => save(r.credentials)).finally(() => { reading = null; });
+      await reading;
+      return health(state, ms);
+    }), new Promise((resolve, reject) => { timer = setTimeout(reject, ms, new Error('timeout')); })]).finally(() => clearTimeout(timer));
+  };
   // Not -N: over a password login's control master (row 78) an ssh -N hands its forwards to the master and exits at once, so
   // the tunnel looked dead and P9 never connected. A session waiting on stdin keeps this ssh alive for as long as the
   // connection (its exit is still the drop), and the remote cat ends when it closes.

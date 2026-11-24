@@ -49,8 +49,8 @@ export const AGENT_START_MS = 90_000;
 // A 401 is not a result: the request was refused before it did anything, so it is sent again with desktop.json read again.
 export async function daemonRequest(state, method, route, body, op = randomUUID(), timeout = 10000) {
   const data = body === undefined ? undefined : JSON.stringify(body);
-  return withCredentials(state, (credentials) => new Promise((resolve, reject) => {
-    const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout,
+  return withCredentials(state, (credentials) => { const send = (first) => new Promise((resolve, reject) => {
+    const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout, ...(!first && { agent: false }),
       headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}`, 'x-p9-csrf': credentials.csrf,
         ...(method === 'GET' ? {} : { 'x-p9-op': op }), ...(data ? { 'content-type': 'application/json' } : {}) } }, (res) => {
       let text = '';
@@ -63,10 +63,13 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
         try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); }
       });
     });
-    req.on('error', reject);
+    // O248: a kept-alive socket the daemon closed while idle looks open until that close arrives, late on a busy remote link.
+    // The request never reached the daemon, so it goes once more (same op id), as Node's docs advise, on a socket of its own:
+    // the pool's other idle sockets were closed in the same quiet spell, and their closes are just as late.
+    req.on('error', (error) => first && req.reusedSocket && error.code === 'ECONNRESET' ? send(false).then(resolve, reject) : reject(error));
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(data);
-  })).catch((error) => {
+  }); return send(true); }).catch((error) => {
     // Still refused with desktop.json just read: the 401 as it was before the cache, a reply and not an error.
     if (error?.status === 401 && error.reply !== undefined) { try { return { status: 401, body: JSON.parse(error.reply) }; } catch { throw Object.assign(new Error('bad-response'), { status: 401 }); } }
     throw error;

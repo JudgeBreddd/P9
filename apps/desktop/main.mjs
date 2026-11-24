@@ -1196,7 +1196,7 @@ export async function createDesktop({ state, open } = {}) {
       // Just after a switch to a server the tunnel is still coming up: wait for it as long as connectServer does (15 s).
       for (let i = 0; i < 60 && serverHost && !server && !serverError; i++) await new Promise(resolve => setTimeout(resolve, 250));
       const unanswered = () => { throw Object.assign(new Error('daemon-unavailable'), { server: serverHost ?? undefined }); };
-      const [devFiles, status] = await Promise.all([devAssets(), (server ? server.check() : health(state)).catch(unanswered)]); // O248: a remote's check allows a busy link
+      const [devFiles, status] = await Promise.all([devAssets(), (server ? server.check(60000) : health(state)).catch(unanswered)]); // O248: a busy link answers late; 60 s, as /dev/editor below
       const host = serverHost ? await serverEditor() : await startHost();
       const origin = 'http://127.0.0.1:' + host.port;
       // Extension pages (webviews: a README, an image preview) get their own origin, p9://webview, so their scripts can't reach

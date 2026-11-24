@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root, versionSeen } from './helpers.mjs';
+import { editorFor } from './editor-fixture.mjs';
 
 const skip = process.platform === 'win32' ? 'Unix sockets and sh' : false;
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -24,7 +25,9 @@ const until = async (check, what, ms = 15000) => {
 const ended = (instance, id) => until(async () => (await call(instance, '/chat/events?after=0&tail=1&only=' + id)).events.at(-1)?.type === 'turn-end', id + ' answered');
 
 test('O248 the switcher opens at once on a remote over a slow link', { skip, timeout: 300000 }, async (t) => {
-  const local = await daemon(t), remote = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // The remote runs Dev Focus's editor server when there is one here (the fixture, or the real one); without, the editor is not checked.
+  const editor = await editorFor();
+  const local = await daemon(t), remote = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake], ...(editor && { path: editor.path, env: { P9_EDITOR_HOST: editor.host } }) }));
   // A busy chat (MBs of screenshots) first, then small ones: its history comes down the link after the list (late()).
   const heavy = (await call(remote, '/chat', 'POST', { provider: 'claude', title: 'Busy' })).conversation;
   await call(remote, `/chat/${heavy}/prompt`, 'POST', { text: 'heavy 8' }); await ended(remote, heavy);
@@ -82,10 +85,15 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   const full = new Promise((resolve, reject) => request({ agent: false, socketPath: path.join(runtime, 'p9-server', 'test-host', 'daemon.sock'),
     path: '/chat/events?after=0&tail=200&only=' + heavy, headers: authenticated(remote.credentials) }, (res) => {
     down.status = res.statusCode;
-    res.on('data', (d) => { down.first ||= Date.now() - t0; down.bytes += d.length; }).on('end', () => resolve(down)).on('error', (e) => reject(new Error(e.message + ' after ' + JSON.stringify(down) + ' at ' + (Date.now() - t0) + ' ms')));
+    res.on('data', (d) => { down.first ||= Date.now() - t0; down.bytes += d.length; }).on('end', () => resolve(down)).on('error', (e) => readFile(log, 'utf8').then((l) => reject(new Error(e.message + ' after ' + JSON.stringify(down) + ' at ' + (Date.now() - t0) + ' ms; ssh: ' + l.slice(-1500)))));
   }).on('error', reject).end());
   full.catch(() => {}); // awaited below; a link cut early still fails there, after the clicks are timed
   await new Promise((r) => setTimeout(r, 500));
+  // Dev Focus's first open starts the remote's editor behind the full link; its page comes once that answers.
+  const devSaid = []; // the editor page's console, for a failure's message
+  const devPage = app.waitForEvent('window', { predicate: (p) => p.url().startsWith('p9://dev/'), timeout: 120000 })
+    .then((p) => { p.on('console', (m) => devSaid.push(m.type() + ': ' + m.text().slice(0, 300))); return p; });
+  devPage.catch(() => {}); // awaited below
   const busy = await round(); step('busy round ' + JSON.stringify(busy));
   await page.click('#serverBadge'); await new Promise((r) => setTimeout(r, 3000)); await page.keyboard.press('Escape'); // past the 2 s other status calls allow
   step('menu again');
@@ -94,15 +102,32 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
   step('greeting off');
   await Promise.race([full, new Promise((r, j) => setTimeout(() => j(new Error('the busy chat not down in 60 s: ' + JSON.stringify(down))), 60000))]);
   step('busy chat down ' + JSON.stringify(down)); assert.ok(down.status === 200 && down.bytes > 3e6, 'the busy chat came down the link');
+  // The editor opened behind the full link is usable: it waited out the link instead of showing "unavailable".
+  if (editor) {
+    const dev = await devPage;
+    await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 }).catch(async (error) => {
+      if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o248-editor ' + (await dev.screenshot()).toString('base64'));
+      throw new Error(error.message + '; the editor page said: ' + devSaid.slice(-12).join(' | '));
+    });
+    assert.equal(await dev.locator('#cause').count(), 0, 'Dev Focus editor: ' + await dev.locator('#cause').textContent().catch(() => ''));
+    step('editor ready');
+  }
   // Counted after the link drains, and 3 s more: the checks sent while it was full (10 s each) have timed out by now, and an ssh login
   // on a timeout would have started.
   await new Promise((r) => setTimeout(r, 3000));
   const logins = await reads() - before; step('logins while full ' + logins);
   assert.equal(await page.isChecked('#setGreeting'), false, 'the greeting stays off after the reads land'); await page.click('#setClose');
-  const settled = await round();
+  const settled = await round(); step('after round ' + JSON.stringify(settled));
   // With the link free the remote in use's check answers: Connected.
   await page.click('#serverBadge'); await page.locator('#serverPop [data-server-go="test-host"] .muted', { hasText: 'Connected' }).waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
   await page.click('#setBtn'); assert.equal(await page.locator('#setDlg[open] #setGreeting').isChecked({ timeout: 5000 }), false, 'off on the next open'); await page.click('#setClose');
+  // After the link drains, the editor still works: it opens a file of the remote's workspace.
+  if (editor) {
+    const dev = app.windows().find((p) => p.url().startsWith('p9://dev/'));
+    const text = await Promise.race([dev.evaluate(async () => (await window.devFocus.open('note.txt')).document.getText()),
+      new Promise((r, j) => setTimeout(() => j(new Error('the editor did not open note.txt in 60 s; the editor page said: ' + devSaid.slice(-12).join(' | '))), 60000))]);
+    assert.equal(text, 'original', 'the editor opens the remote\'s file after the link drains');
+  }
   console.log('O248 ms from click to open, 300 ms RTT, 2 Mbit/s: link full ' + JSON.stringify(busy) + '; after ' + JSON.stringify(settled) + '; ssh logins while full: ' + logins);
   assert.deepEqual(errors, []);
   // A slow /health is not new credentials: it started an ssh login (the credentials read) each time, 15-20 s on a real link.
