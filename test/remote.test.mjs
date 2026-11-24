@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request } from 'node:http';
-import { connectServer, forwardPath, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
+import { connectServer, forwardPath, restartServer, sshHosts, READ, REREAD } from '../apps/desktop/remote.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
 import { EDITOR_COMMIT, EDITOR_DOWNLOADS } from '../apps/desktop/editor-host.mjs';
 import { editorFor } from './editor-fixture.mjs';
@@ -127,6 +127,10 @@ test('Server mode: a lost tunnel is a drop, and a restarted server daemon is fou
   assert.notEqual(second.credentials.cookie, instance.credentials.cookie);
   assert.equal((await server.check()).status, 'ok');
   assert.equal(JSON.parse(await readFile(path.join(server.state, 'desktop.json'), 'utf8')).cookie, second.credentials.cookie);
+  // #517 review 5: that 401's re-read is REREAD, which starts no P9 there (remote-keep.test.mjs runs it on a stopped one), so
+  // a Disconnect and turn off landing while it runs stays off. The connect's own read is READ.
+  const scripts = (await s.calls()).map(c => c.argv.at(-1));
+  assert.deepEqual([scripts.filter(a => a === READ).length, scripts.filter(a => a === REREAD).length], [1, 1], 'one READ at the connect, one REREAD at the 401');
   // The ssh process ends (lid closed, network gone): onDrop runs and the folder goes.
   process.kill((await s.calls()).find(c => c.argv.includes('-L')).pid, 'SIGTERM');
   await Promise.race([dropped, new Promise((_, reject) => setTimeout(() => reject(new Error('no onDrop')), 5000))]);
