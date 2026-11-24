@@ -1645,7 +1645,8 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
     const mine = app, proc = app.process();
     t.after(async () => { await Promise.race([mine.close(), sleep(15000)]); proc.kill(); });
     shell = await app.firstWindow();
-    await badge('Remote · test-host');
+    // Connected, not the badge: a window that asked while the tunnel came up reloads once it answers, and eats a key pressed before.
+    await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
   };
   const badge = text => shell.locator('#serverBadge', { hasText: text }).waitFor({ timeout: 30000 });
   // Dev Focus shown, on the remote's editor and ready (not the page it replaces, nor the unavailable page).
