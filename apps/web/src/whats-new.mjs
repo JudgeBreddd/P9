@@ -4,12 +4,12 @@
 export const WHATS_NEW = {
   version: '0.1.9-beta.14',
   changes: [
-    "Remote: the machine menu, Settings and Dev Focus open at once, even over a slow or busy link.",
+    "Remote: the machine menu and Settings open quickly over a slow or busy link, and Dev Focus waits it out.",
     "Remote: Dev Focus keeps its open files and file tree through a remote switch or a restart.",
-    "Remote: the chat list draws before any chat's history, and screenshots load when they come into view.",
-    "Back after time away, chats jump to where they are now instead of replaying everything missed.",
+    "Desktop shows the chat list first. Desktop and phone load screenshots as you scroll near them.",
+    "When many updates pile up while you're away, chats catch up in one step.",
     "A click on a chat row opens it even while the list is redrawing.",
-    "Phone: a turn nobody typed in (started by a script or hook) still shows Working and Stop.",
-    "A steer sent just as a turn starts joins that turn instead of being refused.",
+    "Phone shows Working and Stop when an agent starts a turn on its own.",
+    "A steer sent while a turn is starting waits for that turn to begin.",
   ],
 };
