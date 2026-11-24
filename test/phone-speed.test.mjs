@@ -63,7 +63,7 @@ async function open(page, name, cacheOff) {
   const out = await page.evaluate(() => {
     const entries = performance.getEntriesByType('resource');
     return { painted: Math.round(performance.getEntriesByName('p9-chat-painted')[0].startTime),
-      requests: entries.map((e) => { const url = new URL(e.name); return [url.pathname + url.search.slice(0, 60), Math.round(e.startTime), Math.round(e.duration), e.transferSize, e.encodedBodySize]; }) };
+      requests: entries.map((e) => { const url = new URL(e.name); return [url.pathname + url.search.slice(0, 120), Math.round(e.startTime), Math.round(e.duration), e.transferSize, e.encodedBodySize]; }) };
   });
   const astro = out.requests.filter(([name]) => name.startsWith('/_astro/'));
   const early = astro.filter((r) => r[1] < out.painted);
@@ -94,7 +94,7 @@ test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads 
   // Item 2: the terminal's code is not loaded before the first chat screen.
   if (cold.astroBeforePaint.some((name) => /terminal[^/]*\.js$/i.test(name))) misses.push('item 2: the terminal loaded before the first screen: ' + cold.astroBeforePaint.join(' '));
   // Item 3: the first read names one chat, the one last shown; the others read theirs when opened.
-  const reads = cold.api.filter(([name]) => name.startsWith('/chat/events?after=0&tail='));
+  const reads = cold.api.filter(([name]) => { const u = new URL(name, 'http://p9'); return u.pathname === '/chat/events' && u.searchParams.get('after') === '0' && u.searchParams.has('tail'); });
   if (reads.length !== 1 || !reads[0][0].endsWith('only=' + third)) misses.push('item 3: the first reads were ' + JSON.stringify(reads.map((r) => r[0])));
   // Another chat still opens with its history, and the list shows every chat (state from GET /chat).
   assert.equal(await page.locator('#chatList [data-chat]').count(), 6);

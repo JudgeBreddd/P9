@@ -266,15 +266,15 @@ const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; 
 // O249: an agent's picture comes as its place (shot:) and is fetched when seen (shots.mjs), which loads with the first chat
 // that has one: startup carries none of it. Until it has loaded, every picture draws as its placeholder; a failed load says so
 // (noLoad) and is not tried again: the file is local, so it fails when P9 was updated under this window, and a reload fixes it.
-let shots; // the loading import, then shots.mjs's desktop loader
+let shots; // the loading import, then shots.mjs's desktop {watch(s, scroller)}; a chat's pictures are its own s.shots
 function sess(id) { return outer.S.sessions.find(x => x.id === id); } // a chat by id
 // Code that loads on first use (shots.mjs, move-fx.mjs) did not load: chat id's chat says so once and redraws (its composer
 // too), or a toast when that chat is not known yet (the list not in, or no chat named).
 const NO_LOAD = 'Reload P9 (Ctrl R) to finish loading it.';
 const noLoad = id => { const s = sess(id); if (!s) return outer.toast({ kind: 'load', txt: NO_LOAD, level: 'bad' });
   if (s.events.at(-1)?.text !== NO_LOAD) s.events.push({ t: 'notice', text: NO_LOAD }); renderChats(); };
-const shotSrc = s => src => shots?.src(s.id, src);
-const watchShots = (s, p) => { const h = p.querySelector('.hist'); if (!h) return; if (shots?.watch) return shots.watch(s.id, h);
+const shotSrc = s => src => s.shots?.get(src);
+const watchShots = (s, p) => { const h = p.querySelector('.hist'); if (!h) return; if (shots?.watch) return shots.watch(s, h);
   if (h.querySelector('img[data-shot]')) shots ??= import('./shots.mjs').then(m => { shots = m.installShots(renderChats); renderChats(); }, () => noLoad(s.id)); };
 // O73: a message another chat's agent sent names that chat: its title when it sent (fromTitle), else its title now, else
 // "a deleted chat"; P9's own notes say P9. Drawn apart from the user's own (data-from).

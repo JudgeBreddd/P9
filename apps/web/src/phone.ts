@@ -4,7 +4,7 @@ import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileIm
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
-import { svg as desktopIcons } from './helpers.mjs'; import { shotStore, shotWatcher } from './shots.mjs';
+import { svg as desktopIcons } from './helpers.mjs'; import { shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillLoose } from './security.mjs';
@@ -374,9 +374,9 @@ type Attached = { mimeType?: string; data: string; name: string; file?: true }; 
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
-// The store and watcher are the desktop's (shots.mjs), keyed by chat and place.
-let shotWatch: ((id: string, list: HTMLElement) => void) | undefined;
-const shots = shotStore(), shotGot = (src: string) => (src.startsWith('shot:') && shots.get(openId + '/' + src.slice(5))) || '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotGot(src) ? 1 : 0).join('')).join('');
+// The watcher is the desktop's (shots.mjs); shots holds the open chat's pictures only (shotsOf), a new Map for each chat.
+let shotWatch: ((id: string, got: Map<string, string>, list: HTMLElement) => void) | undefined, shots = new Map<string, string>(), shotsOf = '';
+const shotGot = (src: string) => shots.get(src) || '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotGot(src) ? 1 : 0).join('')).join('');
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
 // answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
 // for a multi choice); an empty optional field is left out of the answer.
@@ -1403,8 +1403,9 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
 });
 // A screen of the chat's own scroller ahead; 'not-found' (request's error for a 404): the picture is gone, not fetched again.
 function watchShots(id: string, list: HTMLElement) {
-  (shotWatch ??= shotWatcher(one('#chatBody'), shots, (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place)
-    .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, list);
+  if (id !== shotsOf) { shots = new Map(); shotsOf = id; }
+  (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place)
+    .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, shots, list);
 }
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
 function sentImgs(id: string, hashes?: string[]) {

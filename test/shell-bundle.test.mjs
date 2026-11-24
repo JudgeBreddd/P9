@@ -21,9 +21,9 @@ const dist = path.join(root, 'apps/web/dist');
 // to the measured 0 B-spread size; lower it when startup JS shrinks, never raise it to fit a change. 499551: O124 on a8ed192
 // (dev space x5, 0 spread; all parsed JS with the idle terminal chunk was 838879, against the old budget 858744).
 // 493827: O249 (#513), the Mission edit form loading on its first open (-7.0 KB) less #513's launch and queue code (+1.2 KB).
-// 488467: O249 part 2, the send-to-server move and the screenshot loader (shots.mjs) each loading on first use, and one
+// 488464: O249 part 2, the send-to-server move and the screenshot loader (shots.mjs) each loading on first use, and one
 // chat lookup (sess) for 17 copies in chat-view (-5.4 KB net).
-const BUDGET = 488467;
+const BUDGET = 488464;
 // ponytail: warm median of four launches against one fixed line (O124). 300: CI's measured median 221 ms plus a 79 ms margin
 // (about a third, for runner noise); CI x5 on 2edeb22, runs 691347 932428 226241 467595 763484, warm medians 221 233 226 217
 // 221 (spread 217-233; dev space x5 median 123). Lower it when startup gets faster, never raise it to fit a change.
