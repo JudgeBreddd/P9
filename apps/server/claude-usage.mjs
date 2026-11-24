@@ -49,6 +49,8 @@ export function createPoll({ name, read, close = () => {}, now = Date.now, log =
   return {
     // A /usage request: someone is looking. Returns the last good answer ({ windows, at }) or null.
     look() { looked = now(); if (!running && !stopped) ended = loop(); return reading; },
+    // O244: the last good answer with no look, so it starts no read (the usage history's tick).
+    peek: () => reading,
     // The daemon's stop: a look during its request drain starts nothing new. Resolves once a read still running has ended
     // and closed what it opened, so the daemon exits after that (its 10 s stop timer bounds the wait).
     close() { stopped = true; wake(); close(); return ended; },
