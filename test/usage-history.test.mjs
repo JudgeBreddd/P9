@@ -25,6 +25,8 @@ test('O244: stub readings at known times give the projection and pace word, and 
   assert.equal(projectAt(five(46), T0 + 60 * MIN, { at: T0, used: 40 }), 58);
   assert.equal(projectAt({ ...five(40), resetsAt: T0 - MIN }, T0, null), null, 'a window already reset has no projection');
   assert.equal(projectAt({ ...five(2), resetsAt: T0 + 299 * MIN }, T0, null), null, 'one minute in, the average says nothing yet');
+  assert.equal(projectAt(five(38), T0, { at: T0 - HOUR, used: 40 }), 95, 'a reading revised down: the window average, not a flat or falling rate');
+  assert.equal(projectAt(five(46), T0, { at: T0 - HOUR, used: 40 }), 64, 'a reading 60 min before: 6%/h, 3 h left');
 
   let reading = null;
   const at = { now: T0 }, f = await file();
@@ -94,15 +96,29 @@ test('O244: the base is the same window and was fresh; a reading is written once
   reading = { third: { fiveHour: { usedPercent: 40, resetsAt: T0 + 3 * HOUR, windowMins: 300 }, sevenDay: { usedPercent: 7, resetsAt: null, windowMins: 10080 },
     models: [{ name: 'big', usedPercent: 5, resetsAt: T0 + 100 * HOUR, windowMins: 10080 }], asOf: T0 },
     late: { sevenDay: { usedPercent: 10, resetsAt: T0 + 100 * HOUR, windowMins: 10080 }, asOf: T0 } };
-  const shown = history.annotate(reading);
+  const shown = history.annotate(reading), atT0 = reading;
   assert.equal(shown.third.fiveHour.projected, 100, 'the last window\'s 90% is not this window\'s base: the window average');
   assert.equal(shown.late.sevenDay.projected, 24.7, 'a base that was 15 min old when written is not used: the window average');
   assert.equal(shown.third.sevenDay.projected, null, 'no reset, no projection');
   assert.equal(shown.third.models[0].projected, 12.4, 'a per-model window is projected too');
   assert.equal(await history.tick(), 4, 'after the failure the next tick writes again: the null-reset and per-model windows too');
+  // The same window by its exact reset: a reading of a window resetting 5 min later is not its base.
+  at.now = T0 + 40 * MIN;
+  const near = { third: { fiveHour: { usedPercent: 41, resetsAt: T0 + 3 * HOUR + 5 * MIN, windowMins: 300 }, asOf: at.now } };
+  assert.equal(history.annotate(near).third.fiveHour.projected, Math.round((41 + 41 / (2 * HOUR - 5 * MIN + 40 * MIN) * (3 * HOUR - 35 * MIN)) * 10) / 10);
+  // Another writer holds the database: the tick writes nothing and does not wait; once it lets go, the next writes all.
+  reading = { a: { fiveHour: { usedPercent: 1, resetsAt: T0 + 3 * HOUR, windowMins: 300 }, asOf: at.now }, b: { fiveHour: { usedPercent: 1, resetsAt: T0 + 3 * HOUR, windowMins: 300 }, asOf: at.now } };
+  const other = new DatabaseSync(f);
+  other.exec('BEGIN IMMEDIATE');
+  const started = Date.now();
+  assert.equal(await history.tick(), 0);
+  assert.ok(Date.now() - started < 1000, 'the tick did not wait on the lock');
+  assert.equal(other.prepare("SELECT count(*) AS n FROM limits WHERE provider IN ('a', 'b')").get().n, 0, 'nothing partial');
+  other.exec('ROLLBACK'); other.close();
+  assert.equal(await history.tick(), 2);
   // A reading taken before its window reset, looked at after: no live projection.
   at.now = T0 + 4 * HOUR;
-  assert.equal(history.annotate(reading).third.fiveHour.projected, null);
+  assert.equal(history.annotate(atT0).third.fiveHour.projected, null);
   history.close();
   const db = new DatabaseSync(f, { readOnly: true });
   const rows = db.prepare('SELECT provider, win, resets_at, projected_pct, pace FROM limits WHERE as_of = ? ORDER BY provider, win').all(T0).map((r) => ({ ...r }));

@@ -8,7 +8,7 @@ import { paceState } from './limits.mjs';
 
 const MIN = 60000;
 // A window: a used % and a length; its reset may be unknown (then it has no projection and no pace).
-const isWindow = (w) => w && typeof w === 'object' && !Array.isArray(w) && Number.isFinite(w.usedPercent) && w.windowMins > 0;
+const isWindow = (w) => w && typeof w === 'object' && !Array.isArray(w) && Number.isFinite(w.usedPercent) && Number.isFinite(w.windowMins) && w.windowMins > 0;
 // The limits with fn(provider, win, w, asOf) in place of each window: each provider is an object key (null for none,
 // signedOut is an array), each window a key of it holding one, or an entry of a list of named ones (a provider's
 // per-model list), named <list>.<name>.
@@ -21,13 +21,14 @@ const mapWindows = (limits, fn) => (limits && typeof limits === 'object' ? Objec
 })) : limits);
 
 // The % a window will be at its reset, at the rate since base ({ at, used }, an earlier reading of the same window), or
-// with none at the window's average so far. Null once the window has reset, and in its first 35 min (the average of a
+// with none (or a base above today's %: a source revised it down) at the window's average so far. Null once the window has reset, and in its first 35 min (the average of a
 // few minutes says 600% after one busy one). Rounded to 0.1; it can pass 100.
 // ponytail: one earlier reading sets the rate (the usage pace script's rule); a fit over many is the upgrade if it jumps.
 export function projectAt(w, now, base) {
+  if (base && base.used > w.usedPercent) base = null;
   const left = (w.resetsAt ?? NaN) - now, gone = base ? now - base.at : w.windowMins * MIN - left;
   if (!(left > 0) || !(gone >= 35 * MIN)) return null;
-  return Math.round((w.usedPercent + Math.max(0, w.usedPercent - (base?.used ?? 0)) / gone * left) * 10) / 10;
+  return Math.round((w.usedPercent + (w.usedPercent - (base?.used ?? 0)) / gone * left) * 10) / 10;
 }
 
 // file: the database; read: async () => /usage's limits; everyMs: the tick (0: none, the caller ticks). The database opens
@@ -42,10 +43,9 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
         provider TEXT NOT NULL CHECK (length(provider) <= 64), win TEXT NOT NULL CHECK (length(win) <= 32), used_pct REAL NOT NULL,
         resets_at INTEGER, window_mins INTEGER NOT NULL, projected_pct REAL, pace TEXT CHECK (pace IN ('ahead', 'on', 'headroom')),
         as_of INTEGER NOT NULL, age_ms INTEGER NOT NULL, PRIMARY KEY (provider, win, as_of)) STRICT`);
-      // The base reading: the newest of the same window that is 35-90 min older and was fresh (at most 10 min old) when
-      // written. Same window: its reset within 10 min, as one source rounds it and another not; a provider's next window of
-      // that name resets at least one window length later, so it never matches.
-      base = opened.prepare(`SELECT as_of AS at, used_pct AS used FROM limits WHERE provider = ? AND win = ? AND resets_at BETWEEN ? AND ?
+      // The base reading: the newest of the same window (the same reset, as the usage pace script matches it) that is
+      // 35-90 min older and was fresh (at most 10 min old) when written.
+      base = opened.prepare(`SELECT as_of AS at, used_pct AS used FROM limits WHERE provider = ? AND win = ? AND resets_at = ?
         AND as_of BETWEEN ? AND ? AND age_ms <= 600000 ORDER BY as_of DESC LIMIT 1`);
       add = opened.prepare('INSERT OR IGNORE INTO limits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     } catch (error) { opened.close(); throw error; }
@@ -54,7 +54,7 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
   const logOnce = (error) => { if (said !== error.message) log('usage history: ' + (said = error.message)); };
   const baseOf = (provider, win, w, at) => {
     if (closed || !Number.isFinite(w.resetsAt)) return null;
-    try { open(); return base.get(provider, win, w.resetsAt - 10 * MIN, w.resetsAt + 10 * MIN, at - 90 * MIN, at - 35 * MIN) ?? null; } catch (error) { logOnce(error); return null; }
+    try { open(); return base.get(provider, win, Math.round(w.resetsAt), at - 90 * MIN, at - 35 * MIN) ?? null; } catch (error) { logOnce(error); return null; }
   };
   // The limits with each window's projected % (none once its reset has passed, however old the reading).
   const annotate = (limits) => mapWindows(limits, (provider, win, w, asOf) => {
@@ -62,7 +62,7 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
     return { ...w, projected: w.resetsAt > now() ? projectAt(w, at, baseOf(provider, win, w, at)) : null };
   });
   // One read, one row per window not written yet. Answers how many rows it wrote. The database is never waited on
-  // (busy_timeout 0): a reader holding it costs this tick, and the next one tries again.
+  // (busy_timeout 0): a writer holding it costs this tick, and the next one tries again.
   const tick = async () => {
     try {
       const limits = await read(), t = now(), rows = [];
@@ -73,8 +73,10 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
         rows.push([t, provider, win, w.usedPercent, resets, Math.round(w.windowMins), projectAt(w, at, baseOf(provider, win, w, at)), paceState(w, at), at, Math.max(0, t - at)]);
         return w;
       });
+      // One transaction: a tick writes all its rows or none.
       let n = 0;
-      for (const row of rows) n += Number(add.run(...row).changes);
+      db.exec('BEGIN');
+      try { for (const row of rows) n += Number(add.run(...row).changes); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       said = '';
       return n;
     } catch (error) { logOnce(error); return 0; }
