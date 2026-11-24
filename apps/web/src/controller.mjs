@@ -978,14 +978,15 @@ let settings = { name: '', zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, fi
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
 let setPage = 'General';
-// O248: the reads go out once the window has settled, so the first open does not wait on a busy link; each open reads
-// again and draws again only if something changed. Not after an input or click in Settings: the read went out before that save.
-// ponytail: a changed read redraws the whole dialog (a focused box loses focus; rare, a value changed elsewhere meanwhile).
-let setRead, setSeen, setEdits = 0;
-$('#setBody').oninput = $('#setBody').onclick = () => setEdits++;
+// O248: each open reads and waits for it at most 0.5 s, so a busy link does not hold the dialog; a read landing later draws
+// again only if something changed, and not after an edit in Settings (a typed value or a click other than on a page's
+// name: that save came after the read went out) or once a newer open has read. The reads first go out once the window knows its server.
+// ponytail: a changed late read redraws the whole dialog (a focused box loses focus; rare, a value changed elsewhere meanwhile).
+let setSeen, setEdits = 0;
+$('#setBody').oninput = $('#setBody').onclick = e => e.target.dataset.setPage || setEdits++;
 const setLoad = () => {
   // The reads go out together (window-4, O16): one after another, each daemon call is a round trip over a remote's tunnel.
-  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null), edits = setEdits;
+  const status = (p, key) => p.then(r => r?.status === 200 ? r.body[key] : null, () => null), edits = ++setEdits;
   return Promise.all([
     window.p9?.listPets ? window.p9.listPets().catch(() => null) : pets,
     window.p9?.chat ? status(liveChat.call('lock'), 'on') : agentLock,
@@ -995,12 +996,10 @@ const setLoad = () => {
     window.p9?.chat ? window.p9.chat('missionFiles', {}).then(r => r?.status === 200 ? r.body : null, () => null) : missionFiles,
     window.p9?.updates ? window.p9.updates().catch(() => null) : null,
     loadStarts()]) // O133: the Default model and effort as the daemon keeps them now (a failed first read, or another window's save)
-    .then(v => { if (edits < setEdits || setSeen == (setSeen = JSON.stringify(v))) return; [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = v; if ($('#setDlg').open) renderSettings(); });
+    .then(v => { if (edits < setEdits || setSeen == (setSeen = JSON.stringify([v, starts]))) return; [pets, agentLock, fileProtect, termGreeting, serverInfo, missionFiles, updates] = v; if ($('#setDlg').open) renderSettings(); });
 };
-setTimeout(() => setRead ??= setLoad(), 3000);
 $('#setBtn').onclick = async () => {
-  if (setRead) setLoad();
-  await (setRead ??= setLoad());
+  await new Promise(r => { setLoad().then(r); setTimeout(r, 500); });
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
 $('#setClose').onclick = () => $('#setDlg').close();
@@ -1375,7 +1374,7 @@ moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.ma
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); setLoad(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
 const PROBE_STATE = { p9: ['ok', 'P9 running'], 'no-p9': ['warn', 'P9 not running'], unreachable: ['bad', 'Unreachable'] };
 // The remote in use and the last one used come first, even when neither list holds them (the old badge's one click went to last).
 const machines = () => { const { host = null, last = null, hosts = [], remotes = [] } = serverInfo ?? {}; return { host, last, remotes, all: [...new Set([host, last, ...remotes, ...hosts])].filter(Boolean) }; };

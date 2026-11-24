@@ -84,6 +84,7 @@ test('O248 the switcher opens at once on a remote over a slow link', { skip, tim
     down.status = res.statusCode;
     res.on('data', (d) => { down.first ||= Date.now() - t0; down.bytes += d.length; }).on('end', () => resolve(down)).on('error', (e) => reject(new Error(e.message + ' after ' + JSON.stringify(down) + ' at ' + (Date.now() - t0) + ' ms')));
   }).on('error', reject).end());
+  full.catch(() => {}); // awaited below; a link cut early still fails there, after the clicks are timed
   await new Promise((r) => setTimeout(r, 500));
   const busy = await round(); step('busy round ' + JSON.stringify(busy));
   await page.click('#serverBadge'); await new Promise((r) => setTimeout(r, 3000)); await page.keyboard.press('Escape'); // past the 2 s other status calls allow
