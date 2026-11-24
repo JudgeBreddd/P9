@@ -865,10 +865,11 @@ function finished(s) {
   s.done = true; outer.keepUnseen();
   if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(outer.names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); outer.openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
 }
-function turnEnd(s) {
+// send false: the turn's artifact and mode change still happen, but no queued message goes (loadChat's free()).
+function turnEnd(s, send = true) {
   autoArtifact(s);
   if (s.modeNext) { setMode(s, s.modeNext); s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + modeNow(s) + '.'}); }
-  if (s.queue.length) { const { t } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
+  if (send && s.queue.length) { const { t } = s.queue.shift(); keepQueue(s); outer.startTurn(s, t); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -1104,13 +1105,13 @@ async function loadChat() {
     // O249: a stub loads first, so the message goes in the chat's own mode, not the window's default.
     // Events that came for it during that load apply first (behind(), which drains them after: s.drain).
     // Not into a turn running now (another window's): the message waits for its end (settle()).
-    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(() => { if (s.behind) s.drain = true; else if (!s.working) turnEnd(s); }, () => {}) : !s.working && turnEnd(s);
+    for (const s of outer.S.sessions) if (s.queue.length && s.state === 'running') s.stub ? history(s).then(unlessJumped(() => { if (s.behind) s.drain = true; else if (free(s)) turnEnd(s); }), () => {}) : free(s) && turnEnd(s);
   };
   // O251: each loaded chat goes back to a stub, as launch lists a stopped chat, and loads its newest blocks when shown
   // (history); the cursor moves to the newest event (a tail of no chats answers with it). What the person made here stays:
   // the box, the queue, an unseen mark; tabs follow the list as at launch (caughtUp: a stopped chat's is closed). The gap's finishes are summed: a chat not shown that was used in the
   // gap gets one unseen mark, not a notice per turn. False when the daemon did not answer, so the page is drawn as before.
-  const jump = async () => {
+  const jumpNow = async () => {
     const head = await window.p9.chat('events', { after: 0, only: [], tail: TAIL }), l = await window.p9.chat('list', {});
     if (head.status !== 200 || l.status !== 200) return false;
     // A late() still loading stops at its next chat (it would take the gate below and skip that chat) and starts over at the end.
@@ -1120,6 +1121,7 @@ async function loadChat() {
     let open; const gate = new Promise(res => { open = res; }), flying = outer.S.sessions.map(s => s.loading).filter(Boolean);
     for (const s of outer.S.sessions) s.loading = gate;
     try { await Promise.all(flying.map(p => p.catch(() => {}))); } finally { outer.setTimeout(open, 0); }
+    jumps += 1;
     const listed = l.body.conversations || [], by = new Map(listed.map(c => [c.id, c])), shown = new Set(outer.S.open);
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
@@ -1136,6 +1138,13 @@ async function loadChat() {
     if (again) late();
     return true;
   };
+  // Review round 6: a chat's history callback (behind(), the launch drain) that comes while a jump is in flight waits for it.
+  // The page that set off the jump is not applied yet (a stop in it), so the callback would see the old state and send a
+  // queued message into a chat stopped meanwhile. A jump that rebuilt the chats drops the callback (its caughtUp sends kept
+  // messages from the list's state); one that did not runs it after the page is applied.
+  let jumps = 0, jumping = null;
+  const jump = () => (jumping ||= jumpNow().finally(() => { jumping = null; }));
+  const unlessJumped = (f) => { const g = jumps; return () => { const go = () => { if (g === jumps) f(); }; return jumping ? jumping.then(go) : go(); }; };
   // O249: the open chats not shown load after the list draws, shown ones first, one read at a time so the shown chat's
   // read is not shared with the rest over a slow link. Their asks were there before launch, so the bell's notices start
   // only when all are in (S.loaded; bell-notice.mjs counts the first draw after as old).
@@ -1173,24 +1182,25 @@ async function loadChat() {
   // Review rounds 4-5: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends
   // nothing: s.working is that newer turn, and a queued message sent now would steer into it; it goes when that turn ends.
   // Nor to a chat stopped or moving by then (a stop in the same poll): the daemon would resume it.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); if (!s.working && !gone(s)) turnEnd(s); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
-  const gone = (s) => ['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
+  // Every queued-message send in this loop asks free(): no turn running now, and not stopped or moving (the daemon would resume it).
+  const free = (s) => !s.working && !['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
   // Review rounds 2-3: every buffered event applies first, so a send uses the chat's mode as it is now; then at most one
   // queued message goes (one turn end, or the launch drain, s.drain), and none to a chat stopped meanwhile, which the
   // daemon would resume.
   const behind = (s, evs) => {
     if (s.behind) return void s.behind.push(...evs);
     s.behind = [...evs];
-    history(s, evs[0].cursor - 1).then(() => {
+    history(s, evs[0].cursor - 1).then(unlessJumped(() => {
       const buffered = s.behind || [], ended = [], answered_ = [], drain = s.drain; s.behind = null; s.drain = false;
       for (const e of buffered) take(e, ended, answered_);
       const end = ended.length ? [ended.at(-1)] : [];
       settle(end, answered_);
-      if (drain && !end.length && s.state === 'running' && !s.working && s.queue.length) turnEnd(s);
+      if (drain && !end.length && s.state === 'running' && free(s) && s.queue.length) turnEnd(s);
       try { outer.renderTabs(); renderChats(new Set([s.id])); } catch (e) { console.error('chat paint', e); }
-    }, (e) => console.error('chat history', e));
+    }), (e) => console.error('chat history', e));
   };
   while (!outer.lifetime.signal.aborted) {
     if (!replaying && sprintStale && Date.now() - sprintAt > 1000) { sprintStale = false; sprintAt = Date.now(); const f = await window.p9.chat('list', {}); if (f.status === 200 && sprintSync(f.body.conversations || [])) renderChats(); }
