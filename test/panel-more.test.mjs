@@ -106,6 +106,14 @@ test('panel: help with no project, Show more, Ctrl Tab, Split, drag with Undo, w
   await page.mouse.up(); await page.waitForTimeout(500);
   assert.equal((await conv(instance, first))?.project ?? null, null, 'a release off every project moves nothing');
   assert.equal(await page.locator('.lp-ghost').count(), 0, 'the drag ended');
+  // The window losing focus mid-drag puts the row back: a release over Big afterwards moves nothing.
+  await page.mouse.move(a0, b0); await page.mouse.down();
+  await page.mouse.move(a0 + 10, b0 - 10, { steps: 3 }); await page.mouse.move(x1, y1, { steps: 8 });
+  await page.locator('.lp-ghost .to', { hasText: 'Move to Big' }).waitFor({ timeout: 5000 });
+  await page.evaluate(() => dispatchEvent(new Event('blur')));
+  assert.equal(await page.locator('.lp-ghost').count(), 0, 'blur ends the drag');
+  await page.mouse.up(); await page.waitForTimeout(500);
+  assert.equal((await conv(instance, first))?.project ?? null, null, 'a release after blur moves nothing');
 
   // Width: the grip's End key makes it widest; a restart keeps it.
   await page.locator('#nav .p-grip').focus();

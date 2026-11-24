@@ -220,6 +220,7 @@ test('O247 a click on a sidebar row made while the list re-sorts still opens tha
   const [, pressed, last] = await rows();
   await page.locator(`#navList .row[data-chat="${last}"]`).click();
   await until(async () => (await shown()) === last, 'the last chat shown first');
+  await page.evaluate(() => { addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId }; }, true); addEventListener('click', (e) => { window.__ids.click = e.pointerId; }, true); addEventListener('pointercancel', (e) => { window.__ids.cancel = e.pointerId; }, true); });
   const box = await page.locator(`#navList .row[data-chat="${pressed}"]`).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -231,6 +232,8 @@ test('O247 a click on a sidebar row made while the list re-sorts still opens tha
   assert.notEqual((await rows())[0], last, 'the list waits while the row is pressed');
   await page.mouse.up();
   await until(async () => (await shown()) === pressed, 'the pressed chat opened, not ' + await shown());
+  const ids = await page.evaluate(() => window.__ids);
+  assert.equal(ids.click, ids.down, 'the click carries its press\'s pointer id (the hold ends on that click, not the fallback)');
   await until(async () => (await rows())[0] === last, 'the list re-sorts once the press ends');
   assert.deepEqual(errors, []);
   console.log('PASS O247: a press held while the sidebar re-sorted still opened the pressed chat; the list re-sorted after');

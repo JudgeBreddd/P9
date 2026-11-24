@@ -226,10 +226,10 @@ export function installPanel(o, { focus, stopChat, busy }) {
     drag.ghost.querySelector('.to').innerHTML = drag.to === undefined ? 'Drop on a project' : `Move to <b>${esc(drag.to ? projects().find(p => p.id === drag.to)?.name : 'Chats')}</b>`;
   };
   addEventListener('pointermove', over, { signal: o.lifetime.signal });
-  // A cancel (the browser took the touch for a scroll) puts the row back; only a release drops it, on the zone under it then
-  // (a project can open under a pointer that stopped moving).
+  // A cancel (the browser took the touch for a scroll) or the window losing focus puts the row back; only a release drops it,
+  // on the zone under it then (a project can open under a pointer that stopped moving).
   const endDrag = e => {
-    if (drag?.pid !== e.pointerId) return; // another finger's release does not drop it
+    if (!drag || e.type !== 'blur' && drag.pid !== e.pointerId) return; // another finger's release does not drop it
     if (drag.on && e.type === 'pointerup') over(e);
     const d = drag; drag = null; if (!d.on) return;
     d.ghost.remove(); document.body.classList.remove('lp-dragging');
@@ -239,6 +239,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   };
   addEventListener('pointerup', endDrag, { signal: o.lifetime.signal });
   addEventListener('pointercancel', endDrag, { signal: o.lifetime.signal });
+  addEventListener('blur', endDrag, { signal: o.lifetime.signal });
 
   // ---- The strip's title card: on hover and on keyboard focus. Pointer first; otherwise the focused icon keeps its card. ----
   const tip = document.createElement('div'); tip.className = 'lp-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true; document.body.append(tip);
@@ -253,12 +254,10 @@ export function installPanel(o, { focus, stopChat, busy }) {
   for (const ev of ['pointerover', 'pointerout', 'focusin', 'focusout']) strip.addEventListener(ev, e => setTimeout(() => tipFor(e)));
 
   // ---- Clicks, the menu's keys, search ----
-  let pressedStop = null;
-  nav.addEventListener('pointerdown', e => { pressedStop = e.target.closest?.('[data-stop]')?.dataset.stop ?? null; });
   nav.addEventListener('click', e => {
     if (P.noclick) return;
     const t = e.target;
-    const st = t.closest('[data-stop]'); if (st) { const id = st.dataset.stop; if (e.detail && pressedStop !== id) return; pressedStop = null; const s = find(id); return s && stopChat(s); }
+    const st = t.closest('[data-stop]'); if (st) { const s = find(st.dataset.stop); return s && stopChat(s); } // keyed to its row, held while pressed
     const more = t.closest('[data-more]');
     if (more) { if (more.getAttribute('aria-expanded') === 'true') return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
     const sub = t.closest('[data-subs]'); if (sub) { P.subs[sub.dataset.subs] = sub.getAttribute('aria-expanded') !== 'true'; return renderPanel(); }

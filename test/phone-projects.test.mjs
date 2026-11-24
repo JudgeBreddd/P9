@@ -299,6 +299,7 @@ test('O247 phone: a tap held while the chat list redraws still opens the chat', 
     await until(async () => Number(await page.evaluate(() => localStorage.getItem('p9-cursor'))) >= after, 'the phone took in the prompt');
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
   };
+  await page.evaluate(() => { addEventListener('pointerdown', (e) => { window.__ids = { down: e.pointerId }; }, true); addEventListener('click', (e) => { window.__ids.click = e.pointerId; }, true); addEventListener('pointercancel', (e) => { window.__ids.cancel = e.pointerId; }, true); });
   let [x, y] = await middle(tapped);
   await touch('touchStart', x, y);
   await prompted(busy); // its row turns to "Working…": the list redraws
@@ -306,6 +307,8 @@ test('O247 phone: a tap held while the chat list redraws still opens the chat', 
   await touch('touchEnd');
   await until(async () => page.evaluate(() => location.hash), 'a chat opened');
   assert.equal(await page.evaluate(() => decodeURIComponent(location.hash)), '#chat=' + tapped, 'the tapped chat opened');
+  const ids = await page.evaluate(() => window.__ids);
+  assert.equal(ids.click, ids.down, 'the tap\'s click carries its touch\'s pointer id');
   await page.evaluate(() => history.back());
   await until(async () => (await run(busy)) === 'working', 'the list redrew after the tap');
   // A finger that scrolls instead of tapping. The browser takes the touch (pointercancel): the list scrolls, redraws while the
@@ -317,9 +320,14 @@ test('O247 phone: a tap held while the chat list redraws still opens the chat', 
   await touch('touchStart', x, y);
   await prompted(tapped);
   assert.notEqual(await run(tapped), 'working', 'held while the finger rests on the row');
+  const moved = Date.now();
   for (let i = 1; i <= 8; i++) await touch('touchMove', x, y - i * 15);
   await until(async () => (await scrolled()) > 0, 'the list scrolled');
   await until(async () => (await run(tapped)) === 'working', 'the list redrew once the scroll took the touch, the finger still down');
+  // The cancel ended the hold, not the 10 s cap: the browser sent it for this touch, and the redraw came well before the cap.
+  const cancel = await page.evaluate(() => window.__ids);
+  assert.equal(cancel.cancel, cancel.down, 'the browser cancelled this touch');
+  assert.ok(Date.now() - moved < 4000, 'redrawn within 4 s of the scroll, not at the 10 s cap');
   await touch('touchEnd');
   await page.waitForTimeout(300);
   assert.equal(await page.evaluate(() => location.hash), '', 'a scroll opens no chat');

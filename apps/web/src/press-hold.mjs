@@ -13,7 +13,7 @@ export function pressHold(el, redraw, signal) {
   on('pointerdown', e => { if ((id === null || up) && e.isPrimary && !e.button && e.target.closest('button, [data-chat]')) { clearTimeout(t); id = e.pointerId; up = false; t = setTimeout(end, 1e4); } }, el);
   on('pointerup', e => { if (e.pointerId === id) { up = true; clearTimeout(t); t = setTimeout(end, 500); } });
   on('pointercancel', e => e.pointerId === id && end());
-  on('click', () => up && end()); // bubbles here after the list's own click handler
+  on('click', e => up && e.pointerId === id && end()); // its own click, after the list's handler; any other waits on the fallback
   on('blur', end);
   return () => id !== null && (owed = true);
 }
