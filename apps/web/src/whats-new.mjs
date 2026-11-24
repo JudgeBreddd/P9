@@ -2,14 +2,14 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.13',
+  version: '0.1.9-beta.14',
   changes: [
-    "Chat Changes tab: shell-made edits show too (in a git folder, worktree or submodule), with line counts and edit counts.",
-    "Sprint View: each worker row opens Details (branch, head, files, review, notes) and can steer, stop or restart it.",
-    "Sprint View: worker rows show model and effort when known; Clear on a closed sprint also clears its lead chat.",
-    "Mission: a template preview leads into its build, and a space added while its chat failed is kept and retried.",
-    "Mission: a button's window shows its last run; a checklist write refreshes its section; long lists scroll in their tile.",
-    "Phone: Send stops a running turn only when the box was empty at the tap.",
-    "Settings: a Default model or effort row shows its save once it answers, even when redrawn meanwhile.",
+    "Remote: the machine menu, Settings and Dev Focus open at once, even over a slow or busy link.",
+    "Remote: Dev Focus keeps its open files and file tree through a remote switch or a restart.",
+    "Remote: the chat list draws before any chat's history, and screenshots load when they come into view.",
+    "Back after time away, chats jump to where they are now instead of replaying everything missed.",
+    "A click on a chat row opens it even while the list is redrawing.",
+    "Phone: a turn nobody typed in (started by a script or hook) still shows Working and Stop.",
+    "A steer sent just as a turn starts joins that turn instead of being refused.",
   ],
 };
