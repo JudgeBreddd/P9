@@ -148,6 +148,69 @@ test('O249 a busy chat does not hold the chat list back over a slow link', { tim
   assert.deepEqual(errors, []);
 });
 
+// O249 part 2: screenshots load when they are seen. A chat's events carry each image as a place (shot: "cursor/n"), not its
+// data, so loading, starting and opening a chat never wait on MBs of pictures; the window fetches one when it scrolls into view.
+test('O249 screenshots: reads carry no image data, the window fetches each picture when it is seen', { timeout: 300000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const heavy = (await call(instance, '/chat', 'POST', { provider: 'claude', title: 'Busy' })).conversation;
+  await call(instance, `/chat/${heavy}/prompt`, 'POST', { text: 'heavy 8' }); await ended(instance, heavy);
+  const pics = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Pictures' })).conversation;
+  await call(instance, `/chat/${pics}/prompt`, 'POST', { text: 'images' }); await ended(instance, pics);
+  // Replies below the pictures, so a window opening the chat at its end has them more than a screen above.
+  for (let i = 0; i < 8; i += 1) { await call(instance, `/chat/${pics}/prompt`, 'POST', { text: 'filler ' + i + '\n\nmore\n\nmore\n\nmore\n\nmore' }); await ended(instance, pics); }
+  const tail = await call(instance, '/chat/events?shots=1&after=0&tail=200&only=' + heavy);
+  const size = JSON.stringify(tail).length;
+  assert.ok(size < 100_000, `the busy chat's tail is ${size} B; its eight 400 KB screenshots must not ride in it`);
+  for (const read of [tail, await call(instance, '/chat/events?shots=1&after=0&only=' + heavy), await call(instance, '/chat/events?shots=1&after=0')]) {
+    assert.ok(!JSON.stringify(read).includes('AAAAAAAAAAAAAAAA'), 'no image data in any read');
+  }
+  const shot = tail.events.find((e) => e.data?.toolCallId === 'heavy-0')?.data.content[0].content;
+  assert.deepEqual(Object.keys(shot ?? {}).sort(), ['mimeType', 'shot', 'type'], 'an image is its place, not its data');
+  // The place fetches the picture, from that chat only.
+  const ev = (await call(instance, '/chat/events?shots=1&after=0&only=' + pics)).events.find((e) => e.data?.toolCallId === 'gen-1');
+  // A reader that does not ask for places (a window older than this) still gets the data.
+  const old = (await call(instance, '/chat/events?after=0&only=' + pics)).events.find((e) => e.data?.toolCallId === 'gen-1');
+  assert.equal(typeof old.data.content[1].content.data, 'string', 'without shots=1 an image keeps its data');
+  const place = ev.data.content[1].content.shot;
+  const got = await call(instance, `/chat/${pics}/shots/${place}`);
+  assert.equal(got.status ?? 200, 200); assert.equal(got.mimeType, 'image/png');
+  assert.equal(Buffer.from(got.data, 'base64').subarray(1, 4).toString(), 'PNG');
+  assert.equal((await call(instance, `/chat/${heavy}/shots/${place}`)).status, 404, 'another chat\'s picture is not found');
+  assert.equal((await call(instance, `/chat/${pics}/shots/${place.split('/')[0]}/9`)).status, 404, 'no ninth image');
+  // The window draws both pictures (the tool's and the reply's) once they are in view.
+  const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
+  const sock = path.join(slow, 'daemon.sock');
+  const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
+  await writeFile(path.join(slow, 'desktop.json'), JSON.stringify({ ...creds, socketPath: sock }), { mode: 0o600 });
+  const link = await slowLink(path.join(instance.state, 'daemon.sock'), sock, RTT, t);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', slow, '--user-data-dir=' + path.join(slow, 'profile')], env, chromiumSandbox: true, timeout: 60000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((r) => setTimeout(r, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 1400, height: 900 }).catch(() => {});
+  await page.locator(`#navList .row[data-chat="${pics}"]`).click();
+  // This chat's picture requests over the link (its cursors come after the busy chat's, whose pictures may load at launch).
+  const asked = () => link.log.filter((e) => Number(/\/shots\/(\d+)\//.exec(e.req)?.[1]) >= Number(place.split('/')[0])).length;
+  const imgs = page.locator(`#chats img[alt^="Image from"]`);
+  await imgs.nth(1).waitFor({ state: 'attached', timeout: 60000 });
+  // Opened at its end, the pictures are more than a screen above: they stay placeholders, nothing fetched, until scrolled to.
+  await page.waitForTimeout(3000);
+  const above = await imgs.evaluateAll((list) => list.map((el) => el.closest('.hist').getBoundingClientRect().top - el.getBoundingClientRect().bottom));
+  assert.ok(above.every((px) => px > 1000), `both pictures sit more than the 1000 px margin above the view: ${above}`);
+  assert.equal(asked(), 0, 'no picture asked for over the link before it comes near the view');
+  assert.deepEqual(await imgs.evaluateAll((list) => list.map((el) => el.hasAttribute('src'))), [false, false], 'pictures out of reach are not drawn');
+  for (let i = 0; i < 2; i += 1) {
+    await imgs.nth(i).scrollIntoViewIfNeeded();
+    await page.waitForFunction((el) => el.complete && el.naturalWidth > 0, await imgs.nth(i).elementHandle(), { timeout: 30000 });
+  }
+  assert.deepEqual(await imgs.evaluateAll((list) => list.map((el) => el.naturalWidth)), [320, 120], 'the tool\'s picture and the reply\'s');
+  assert.equal(asked(), 2, 'each picture asked for once');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o249-shots ' + (await page.locator(`#chats .pane[data-id="${pics}"]`).screenshot()).toString('base64'));
+  assert.deepEqual(errors, []);
+});
+
 // O251: back after time away. The window was open, its machine slept (the link held), one chat worked meanwhile; on wake the
 // window should draw that chat's current state in one step, not page through every update the chat streamed meanwhile.
 test('O251 back after time away: the window draws the current state in one step, not every update since', { timeout: 300000 }, async (t) => {

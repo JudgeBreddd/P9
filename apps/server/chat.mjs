@@ -24,7 +24,7 @@ import { createProjects, IN_P9 } from './projects.mjs';
 import { createWorkerFolders, WORKER } from './worker-folders.mjs';
 import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey } from './sprint-files.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
-import { counted } from './ledger.mjs';
+import { counted, eachImage, placed } from './ledger.mjs';
 import { shellEnd, shellStart } from './shell-edits.mjs';
 import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START } from './agents.mjs';
 
@@ -1655,6 +1655,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Unrestricted mode (v0.1.6 U1-U5): the agent lock off and File protection off, the two switches the mode turns off and the
     // daemon holds. Folder roots may hold home and the workspace, P9's MCP tools stop asking, a chat may start in any folder.
     loose: (id) => loose() && !live.get(id)?.solo,
+    // O249: an agent's picture by its place (ledger.mjs parsed): the nth image of that update, which must be this chat's.
+    shot(id, cursor, n) {
+      if (!ID.test(id) || !/^\d{1,15}$/.test(cursor) || !/^\d{1,2}$/.test(n)) return refused(404, 'not-found');
+      const row = db.prepare("SELECT data FROM events WHERE cursor = ? AND conversation = ? AND type = 'update'").get(Number(cursor), id);
+      let image; try { if (row) eachImage(JSON.parse(row.data), (b, i) => { if (i === Number(n)) image = b; return b; }); } catch {} // a malformed row: not found, as its read says
+      return image ? { status: 200, mimeType: image.mimeType, data: image.data } : refused(404, 'not-found');
+    },
     // CP3: a photo sent in this chat, by hash. Only one this chat's own messages name; base64 in JSON, as it was sent.
     async image(id, hash) {
       if (!ID.test(id) || typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash) || !imageDir) return refused(404, 'not-found');
@@ -2284,12 +2291,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).
     // tail (P20, with only): the newest tail blocks of each chat instead (ledger.tail), for the phone.
-    async events(after, waitMs, only, until, tail) {
+    // shots (O249): each image as its place, not its data (ledger.mjs placed), for a window that fetches pictures when seen.
+    async events(after, waitMs, only, until, tail, shots) {
+      const out = (read) => (shots ? { ...read, events: read.events.map(placed) } : read);
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(waitMs) || waitMs < 0) return refused(400, 'request-refused');
       if (only !== undefined || until !== undefined || tail !== undefined) {
         if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))
           || (tail !== undefined && (!Number.isSafeInteger(tail) || tail < 1 || tail > 200))) return refused(400, 'request-refused');
-        return { status: 200, ...(tail === undefined ? ledger.of(only, after, until) : ledger.tail(only, until, tail)) };
+        return { status: 200, ...out(tail === undefined ? ledger.of(only, after, until) : ledger.tail(only, until, tail)) };
       }
       let events = ledger.after(after);
       if (!events.length && waitMs) {
@@ -2300,7 +2309,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         });
         events = ledger.after(after);
       }
-      return { status: 200, events, cursor: events.length ? events.at(-1).cursor : after };
+      return { status: 200, ...out({ events }), cursor: events.length ? events.at(-1).cursor : after };
     },
     // Daemon shutdown: wake every long poll so the server can close, stop every session, and return 'cleanup-failed'
     // if any scope may still hold work (the next start stops leftover scopes again).

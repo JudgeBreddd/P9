@@ -179,9 +179,13 @@ export const LOOSE = { 'Bypass permissions': 'Claude runs every command and edit
 // built here; a block's uri is never used. Desktop and phone (P9). ponytail: data: strings are re-diffed each render;
 // blob: needs a CSP change.
 export const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
+export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && (typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}`
+  : typeof b.shot === 'string' && /^\d{1,15}\/\d{1,2}$/.test(b.shot) ? 'shot:' + b.shot : null) || null; // O249: shot: a place, fetched when seen (agentImgs)
 export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
-export const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
+// A place (shot:) draws as an empty img[data-shot] until the window fetches it (got: its data: address once fetched).
+/** @param {string[] | undefined} list @param {string} who @param {(src: string) => string} [got] */
+export const agentImgs = (list, who, got = () => '') => list?.length ? `<div class="agent-imgs">${list.map(src => src.startsWith('shot:')
+  ? `<img data-shot="${src.slice(5)}"${got(src) ? ` src="${got(src)}"` : ''} alt="Image from ${esc(who)}">` : `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
 // O191: a provider profile's chats (/usage profiles), outside the Claude totals; its cost is the adapter's estimate, never a
 // Claude bill. Drawn whatever /usage's state: state counts Claude records only. Old daemon (no profiles): nothing.
 export const profileLines = (usage, cls = 'sm') => (usage.profiles ?? []).map(p => `<p class="${cls}" data-profile>${esc(p.name)} (profile): ${p.inputTokens.toLocaleString()} input · ${p.outputTokens.toLocaleString()} output tokens · ${p.turns} turn${p.turns === 1 ? '' : 's'} · $${p.costUsd.toFixed(2)} estimated at Claude prices, not billed by Claude</p>`).join('');

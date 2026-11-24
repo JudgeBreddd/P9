@@ -131,7 +131,7 @@ const CFM = {};
 function renderChatFiles() {
   if (outer.side.current()?.slot !== 'chat-files') return;
   if (!CFM.render) { CFM.load ??= import('./chat-files.mjs').then(m => { CFM.render = m.render; renderChatFiles(); }, () => { CFM.load = null; if (outer.side.current()?.slot === 'chat-files') outer.side.body.textContent = 'The list could not be loaded. Open it again to retry.'; }); return; }
-  const s = outer.S.sessions.find(x => x.id === CF.sid);
+  const s = sess(CF.sid);
   CFM.render({ outer, CF, s, all: s ? chatItems(s) : [], GH, cfKey, openArtifact, again: renderChatFiles });
 }
 // From renderChats, in Chat Focus: the open list follows its chat (another chat shown hides it, still remembered), and a
@@ -142,7 +142,7 @@ function chatFilesFollow(ids) {
   const want = !outer.side.current() && ids.find(id => localStorage.getItem(cfKey(id)) && outer.S.sessions.some(s => s.id === id && !s.stub && chatItems(s).length));
   if (want) openChatFiles(want); else renderChatFiles();
 }
-function focus(id) { const s = outer.S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); outer.renderTabs(); renderChats(); }
+function focus(id) { const s = sess(id); if (s?.hidden) s.hidden = false; show(id); outer.renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
 const show = id => { outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
@@ -263,9 +263,22 @@ function meters(s) {
 }
 const loadImg = (s, hash) => { if (outer.chatImgs.has(hash) || !s.live) return; outer.chatImgs.set(hash, '');
   window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { outer.chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) outer.chatImgs.delete(hash); }); };
+// O249: an agent's picture comes as its place (shot:) and is fetched when seen (shots.mjs), which loads with the first chat
+// that has one: startup carries none of it. Until it has loaded, every picture draws as its placeholder; a failed load says so
+// (noLoad) and is not tried again: the file is local, so it fails when P9 was updated under this window, and a reload fixes it.
+let shots; // the loading import, then shots.mjs's desktop {watch(s, scroller)}; a chat's pictures are its own s.shots
+function sess(id) { return outer.S.sessions.find(x => x.id === id); } // a chat by id
+// Code that loads on first use (shots.mjs, move-fx.mjs) did not load: chat id's chat says so once and redraws (its composer
+// too), or a toast when that chat is not known yet (the list not in, or no chat named).
+const NO_LOAD = 'Reload P9 (Ctrl R) to finish loading it.';
+const noLoad = id => { const s = sess(id); if (!s) return outer.toast({ kind: 'load', txt: NO_LOAD, level: 'bad' });
+  if (s.events.at(-1)?.text !== NO_LOAD) s.events.push({ t: 'notice', text: NO_LOAD }); renderChats(); };
+const shotSrc = s => src => s.shots?.get(src);
+const watchShots = (s, p) => { const h = p.querySelector('.hist'); if (!h) return; if (shots?.watch) return shots.watch(s, h);
+  if (h.querySelector('img[data-shot]')) shots ??= import('./shots.mjs').then(m => { shots = m.installShots(renderChats); renderChats(); }, () => noLoad(s.id)); };
 // O73: a message another chat's agent sent names that chat: its title when it sent (fromTitle), else its title now, else
 // "a deleted chat"; P9's own notes say P9. Drawn apart from the user's own (data-from).
-const sentBy = (id, title) => esc(title || (id === 'p9' ? 'P9' : outer.S.sessions.find(x => x.id === id)?.title) || (typeof id === 'string' ? 'a deleted chat' : 'another chat'));
+const sentBy = (id, title) => esc(title || (id === 'p9' ? 'P9' : sess(id)?.title) || (typeof id === 'string' ? 'a deleted chat' : 'another chat'));
 function event(e, s) {
   switch (e.t) {
     // O109-repeat-visible: a message P9 resent after a restart (repeat: true) says so on its row, as the agent was told.
@@ -273,10 +286,10 @@ function event(e, s) {
     // O109: a worker report scrolls with the chat once it is not the one pinned above the box (closed, or a newer one came).
     case 'report': { const c = s.cards?.get(e.id), on = c && c.text === e.text && s.events.findLast(x => x.t === 'report') === e && !SHUT.get().has(reportKey(s, c)) && !shelved(e.id);
       return on ? '' : `<div class="report" data-report="${esc(e.id)}"><div class="eyebrow">Worker report</div><div class="msg agent">${outer.mdOf(e)}</div></div>`; }
-    case 'agent': return `<div class="msg agent"><div class="who">${esc(outer.names[s.agent])}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent])}</div>`;
+    case 'agent': return `<div class="msg agent"><div class="who">${esc(outer.names[s.agent])}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}</div>`;
     case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
-    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span>${e.exit ? `<span data-slot="badge" data-variant="bad" data-exit>${esc(e.exit)}</span>` : ''}<span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button ${OL} class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent])}`;
+    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span>${e.exit ? `<span data-slot="badge" data-variant="bad" data-exit>${esc(e.exit)}</span>` : ''}<span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button ${OL} class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button ' + OL + ' data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/ is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button ' + OL + ' data-signin>Sign in</button>' : ''}</div>`;
   }
@@ -348,7 +361,7 @@ function sprintCard(s) {
     ${asks.length ? `<div class="sp-asks"><h5 class="eyebrow">Waiting on you</h5><ul>${asks.map(a => `<li><button type="button" data-sprint-ask="${esc(a.k.id)}"><span class="sp-akind" data-blocking="${a.kind === 'approval'}">${a.kind === 'approval' ? 'Approval' : 'Question'}</span><span class="sp-atxt truncate">${esc(a.k.title)}: ${esc(a.e.title)}</span>${a.at ? `<span class="sp-wait">waited ${since(a.at)}</span>` : ''}</button></li>`).join('')}</ul></div>` : ''}</div>
   </aside>`;
 }
-const sprintDoor = () => { if (!window.__sprint && outer.sampleView) window.__sprint = { add: (...x) => { outer.S.sessions.push(...x); renderChats(); }, set: (id, patch) => { Object.assign(outer.S.sessions.find(x => x.id === id), patch); renderChats(); }, render: () => renderChats() }; }; // ponytail: the UI test's door (sample data is handed in only by tests)
+const sprintDoor = () => { if (!window.__sprint && outer.sampleView) window.__sprint = { add: (...x) => { outer.S.sessions.push(...x); renderChats(); }, set: (id, patch) => { Object.assign(sess(id), patch); renderChats(); }, render: () => renderChats() }; }; // ponytail: the UI test's door (sample data is handed in only by tests)
 // Per pane: the card moves left of the cards stack only where they overlap this pane, takes the width the pane has, and (unless
 // the person chose) opens only when it does not cover the centered text column.
 let spObs; // made on first use: the controller's observe() is not there yet when this module loads
@@ -377,7 +390,7 @@ function placeSprints() {
 // The live fields (task, ready, verdict, idleSince, work) come from the daemon's list; c2's sprint-state event will carry them too (follows #92).
 // Until then a batch of events marks the list stale and it is read again, a field the list no longer has cleared.
 const sprintSync = conversations => { const was = JSON.stringify(outer.S.sessions.map(s => [s.id, s.title, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent, s.sprintClosed]));
-  for (const c of conversations) { const s = outer.S.sessions.find(x => x.id === c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
+  for (const c of conversations) { const s = sess(c.id); if (s) { sprintFields(s, c); s.parent = c.parent ?? s.parent ?? null; } }
   return was !== JSON.stringify(outer.S.sessions.map(s => [s.id, s.title, s.task, s.ready, s.verdict, s.idleSince, s.work, s.parent, s.sprintClosed])); };
 setInterval(() => { if (!document.hidden) document.querySelectorAll('time[data-since]').forEach(t => { const x = ageOf(+t.dataset.since); if (t.textContent !== x) t.textContent = x; }); }, 15000);
 // A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
@@ -500,7 +513,7 @@ function closePill(back = true) {
 const itemKey = el => [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => a.name + '=' + a.value).join(' ');
 function refreshPill() {
   if (!PM.sid) return;
-  const s = outer.S.sessions.find(x => x.id === PM.sid), btn = s && pillBtn();
+  const s = sess(PM.sid), btn = s && pillBtn();
   if (!btn) return closePill(false);
   PM.btn = btn;
   const html = pillMenuHtml(s, PM.kind); if (html === PM.html) return;
@@ -530,7 +543,7 @@ function applyMode(s, m) { if (busy(s)) s.modeNext = m === modeNow(s) ? null : m
 // the same way and the old one stays as it was, and the bar says why.
 const SWAP = new Map(); // the new chat's id -> { from, open, side, done }
 function swapIn(id) {
-  const w = SWAP.get(id), n = outer.S.sessions.find(x => x.id === id);
+  const w = SWAP.get(id), n = sess(id);
   if (!w || !w.done || !n) return !!w; // under way: its 'created' does not show it; this does, once the old one is gone
   SWAP.delete(id);
   Object.assign(n, { draft: w.from.draft, images: w.from.images, ...(w.folderChange ? { mode: w.from.mode, modelPick: w.from.modelPick, pick: w.from.pick } : {}) });
@@ -578,7 +591,7 @@ function chatFolder(s) {
 }
 
 function pillPick(item) {
-  const s = outer.S.sessions.find(x => x.id === PM.sid); if (!s || item.getAttribute('aria-disabled') === 'true') return;
+  const s = sess(PM.sid); if (!s || item.getAttribute('aria-disabled') === 'true') return;
   const v = item.dataset.val;
   if (item.dataset.mode) { closePill(); return pickMode(s, item.dataset.mode); }
   if (item.dataset.agent) { closePill(); return pickAgent(s, item.dataset.agent); }
@@ -639,7 +652,7 @@ function renderChats(only) {
   if (document.hasFocus()) { const seen = [...(outer.S.focus === 'chat' ? ss : []), outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(s => s?.done || s?.failed); seen.forEach(s => { s.done = s.failed = false; }); if (seen.length) outer.renderCards(); }
   outer.keepUnseen();
   outer.$('#chats').dataset.split = String(outer.S.split && ss.length > 1);
-  for (const s of [...ss, outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(x => x.id === outer.S.modal.id)]) if (s?.stub) history(s);
+  for (const s of [...ss, outer.mdl.open && outer.S.modal?.kind === 'chat' && sess(outer.S.modal.id)]) if (s?.stub) history(s);
   paint(outer.$('#chats'), ss, only);
   outer.bottoms.disconnect(); outer.$('#chats').querySelectorAll(':scope > .pane > .bottom').forEach(b => outer.bottoms.observe(b));
   if (outer.mdl.open && outer.S.modal?.kind === 'chat') paint(outer.$('#mdlBody'), [outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(Boolean), only);
@@ -690,7 +703,7 @@ function paint(root, ss, only) {
   const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
   const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
   // A7: a worker's event repaints the chats above it too (its open request is drawn there).
-  const up = id => { const out = []; for (let k = outer.S.sessions.find(x => x.id === id); k && out.length < 9; k = k.parent && outer.S.sessions.find(x => x.id === k.parent)) out.push(k.id); return out; };
+  const up = id => { const out = []; for (let k = sess(id); k && out.length < 9; k = k.parent && sess(k.parent)) out.push(k.id); return out; };
   const touched = part && new Set([...only].flatMap(up));
   const panes = part ? old.filter(p => only.has(p.dataset.id) || touched.has(p.dataset.id)) : old;
   if (part && !panes.length) return;
@@ -700,7 +713,7 @@ function paint(root, ss, only) {
   // pinned, and place() could not scroll it. Its record stays as it was before it hid (hid), and the first paint after it
   // shows again places it from that record, not from what the hidden paints left on screen.
   save(root, panes);
-  panes.forEach(p => keepIn(outer.S.sessions.find(x => x.id === p.dataset.id), outer.view[root.id + ':' + p.dataset.id]));
+  panes.forEach(p => keepIn(sess(p.dataset.id), outer.view[root.id + ':' + p.dataset.id]));
   panes.forEach(p => p.querySelectorAll('details[data-ev]').forEach(d => { const w = DRAWN.get(d); if (w?.[0] && d.open !== w[1]) w[0].open = d.open; }));
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); outer.addHalos(t.content); outer.attrs(p, t.content.firstElementChild); outer.sync(p, t.content.firstElementChild); });
@@ -708,14 +721,14 @@ function paint(root, ss, only) {
   const split = root.id === 'chats' && root.querySelector(':scope > .handle-v'); // morph keeps the bar by position; wire it once
   if (split && !outer.wiredBars.has(split)) { outer.wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: outer.lifetime.signal }); }
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
-    const s = outer.S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), k = root.id + ':' + s.id, first = !outer.view[k];
+    const s = sess(p.dataset.id), h = p.querySelector('.hist'), k = root.id + ':' + s.id, first = !outer.view[k];
     const v = outer.view[k] ??= { pinned: true }; // a new pane follows the bottom; its record holds where place() left it (FIX2: up needs that from the first paint)
     const place = () => { if (!h.getClientRects().length) return void (v.hid = true); // O212: hidden, nothing to scroll; placed on the next paint shown
       h.scrollTo({ top: v.pinned ? 1e6 : held(s, h, v.anchor) ?? v.top, behavior: 'instant' }); v.at = h.scrollTop; }; // at: where it was left, for up
     h.querySelectorAll(':scope > .col > [data-at]').forEach(el => AT.set(el, s.events[el.dataset.at]));
     place(); if (first) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
     p.querySelectorAll('details[data-ev]').forEach(d => { const e = s.events[d.dataset.ev]; DRAWN.set(d, [e, d.open]); d.ontoggle = () => { if (e) e.open = d.open; DRAWN.set(d, [e, d.open]); }; });
-    p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
+    p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg)); watchShots(s, p);
     // A7: a card answers the chat it came from (data-ask): this one, or a worker of it.
     const asker = el => outer.S.sessions.find(x => x.id === el.closest('[data-ask]')?.dataset.ask) || s;
     p.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => { const s = asker(b); if (s.live) return outer.liveChat.approve(s, b.dataset.approve); const a = s.events.find(e => e.t === 'approval'); s.events = s.events.filter(e => e !== a); s.pending = null; if (b.dataset.approve === 'reject') { s.events.push({t:'notice', text:'Denied: ' + a.title + '. ' + outer.names[s.agent] + ' will take another approach.'}); reply(s, 'Understood, I will not touch server.ts. I can expose the grace through the existing /api/conversations payload instead; say so and I will do that.'); } else { s.events.push({t:'tool', status:'completed', title:a.title, diff:a.diff}); const plan = s.events.find(e => e.t === 'plan'); if (plan) { plan.entries[2][0] = 'completed'; plan.entries[3][0] = 'in_progress'; } reply(s, 'Bootstrap now carries leaseGraceMs. Next I will read it in the chat-pane footer so the 60 s copy stops being hardcoded.'); } answered(s); });
@@ -998,7 +1011,7 @@ async function earlier(s) {
 function applyChat(ev, into) {
   const d = ev.data;
   if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project, d.profile); if (d.parent) s.parent = d.parent; outer.claimFresh(s, d.op); outer.S.sessions.push(s); } return null; }
-  const s = into ?? outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
+  const s = into ?? sess(ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!NOT_USE.includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
@@ -1190,7 +1203,7 @@ async function loadChat() {
   // strip) until it is seen; CP1, a held message taken back goes into the box, as typed (the box keeps its own draft).
   // ponytail: a taken-back message's images are not returned; attach them again.
   const carry = (ev) => {
-    const s = outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return;
+    const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
     if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) s.draft = ev.data.text + (s.draft ? '\n' + s.draft : '');
   };
@@ -1213,7 +1226,7 @@ async function loadChat() {
   // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
   // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
   // the same poll): the daemon would resume it.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = outer.S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so a send uses the chat's mode as it is now; then at most one
@@ -1262,5 +1275,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, free, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace };
+  return { noLoad, ART, free, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace };
 }

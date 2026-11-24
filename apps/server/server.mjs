@@ -543,7 +543,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/profiles/names', (c) => reply(c, chat.profiles.names()));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c), c.req.header('x-p9-op'))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until'), tail = c.req.query('tail');
-    return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail))); });
+    return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail), c.req.query('shots') === '1')); });
   // P8: a signed-out Codex has no plan figure (its old sessions would show one months old) and is named signed out. Claude
   // is left out: on a Mac its login is in the Keychain, so a missing credentials file says nothing.
   // One answer for the page and for a sprint script's input (sprint-hooks.mjs).
@@ -598,6 +598,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/askable', async (c) => (c.get('device') ? c.json({ error: 'desktop-only' }, 403) : reply(c, chat.setAskable(c.req.param('id'), await json(c)))));
   api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'), await json(c))));
   api.get('/chat/:id/images/:hash', async (c) => reply(c, await chat.image(c.req.param('id'), c.req.param('hash'))));
+  api.get('/chat/:id/shots/:cursor/:n', (c) => reply(c, chat.shot(c.req.param('id'), c.req.param('cursor'), c.req.param('n'))));
   api.get('/terminals', async (c) => {
     try { return c.json({ terminals: await terminals.list() }); } catch (error) {
       if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503);

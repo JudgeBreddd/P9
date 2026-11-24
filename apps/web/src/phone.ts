@@ -4,7 +4,7 @@ import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileIm
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
-import { svg as desktopIcons } from './helpers.mjs';
+import { svg as desktopIcons } from './helpers.mjs'; import { shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillLoose } from './security.mjs';
@@ -138,8 +138,8 @@ function csrfToken() {
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
 const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
   for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); fillLoose(agents); }, () => {});
-async function request(path: string) {
-  const response = await fetch(path, { cache: 'no-store' });
+async function request(path: string, signal?: AbortSignal) {
+  const response = await fetch(path, { cache: 'no-store', signal });
   if (response.status === 401) toLogin();
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
@@ -271,7 +271,7 @@ let jumps = 0;
 async function pull(extra: string, wait = 0, live = false): Promise<boolean> {
   let batch: Json[];
   do {
-    const sent = jumps, result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
+    const sent = jumps, result = await request('/chat/events?shots=1&after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
     if (sent !== jumps) return false;
     batch = result.events as Json[] ?? [];
     if (live && batch.length === 500) return true;
@@ -294,13 +294,13 @@ async function replay() {
   let scoped = true;
   for (;;) {
     // P20: a chat that is not stopped starts with its newest blocks only; Load earlier reads the ones before.
-    try { if (!scoped) await pull(''); else { const result = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + ids.map(encodeURIComponent).join(',')); take(result, ids); state.cursor = Math.max(state.cursor, Number(result.cursor)); } break; }
+    try { if (!scoped) await pull(''); else { const result = await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + ids.map(encodeURIComponent).join(',')); take(result, ids); state.cursor = Math.max(state.cursor, Number(result.cursor)); } break; }
     // A listed ID the daemon will not take (only a seeded test ledger has one) replays everything, as before.
     catch (error) { if (!scoped || (error as Error).message !== 'request-refused') throw error; scoped = false; }
   }
   if (!scoped) return gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
   // The narrowed events skip the other chats', so a gap is looked for in the whole feed: its first event after the saved cursor.
-  if (state.seen > 0) gapAfter(((await request('/chat/events?after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
+  if (state.seen > 0) gapAfter(((await request('/chat/events?shots=1&after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
   // Listed again after the read: a chat made meanwhile has events below base this read did not take, so it is a stub too.
   state.base = state.cursor;
   const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; // MC-16: a Settings default changed meanwhile
@@ -359,7 +359,7 @@ function history(id: string) {
   if (!state.stubs.has(id)) return Promise.resolve();
   if (!loading.has(id)) loading.set(id, (async () => {
     try {
-      take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
+      take(await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
     } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
     state.stubs.delete(id);
   })().finally(() => loading.delete(id)));
@@ -372,7 +372,14 @@ type Block = { kind: string; text: string; at?: string; id?: unknown; status?: s
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
-let sentLanded = 0; // photos fetched into sentCache: the list key counts these, since a landing photo leaves sentCache.size as it was
+let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
+// O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
+// The watcher is the desktop's (shots.mjs); shots holds the open chat's pictures (shotsOf): opening another drops the loaded
+// ones it does not draw and keeps those still fetching, so going back to a chat uses (or waits for) the fetch it started.
+// Keys cannot clash across chats: a place's cursor is the event log's, one for every chat.
+let shotWatch: ((id: string, got: Map<string, string | undefined>, list: HTMLElement) => void) | undefined, shotsOf = '';
+const shots = new Map<string, string | undefined>();
+const shotGot = (src: string) => shots.get(src) || '', shotsIn = (run: Block[]) => run.map((block) => (block.images ?? []).map((src) => shotGot(src) ? 1 : 0).join('')).join('');
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
 // answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
 // for a multi choice); an empty optional field is left out of the answer.
@@ -487,7 +494,7 @@ function foldBlocks(now: Folded, events: Json[]) {
   }
 }
 // P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
-const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span>${block.exit ? `<span class="exit">${escape(block.exit)}</span>` : ''}</summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
+const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span>${block.exit ? `<span class="exit">${escape(block.exit)}</span>` : ''}</summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent', shotGot) : ''}</article>`;
 // O73: a message another chat's agent sent names that chat (its title when it sent, else now, else "a deleted chat"; P9's
 // own notes say P9), as the desktop window does; the user's own messages have no heading.
 // The block keeps who sent it, not the heading: a title looked up now follows a rename or a deletion (itemsOf signs it).
@@ -500,7 +507,7 @@ function whoSent(data?: Json) {
 function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') { const who = whoSent(block.who); return `<article data-kind="user" class="msg user"${who ? ' data-from' : ''}>${who ? `<div class="who">${escape(who)}</div>` : ''}${escape(block.text)}${block.files?.length ? `<div class="sent-files">📎 ${escape(block.files.join(', '))}</div>` : ''}${sentImgs(openId, block.sent)}</article>`; }
-  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
+  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent', shotGot)}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
   if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
@@ -538,10 +545,10 @@ function itemsOf(blocks: Block[]) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
     if (j - i >= 2) {
       const run = blocks.slice(i, j + 1);
-      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, '', () => JSON.stringify(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'failed' || block.exit) ? 'failed' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
+      out.push({ key: 'g' + blocks[i].at, sig: sign('g' + blocks[i].at, run, shotsIn(run), () => JSON.stringify(run) + shotsIn(run)), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : run.some((block) => block.status === 'failed' || block.exit) ? 'failed' : run.some((block) => block.status === 'ended') ? 'ended' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent', shotGot)}</article>` });
       i = j;
     } else {
-      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion() + (whoSent(block.who) ?? '');
+      const block = blocks[i], extra = (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + shotsIn([block]) + codeColoursVersion() + (whoSent(block.who) ?? '');
       out.push({ key: 'b' + block.at, sig: sign('b' + block.at, [block], extra, () => JSON.stringify(block) + extra), html: () => blockHtml(block) });
     }
   }
@@ -746,7 +753,7 @@ function render() {
       if (box.bottom > edge) { hold = { key: node.dataset.key, top: box.top }; break; }
     }
   }
-  patch(events, shown);
+  patch(events, shown); watchShots(picked, events);
   const info = phoneFolders.get(picked);
   if (!info && !phoneFoldersLoading.has(picked)) {
       phoneFoldersLoading.add(picked);
@@ -858,7 +865,7 @@ one('#earlier').addEventListener('click', async () => {
   if (!id || from === undefined || button.disabled) return;
   button.disabled = true; button.textContent = 'Loading…';
   try {
-    const page = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1));
+    const page = await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1));
     // O251: a jump meanwhile read the chat again from its newest blocks; a page from before it would skip what lies between.
     if (older.get(id) === from) take(page, [id]);
     button.disabled = false; button.textContent = 'Load earlier';
@@ -1397,6 +1404,16 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
 });
+// A screen of the chat's own scroller ahead; 'not-found' (request's error for a 404): the picture is gone, not fetched again.
+function watchShots(id: string, list: HTMLElement) {
+  if (id !== shotsOf) {
+    const drawn = new Set([...list.querySelectorAll<HTMLElement>('[data-shot]')].map((img) => 'shot:' + img.dataset.shot));
+    for (const [key, src] of shots) if (src !== undefined && !drawn.has(key)) shots.delete(key);
+    shotsOf = id;
+  }
+  (shotWatch ??= shotWatcher(one('#chatBody'), (chat: string, place: string) => request('/chat/' + encodeURIComponent(chat) + '/shots/' + place, AbortSignal.timeout?.(120000))
+    .catch((error: Error) => { if (error?.message === 'not-found') return null; throw error; }), () => { sentLanded += 1; render(); }))(id, shots, list);
+}
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
 function sentImgs(id: string, hashes?: string[]) {
   if (!hashes?.length) return '';
@@ -1591,7 +1608,7 @@ one('#events').addEventListener('click', (event) => { const button = (event.targ
 // P9: a tap on an agent's image opens it full screen; any tap closes it.
 const picture = document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'picture', onclick: () => picture.close() }));
 addEventListener('click', (event) => {
-  const image = (event.target as Element).closest?.('.agent-imgs img, .user-imgs img') as HTMLImageElement | null; if (!image) return;
+  const image = (event.target as Element).closest?.('.agent-imgs img[src], .user-imgs img') as HTMLImageElement | null; if (!image) return;
   picture.replaceChildren(Object.assign(document.createElement('img'), { src: image.src, alt: image.alt })); picture.showModal();
 });
 one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };

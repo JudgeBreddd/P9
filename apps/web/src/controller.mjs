@@ -22,7 +22,6 @@ import { installPanel } from './panel.mjs';
 import { installSettings } from './settings-view.mjs';
 import { installCards } from './cards-modal.mjs';
 import { installFiles } from './files-view.mjs';
-import { installMove } from './move-fx.mjs';
 
 // The admin password window (shell-start.ts, row I2), for row 61 on a remote.
 let adminAsk = null;
@@ -81,12 +80,23 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, free, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
+  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, free, reply, dataNote, linkOk, keepQueue, history, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
-  const { leave, onMove, moveReloaded, SERVER_STATE } = installMove(outer);
+  // O249: the send-to-server move loads on its first use (the startup JS budget); its calls wait for it, in order. A click
+  // freezes the chat at once, as the move itself does (s.leaving), so nothing is sent while it loads. A failed load says so
+  // (noLoad) on each call; it is not tried again (local file: P9 was updated under this window, and a reload fixes it).
+  let move; const mv = () => (move ??= import('./move-fx.mjs').then(m => m.installMove(outer)));
+  const leave = s => { if (s.leaving) return; s.leaving = true; renderChats(); mv().finally(() => { s.leaving = false; }).then(m => m.leave(s), () => noLoad(s.id)); };
+  const onMove = e => mv().then(m => m.onMove(e), () => noLoad(e.id)), moveReloaded = () => void ((localStorage.getItem('p9-after-move') || outer.S.sessions.some(s => s.live && s.state === 'moving')) && mv().then(m => m.moveReloaded(), () => noLoad())); // only after a move
+  // The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
+  // each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
+  // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
+  // probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
+  // ~/.ssh/config hosts never saved or used are not asked.
+  const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
   adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (sample data is never part of the app).
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
@@ -1297,7 +1307,7 @@ liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(
 // A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
 const picDlg = $('#picDlg');
 addEventListener('click', e => {
-  const i = e.target.closest?.('.user-imgs img[src], .agent-imgs img'); if (!i) return;
+  const i = e.target.closest?.('.user-imgs img[src], .agent-imgs img[src]'); if (!i) return;
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();

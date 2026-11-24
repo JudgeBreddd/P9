@@ -82,6 +82,21 @@ export function rollbackLedger(file) {
 // The event types the phone draws as a block of their own (P20's tail read counts them).
 const BLOCKS = new Set(['user', 'approval', 'answered', 'question', 'error', 'steer-lost', 'interrupted', 'exited', 'stopped']);
 const COMMANDS = '"sessionUpdate":"available_commands_update"';
+// O249: an update's image blocks in one fixed order (its content, or each content item's content), each given to fn with
+// its index; parsed() and chat.shot() walk the same order, so a place names the same picture.
+export const eachImage = (update, fn) => {
+  let n = 0; const one = (b) => (b?.type === 'image' ? fn(b, n++) : b);
+  if (Array.isArray(update?.content)) return { ...update, content: update.content.map((i) => (i?.type === 'content' ? { ...i, content: one(i.content) } : one(i))) };
+  return update?.content?.type === 'image' ? { ...update, content: one(update.content) } : update;
+};
+// An event as a reader that asks for places gets it (chat.events with shots): each image its place (shot: "cursor/n"), not
+// its data, fetched when seen (/chat/:id/shots), so a chat of screenshots loads as fast as one without. A reader that does not
+// ask (a window older than this) gets the data, as before. The stored row keeps the data.
+export const placed = (e) => {
+  if (e.type !== 'update') return e;
+  let any = false; const data = eachImage(e.data, ({ data: _, ...b }, n) => { any = true; return { ...b, shot: e.cursor + '/' + n }; });
+  return any ? { ...e, data } : e;
+};
 const parsed = (row) => {
   try { return { ...row, data: JSON.parse(row.data) }; }
   catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }

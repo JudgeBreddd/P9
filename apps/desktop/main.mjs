@@ -769,11 +769,11 @@ export async function createDesktop({ state, open } = {}) {
   const chatRoutes = {
     list: () => ['GET', '/chat?lists=fresh'], // O47: with each agent's model lists
     // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
-    // tail (P20, with only): the newest tail blocks of each of those chats.
+    // tail (P20, with only): the newest tail blocks of each of those chats. shots: images as places (O249, chat-view.mjs).
     events: ({ after = 0, wait = 0, only, until, tail }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000
       && (only === undefined || Array.isArray(only) && only.length <= 100 && only.every(uuid)) && (until === undefined || Number.isSafeInteger(until) && until >= 0)
       && (tail === undefined || only !== undefined && Number.isSafeInteger(tail) && tail >= 1 && tail <= 200)
-      && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}${tail === undefined ? '' : '&tail=' + tail}`],
+      && ['GET', `/chat/events?shots=1&after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}${tail === undefined ? '' : '&tail=' + tail}`],
     create: body => ['POST', '/chat', body],
     chatFolder: ({ id: item }) => uuid(item) && ['GET', `/chat/${item}/folder`],
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
@@ -805,6 +805,8 @@ export async function createDesktop({ state, open } = {}) {
     // A worker's notes file (SECURITY.md § Sprint files): read-only; the daemon builds the name from the chat's parent and key.
     notes: ({ id: chat, ...rest }) => uuid(chat) && !Object.keys(rest).length && ['GET', `/chat/${chat}/notes`],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
+    // O249: an agent's picture by its place in the events (the daemon's shot: "cursor/n"), fetched when it scrolls into view.
+    shot: ({ id: chat, shot, ...rest }) => uuid(chat) && !Object.keys(rest).length && typeof shot === 'string' && /^\d{1,15}\/\d{1,2}$/.test(shot) && ['GET', `/chat/${chat}/shots/${shot}`],
     lock: () => ['GET', '/agent-lock'],
     agents: (body) => !Object.keys(body).length && ['GET', '/agents'], // CAT-1e: the catalog the setup wizard reads
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
