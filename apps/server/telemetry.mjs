@@ -465,22 +465,27 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   let insert = null;
   let state = freshState();
   let ledger = null;
-  let replayed = false; // the last replay ran from the ledger's start to its end with every row written and every deleted chat removed
-  let unforgotten = 0; // forget() calls that left a deleted chat's rows behind
+  // A new turns file is marked whole (user_version) only when a replay from the ledger's start wrote every row (whole is
+  // droppedRows when it ended; -1 until then, and any row dropped since unmarks it) and no deleted chat's rows are left
+  // (owed: their ids, retried with every batch). Checked again after every batch, so a mark that failed is retried too.
+  let whole = -1, owed = new Set();
+  const isWhole = () => whole === stats.droppedRows && !owed.size;
   const turns = sqliteFile(file, SCHEMA, TABLES, stats.setAside, stats, 'lastError', (db) => {
     insert = db.prepare('INSERT OR IGNORE INTO turns (' + COLUMNS.join(', ') + ') VALUES (' + COLUMNS.map(() => '?').join(', ') + ')');
-  }, () => replayed);
+  }, isWhole);
   // O35: a deleted chat's turns, and their resource rows in the samples file. After the batch's own rows, so none is left
   // behind; on every replay too, so rows a failed write or an older daemon left are removed at the next start.
   const forget = (events) => {
-    const ids = events.filter((event) => event?.type === 'deleted').map((event) => event.conversation);
+    owed = new Set([...owed, ...events.filter((event) => event?.type === 'deleted').map((event) => event.conversation)]);
+    const ids = [...owed];
     if (!ids.length || !turns.opened()) return;
     try {
       const list = JSON.stringify(ids), keys = turns.db.prepare('SELECT key FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').all(list).map((row) => row.key);
       // The turns stay until their resource rows are gone: the keys are how the next start finds those.
-      if (keys.length && !inSamples(keys.length, 'droppedResources', () => statements.unresource.run(JSON.stringify(keys)))) { unforgotten += 1; return; }
+      if (keys.length && !inSamples(keys.length, 'droppedResources', () => statements.unresource.run(JSON.stringify(keys)))) return;
       stats.rowsForgotten += Number(turns.db.prepare('DELETE FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').run(list).changes);
-    } catch (error) { stats.lastError = error.errstr ?? error.message; unforgotten += 1; }
+      owed = new Set();
+    } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
   const write = (rows) => {
     if (!rows.length) return;
@@ -504,10 +509,10 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   // ponytail: a full pass per start (the server's 204k events, 2026-11-05); keep a progress cursor if starts get slow.
   // The SQL trims update and user events to the fields project() reads, so replay never parses prompt or reply text.
   const catchUp = () => {
-    // Only a replay from the ledger's start can mark a new file whole: a later one (a queue gap) starts past pages an
+    // Only a replay from the ledger's start can make a new file whole: a later one (a queue gap) starts past pages an
     // earlier one may have dropped.
-    replayed = false;
-    const fromStart = state.cursor === 0, dropped = stats.droppedRows, missed = unforgotten;
+    const fromStart = state.cursor === 0, dropped = stats.droppedRows;
+    if (fromStart) whole = -1;
     try {
       ledger ??= new DatabaseSync(ledgerFile, { readOnly: true });
       const page = ledger.prepare(`SELECT cursor, conversation, type, at, CASE WHEN NOT json_valid(data) THEN '{}'
@@ -524,7 +529,8 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
         write(rows);
         forget(events);
       }
-      if (fromStart && stats.droppedRows === dropped && unforgotten === missed) { replayed = true; turns.stamp(); }
+      if (fromStart && stats.droppedRows === dropped) whole = dropped;
+      if (isWhole()) turns.stamp();
     } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
 
@@ -590,7 +596,7 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
     since.main += mainUs ?? 0;
     writeResources(resources); // first, so a deleted chat's last resource row in this batch goes with its turns below
     if (gap) catchUp(); // events were dropped from the queue: the ledger has them all
-    else { const rows = []; for (const event of events) rows.push(...derive(state, event)); write(rows); forget(events); }
+    else { const rows = []; for (const event of events) rows.push(...derive(state, event)); write(rows); forget(events); if (isWhole()) turns.stamp(); }
     for (const at of ticks ?? []) tick(at);
     parentPort.postMessage(stats);
   });

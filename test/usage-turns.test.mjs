@@ -139,6 +139,23 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
   await again.close();
   assert.equal(JSON.stringify(read(90)), final, 'the next start backfills the missing turns, each once');
 
+  // A deleted chat (B) whose rows cannot go yet (the samples file held locked) keeps a new file unmarked; the next batch
+  // after the lock clears removes them and marks it, with no restart.
+  insert.run(B, 'deleted', JSON.stringify({}), NOW);
+  const samplesLock = new DatabaseSync(path.join(dir, 'telemetry-samples.db'));
+  samplesLock.exec('BEGIN IMMEDIATE');
+  new DatabaseSync(file).exec('PRAGMA user_version = 0');
+  const owing = startTelemetry({ ledgerFile, file });
+  await owing.idle();
+  assert.equal(read(90).state, 'rebuilding', 'a deleted chat still counted: not whole');
+  samplesLock.exec('COMMIT');
+  samplesLock.close();
+  owing.push({ cursor: 1e9 + 3, conversation: Q, type: 'answered', data: { request: 'late3' }, at: NOW });
+  await owing.idle();
+  await owing.close();
+  const after = read(90);
+  assert.deepEqual([after.state, after.chats?.claude], ['ok', 6], 'the next batch removed chat B and marked the file');
+
   const fresh = readTurns({ file: path.join(dir, 'missing.db'), exists: false, days: 7 });
   assert.deepEqual([fresh.state, fresh.rows, fresh.chats], ['ok', [], {}], 'no telemetry.db yet (no turn recorded): empty, not an error');
   const damaged = path.join(dir, 'damaged.db');

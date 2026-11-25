@@ -611,7 +611,9 @@ protocol ever carries them, that becomes the source and these reads go.
 - **What this adds to telemetry.db.** Each turn row (already a chat id, provider, model alias and token counts) gains
   two 0/1 flags: whether the chat is on a provider profile, and whether the turn's counts include calls outside its
   main loop (a compaction or subagent). Plus an index on the turn's end time. Still no prompt, reply, path or key.
-  The schema change sets the old file aside (kept) and rebuilds it from the ledger once.
+  The schema change sets the old file aside (kept, `telemetry.db.set-aside-<time>`) and rebuilds it from the ledger
+  once. That kept copy is not touched again: a chat deleted after the upgrade is removed from telemetry.db, not from
+  the copy. Delete the copy to remove what it holds; nothing reads it.
 
 ## Provider profiles
 
