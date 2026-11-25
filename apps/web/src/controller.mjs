@@ -1306,9 +1306,12 @@ liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.
   const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
   const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
-  if (r.status === 202) { const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
+  if (r.status === 202) { s.sentFrom?.delete(text); // taken: its quotes went with it
+    const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
   keep(); // all of them: a box over the limit is refused when sent, and keeps its files
-  s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
+  // A2 step 6: a refused message sent with quotes gets its chips back, and only what was typed goes back in the box.
+  const from = s.sentFrom?.get(text); s.sentFrom?.delete(text); if (from) s.quotes = [...from.quotes, ...(s.quotes || [])];
+  const back = from ? from.draft : text; s.draft = back + (s.draft && back ? '\n' : '') + (s.draft || ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
   const q = s.events.find(e => e.t === 'question'); if (!q || q.unsupported) return;

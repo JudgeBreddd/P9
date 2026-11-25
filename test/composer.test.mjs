@@ -550,3 +550,46 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 6: select or Quote opens a box under it; Enter makes a chip, x removes it, the send carries quote and comment');
 });
+
+// A2 step 6, review round 1: the message box is kept as chips come and go (its undo history with it); Esc from the box's
+// buttons closes it and gives the typing back; a slash command goes alone and the chips wait; a refused send gives the
+// chips back as chips; in the chat dialog the box opens inside the dialog, where it can be reached.
+test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leaves the chips, a refusal gives them back, the dialog has it', { timeout: 120000 }, async (t) => {
+  const { app, page, pane, errors, instance, id } = await setup(t, 'a2-quote-2');
+  const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea'), reply = pane.locator('.msg.agent').last();
+  const quote = async (r = reply) => { await r.hover(); await r.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); };
+  await composer.evaluate((b) => { b.dataset.mark = 'kept'; });
+  await quote(); await page.keyboard.press('Enter');
+  await until(async () => await chips.count() === 1, 'a chip', 5000);
+  assert.equal(await composer.getAttribute('data-mark'), 'kept', 'the first chip leaves the same message box (its undo history too)');
+  await quote(); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
+  await until(async () => await box.count() === 0, 'Esc on the Cancel button closes the box', 5000);
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'and the message box has the typing');
+  // A command the agent lists goes alone; the chip waits for the next message.
+  await composer.click(); await page.keyboard.type('/compact'); await page.keyboard.press('Enter');
+  await until(async () => (await users(instance, id)).includes('/compact'), 'the command went as typed', 15000);
+  assert.equal(await chips.count(), 1, 'the chip waits');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
+  // The daemon refuses the next message once: the chip comes back as a chip, and only the typed words go back in the box.
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let once = true;
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'prompt' && once ? (once = false, { status: 409, body: { error: 'not-ready' } }) : h(e, ...args)); });
+  await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
+  await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: the words in the box, the chip a chip', 10000);
+  await chips.first().locator('[data-unquote]').click();
+  await until(async () => await chips.count() === 0, 'the last chip goes', 5000);
+  assert.equal(await composer.getAttribute('data-mark'), 'kept', 'and the message box is still the same one');
+  // In the chat dialog (opened from its card), the box opens inside the dialog and its chip lands in that chat.
+  await composer.fill(''); await page.keyboard.press('Escape');
+  await pane.locator('.composer textarea').click(); await page.keyboard.type('ask-text'); await page.keyboard.press('Enter');
+  await pane.locator('[data-question]').waitFor({ timeout: 15000 });
+  await page.click('#rBell'); await page.locator('#mdlBody .mlist [data-i]').first().click();
+  const mbtn = page.locator('#mdlBody .mlist button').first(); if (await mbtn.count()) await mbtn.click();
+  const dpane = page.locator('#mdlBody .pane'); await dpane.waitFor({ timeout: 10000 });
+  await quote(dpane.locator('.msg.agent').first());
+  assert.ok(await box.evaluate((b) => !!b.closest('dialog[open]')), 'the box is inside the open dialog');
+  await page.keyboard.type('from the dialog'); await page.keyboard.press('Enter');
+  await until(async () => await dpane.locator('.attach .att-quote').count() === 1, 'the chip in the dialog\'s chat', 5000);
+  assert.ok(await dpane.locator('.composer textarea').evaluate((b) => document.activeElement === b), 'the dialog\'s message box has the typing');
+  assert.deepEqual(errors.filter((e) => !/not-ready|409/.test(e)), [], 'no page errors');
+  console.log('PASS A2 step 6 round 2: box kept, Esc from a button, command alone, refusal keeps chips, the dialog');
+});
