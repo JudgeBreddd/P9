@@ -915,7 +915,7 @@ const quote = (s, p, rect, text, raw) => { import('./quote.mjs').then(m => {
 // A2 step 7: drafts saved aside with Ctrl+S in the box, newest first, in this machine's window storage, so any chat can take
 // one back. The menu (drafts.mjs) loads on first use. ponytail: text only, the last 20 kept; files and quotes stay in the box.
 const DRAFTS = 'p9-drafts', boxOf = s => document.querySelector(`.pane[data-id="${CSS.escape(s.id)}"] .composer textarea`);
-addEventListener('storage', e => { if (e.key === DRAFTS) renderChats(); }, { signal: outer.lifetime.signal }); // another window saved or took one
+window.addEventListener('storage', e => { if (e.key === DRAFTS) renderChats(); }); // another window saved or took one
 const draftsN = () => { try { return JSON.parse(localStorage.getItem(DRAFTS) || '[]').length || 0; } catch { return 0; } };
 function putAside(s, ta) {
   let d; try { d = JSON.parse(localStorage.getItem(DRAFTS) || '[]'); if (!Array.isArray(d)) d = []; } catch { d = []; }
