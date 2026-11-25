@@ -829,12 +829,15 @@ function paint(root, ss, only) {
         if (ed.text === ed.was) { s.hedit = null; return renderChats(); }
         ed.saving = ed.text; renderChats(); const base = ed.base;
         outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).catch(() => ({})).then(r => { if (s.hedit !== ed) return; const sent = ed.saving; ed.saving = null;
-          if (r.status === 200) s.hedit = null;
+          if (r.status === 200) { s.hedit = null; return renderChats(); }
+          // Unsure: no answer, or the retry's 503 or outcome-unknown (liveChat.call): the save may have landed.
+          const unsure = !r.status || r.status === 503 || r.body?.error === 'outcome-unknown'; if (unsure) ed.lost = sent;
+          // Its message already gone (a catch-up skipped its event, and the load left this to the answer): settled here.
+          if (!s.stub && !s.held?.some(h => h.id === ed.id)) editGone(s, false);
           // A newer held-text event that came first already moved base on; the answer's older words do not set it back.
           else if (r.body?.error === 'changed') { if (ed.base === base) ed.base = r.body.text; ed.was = ed.base; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + ed.base + ' Enter saves yours over it; Esc keeps that one.' }); }
-          // not-held: it left before the save; its event settles the edit (carry), or, if a catch-up skipped it, this does.
-          else if (r.body?.error === 'not-held') { if (!s.stub && !s.held?.some(h => h.id === ed.id)) editGone(s, false); }
-          else { if (!r.status) ed.lost = sent; s.events.push({ t: 'notice', text: 'Your edit ' + (r.status ? 'was not saved (' + (r.body?.error || r.status) + ')' : 'got no answer, so it may or may not be saved') + '. It is still open.' }); }
+          // not-held: it left before the save; its event settles the edit (carry).
+          else if (r.body?.error !== 'not-held') s.events.push({ t: 'notice', text: 'Your edit ' + (unsure ? 'got no sure answer (' + (r.body?.error || r.status || 'none') + '), so it may or may not be saved' : 'was not saved (' + (r.body?.error || r.status) + ')') + '. It is still open.' });
           renderChats(); }); }; });
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
@@ -1041,7 +1044,10 @@ function history(s, until = outer.liveChat.cursor) {
     }
     // A2 step 3: an open edit whose message left in events no carry saw (a catch-up skips them, O251). A save in flight is
     // settled by its answer instead (heldText below).
-    if (s.hedit && s.hedit.saving == null && !s.held?.some(h => h.id === s.hedit.id)) editGone(s, false);
+    // One still waiting meets its newest words (an untouched editor moves to them), as its held-text event would.
+    const h = s.hedit && s.held?.find(h => h.id === s.hedit.id);
+    if (h) editSeen(s, { type: 'held-text', data: { id: h.id, text: h.text } });
+    else if (s.hedit && s.hedit.saving == null) editGone(s, false);
     s.stub = false; outer.renderTabs(); renderChats();
   })();
 }
