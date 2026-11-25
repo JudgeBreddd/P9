@@ -9,7 +9,7 @@ export function quoteBox({ rect, text, add }) {
   shut?.();
   text = text.length > MAX ? text.slice(0, MAX) + '…' : text;
   const box = Object.assign(document.createElement('form'), { className: 'quote-box' });
-  box.innerHTML = '<blockquote></blockquote><textarea rows="2" aria-label="Comment on the quote" placeholder="Comment (optional)"></textarea><div class="quote-bar"><button type="button">Cancel</button><button type="submit">Quote</button></div>';
+  box.innerHTML = '<blockquote></blockquote><textarea rows="2" aria-label="Comment on the quote" placeholder="Comment (optional)"></textarea><div class="quote-bar"><button type="button">Cancel</button><button type="submit">Comment</button></div>';
   box.firstChild.textContent = text;
   const ta = box.querySelector('textarea'), ac = new AbortController();
   document.body.append(box);
