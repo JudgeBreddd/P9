@@ -2,14 +2,16 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.14',
+  version: '0.1.9-beta.15',
   changes: [
-    "Remote: the machine menu and Settings open quickly over a slow or busy link, and Dev Focus waits it out.",
-    "Remote: Dev Focus keeps its open files and file tree through a remote switch or a restart.",
-    "Desktop shows the chat list first. Desktop and phone load screenshots as you scroll near them.",
-    "When many updates pile up while you're away, chats catch up in one step.",
-    "A click on a chat row opens it even while the list is redrawing.",
-    "Phone shows Working and Stop when an agent starts a turn on its own.",
-    "A steer sent while a turn is starting waits for that turn to begin.",
+    "Chat: select part of a reply, or press its Quote button, to quote it with a comment; it waits as a chip you can remove.",
+    "Chat box: Up in an empty box brings back the prompts you sent, and Down goes forward again.",
+    "Chat box: a big paste of text attaches as pasted.txt instead of filling the box.",
+    "Chat: a queued message can be edited in place before it goes.",
+    "Chat: the agent's goal shows as a line above the message box.",
+    "Queued messages are kept in one list by P9's background service, and go with what is attached when they are sent.",
+    "Usage: Tokens and Cost tabs on desktop and phone; the phone's Usage screen gets the Limits tab too.",
+    "Usage: each limit shows where it is projected to be at its reset, and P9 records usage every 10 minutes.",
+    "The window starts with less code: the project page loads when it is first opened.",
   ],
 };
