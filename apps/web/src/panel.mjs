@@ -5,7 +5,6 @@
 // menu, drag onto a project, the strip's title card, Ctrl B and Ctrl Tab. State lives on the sessions (controller's S).
 import { svg, esc, dragBar } from './helpers.mjs';
 import { agentIcon } from './agent-icons.mjs';
-import { installProjects } from './projects-view.mjs';
 import { pressHold } from './press-hold.mjs';
 
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
@@ -318,6 +317,14 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (o.openProject) return o.openProject(id);
     setOpen(id, true); if (P.collapsed) setCollapsed(false); else if (P.narrow) P.overlay = true; renderPanel(); list.querySelector(`[data-proj="${CSS.escape(id)}"]`)?.focus(); }, { signal: o.lifetime.signal });
   const api = { renderPanel, jumps, openChat, move, setOpen, loadProjects, closeMenu, openMenu, undoToast, panel: P };
-  installProjects(o, api); // N1 points 9 and 10: the project page, New project, a chat's Rename, Archive and Delete
+  // N1 points 9 and 10: the project page, New project, Archived, a chat's Rename, Archive and Delete (projects-view.mjs).
+  // O261: not on the startup path. It loads once the window has loaded and is idle, as O118's terminal chunk, or at once
+  // when one of these is used before that; a failed load is tried again on the next use.
+  let pv = null;
+  const pages = () => (pv ??= import('./projects-view.mjs').then(m => m.installProjects(o, api), e => { pv = null; throw e; }));
+  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => pages().then(() => o[k](...a));
+  o.renderPage = () => { if (o.S.view) pages().then(() => o.renderPage()); };
+  const idle = () => requestIdleCallback(() => pages().catch(() => {}), { timeout: 2000 });
+  if (document.readyState === 'complete') idle(); else addEventListener('load', idle, { once: true, signal: o.lifetime.signal });
   return api;
 }

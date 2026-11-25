@@ -113,6 +113,10 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 3
         const startup = sizes([...new Set(order.slice(0, cut))]), startupRaw = startup.reduce((n, f) => n + f.raw, 0);
         console.log('P9_STARTUP ' + JSON.stringify({ raw: startupRaw, files: startup.length, after: [...new Set(order.slice(cut + 1))], scripts: startup }));
         assert.ok(startupRaw <= BUDGET, `the shell page parsed ${startupRaw} bytes of JS before it was usable, over the budget of ${BUDGET}`);
+        // O261: the project page's code (projects-view.mjs) is not on the startup path; it loads once the window is idle.
+        const pages = (files) => files.filter((f) => readFileSync(path.join(dist, '_astro', f), 'utf8').includes('data-sp-scripts'));
+        assert.deepEqual(pages(startup.map((f) => f.file)), [], 'the project page\'s code was parsed before the shell was usable');
+        assert.equal(pages([...new Set(order.slice(cut + 1))]).length, 1, 'the project page\'s code loaded once the window was idle');
         const png = await page.screenshot({ animations: 'disabled' });
         if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT shell ' + png.toString('base64'));
         assert.ok(await page.locator('[data-p9-island]').count() === 1, 'the shell markup is on the page once');
