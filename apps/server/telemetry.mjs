@@ -465,7 +465,8 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   let insert = null;
   let state = freshState();
   let ledger = null;
-  let replayed = false; // the last replay reached the ledger's end with every row written
+  let replayed = false; // the last replay ran from the ledger's start to its end with every row written and every deleted chat removed
+  let unforgotten = 0; // forget() calls that left a deleted chat's rows behind
   const turns = sqliteFile(file, SCHEMA, TABLES, stats.setAside, stats, 'lastError', (db) => {
     insert = db.prepare('INSERT OR IGNORE INTO turns (' + COLUMNS.join(', ') + ') VALUES (' + COLUMNS.map(() => '?').join(', ') + ')');
   }, () => replayed);
@@ -477,9 +478,9 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
     try {
       const list = JSON.stringify(ids), keys = turns.db.prepare('SELECT key FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').all(list).map((row) => row.key);
       // The turns stay until their resource rows are gone: the keys are how the next start finds those.
-      if (keys.length && !inSamples(keys.length, 'droppedResources', () => statements.unresource.run(JSON.stringify(keys)))) return;
+      if (keys.length && !inSamples(keys.length, 'droppedResources', () => statements.unresource.run(JSON.stringify(keys)))) { unforgotten += 1; return; }
       stats.rowsForgotten += Number(turns.db.prepare('DELETE FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').run(list).changes);
-    } catch (error) { stats.lastError = error.errstr ?? error.message; }
+    } catch (error) { stats.lastError = error.errstr ?? error.message; unforgotten += 1; }
   };
   const write = (rows) => {
     if (!rows.length) return;
@@ -503,8 +504,10 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   // ponytail: a full pass per start (the server's 204k events, 2026-11-05); keep a progress cursor if starts get slow.
   // The SQL trims update and user events to the fields project() reads, so replay never parses prompt or reply text.
   const catchUp = () => {
+    // Only a replay from the ledger's start can mark a new file whole: a later one (a queue gap) starts past pages an
+    // earlier one may have dropped.
     replayed = false;
-    const dropped = stats.droppedRows;
+    const fromStart = state.cursor === 0, dropped = stats.droppedRows, missed = unforgotten;
     try {
       ledger ??= new DatabaseSync(ledgerFile, { readOnly: true });
       const page = ledger.prepare(`SELECT cursor, conversation, type, at, CASE WHEN NOT json_valid(data) THEN '{}'
@@ -521,7 +524,7 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
         write(rows);
         forget(events);
       }
-      if (stats.droppedRows === dropped) { replayed = true; turns.stamp(); }
+      if (fromStart && stats.droppedRows === dropped && unforgotten === missed) { replayed = true; turns.stamp(); }
     } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
 

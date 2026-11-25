@@ -606,9 +606,12 @@ protocol ever carries them, that becomes the source and these reads go.
   and a dollar estimate from a fixed price table in the code (Claude models only; any other model, and every chat on
   a provider profile, is no price). Only turns that reported all four token counts are priced, and each row says how
   many were. The figures are the turns P9 recorded, of chats not deleted. The read never waits: while telemetry.db is
-  being rebuilt it answers `rebuilding`, and when the file is busy or damaged `unavailable`. telemetry.db holds a 0/1
-  profile flag per turn and an index on the turn's end time, nothing more. No chat id, title, folder or text, and
-  nothing is sent anywhere.
+  being rebuilt it answers `rebuilding`, and when the file is busy or damaged `unavailable`. The answer carries no
+  chat id, title, folder or text, and nothing is sent anywhere.
+- **What this adds to telemetry.db.** Each turn row (already a chat id, provider, model alias and token counts) gains
+  two 0/1 flags: whether the chat is on a provider profile, and whether the turn's counts include calls outside its
+  main loop (a compaction or subagent). Plus an index on the turn's end time. Still no prompt, reply, path or key.
+  The schema change sets the old file aside (kept) and rebuilds it from the ledger once.
 
 ## Provider profiles
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { constants as fsConstants, existsSync, realpathSync } from 'node:fs';
+import { constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
@@ -567,7 +567,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/usage/turns', (c) => {
     if (!ownership) return c.json({ state: 'unavailable' });
     const file = path.join(ownership, 'telemetry.db');
-    return c.json(readTurns({ file, exists: existsSync(file), days: c.req.query('days') }));
+    let exists = true; // only a confirmed absence (ENOENT) is no turns yet; a stat that fails otherwise lets the reader say unavailable
+    try { exists = Boolean(statSync(file, { throwIfNoEntry: false })); } catch {}
+    return c.json(readTurns({ file, exists, days: c.req.query('days') }));
   });
   api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));

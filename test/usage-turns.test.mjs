@@ -85,7 +85,8 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
     [one, 'claude', 'glm-5.3:cloud', false, 1, 1, 0, 0], [one, 'claude', 'opus', false, 2, 2, 2, 0], [one, 'claude', 'sonnet', false, 1, 1, 1, 0], [one, 'codex', 'gpt-6.1-sol', false, 1, 1, 0, 0],
     [two, 'claude', 'haiku', false, 2, 2, 1, 0], [two, 'claude', 'opus', false, 3, 2, 2, 1], [two, 'claude', 'sonnet', true, 1, 1, 0, 0], [two, 'codex', 'gpt-6.1-sol', false, 2, 2, 0, 0]]);
   const [glm, opus, sonnet, codex, haiku, opus2, profile] = month.rows;
-  assert.deepEqual([haiku.input, haiku.cacheWrite], [1001000, 0], 'both haiku turns show their tokens');
+  assert.deepEqual([haiku.input, haiku.cacheWrite, haiku.total], [1001000, 0, 1000], 'both haiku turns show the counts they reported');
+  assert.deepEqual(haiku.known, { input: 2, output: 2, cacheRead: 2, cacheWrite: 1, total: 1 }, 'and say how many turns each sum covers');
   close(haiku.usd, 0.0001, 'only the whole haiku turn is priced: 1000 x $0.10 / 1M');
   assert.deepEqual([opus.input, opus.output, opus.cacheRead, opus.cacheWrite, opus.total], [1000, 2500, 150000, 10000, 163500]);
   close(opus.usd, 0.164, 'opus dollars');
@@ -116,15 +117,27 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
   plan.close();
   assert.match(steps, /turns_end_at/, 'the window reads through the end_at index: ' + steps);
 
-  // A start that finds a rebuild cut short (user_version still 0) replays into it, then marks it whole; no row twice.
-  const cut = new DatabaseSync(file);
-  cut.exec('PRAGMA user_version = 0');
-  cut.close();
+  // A rebuild cut short: only the first page's row (chat E) is there, user_version still 0. A start whose writes fail
+  // (the file held locked) leaves it unmarked, and so does a later catch-up from past the dropped pages (a queue gap);
+  // the next clean start backfills the missing turns, once each, and marks it.
+  const lock = new DatabaseSync(file);
+  lock.prepare('DELETE FROM turns WHERE conversation != ?').run(E);
+  lock.exec('PRAGMA user_version = 0; BEGIN IMMEDIATE');
   assert.equal(read(90).state, 'rebuilding');
+  const locked = startTelemetry({ ledgerFile, file, cap: 1 });
+  await locked.idle();
+  assert.ok(locked.stats().droppedRows > 0, 'the replay could not write: ' + JSON.stringify(locked.stats()));
+  lock.exec('COMMIT');
+  lock.close();
+  for (const n of [1, 2]) locked.push({ cursor: 1e9 + n, conversation: Q, type: 'answered', data: { request: 'late' + n }, at: NOW });
+  await locked.idle();
+  assert.ok(locked.stats().droppedEvents > 0, 'the queue overflowed, so the worker caught up from the ledger');
+  await locked.close();
+  assert.equal(read(90).state, 'rebuilding', 'a catch-up that did not start at the beginning does not mark the file whole');
   const again = startTelemetry({ ledgerFile, file });
   await again.idle();
   await again.close();
-  assert.equal(JSON.stringify(read(90)), final, 'the same history after the second replay');
+  assert.equal(JSON.stringify(read(90)), final, 'the next start backfills the missing turns, each once');
 
   const fresh = readTurns({ file: path.join(dir, 'missing.db'), exists: false, days: 7 });
   assert.deepEqual([fresh.state, fresh.rows, fresh.chats], ['ok', [], {}], 'no telemetry.db yet (no turn recorded): empty, not an error');

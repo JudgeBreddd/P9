@@ -24,7 +24,8 @@ const TYPES = ['input', 'output', 'cacheRead', 'cacheWrite'];
 // no turns yet (empty rows). A file whose first replay has not finished is { state: 'rebuilding' }. Any other failure
 // (busy, damaged, cannot open) is { state: 'unavailable' }, at once: the read never waits on a lock, as it runs on the
 // daemon's one thread.
-// Per row: turns; measured, the turns that reported any count; priced, the turns with all four counts and a price, the
+// Per row: turns; measured, the turns that reported any count; known, per token type and total, the turns that reported
+// that one (each sum covers only those, and is null when none did); priced, the turns with all four counts and a price, the
 // only ones in cost, usd and saved; estimated, the priced turns whose counts include calls outside the main loop
 // (compactions, subagents), all priced at the chat's model though some may have run on another.
 const WHOLE = 'input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_write_tokens IS NOT NULL';
@@ -41,7 +42,8 @@ export function readTurns({ file, exists, days, now = Date.now() }) {
     const rows = db.prepare(`SELECT date(end_at / 1000, 'unixepoch', 'localtime') AS day, provider, model, profile, count(*) AS turns,
       sum(usage) AS measured, sum(${WHOLE}) AS whole, sum(${WHOLE} AND side_calls) AS sides,
       sum(input_tokens) AS input, sum(output_tokens) AS output, sum(cached_read_tokens) AS cacheRead,
-      sum(cached_write_tokens) AS cacheWrite, sum(total_tokens) AS total,
+      sum(cached_write_tokens) AS cacheWrite, sum(total_tokens) AS total, count(input_tokens) AS k_input, count(output_tokens) AS k_output,
+      count(cached_read_tokens) AS k_cacheRead, count(cached_write_tokens) AS k_cacheWrite, count(total_tokens) AS k_total,
       total(iif(${WHOLE}, input_tokens, 0)) AS p_input, total(iif(${WHOLE}, output_tokens, 0)) AS p_output,
       total(iif(${WHOLE}, cached_read_tokens, 0)) AS p_cacheRead, total(iif(${WHOLE}, cached_write_tokens, 0)) AS p_cacheWrite
       FROM turns WHERE end_at > ? AND end_at <= ? GROUP BY day, provider, model, profile ORDER BY day, provider, model, profile`).all(since, now).map((row) => {
@@ -51,7 +53,7 @@ export function readTurns({ file, exists, days, now = Date.now() }) {
       // less what they cost as cache reads and writes; below zero when the writes' premium outran the reads' discount.
       const cost = priced ? Object.fromEntries(TYPES.map((type, i) => [type, p(type) * price[i] / 1e6])) : null;
       return { day: row.day, provider: row.provider, model: row.model, profile: row.profile === 1, turns: row.turns,
-        measured: row.measured, priced, estimated: priced ? row.sides : 0,
+        measured: row.measured, known: Object.fromEntries([...TYPES, 'total'].map((type) => [type, row['k_' + type]])), priced, estimated: priced ? row.sides : 0,
         input: row.input, output: row.output, cacheRead: row.cacheRead, cacheWrite: row.cacheWrite, total: row.total,
         cost, usd: cost && TYPES.reduce((sum, type) => sum + cost[type], 0),
         saved: cost && ((p('cacheRead') + p('cacheWrite')) * price[0] - p('cacheRead') * price[2] - p('cacheWrite') * price[3]) / 1e6 };
