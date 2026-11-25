@@ -3,6 +3,7 @@
 // for Claude models in PRICES. Any other model, and every turn of the codex provider, gets usd: null ("no price"), never $0.
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA } from './telemetry.mjs';
+import { API_PRICED } from './agents.mjs';
 
 export const PRICES_AS_OF = '2026-11-03';
 // $ per million tokens: input, output, cache read, cache write. Cache writes at the 1-hour rate (2x input), the cache P9's
@@ -14,7 +15,7 @@ export const PRICES = { opus: OPUS, 'claude-opus-5-5': OPUS, sonnet: SONNET, 'cl
 export const RANGES = [1, 7, 30, 90];
 
 // A provider profile's chat (profile 1) talks to another service under a model name of its own: no price, whatever the name.
-const priceOf = (row) => (row.provider === 'claude' && !row.profile && Object.hasOwn(PRICES, row.model) ? PRICES[row.model] : null);
+const priceOf = (row) => (API_PRICED[row.provider] && !row.profile && Object.hasOwn(PRICES, row.model) ? PRICES[row.model] : null);
 const TYPES = ['input', 'output', 'cacheRead', 'cacheWrite'];
 
 // days: one of RANGES (anything else is 7), the window ending at now. Days are the daemon's local dates. Scope: the turns
