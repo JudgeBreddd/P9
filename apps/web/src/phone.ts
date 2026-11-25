@@ -1211,6 +1211,7 @@ async function submitFromBox(event: Event) {
     else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
+  if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
   const text = (art ?? input.value).trim();
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
@@ -1362,13 +1363,20 @@ function renderAttached() {
   box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
-async function addImages(files: Iterable<File>) {
-  const id = openId; if (!id) return;
-  const list = attached.get(id) ?? []; attached.set(id, list);
-  note(); let ok = true; // true: every file attached
+// One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file
+// check, and a send went without a file still being read. Notes only for the chat on screen.
+const adding = new Map<string, Promise<boolean>>(); // chat id -> its attach now
+function addImages(files: Iterable<File>): Promise<boolean> {
+  const id = openId; if (!id) return Promise.resolve(false);
+  const run = (adding.get(id) ?? Promise.resolve(true)).catch(() => true).then(() => attachNow(id, files)); adding.set(id, run);
+  void run.finally(() => { if (adding.get(id) === run) adding.delete(id); }).catch(() => {}); return run;
+}
+async function attachNow(id: string, files: Iterable<File>) {
+  const list = attached.get(id) ?? []; attached.set(id, list); const say = (text = '') => { if (openId === id) note(text); };
+  say(); let ok = true; // true: every file attached
   for (const file of files) {
-    const full = attachFull(file, list); if (full) { ok = false; note('Not attached: ' + full.toLowerCase() + '.'); continue; }
-    try { list.push(await readAttachment(file, list)); } catch (error) { ok = false; note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    const full = attachFull(file, list); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
+    try { list.push(await readAttachment(file, list)); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
@@ -1403,11 +1411,12 @@ one('#sheetBody').addEventListener('click', (event) => {
 });
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
-  const files = event.clipboardData ? pastedFiles(event.clipboardData, false) : []; if (!files.length) return;
-  event.preventDefault(); const box = event.currentTarget as HTMLTextAreaElement, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
-  void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes into the box as text, not lost
-    if (!text) return; if (ok) return note('A big paste went in as pasted.txt. Remove it with ✕.');
-    box.setRangeText(text, box.selectionStart, box.selectionEnd, 'end'); box.dispatchEvent(new Event('input'));
+  const box = event.currentTarget as HTMLTextAreaElement, files = event.clipboardData ? pastedFiles(event.clipboardData, box.selectionStart !== box.selectionEnd) : [];
+  if (!files.length) return; // over a selection it stays text, so it replaces what was selected as any paste does
+  event.preventDefault(); const id = openId, was = box.value, at = box.selectionStart, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
+  void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
+    if (!text || !id) return; if (ok) { if (openId === id) note('A big paste went in as pasted.txt. Remove it with ✕.'); return; }
+    editDraft(id, (now) => now === was ? now.slice(0, at) + text + now.slice(at) : now + (now ? '\n' : '') + text); // where it was pasted, or after what was typed since
   });
 }); // A2 step 1: a big paste of text attaches as a file
 // A dropped file attaches the same way (spec §4); dropped text still goes into the box.

@@ -372,7 +372,7 @@ test('A2 step 1: the desktop paperclip attaches any file; the agent gets its pat
 
 // A2 step 1: a big paste of text attaches as a file, so a long log does not fill the box; a short one, or Ctrl Shift V, stays text.
 test('A2 step 1: a big paste of text attaches as pasted.txt; a short paste or Ctrl Shift V stays text', { timeout: 90000 }, async (t) => {
-  const { instance, id, page, pane, send, errors } = await setup(t, 'a2-paste');
+  const { instance, id, page, pane, type, errors } = await setup(t, 'a2-paste');
   const box = pane.locator('.composer textarea'), big = 'log line\n'.repeat(600);
   const paste = (text, plain) => box.evaluate((ta, [text, plain]) => {
     if (plain) ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true, bubbles: true }));
@@ -382,12 +382,30 @@ test('A2 step 1: a big paste of text attaches as pasted.txt; a short paste or Ct
   assert.equal(await paste('a short paste'), false, 'a short paste stays text');
   assert.equal(await paste('x'.repeat(5000)), false, '5000 characters is not big');
   assert.equal(await paste(big, true), false, 'Ctrl Shift V pastes a big one as text');
+  // The real shortcut, through the real clipboard: the text lands in the box.
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.evaluate((text) => navigator.clipboard.writeText(text), big);
+  await box.click(); await page.keyboard.press('Control+Shift+V');
+  await until(async () => await box.inputValue() === big, 'Ctrl Shift V put the big paste in the box as text');
+  await box.fill('an old prompt'); await box.evaluate((ta) => ta.select());
+  assert.equal(await paste(big), false, 'a big paste over a selection replaces it as text');
+  await box.fill('');
   assert.equal(await pane.locator('.attach').count(), 0, 'nothing attached yet');
-  assert.equal(await paste(big), true, 'a big paste is taken from the box');
+  // A Ctrl Shift V that pasted nothing (keyup came) does not keep the next paste as text; Enter while the file is still
+  // being read does not send without it.
+  await type('edit attached');
+  assert.equal(await box.evaluate((ta, text) => {
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true, bubbles: true }));
+    ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'V', code: 'KeyV', bubbles: true }));
+    const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev); ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return ev.defaultPrevented;
+  }, big), true, 'a big paste is taken from the box');
+  await page.locator('#toasts .toast', { hasText: 'Still attaching a file' }).waitFor({ timeout: 10000 });
   await pane.locator('.attach .att-file', { hasText: 'pasted.txt' }).waitFor({ timeout: 10000 });
   await page.locator('#toasts .toast', { hasText: 'Ctrl Shift V pastes it as text' }).waitFor({ timeout: 10000 });
+  assert.equal(await box.inputValue(), 'edit attached', 'nothing was sent while attaching');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-paste-chip ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
-  await send('edit attached');
+  await box.press('Enter');
   let reply;
   await until(async () => (reply = (await said(instance, id, 'update')).map((e) => e.data.content?.text).find((text) => text?.startsWith('edited:'))), 'the agent edited the file');
   const uri = Object.fromEntries(reply.slice('edited:'.length).split(',').map((pair) => pair.split('=')))['pasted.txt'];
@@ -401,7 +419,7 @@ test('A2 step 1: a big paste of text attaches as pasted.txt; a short paste or Ct
   await until(async () => await pane.locator('.composer textarea').inputValue() === fifth, 'the refused paste is in the box');
   assert.equal(await pane.locator('.attach .att-file').count(), 4);
   assert.deepEqual(errors, []);
-  console.log('PASS A2 step 1 paste: a 5400-character paste went as pasted.txt and the agent edited it; short, 5000 and Ctrl Shift V pastes stayed text; a fifth file went in as text');
+  console.log('PASS A2 step 1 paste: a 5400-character paste went as pasted.txt and the agent edited it; short, 5000, over a selection and Ctrl Shift V (real clipboard too) stayed text; Enter waited for the attach; a fifth file went in as text');
 });
 
 // RS2: the agent asks through P9's MCP server, as a real one would. The native "Restart P9?" dialog is answered Cancel,

@@ -302,8 +302,18 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   // A2 step 1: a big paste of text attaches as pasted.txt; a short one stays text (not taken from the box).
   const pasteText = (text) => page.evaluate((text) => { const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); document.querySelector('#prompt').dispatchEvent(ev); return ev.defaultPrevented; }, text);
   assert.equal(await pasteText('short'), false, 'a short paste stays text');
-  assert.equal(await pasteText('x'.repeat(5001)), true, 'a big paste is taken from the box');
+  await page.fill('#prompt', 'an old prompt'); await page.evaluate(() => document.querySelector('#prompt').select());
+  assert.equal(await pasteText('x'.repeat(5001)), false, 'a big paste over a selection replaces it as text');
+  // A send tapped while the paste is still being read waits for it instead of going without the file.
+  await page.fill('#prompt', 'hi');
+  assert.deepEqual(await page.evaluate((text) => {
+    const ta = document.querySelector('#prompt'); ta.selectionStart = ta.selectionEnd = ta.value.length;
+    const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev); document.querySelector('#composer').requestSubmit(); return [ev.defaultPrevented, document.querySelector('#composerNote').textContent];
+  }, 'x'.repeat(5001)), [true, 'Still attaching a file. Send again in a moment.'], 'a big paste is taken from the box; the send waits');
   await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  assert.equal(await page.inputValue('#prompt'), 'hi', 'nothing was sent while attaching');
+  await page.fill('#prompt', '');
   assert.match(await page.textContent('#composerNote'), /A big paste went in as pasted\.txt/);
   // Four files a message: a fifth big paste is refused, and goes into the box as text instead of being lost.
   for (let i = 0; i < 3; i += 1) assert.equal(await pasteText('x'.repeat(5001)), true);
