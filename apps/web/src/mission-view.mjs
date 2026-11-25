@@ -219,8 +219,8 @@ const limitsBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" 
 // A3 (2): the Usage window's tabs. Limits is the plan windows above; Tokens and Cost read /usage/turns through
 // p9.usageTurns(days) and are drawn by usage-history.mjs, loaded the first time either opens. The phone and an older desktop
 // have no p9.usageTurns and keep Limits alone. The tab is kept on the window's modal, so each opening starts on Limits (the
-// pace bars); the range and breakdown are kept for the session. The answer is read again when the range changes, at any
-// redraw a minute after the last read (an opening, a click, a Mission refresh), and 5 s after a 'rebuilding' answer.
+// pace bars); the range and breakdown are kept for the session. The answer is read again when the range changes, each
+// minute while Tokens or Cost is open, and 5 s after a 'rebuilding' answer (the daemon's first replay).
 const UH = { days: 7, by: 'model', page: null, at: 0, busy: false, draw: null, load: null };
 const UTABS = [['limits', 'Limits'], ['tokens', 'Tokens'], ['cost', 'Cost']];
 const usageOpen = () => outer.S.modal?.kind === 'win' && outer.S.modal.id === 'musage', redrawUsage = () => { if (usageOpen()) outer.renderModal(); };
@@ -228,7 +228,8 @@ function readTurns() {
   const days = UH.days; UH.busy = true;
   window.p9.usageTurns(days).catch(() => null).then(r => {
     UH.busy = false; UH.page = r?.status === 200 ? r.body : { state: 'unavailable', days }; UH.at = Date.now();
-    if (UH.page.state === 'rebuilding') outer.setTimeout(() => { UH.at = 0; redrawUsage(); }, 5000);
+    // The next read: a redraw when this answer is stale, which reads again only if Tokens or Cost is still on screen.
+    const soon = UH.page.state === 'rebuilding'; outer.setTimeout(() => { if (soon) UH.at = 0; redrawUsage(); }, soon ? 5000 : 60500);
     redrawUsage();
   });
 }
