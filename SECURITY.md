@@ -594,7 +594,7 @@ protocol ever carries them, that becomes the source and these reads go.
   10 minutes the daemon also checks the reading it already has (it starts no read of its own) and,
   when that reading is new, adds it to `usage-limits.db` beside the ledger, one SQLite database in
   WAL mode (with its `-wal` and `-shm` files): per provider and window the percent, the window's
-  length, the reset, the projected percent at the reset and the pace, when it was read, its age then,
+  length, the reset, the projected percent at the reset and the pace, when it was read and how old it was when written,
   and when it was written. No account id is written.
   The Codex answer also carries an account id; P9 drops it. A failed read logs one fixed line
   per kind of failure, never the agent's error text (it can name the account) and never the
