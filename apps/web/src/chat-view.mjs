@@ -901,9 +901,10 @@ const adding = new Map(); // chat id -> its attach now
 // A2 step 6: quote.mjs loads on the first quote; a failed load says so, and the next quote imports it afresh.
 const quote = (s, p, rect, text, raw) => { import('./quote.mjs').then(m => {
   // The chat it was asked from: still in this pane (the patcher reuses panes), still shown (focus modes hide with
-  // visibility), and under no dialog it is not in; checked when the box loads, while it is open, and on Comment.
-  const ta = () => p.querySelector('.composer textarea'), alive = () => p.isConnected && p.dataset.id === s.id && p.checkVisibility({ visibilityProperty: true })
-    && ![...document.querySelectorAll('dialog:modal')].some(d => !d.contains(p));
+  // visibility), and in the top dialog when one is open (raiseToasts' rule: the last opened still modal); checked when the box
+  // loads, while it is open, and on Comment.
+  const ta = () => p.querySelector('.composer textarea'), top = () => outer.modals.filter(d => d.matches(':modal')).pop(),
+    alive = () => p.isConnected && p.dataset.id === s.id && p.checkVisibility({ visibilityProperty: true }) && (top()?.contains(p) ?? true);
   if (alive()) m.quoteBox({ rect, text, raw, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: q => { (s.quotes ||= []).push(q); renderChats(); ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };

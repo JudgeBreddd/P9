@@ -576,8 +576,8 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   assert.equal(await chips.count(), 1, 'the chip waits');
   await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
   // The daemon holds the next message, then refuses it: while it waits the box is empty and the chip gone; after, the chip
-  // comes back as the same chip, and only the typed words go back in the box. (A second send while one waits is queued, not
-  // sent: liveChat.prompt marks the chat working at once, so two quoted sends are never in flight from one box.)
+  // comes back as the same chip, and only the typed words go back in the box. Review round 4: a second, identical quoted send
+  // made while the first waits (its call waits behind the first's) is taken, and must not take the first one's chip and words.
   const chipText = await chips.first().textContent();
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let once = true;
     ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt' || !once) return h(e, ...args);
@@ -587,9 +587,14 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the daemon was sent the quoted message', 10000);
   assert.equal(await composer.inputValue(), '', 'while it waits the box is empty');
   assert.equal(await chips.count(), 0, 'and the chip went with the send');
+  await quote(); await page.keyboard.press('Enter'); await until(async () => await chips.count() === 1, 'the same quote again', 5000);
+  await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
+  await until(async () => (await composer.inputValue()) === '' && await chips.count() === 0, 'the second send left the box', 5000);
   await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await users(instance, id)).filter((u) => u.startsWith('> ') && u.endsWith('my words')).length === 1, 'the identical second send was taken', 15000);
   await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: the words in the box, the chip a chip', 10000);
   assert.equal(await chips.first().textContent(), chipText, 'the same chip came back');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'the second send\'s turn ended', 15000);
   await chips.first().locator('[data-unquote]').click();
   await until(async () => await chips.count() === 0, 'the last chip goes', 5000);
   assert.equal(await composer.evaluate((b) => b.p9kept), true, 'and the message box is still the same one');
