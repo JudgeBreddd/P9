@@ -499,3 +499,124 @@ test('A2 step 2: Up in an empty box brings back the prompts sent before, Down go
   assert.deepEqual(errors, []);
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-recall ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
 });
+
+// A2 step 6: quote a reply, or the part of it selected, with a comment; the chip it makes goes with the next message.
+test('A2 step 6: a selection in a reply, or its Quote button, opens a box under it; Enter makes a chip, x removes it, and the message carries quote and comment', { timeout: 90000 }, async (t) => {
+  const { page, pane, send, errors, instance, id } = await setup(t, 'a2-quote');
+  const said_ = 'The first sentence. The second sentence.', reply = pane.locator('.msg.agent').last();
+  await send(said_); await until(async () => (await reply.textContent()).includes('The second sentence.'), 'the reply is drawn');
+  const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea');
+  // As a drag over "The second sentence." leaves it: the words selected, then the pointer let go over the history.
+  const select = () => reply.evaluate((m) => { const w = document.createTreeWalker(m, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode()) && !n.data.includes('The second'));
+    const at = n.data.indexOf('The second'), r = document.createRange(); r.setStart(n, at); r.setEnd(n, at + 'The second sentence.'.length);
+    getSelection().removeAllRanges(); getSelection().addRange(r); m.closest('.hist').dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    const b = r.getBoundingClientRect(); return { bottom: b.bottom, left: b.left }; });
+  const sel = await select();
+  await box.waitFor({ timeout: 5000 });
+  const at = await box.evaluate((b) => { const r = b.getBoundingClientRect(); return { top: r.top, left: r.left, focused: document.activeElement === b.querySelector('textarea') }; });
+  assert.ok(at.top >= sel.bottom && at.top <= sel.bottom + 8 && Math.abs(at.left - Math.max(8, sel.left)) < 1, 'the box opens just under the selection: ' + JSON.stringify({ at, sel }));
+  assert.ok(at.focused, 'the box takes the typing');
+  assert.equal(await box.locator('blockquote').textContent(), 'The second sentence.', 'the box shows what was selected');
+  await page.keyboard.type('why this?');
+  const shot = await page.screenshot({ type: 'png', clip: { x: Math.max(0, at.left - 40), y: Math.max(0, sel.bottom - 60), width: 520, height: 260 } });
+  if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'a2-quote-box.png'), shot); else console.log('P9_SHOT a2-quote-box ' + shot.toString('base64'));
+  await page.keyboard.press('Enter');
+  await until(async () => await box.count() === 0 && await chips.count() === 1, 'Enter makes a chip and closes the box', 5000);
+  assert.equal(await chips.first().getAttribute('title'), 'The second sentence.\n\nwhy this?', 'the chip holds the quote and the comment');
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the message box has the typing again');
+  await select(); await box.waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  await until(async () => await box.count() === 0, 'Esc closes the box', 5000);
+  assert.equal(await chips.count(), 1, 'Esc adds nothing');
+  await reply.hover(); await reply.locator('[data-quote-reply]').click();
+  await box.waitFor({ timeout: 5000 });
+  assert.equal(await box.locator('blockquote').textContent(), 'echo:' + said_, 'Quote takes the whole reply');
+  await page.keyboard.press('Enter');
+  await until(async () => await chips.count() === 2, 'a second chip, with no comment', 5000);
+  const png = await pane.locator('.composer').screenshot({ type: 'png' });
+  if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'a2-quote.png'), png); else console.log('P9_SHOT a2-quote ' + png.toString('base64'));
+  await chips.first().locator('[data-unquote]').click();
+  await until(async () => await chips.count() === 1, 'x removes its chip', 5000);
+  assert.equal(await chips.first().getAttribute('title'), 'echo:' + said_, 'the other chip stays');
+  await composer.click(); await page.keyboard.type('my message'); await page.keyboard.press('Enter');
+  await until(async () => (await users(instance, id)).includes('> echo:' + said_ + '\n\nmy message'), 'the message carries the quote first', 15000);
+  assert.equal(await chips.count(), 0, 'a send takes the chips');
+  // A quote alone, with the box empty, sends too.
+  await until(async () => (await reply.textContent()).includes('my message'), 'that one is answered on the page');
+  await pane.locator('.msg.agent').first().hover(); await pane.locator('.msg.agent').first().locator('[data-quote-reply]').click();
+  await box.waitFor({ timeout: 5000 }); await page.keyboard.type('only this'); await page.keyboard.press('Enter');
+  await until(async () => await chips.count() === 1, 'the chip', 5000);
+  await composer.click(); await page.keyboard.press('Enter');
+  await until(async () => (await users(instance, id)).includes('> echo:hello\n\nonly this'), 'a quote with nothing typed sends', 15000);
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS A2 step 6: select or Quote opens a box under it; Enter makes a chip, x removes it, the send carries quote and comment');
+});
+
+// A2 step 6, review round 1: the message box is kept as chips come and go (its undo history with it); Esc from the box's
+// buttons closes it and gives the typing back; a slash command goes alone and the chips wait; a refused send gives the
+// chips back as chips; in the chat dialog the box opens inside the dialog, where it can be reached.
+test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leaves the chips, a refusal gives them back, the dialog has it', { timeout: 120000 }, async (t) => {
+  const { app, page, pane, errors, instance, id } = await setup(t, 'a2-quote-2');
+  const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea'), reply = pane.locator('.msg.agent').last();
+  const quote = async (r = reply) => { await r.hover(); await r.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); };
+  await composer.evaluate((b) => { b.p9kept = true; }); // a property: the patcher copies attributes, not properties
+  await quote(); await page.keyboard.press('Enter');
+  await until(async () => await chips.count() === 1, 'a chip', 5000);
+  assert.equal(await composer.evaluate((b) => b.p9kept), true, 'the first chip leaves the same message box (its undo history too)');
+  await quote(); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
+  await until(async () => await box.count() === 0, 'Esc on the Cancel button closes the box', 5000);
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'and the message box has the typing');
+  // Another focus mode by its shortcut (the focus stays in the box) closes it, so Enter cannot add to a chat out of sight.
+  await quote(); await page.keyboard.press('Control+2');
+  await until(async () => await box.count() === 0, 'Ctrl+2 closes the box', 5000);
+  await page.keyboard.press('Control+1'); await composer.waitFor({ state: 'visible', timeout: 5000 });
+  assert.equal(await chips.count(), 1, 'and added nothing');
+  // A command the agent lists goes alone; the chip waits for the next message.
+  await composer.click(); await page.keyboard.type('/compact'); await page.keyboard.press('Enter');
+  await until(async () => (await users(instance, id)).includes('/compact'), 'the command went as typed', 15000);
+  assert.equal(await chips.count(), 1, 'the chip waits');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
+  // The daemon holds the next message, then takes it; a second, identical quoted send made while it waits (its call waits
+  // behind the first's) is refused. While they wait the box is empty and the chip gone; after, the refused one's chip comes
+  // back as the same chip and only its typed words go back in the box. Review round 5: the first is taken and the second
+  // refused, so a recovery shared by identical sends (taken one clears it) fails here.
+  const chipText = await chips.first().textContent();
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let n = 0;
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt' || n > 1) return h(e, ...args);
+      if (n++ === 0) { await new Promise((r) => { globalThis.p9release = r; }); return h(e, ...args); }
+      globalThis.p9refused = args[1]?.text; return { status: 409, body: { error: 'not-ready' } }; }); });
+  await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
+  await until(async () => await app.evaluate(() => !!globalThis.p9release), 'the first send reached the daemon and waits', 10000);
+  assert.equal(await composer.inputValue(), '', 'while it waits the box is empty');
+  assert.equal(await chips.count(), 0, 'and the chip went with the send');
+  await quote(); await page.keyboard.press('Enter'); await until(async () => await chips.count() === 1, 'the same quote again', 5000);
+  await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
+  await until(async () => (await composer.inputValue()) === '' && await chips.count() === 0, 'the second send left the box', 5000);
+  const ends = (await said(instance, id, 'turn-end')).length;
+  await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await users(instance, id)).filter((u) => u.startsWith('> ') && u.endsWith('my words')).length === 1, 'the first send was taken', 15000);
+  const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
+  await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the identical second send was refused', 15000);
+  await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: its words in the box, its chip a chip', 10000);
+  assert.equal(await chips.first().textContent(), chipText, 'the same chip came back');
+  await until(async () => (await said(instance, id, 'turn-end')).length > ends, 'the taken send\'s turn ended', 15000);
+  await chips.first().locator('[data-unquote]').click();
+  await until(async () => await chips.count() === 0, 'the last chip goes', 5000);
+  assert.equal(await composer.evaluate((b) => b.p9kept), true, 'and the message box is still the same one');
+  // In the chat dialog (opened from its card in Notification Center, over Settings left open), the box opens inside the
+  // dialog and its chip lands in that chat: only the top dialog counts (review round 5).
+  await composer.fill(''); await page.keyboard.press('Escape');
+  await pane.locator('.composer textarea').click(); await page.keyboard.type('ask-text'); await page.keyboard.press('Enter');
+  await pane.locator('[data-question]').waitFor({ timeout: 15000 });
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+  await page.keyboard.press('Control+Shift+N'); await page.locator('#mdlBody .mlist [data-i]').first().click();
+  const mbtn = page.locator('#mdlBody .mlist button').first(); if (await mbtn.count()) await mbtn.click();
+  const dpane = page.locator('#mdlBody .pane'); await dpane.waitFor({ timeout: 10000 });
+  await quote(dpane.locator('.msg.agent').first());
+  assert.ok(await box.evaluate((b) => !!b.closest('dialog[open]')), 'the box is inside the open dialog');
+  assert.equal(await page.locator('#setDlg[open]').count(), 1, 'with Settings still open under it');
+  await page.keyboard.type('from the dialog'); await page.keyboard.press('Enter');
+  await until(async () => await dpane.locator('.attach .att-quote').count() === 1, 'the chip in the dialog\'s chat', 5000);
+  assert.ok(await dpane.locator('.composer textarea').evaluate((b) => document.activeElement === b), 'the dialog\'s message box has the typing');
+  assert.deepEqual(errors.filter((e) => !/not-ready|409/.test(e)), [], 'no page errors');
+  console.log('PASS A2 step 6 round 2: box kept, Esc from a button, command alone, refusal keeps chips, the dialog');
+});

@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { pastedFiles, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -287,7 +287,7 @@ function event(e, s) {
     // O109: a worker report scrolls with the chat once it is not the one pinned above the box (closed, or a newer one came).
     case 'report': { const c = s.cards?.get(e.id), on = c && c.text === e.text && s.events.findLast(x => x.t === 'report') === e && !SHUT.get().has(reportKey(s, c)) && !shelved(e.id);
       return on ? '' : `<div class="report" data-report="${esc(e.id)}"><div class="eyebrow">Worker report</div><div class="msg agent">${outer.mdOf(e)}</div></div>`; }
-    case 'agent': return `<div class="msg agent"><div class="who">${esc(outer.names[s.agent])}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}</div>`;
+    case 'agent': return `<div class="msg agent"><div class="who">${esc(outer.names[s.agent])}${e.text ? '<button class="quote-reply" data-quote-reply title="Quote this reply in your message" aria-label="Quote this reply"></button>' : ''}</div>${outer.mdOf(e)}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}</div>`;
     case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
     case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span>${e.exit ? `<span data-slot="badge" data-variant="bad" data-exit>${esc(e.exit)}</span>` : ''}<span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button ${OL} class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, outer.names[s.agent], shotSrc(s))}`;
@@ -638,7 +638,7 @@ function pane(s, i, bare) {
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get(), shelved)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? esc(outer.names[s.agent]) + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.goal ? (st => `<div class="goal" data-key="goal" title="Goal: ${esc(s.goal.objective + st)}"><span class="truncate">Goal: ${esc(s.goal.objective)}</span>${st ? `<span class="st">${esc(st)}</span>` : ''}</div>`)(s.goal.status === 'active' ? '' : ' · ' + s.goal.status) : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="${loading(s) ? 'Loading this chat…' : 'Interrupt and send this now'}" data-qnow="${j}"${loading(s) ? ' disabled' : ''}>${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
-      <div class="composer" data-key="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer" data-key="composer"><div class="slash" data-slash hidden></div>${s.images?.length || s.quotes?.length ? `<div class="attach" data-key="attach">${(s.quotes || []).map((q, i) => `<span class="att att-file att-quote" title="${esc(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><span class="truncate">“${esc(q.text.slice(0, 80))}”${q.comment ? ' · ' + esc(q.comment.slice(0, 80)) : ''}</span><button data-unquote="${i}" title="Remove" aria-label="Remove this quote">×</button></span>`).join('')}${(s.images || []).map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
@@ -753,7 +753,7 @@ function paint(root, ss, only) {
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
     // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
-    const go = (now, when) => { const t = ta.value.trim(); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
+    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; const from = !cmd && s.quotes?.length ? { draft: typed, quotes: s.quotes } : undefined; if (from) s.quotes = []; sendText(s, t, now, when, from); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       plainPaste = !e.isComposing && e.shiftKey && (e.ctrlKey || e.metaKey) && e.code === 'KeyV' ? ta : null;
@@ -774,7 +774,7 @@ function paint(root, ss, only) {
       // Tab with an empty box still moves focus on.
       const key = busy(s) && !s.readonly && turnKey(e);
       if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
-      if (key === 'steer' || key === 'queue' && ta.value.trim()) { e.preventDefault(); return go(false, key); }
+      if (key === 'steer' || key === 'queue' && (ta.value.trim() || s.quotes?.length)) { e.preventDefault(); return go(false, key); }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(e.ctrlKey || e.metaKey); }
     };
     p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
@@ -862,6 +862,11 @@ function paint(root, ss, only) {
     p.ondragover = e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); };
     p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
+    // A2 step 6: Quote on a reply quotes all of it; a selection inside one reply quotes that part. Either opens the box.
+    p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { s.quotes.splice(+b.dataset.unquote, 1); renderChats(); });
+    p.querySelectorAll('[data-quote-reply]').forEach(b => b.onclick = () => { const e = s.events[b.closest('[data-at]')?.dataset.at]; if (e?.text) quote(s, p, b.getBoundingClientRect(), e.text); });
+    const hist = p.querySelector('.hist');
+    if (hist) hist.onpointerup = () => setTimeout(() => { const sel = getSelection(), r = !sel.isCollapsed && sel.rangeCount && sel.getRangeAt(0), at = r && r.commonAncestorContainer, msg = at && (at.nodeType === 1 ? at : at.parentElement).closest('.msg.agent'), raw = msg && hist.contains(msg) && sel.toString(), text = raw && raw.trim(); if (text) quote(s, p, r.getBoundingClientRect(), text, raw); });
     const more = p.querySelector('[data-earlier]'); if (more) more.onclick = async () => {
       if (s.fetching) return;
       const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
@@ -893,6 +898,16 @@ function pickImages(s) {
 // One attach at a time per chat (paste, paperclip or drop), and no send while one runs: two at once both passed the four-file
 // check, and a send took s.images while a file was still being read into it.
 const adding = new Map(); // chat id -> its attach now
+// A2 step 6: quote.mjs loads on the first quote; a failed load says so, and the next quote imports it afresh.
+const quote = (s, p, rect, text, raw) => { import('./quote.mjs').then(m => {
+  // The chat it was asked from: still in this pane (the patcher reuses panes), still shown (focus modes hide with
+  // visibility), and in the top dialog when one is open (raiseToasts' rule: the last opened still modal); checked when the box
+  // loads, while it is open, and on Comment.
+  const ta = () => p.querySelector('.composer textarea'), top = () => outer.modals.filter(d => d.matches(':modal')).pop(),
+    alive = () => p.isConnected && p.dataset.id === s.id && p.checkVisibility({ visibilityProperty: true }) && (top()?.contains(p) ?? true);
+  if (alive()) m.quoteBox({ rect, text, raw, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
+    add: q => { (s.quotes ||= []).push(q); renderChats(); ta()?.focus(); } });
+}, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
 function addImages(s, files) {
   const run = (adding.get(s.id) ?? Promise.resolve()).catch(() => {}).then(() => attachNow(s, files)); adding.set(s.id, run);
   run.finally(() => adding.get(s.id) === run && adding.delete(s.id)).catch(() => {}); return run; // true: every file attached
@@ -916,16 +931,17 @@ async function attachNow(s, files) {
 const loading = s => !!(s.stub || s.behind);
 const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || loading(s) || s.state === 'moving' || s.state === 'moved');
 // Review round 9: one typed while an earlier message waits in the daemon's hold goes behind it ('queue'), not past it by steering.
-function sendText(s, t, now, when) {
+// from: a send made with quote chips, { draft, quotes }, so a refusal gives them back (liveChat.prompt); it goes with this send only.
+function sendText(s, t, now, when, from) {
   const mid = !now && busy(s);
   localStorage.removeItem('p9-queue:' + s.id); // oldQueue's text was in the box: it is this send now, or let go
   if (!now && !s.live && busy(s)) { s.queue.push({ t, at: Date.now() }); renderChats(); return; }
-  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length || s.sending ? 'queue' : 'steer') : undefined); // one still on its way may be held
+  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length || s.sending ? 'queue' : 'steer') : undefined, from); // one still on its way may be held
 }
 // O255: a live chat's interrupt is the daemon's: it holds the message first, stops the turn, and sends it at that end.
-function interrupt(s, t) {
-  if (!busy(s) || s.live) return outer.startTurn(s, t, s.live && 'now');
-  cancelTurn(s); outer.startTurn(s, t);
+function interrupt(s, t, _, from) {
+  if (!busy(s) || s.live) return outer.startTurn(s, t, s.live && 'now', from);
+  cancelTurn(s); outer.startTurn(s, t, undefined, from);
 }
 function cancelTurn(s, quiet) {
   // CP7: no turn to cancel (it ended, or its end never came) means idle: the chat stops showing working and an
@@ -1252,7 +1268,7 @@ async function loadChat() {
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
     for (const s of outer.S.sessions) {
-      const c = by.get(s.id), keep = { hedit: s.hedit, queue: s.queue, draft: s.draft, images: s.images, stops: s.stops, sending: s.sending, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
+      const c = by.get(s.id), keep = { hedit: s.hedit, queue: s.queue, draft: s.draft, images: s.images, quotes: s.quotes, stops: s.stops, sending: s.sending, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, stubOf(c), keep);
     }

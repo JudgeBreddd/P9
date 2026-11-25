@@ -488,12 +488,19 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 /* Delegation: a pick keeps its words on one line; a provider's Model and Effort sit together on the line under its name. */
 #setDelegation .set-pick{flex:none;white-space:nowrap}#setDelegation .set-row>span:first-child{flex:1;min-width:0}#setDelegation .set-dg>span:first-child{flex:1 0 100%}#setDelegation .set-row>.spacer{display:none}#setDelegation .set-setup{flex-wrap:wrap}#setDelegation .set-setup>span:first-child{flex:1 0 100%}#setDelegation .set-setup>input{flex:1;min-width:0}.set-pick{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground)}
 .composer .send[data-working]{background:var(--destructive);color:#fff}
-.attach{display:flex;gap:6px;padding:8px 14px 0}
+.attach{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px 0;max-height:40vh;overflow:auto}
 .attach .att{position:relative}
 /* A2 step 1: a file that is not a photo shows as its name, the same height as a photo's thumbnail. */
 .attach .att-file{display:flex;align-items:center;height:44px;max-width:180px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--foreground)}
 .attach img{display:block;width:44px;height:44px;border-radius:6px;object-fit:cover;border:1px solid var(--border)}
 .attach [data-unattach]{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:1px solid var(--border);background:var(--popover);color:var(--foreground);font-size:12px;line-height:1;padding:0;cursor:pointer}
+/* A2 step 6: a quote waiting in the box shows its start and comment, all of it on hover; Quote on a reply shows on hover or focus. */
+.attach .att-quote{max-width:260px}.attach [data-unquote]{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:1px solid var(--border);background:var(--popover);color:var(--foreground);font-size:12px;line-height:1;padding:0;cursor:pointer}
+.msg .quote-reply{display:grid;margin-left:auto;padding:2px;width:20px;height:20px;border:0;border-radius:5px;background:none;color:var(--muted-foreground);font:inherit;cursor:pointer;user-select:none;opacity:0}.msg:hover .quote-reply,.msg .quote-reply:focus-visible{opacity:1}.msg .quote-reply:hover{color:var(--foreground);background:var(--accent)}.msg .quote-reply::before{content:"";width:14px;height:14px;margin:auto;background:currentColor;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 21c3 0 7-1 7-8V5H3v7h4M14 21c3 0 7-1 7-8V5h-7v7h4'/%3E%3C/svg%3E") center/contain no-repeat}
+.quote-box{position:fixed;z-index:60;display:grid;gap:6px;width:min(360px,calc(100vw - 16px));padding:8px;border:1px solid var(--border);border-radius:9px;background:var(--popover);color:var(--foreground);box-shadow:0 12px 32px rgb(0 0 0/.45)}
+.quote-box blockquote{margin:0;padding-left:8px;border-left:2px solid var(--border);color:var(--muted-foreground);font-size:12px;max-height:4.5em;overflow:hidden;white-space:pre-wrap}
+.quote-box textarea{resize:none;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--background);color:var(--foreground)}
+.quote-box .quote-bar{display:flex;justify-content:flex-end;gap:6px}.quote-box button{padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--foreground);font:inherit;font-size:12px;cursor:pointer}.quote-box [type=submit]{background:var(--primary);color:var(--primary-foreground);border-color:transparent}
 .pfoot{display:flex;justify-content:space-between;gap:12px;white-space:nowrap;overflow:hidden;font-size:10.5px;color:var(--muted-foreground);padding:4px 2px 0}
 /* ---- Terminal dock ---- */
 .dock{border-top:1px solid var(--border);display:grid;grid-template-rows:4px 30px 1fr;height:280px;background:color-mix(in oklch,var(--background) 60%,black);min-height:0;position:relative}
