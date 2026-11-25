@@ -1742,11 +1742,11 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   await until(() => hits === 1, 'opening the menu asked for the project page');
   assert.equal(await page.locator('.lp-menu [data-pjchat=rename]').count(), 0, 'held back: the menu has no Rename yet');
   await page.keyboard.press('ArrowDown');
-  const focused = await page.evaluate(() => document.activeElement?.outerHTML);
-  assert.notEqual(focused, await page.evaluate(() => document.querySelector('.lp-menu button')?.outerHTML), 'the second item is focused, not the first');
+  const focused = await page.evaluateHandle(() => document.activeElement);
+  assert.ok(await page.evaluate((f) => f !== document.querySelector('.lp-menu button') && f.matches('.lp-menu button'), focused), 'the second item is focused, not the first');
   release();
   await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 });
-  assert.equal(await page.evaluate(() => document.activeElement?.outerHTML), focused, 'the item focused before the menu filled in is focused after');
+  assert.ok(await page.evaluate((f) => f.isConnected && f === document.activeElement, focused), 'the item focused before the menu filled in is the same button, still focused');
   await page.keyboard.press('Escape');
 
   // A project click, then a click on the chat already open: the chat stays. A project click alone opens the page.
@@ -1755,10 +1755,13 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   await page.locator(`#navList [data-proj="${site}"]`).click();
   await page.locator(`#navList .row[data-chat="${plain}"]`).click();
   release();
+  await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape'); // the code is in
   await new Promise((go) => setTimeout(go, 1500));
   assert.equal(await page.locator('#pjName').count(), 0, 'the project click made before the later chat click did not take the chat\'s place');
+  // A key or a click on empty space after the project click does not drop it.
   await fresh('hold');
   await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.keyboard.press('Shift'); await page.mouse.click(800, 400);
   release();
   await page.locator('#pjName').waitFor({ timeout: 5000 });
 

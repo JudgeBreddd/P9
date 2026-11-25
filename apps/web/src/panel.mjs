@@ -159,7 +159,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const isOpen = id => !P.open || P.open.has(id);
   const setOpen = (id, v) => { P.open ??= new Set(projects().map(p => p.id)); v ? P.open.add(id) : P.open.delete(id); key('p9-panel-open', JSON.stringify([...P.open])); };
   // A click on a chat (row or strip) shows it in Chat Focus; with Chat Focus off in Settings, it opens as a card.
-  const openChat = id => { closeMenu(); P.overlay = false; tip.hidden = true;
+  let acts = 0; // O261: opening a chat or a page; a project click waiting for its code runs only if none came after it
+  const openChat = id => { acts++; closeMenu(); P.overlay = false; tip.hidden = true;
     if (o.S.focus !== 'chat' && !o.focusOn('chat')) return o.openModal({ kind: 'chat', id });
     if (o.S.view) o.S.view = null; const pj = find(id)?.project; if (pj && !isOpen(pj)) setOpen(pj, true); // the chat shown is never hidden in a closed project
     if (o.S.focus !== 'chat') o.setFocus('chat'); focus(id); };
@@ -184,13 +185,16 @@ export function installPanel(o, { focus, stopChat, busy }) {
       + (ps.length ? `<div class="note">It reads a project's instructions and files from its next message; its folder and files stay where they are. You can also drag a chat onto a project.</div>` : '')
       || '<div class="note">No projects yet.</div>', at, anchor);
     // O261: Rename, Archive and Delete come with the project page's code; opened before it arrives, the menu fills in then.
-    // The redraw keeps the focused item (the items come after it); a failed load says so in the menu.
+    // They go in where a fresh menu has them (before the projects note, or in place of "No projects yet"); the buttons
+    // already there stay, with their focus and any press on them. A failed load says so in the menu.
     if (!o.chatMenuItems) {
       const m = document.querySelector('.lp-menu');
       pages().then(() => {
         if (!m?.isConnected) return;
-        const f = [...m.querySelectorAll('button')].indexOf(document.activeElement); chatMenu(id, at, anchor);
-        if (f > 0) document.querySelector('.lp-menu')?.querySelectorAll('button')[f]?.focus({ preventScroll: true });
+        const html = o.chatMenuItems(s), last = m.lastElementChild;
+        if (m.children.length === 1 && last.matches('.note')) last.outerHTML = html;
+        else if (ps.length && last?.matches('.note')) last.insertAdjacentHTML('beforebegin', html); else m.insertAdjacentHTML('beforeend', html);
+        m.style.top = Math.max(8, Math.min(at.y, innerHeight - m.getBoundingClientRect().height - 8)) + 'px';
       }, () => m?.isConnected && m.insertAdjacentHTML('beforeend', '<div class="note">Rename, Archive and Delete did not load. Open this menu again to try again.</div>'));
     }
   }
@@ -332,12 +336,10 @@ export function installPanel(o, { focus, stopChat, busy }) {
   // when one of these is used before that; a failed load is tried again on the next use.
   let pv = null;
   const pages = () => (pv ??= import('./projects-view.mjs').then(m => m.installProjects(o, api), e => { pv = null; throw e; }));
-  // A click made while it loads runs once it arrives, unless the user did anything after it (a press or a key, which also
-  // drops an older click still waiting); a failed load says so.
-  let acts = 0;
-  for (const t of ['pointerdown', 'keydown']) addEventListener(t, () => acts++, { capture: true, signal: o.lifetime.signal });
+  // A click made while it loads runs once it arrives, unless a chat or another of these was opened after it; a failed load
+  // says so.
   const failed = () => o.toast({ kind: 'project', txt: 'Projects did not load. Try again.', level: 'warn' }, true);
-  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const n = acts; return pages().then(() => { if (acts === n) o[k](...a); }, failed); };
+  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const n = ++acts; return pages().then(() => { if (acts === n) o[k](...a); }, failed); };
   o.renderPage = () => { if (o.S.view) pages().then(() => o.renderPage()); };
   const idle = () => requestIdleCallback(() => pages().catch(() => {}), { timeout: 2000 });
   if (document.readyState === 'complete') idle(); else addEventListener('load', idle, { once: true, signal: o.lifetime.signal });
