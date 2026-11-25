@@ -827,7 +827,7 @@ function paint(root, ss, only) {
         if (e.key !== 'Enter' || e.shiftKey) return;
         e.preventDefault(); e.stopPropagation(); if (ed.saving != null) return;
         if (ed.text === ed.was) { s.hedit = null; return renderChats(); }
-        ed.saving = ed.text; ed.op = crypto.randomUUID(); renderChats(); const base = ed.base;
+        ed.saving = ed.text; ed.op = crypto.randomUUID(); ed.lost = null; renderChats(); const base = ed.base;
         outer.liveChat.call('heldText', { op: ed.op, id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).catch(() => ({})).then(r => { if (s.hedit !== ed) return; const sent = ed.saving; ed.saving = null;
           if (r.status === 200) { s.hedit = null; return renderChats(); }
           // Unsure: no answer, or the retry's 503 or outcome-unknown (liveChat.call): the save may have landed.
