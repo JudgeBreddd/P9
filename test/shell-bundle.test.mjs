@@ -106,7 +106,11 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 3
         await pre.send('Debugger.enable'); order.length = 0; // the scripts of the page before the reload are reported first
         await page.reload(); await page.locator('#rChat svg').waitFor({ timeout: 20000 });
         await page.waitForFunction((name) => performance.getEntriesByName(name).length > 0, USABLE, { timeout: 20000 });
-        await page.waitForTimeout(2500); // the idle loads after it (O118's terminal chunk) come in, to be listed as after
+        // The idle loads after it (O118's terminal chunk, O261's project page) come in, to be listed as after: up to 10 s for the
+        // project page's, which waits for an idle moment (2 s at most) after the window's load.
+        const pages = (files) => files.filter((f) => readFileSync(path.join(dist, '_astro', f), 'utf8').includes('data-sp-scripts'));
+        await page.waitForTimeout(2500);
+        for (let i = 0; i < 30 && !pages(order.slice(order.indexOf(null) + 1)).length; i++) await page.waitForTimeout(250);
         await pre.detach();
         const cut = order.indexOf(null);
         assert.ok(cut > 0, `the reload's usable mark came ${cut < 0 ? 'never' : 'before any script'}: ${JSON.stringify(order)}`);
@@ -114,7 +118,6 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 3
         console.log('P9_STARTUP ' + JSON.stringify({ raw: startupRaw, files: startup.length, after: [...new Set(order.slice(cut + 1))], scripts: startup }));
         assert.ok(startupRaw <= BUDGET, `the shell page parsed ${startupRaw} bytes of JS before it was usable, over the budget of ${BUDGET}`);
         // O261: the project page's code (projects-view.mjs) is not on the startup path; it loads once the window is idle.
-        const pages = (files) => files.filter((f) => readFileSync(path.join(dist, '_astro', f), 'utf8').includes('data-sp-scripts'));
         assert.deepEqual(pages(startup.map((f) => f.file)), [], 'the project page\'s code was parsed before the shell was usable');
         assert.equal(pages([...new Set(order.slice(cut + 1))]).length, 1, 'the project page\'s code loaded once the window was idle');
         const png = await page.screenshot({ animations: 'disabled' });
