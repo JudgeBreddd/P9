@@ -126,6 +126,9 @@ export function project(event) {
     }
     case 'error': {
       const message = String(data.message ?? '');
+      // Before review round 7 of A3 (1), a refused hand-off of a profile chat wrote this as an error while its turn ran on:
+      // not an end, or a replay would split that turn in two.
+      if (message.startsWith('A chat on a provider profile cannot be handed to a terminal')) return null;
       const known = ERRORS.find(([start]) => message.startsWith(start));
       return { ...base, code: known ? known[1] : / could not be set; nothing was sent\.$/.test(message) ? 'config-failed' : 'agent-error' };
     }

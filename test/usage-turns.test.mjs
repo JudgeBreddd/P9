@@ -39,7 +39,9 @@ const EVENTS = [
   [A, 'user', { text: 'x' }, T + DAY], [A, 'turn-end', usage(0, 0, 10000, 0), T + DAY + 50], // $0.002
   ...chat(F, 'claude', 'opus', T + DAY + 1000, [{ ...usage(0, 0, 0, 0), counted: { inputTokens: 100, outputTokens: 1000, cachedReadTokens: 0, cachedWriteTokens: 5000 } },
     { stopReason: 'end_turn' }]), // $0.0004 + $0.02 + $0.04; then a turn with no counts
-  ...chat(G, 'claude', 'sonnet', T + DAY + 2000, [usage(1000, 1000, 0, 0)], { profile: 'p1' }),
+  // An older daemon wrote a refused hand-off as an error mid-turn; it does not end the turn (still one row).
+  ...chat(G, 'claude', 'sonnet', T + DAY + 2000, [usage(1000, 1000, 0, 0)], { profile: 'p1' }).flatMap((event) => event[1] === 'turn-end'
+    ? [[G, 'error', { message: 'A chat on a provider profile cannot be handed to a terminal: there it would run on the Claude sign-in, not the profile.' }, event[3] - 10], event] : [event]),
   // haiku: one whole turn ($0.0001) and one that reported no cache-write count: its tokens show, it is not priced.
   ...chat(H, 'claude', 'haiku', T + DAY + 3000, [usage(1000, 0, 0, 0), { stopReason: 'end_turn', usage: { inputTokens: 1000000, outputTokens: 0, cachedReadTokens: 0 } }]),
   ...chat(J, 'codex', 'gpt-6.1-sol', CUT - 50, [usage(1, 0, 0, 0)]),
