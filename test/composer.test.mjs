@@ -418,3 +418,26 @@ test('A2 step 1: a failed load of the attach code says so, keeps the draft, and 
   assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is still there');
   assert.equal(await app.evaluate(() => globalThis.attachRequests), 2, 'the chunk was requested again on the next attach');
 });
+
+test('A2 step 2: Up in an empty box brings back the prompts sent before, Down goes forward again; typed text is never replaced', { timeout: 90000 }, async (t) => {
+  const { page, pane, type, agentSaid, errors, instance, id } = await setup(t, 'a2-recall');
+  const box = pane.locator('.composer textarea'), key = (k) => page.keyboard.press(k), value = () => box.inputValue();
+  await type('second'); await key('Shift+Enter'); await page.keyboard.type('one'); await key('Enter');
+  await until(() => agentSaid('echo:second\none'), 'second answered');
+  await box.click();
+  await key('ArrowUp'); assert.equal(await value(), 'second\none', 'Up in an empty box: the last prompt, caret at its end');
+  await key('ArrowUp'); assert.equal(await value(), 'second\none', 'Up on its second line moves the caret, recalls nothing');
+  await key('ArrowUp'); assert.equal(await value(), 'hello', 'Up on the first line: the one before');
+  await key('ArrowUp'); assert.equal(await value(), 'hello', 'the first prompt stays');
+  await key('ArrowDown'); assert.equal(await value(), 'second\none', 'Down: forward again');
+  await key('ArrowDown'); assert.equal(await value(), '', 'Down past the newest: an empty box');
+  await page.keyboard.type('hello'); await key('ArrowUp');
+  assert.equal(await value(), 'hello', 'typed text is never replaced, even when it matches a sent prompt');
+  await box.fill(''); await key('ArrowUp'); await key('ArrowUp'); await key('ArrowUp'); await page.keyboard.type(' again'); await key('ArrowUp');
+  assert.equal(await value(), 'hello again', 'an edited recall is kept');
+  await key('Enter');
+  await until(async () => (await users(instance, id)).join('|') === 'hello|second\none|hello again', 'the edited recall sent');
+  await key('ArrowUp'); assert.equal(await value(), 'hello again', 'the newest sent prompt comes back first');
+  assert.deepEqual(errors, []);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-recall ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
+});

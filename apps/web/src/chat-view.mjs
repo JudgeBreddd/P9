@@ -756,6 +756,16 @@ function paint(root, ss, only) {
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
+      // A2 step 2: Up in an empty box, or on a prompt it brought back, gives the one you sent before; Down goes forward, then
+      // empty. Up acts only on the first line and Down only on the last, so the caret still moves through a long prompt.
+      // Typed or edited text is never replaced (s.recall must still match the box).
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) && ta.selectionStart === ta.selectionEnd) {
+        const sent = s.events.filter(v => v.t === 'user' && v.text && !v.from && !v.info && !v.ask).map(v => v.text), up = e.key === 'ArrowUp';
+        const at = !ta.value ? sent.length : sent[s.recall] === ta.value ? s.recall : -1, to = at + (up ? -1 : 1);
+        if (at >= 0 && to >= 0 && (up || ta.value) && !(up ? ta.value.slice(0, ta.selectionStart) : ta.value.slice(ta.selectionEnd)).includes('\n')) {
+          e.preventDefault(); s.recall = to; ta.value = s.draft = sent[to] ?? ''; ta.setSelectionRange(ta.value.length, ta.value.length); showSlash(); return;
+        }
+      }
       // Tab with an empty box still moves focus on.
       const key = busy(s) && !s.readonly && turnKey(e);
       if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
