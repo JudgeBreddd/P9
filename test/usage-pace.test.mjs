@@ -38,7 +38,7 @@ test('pace: the clock\'s share of the window against the share used', () => {
 test('pace: one row says what is left, the pace, where the tick is and when it resets', () => {
   const row = paceRow('Session', { usedPercent: 91, resetsAt: NOW + HOUR, windowMins: 300 }, 300, NOW);
   assert.match(row, /data-pace="ahead" data-hot="2"/);
-  assert.match(row, /<b>9% left<\/b><span class="prow-p" title="[^"]+runs out before the reset">Over pace<\/span>/);
+  assert.match(row, /<b>9% left<\/b><span class="prow-p" title="Using it faster than the window passes">Over pace<\/span>/);
   assert.match(row, /resets in 1h 0m<\/span>/);
   assert.match(row, /<i style="width:91%"><\/i><u style="left:80%"><\/u>/, 'the fill is what is used, the tick is where the clock is');
   assert.match(row, /aria-label="Session: 91% used, 80% of the window gone\./);
@@ -51,8 +51,8 @@ test('pace: one row says what is left, the pace, where the tick is and when it r
   assert.match(bare, /<b>80% left<\/b>/); assert.doesNotMatch(bare, /<u |data-pace/);
   // O244 (a): the daemon's projection follows the pace word, and only with a pace (a window with a reset ahead).
   const on = paceRow('Session', { usedPercent: 80, resetsAt: NOW + HOUR, windowMins: 300, projected: 98.8 }, 300, NOW);
-  assert.match(on, /<span class="prow-p" title="[^"]+">On pace · 98\.8% at reset<\/span>/);
-  assert.match(on, /aria-label="Session: 80% used, 80% of the window gone\. [^"]+ 98\.8% used at the reset at this rate\."/);
+  assert.match(on, /<span class="prow-p" title="[^"]+"><span>On pace<\/span> <span>· 98\.8% at reset<\/span><\/span>/);
+  assert.match(on, /aria-label="Session: 80% used, 80% of the window gone\. Using it about as fast as the window passes\. Projected use at the reset: 98\.8%\."/);
   assert.match(paceRow('Session', { usedPercent: 80, resetsAt: NOW + HOUR, windowMins: 300, projected: null }, 300, NOW), /">On pace<\/span>/, 'no projection: the word alone');
   assert.match(paceRow('Weekly', { usedPercent: 61, resetsAt: NOW - HOUR, projected: 70 }, 10080, NOW), /">new window<\/span>/, 'a reset window shows no projection');
   // A model's name comes from the daemon: it is text, never markup.
