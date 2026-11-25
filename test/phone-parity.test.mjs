@@ -369,6 +369,30 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await chips(0);
   assert.equal(await page.inputValue('#prompt'), '  next ', 'a photo-only send leaves what was typed meanwhile byte for byte');
   await page.fill('#prompt', '');
+  // A reload before the answer (the page was killed, so no failure put it back) puts a box send's text back, in front of what was typed
+  // since, and not twice over a second reload; a send that never came from the box (an artifact's comments) leaves the box alone.
+  // The stored state is written after the page's own pagehide save, as it stood when the page died.
+  const cid = await page.evaluate(() => document.querySelector('#conversation').value);
+  const died = (box, typed) => page.evaluate(([id, box, typed]) => addEventListener('pagehide', () => {
+    localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: JSON.stringify(['held one', [], '[]']), sent: { text: 'held one' }, ...(box && { box: true }) } }));
+    localStorage.setItem('p9-drafts', JSON.stringify(typed ? { [id]: typed } : {}));
+  }), [cid, box, typed]);
+  const boxIs = (want) => page.waitForFunction(([id, w]) => document.querySelector('#conversation').value === id && document.querySelector('#prompt').value === w, [cid, want], { timeout: 15000 });
+  await died(true, 'next'); await page.reload(); await boxIs('held one\nnext');
+  await page.reload(); await boxIs('held one\nnext');
+  await died(false, ''); await page.reload(); await page.waitForFunction((id) => document.querySelector('#conversation').value === id, cid, { timeout: 15000 });
+  await page.waitForTimeout(500); assert.equal(await page.inputValue('#prompt'), '', "an artifact send's text never lands in the box");
+  await page.evaluate(() => localStorage.removeItem('p9-inflight'));
+  await page.fill('#prompt', '');
+  // A send that moves to the queue when storage is full queues nothing (a queue only this page knew would be lost) and its text
+  // comes back to the box.
+  await page.evaluate(() => { const set = Storage.prototype.setItem; window.__set = set; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.route(onPrompt, (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }), { times: 1 });
+  await send(page, 'queue me');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'queue me', null, { timeout: 10000 });
+  assert.equal(await page.isHidden('#queued'), true, 'nothing queued when it could not be stored');
+  await page.evaluate(() => { Storage.prototype.setItem = window.__set; });
+  await page.fill('#prompt', '');
   // The sent photo shows in its message, fetched from the daemon by hash.
   await page.waitForSelector('#events .user-imgs img[src^="data:image/png;base64,"]', { timeout: 10000 });
   await page.locator('#events .user-imgs img').last().scrollIntoViewIfNeeded(); await shot(page, 'phone-sent-photo');
@@ -721,6 +745,9 @@ test('O55 round 3: Interrupt with a stalled event read lets go of the composer, 
   t.after(release);
   await page.route((url) => url.pathname.endsWith('/chat/events') && url.search.includes('wait=1000'), async (route) => { await held; await route.abort().catch(() => {}); });
   await page.click('#midTurn [data-when="now"]');
+  // While the turn stops, the text waits in the box and the box takes no typing: nothing typed after the tap joins this message, and a
+  // reload meanwhile still has it.
+  await page.waitForFunction(() => document.querySelector('#prompt').readOnly && document.querySelector('#prompt').value === 'do this instead', null, { timeout: 10000 });
   // Either the turn ended and the message went, or the box says it is still stopping and keeps the text: never locked.
   await page.waitForFunction(() => document.querySelector('#composerNote').hidden || (!document.querySelector('#composerNote').hidden && !/^Stopping/.test(document.querySelector('#composerNote').textContent)), null, { timeout: 60000 });
   await page.fill('#prompt', 'later one');
