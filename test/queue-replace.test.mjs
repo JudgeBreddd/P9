@@ -46,7 +46,7 @@ test('O125 point 1: a queued message replaced by its ID from the same sender lea
   assert.ok(prompt && !sentTexts.includes('first wording'), 'the replaced wording must not be sent: ' + JSON.stringify(sentTexts));
 });
 
-test('A2 step 3: a waiting message edited by its ID keeps its place and goes with the new text; one already sent cannot be edited', { timeout: 120000 }, async (t) => {
+test('A2 step 3: a waiting message edited by its ID keeps its place and goes with the new text; one already sent cannot be edited; a stale editor is refused; taken back gives the edited words', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
@@ -54,18 +54,27 @@ test('A2 step 3: a waiting message edited by its ID keeps its place and goes wit
   await until(async () => (await events(instance, id)).some((e) => e.type === 'update' && e.data?.content?.text === 'gating'), 'gate turn started');
   const first = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'alpha wording', when: 'queue' });
   const second = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'bravo wording', when: 'queue' });
-  assert.equal(second.status, 202, JSON.stringify(second.body));
-  for (const bad of [{ held: first.body.held, text: '  ' }, { held: first.body.held }, { held: first.body.held, text: 'x'.repeat(100_001) }])
+  const third = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'charlie wording', when: 'queue' });
+  assert.equal(third.status, 202, JSON.stringify(third.body));
+  const was = 'alpha wording';
+  for (const bad of [{ held: first.body.held, text: '  ', was }, { held: first.body.held, was }, { held: first.body.held, text: 'x'.repeat(100_001), was }, { held: first.body.held, text: 'no was' }])
     assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', bad)).status, 400, JSON.stringify(bad).slice(0, 80));
-  assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', { held: '00000000-0000-4000-8000-000000000000', text: 'x' })).status, 409);
-  const edit = await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'alpha edited' });
+  assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', { held: '00000000-0000-4000-8000-000000000000', text: 'x', was: 'x' })).status, 409);
+  const edit = await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'alpha edited', was });
   assert.equal(edit.status, 200, JSON.stringify(edit.body));
+  // Another window's editor opened on the old words: refused with the words now, never written over them.
+  const stale = await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'alpha stale', was });
+  assert.deepEqual([stale.status, stale.body.error, stale.body.text], [409, 'changed', 'alpha edited'], JSON.stringify(stale.body));
+  // Taken back after an edit: the answer carries the edited words (the phone puts these in its box, not its older copy).
+  assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', { held: third.body.held, text: 'charlie edited', was: 'charlie wording' })).status, 200);
+  const back = await call(instance, '/chat/' + id + '/unhold', 'POST', { held: third.body.held });
+  assert.deepEqual([back.status, back.body.text], [200, 'charlie edited'], JSON.stringify(back.body));
   const seen = await events(instance, id);
-  assert.deepEqual(seen.filter((e) => e.type === 'held-text').map((e) => e.data), [{ id: first.body.held, text: 'alpha edited' }]);
-  assert.equal(seen.filter((e) => e.type === 'unheld').length, 0, 'an edit takes nothing out of the queue');
+  assert.deepEqual(seen.filter((e) => e.type === 'held-text').map((e) => e.data), [{ id: first.body.held, text: 'alpha edited' }, { id: third.body.held, text: 'charlie edited' }]);
+  assert.deepEqual(seen.filter((e) => e.type === 'unheld').map((e) => e.data.id), [third.body.held], 'an edit takes nothing out of the queue');
   await writeFile(path.join(instance.workspace, 'go'), '');
   await until(async () => (await events(instance, id)).some((e) => e.type === 'user' && /bravo wording/.test(e.data?.text)), 'the queue went out');
   const sent = (await events(instance, id)).filter((e) => e.type === 'user').map((e) => e.data.text).join('\n');
-  assert.ok(!sent.includes('alpha wording') && sent.indexOf('alpha edited') >= 0 && sent.indexOf('alpha edited') < sent.indexOf('bravo wording'), 'the edit goes in its old place: ' + sent);
-  assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'too late' })).status, 409, 'a message already sent is not edited');
+  assert.ok(!sent.includes('alpha wording') && !sent.includes('alpha stale') && !sent.includes('charlie') && sent.indexOf('alpha edited') >= 0 && sent.indexOf('alpha edited') < sent.indexOf('bravo wording'), 'the edit goes in its old place: ' + sent);
+  assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'too late', was: 'alpha edited' })).status, 409, 'a message already sent is not edited');
 });

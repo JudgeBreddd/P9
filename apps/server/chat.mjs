@@ -1506,6 +1506,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // leaves the queue as 'replaced' (unheld, never dropped); another sender's ID, or one no longer waiting, replaces nothing.
   // A message that replaces one still waiting is held with it, whatever its path would have been (FIX1: a steer would
   // send the correction now and leave the old wording to go later). A foreign sender's ID, or one no longer waiting, is not a replace.
+  // A2 step 3: the window's own words only: another chat's, a joined prompt with another sender's, a note, a question or a command keeps its sender's words.
+  const editable = (body) => !senders.has(body) && !mixed.has(body) && !notes.has(body) && !solos.has(body) && !commands.has(body);
   const waitingReplace = (session, body) => body.replaces !== undefined && [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
   // was: the IDs it waited under before (a restart's replay, O109 FIX1); its 'user' or 'unheld' event names them too.
   function hold(id, session, body, images, when, repicks = false, was = []) {
@@ -1541,7 +1543,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     if (old) unheld(id, [old], 'replaced');
-    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }), ...(senders.has(body) && { from: true }) }); // info: a note, which has no send-now; from: another chat's, not editable here
+    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }), ...(!editable(body) && { fixed: true }) }); // info: a note, which has no send-now; fixed: no pencil (editable)
     if (kept) crashAt('held-event');
     crashHook(body);
     if (kept) crashAt('hold-write');
@@ -2079,7 +2081,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body.now) return session ? sendNow(id, session, body.held) : refused(409, 'not-held'); // a promise: the route awaits it
       for (const list of session ? [session.held, session.queued] : []) {
         const at = list.findIndex((item) => item.id === body.held);
-        if (at >= 0) { unheld(id, list.splice(at, 1), 'removed'); return { status: 200, ok: true }; }
+        if (at >= 0) { const [item] = list.splice(at, 1); unheld(id, [item], 'removed'); return { status: 200, ok: true, text: item.body.text }; } // text: as edited (A2 step 3)
       }
       return refused(409, 'not-held');
     },
@@ -2088,13 +2090,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Only the window's own messages: another chat's, a note or a command keeps the words its sender chose.
     editHeld(id, body) {
       const session = ID.test(id) && live.get(id);
-      if (typeof body?.held !== 'string' || typeof body.text !== 'string' || body.text.length > MAX_TEXT) return refused(400, 'request-refused');
+      // was: the words the editor opened with; another window's save meanwhile is a 409 changed with the words now, never overwritten.
+      if (typeof body?.held !== 'string' || typeof body.text !== 'string' || typeof body.was !== 'string' || body.text.length > MAX_TEXT) return refused(400, 'request-refused');
       const item = session && [...session.held, ...session.queued].find((x) => x.id === body.held);
       if (!item) return refused(409, 'not-held');
-      if (senders.has(item.body) || notes.has(item.body) || solos.has(item.body) || commands.has(item.body)) return refused(409, 'not-editable');
+      if (!editable(item.body)) return refused(409, 'not-editable');
+      if (item.body.text !== body.was) return { status: 409, error: 'changed', text: item.body.text };
       if (!body.text.trim() && !item.images.length) return refused(400, 'request-refused');
-      item.body.text = body.text; // deliver() reads it at send time; the body object stays, so what is keyed on it stays
-      setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i))); // O109: a restart sends the edit
+      // O109: the restart copy first, so a failed write changes nothing; then the live body (deliver() reads it at send time,
+      // and the object stays, so what is keyed on it stays), then the event.
+      setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i)));
+      item.body.text = body.text;
       emit(id, 'held-text', { id: item.id, text: body.text });
       return { status: 200, ok: true };
     },

@@ -43,6 +43,25 @@ test('O109: a message held for a turn\'s end survives a daemon restart and is de
   console.log('PASS O109 held across restart: the user\'s and the agent\'s held messages went once each after a SIGTERM restart, under their senders, and not again after a second restart');
 });
 
+// A2 step 3: an edit of a held message is in the restart copy: after a restart it goes once, with the edited words only.
+test('A2 step 3: a queued message edited before a daemon restart goes once after it, with the edited words', { timeout: 240000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'gate', title: 'Target' });
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'gating');
+  const mine = await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'held before the edit', when: 'queue' });
+  assert.ok(mine.body.held, 'not held: ' + JSON.stringify(mine.body));
+  const edit = await call(instance, `/chat/${made.chat}/held-text`, 'POST', { held: mine.body.held, text: 'held, then edited', was: 'held before the edit' });
+  assert.equal(edit.status, 200, JSON.stringify(edit.body));
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit'); instance = await restart(t, instance, 'state-2');
+  const sent = async (text) => (await events(instance, made.chat)).filter((e) => e.type === 'user' && String(e.data?.text).includes(text));
+  for (let i = 0; i < 300 && (await sent('held, then edited')).length < 1; i += 1) await pause(100);
+  await pause(3000);
+  assert.deepEqual([(await sent('held, then edited')).length, (await sent('held before the edit')).length], [1, 0], 'after the restart: the edit once, the old words never');
+  console.log('PASS A2 step 3 restart: an edited queued message went once after a SIGTERM restart, with the edited words');
+});
+
 // O125 point 5: a lead busy in a turn (no steering, as Claude on ACP 2) while 4 workers end 10 turns each (40 end
 // notes) and the coordinator queues a message and then replaces it. At the turn's end everything waiting goes as ONE
 // prompt: each worker's newest note only (4), and only the coordinator's replacement (1).

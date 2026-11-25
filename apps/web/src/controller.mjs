@@ -456,11 +456,11 @@ mdl.addEventListener('close', () => {
   if (!mdl.open) S.modal = null;
   const r = lastEdit; renderTabs(); renderChats(); renderTree(); renderDev();
   if (S.primary) { const go = S.primary; S.primary = null; return go(); } // Make Primary: its own caret step runs after the re-render
-  const t = r && (r.id ? document.getElementById(r.id) : $(`#chats .pane[data-id="${r.pane}"] textarea`));
+  const t = r && (r.id ? document.getElementById(r.id) : $(`#chats .pane[data-id="${r.pane}"] .composer textarea`));
   if (t && !t.closest('[inert]')) { t.focus(); t.setSelectionRange(...r.sel); }
 });
 // D05: Make Primary takes the chat out of the modal into Chat Focus, draft and all
-$('#mdlPrimary').onclick = () => { if (S.modal.kind === 'file') return devPrimary(S.modal.name); const id = S.modal.id; S.primary = () => {}; closeModal(); setFocus('chat'); focus(id); const t = $(`#chats .pane[data-id="${id}"] textarea`); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } };
+$('#mdlPrimary').onclick = () => { if (S.modal.kind === 'file') return devPrimary(S.modal.name); const id = S.modal.id; S.primary = () => {}; closeModal(); setFocus('chat'); focus(id); const t = $(`#chats .pane[data-id="${id}"] .composer textarea`); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } };
 $('#rBell').onclick = () => openModal({ kind: 'center' });
 
 // action buttons answer a click: green for 5 s

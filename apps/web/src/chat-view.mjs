@@ -696,7 +696,7 @@ const keepIn = (s, v) => {
 const held = (s, h, a) => { const el = a?.ev && h.querySelector(`:scope > .col > [data-at="${s.events.indexOf(a.ev)}"]`);
   return el ? Math.round(h.scrollTop + el.getBoundingClientRect().top - h.getBoundingClientRect().top - a.off) : undefined; }; // whole px: within 1 px of where it was
 // Records where each pane's reader is (outer.view). Run before every paint, and by keepPlace() before the chats hide (O212).
-const save = (root, panes) => panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'), k = root.id + ':' + p.dataset.id, was = outer.view[k], pinned = h.scrollHeight - h.scrollTop - h.clientHeight < 24;
+const save = (root, panes) => panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('.composer textarea'), k = root.id + ':' + p.dataset.id, was = outer.view[k], pinned = h.scrollHeight - h.scrollTop - h.clientHeight < 24;
   if (!h.getClientRects().length || was?.hid) { if (was && h.getClientRects().length) delete was.hid; return; }
   outer.view[k] = { top: h.scrollTop, pinned, up: !pinned && (!was || was.up || h.scrollTop < (was.at ?? was.top)), selection: [ta.selectionStart, ta.selectionEnd], anchor: anchorOf(h) }; });
 // O212 review: a scroll alone paints nothing, so the chats about to hide record where the reader is now; hidden, they cannot.
@@ -735,7 +735,7 @@ function paint(root, ss, only) {
     const asker = el => outer.S.sessions.find(x => x.id === el.closest('[data-ask]')?.dataset.ask) || s;
     p.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => { const s = asker(b); if (s.live) return outer.liveChat.approve(s, b.dataset.approve); const a = s.events.find(e => e.t === 'approval'); s.events = s.events.filter(e => e !== a); s.pending = null; if (b.dataset.approve === 'reject') { s.events.push({t:'notice', text:'Denied: ' + a.title + '. ' + outer.names[s.agent] + ' will take another approach.'}); reply(s, 'Understood, I will not touch server.ts. I can expose the grace through the existing /api/conversations payload instead; say so and I will do that.'); } else { s.events.push({t:'tool', status:'completed', title:a.title, diff:a.diff}); const plan = s.events.find(e => e.t === 'plan'); if (plan) { plan.entries[2][0] = 'completed'; plan.entries[3][0] = 'in_progress'; } reply(s, 'Bootstrap now carries leaseGraceMs. Next I will read it in the chat-pane footer so the 60 s copy stops being hardcoded.'); } answered(s); });
     p.querySelectorAll('[data-question]').forEach(q => { const s = asker(q); q.oninput = e => { const qe = s.events.find(e => e.t === 'question'); qe.vals = Object.fromEntries(new FormData(q)); (qe.touched ??= new Set()).add(e.target.name.split('~')[0]); }; q.onsubmit = e => { e.preventDefault(); if (s.live) return outer.liveChat.answer(s, Object.fromEntries(new FormData(q))); const v = new FormData(q).get('f0'), qe = s.events.find(e => e.t === 'question'); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'tool', status:'completed', title:qe.title, output:'answer: ' + v}); reply(s, v); answered(s); }; q.querySelector('[data-decline]').onclick = () => { if (s.live) return outer.liveChat.decline(s); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'notice', text:'Question declined.'}); answered(s); }; });
-    const ta = p.querySelector('textarea');
+    const ta = p.querySelector('.composer textarea'); // not the queue's editor (A2 step 3)
     if (v?.selection) ta.setSelectionRange(...v.selection);
     // Slash commands: the agent's own list (available_commands_update) while the box holds only "/name"; Tab, Enter or a click fills one in, the agent runs it.
     const slash = p.querySelector('[data-slash]');
@@ -747,7 +747,7 @@ function paint(root, ss, only) {
     };
     showSlash();
     ta.oninput = () => { s.draft = ta.value; s.recall = null; showSlash(); }; // any typing ends an up-arrow recall
-    if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
+    if (caret && caret.id === s.id) { const c = caret.n === 'heldEdit' ? p.querySelector('[name=heldEdit]') : caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
     // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
@@ -820,11 +820,19 @@ function paint(root, ss, only) {
     TUCK.wire?.(p, s, renderChats); if (TUCK.want) import('./tuck.mjs').then(() => renderChats());
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold, now: 'now' in b.dataset || undefined }));
     p.querySelectorAll('[data-hedit]').forEach(b => b.onclick = () => { const h = s.held.find(x => x.id === b.dataset.hedit); s.hedit = { id: h.id, text: h.text, was: h.text }; renderChats(); const ta = p.querySelector('[name=heldEdit]'); ta?.focus(); ta?.setSelectionRange(1e6, 1e6); });
+    // ed.saving: the words sent, the field read-only until the answer; ed.saved: their held-text event came (carry, below).
     p.querySelectorAll('[name=heldEdit]').forEach(ta => { ta.oninput = () => { s.hedit.text = ta.value; };
-      ta.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); s.hedit = null; renderChats(); }
-        if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
-        e.preventDefault(); e.stopPropagation(); const ed = s.hedit;
-        outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.text }, { quiet: true }).then(r => { if (s.hedit !== ed) return; s.hedit = null; if (r.status >= 400) heldEditBack(s, ed, r.body?.error); renderChats(); }); }; });
+      ta.onkeydown = e => { if (e.isComposing) return; const ed = s.hedit;
+        if (e.key === 'Escape') { e.stopPropagation(); s.hedit = null; return renderChats(); }
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        e.preventDefault(); e.stopPropagation(); if (ed.saving != null) return;
+        if (ed.text === ed.was) { s.hedit = null; return renderChats(); }
+        ed.saving = ed.text; renderChats();
+        outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).then(r => { if (s.hedit !== ed) return; ed.saving = null;
+          if (r.status === 200) s.hedit = null;
+          else if (r.body?.error === 'changed') { ed.was = r.body.text; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + r.body.text + ' Enter saves yours over it; Esc keeps that one.' }); }
+          else if (r.body?.error !== 'not-held') s.events.push({ t: 'notice', text: 'Your edit was not saved (' + (r.body?.error || r.status) + '). It is still open.' }); // not-held: it left; its event settles the edit (carry)
+          renderChats(); }); }; });
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); renderChats(); });
@@ -857,7 +865,7 @@ function paint(root, ss, only) {
     const folder = p.querySelector('[data-chat-folder]'); if (folder) folder.onclick = () => void pickChatFolder(s);
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); outer.renderTabs(); renderChats(); };
     const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => stopChat(s);
-    const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); outer.renderTabs(); renderChats(); };
+    const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('.composer textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); outer.renderTabs(); renderChats(); };
     const cf = p.querySelector('[data-chat-files]'); if (cf) cf.onclick = () => outer.side.current()?.slot === 'chat-files' && CF.sid === s.id ? outer.side.close('chat-files') : openChatFiles(s.id);
     p.querySelector('[data-steps]').onclick = () => { outer.hideSteps = !outer.hideSteps; localStorage.setItem('p9-hide-steps', outer.hideSteps ? '1' : '0'); renderChats(); };
     const nt = p.querySelector('[data-notes]'); if (nt) nt.onclick = () => outer.side.current()?.slot === 'worker-notes' && notesSid === s.id ? outer.side.close('worker-notes') : openNotes(s);
@@ -1050,11 +1058,10 @@ async function earlier(s) {
   s.events = [...old.events, ...s.events];
   tailed(s, r.body);
 }
-// A2 step 3: an edit of a queued message that left before it was saved goes into the box, so no typing is lost.
-function heldEditBack(s, ed, why = 'not-held') {
-  if (ed.text === ed.was || !ed.text.trim()) return;
-  s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null;
-  s.events.push({ t: 'notice', text: (why === 'not-held' ? 'The queued message left before your edit was saved.' : 'Your edit was not saved (' + why + ').') + ' Your edit is in the box.' });
+// A2 step 3: an edit of a queued message that was not saved goes into the box, so no typing is lost; true when it did.
+function heldEditBack(s, ed) {
+  if (ed.saved || ed.text === ed.was || !ed.text.trim()) return false;
+  s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; return true;
 }
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
@@ -1070,7 +1077,7 @@ function applyChat(ev, into) {
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
-    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when, at: ev.at, ...(d.info && { info: true }), ...(d.from && { from: true }) }); break;
+    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when, at: ev.at, ...(d.info && { info: true }), ...(d.fixed && { fixed: true }) }); break;
     case 'held-text': for (const h of s.held || []) if (h.id === d.id) h.text = d.text; break;
     // A note from another chat that waits for this chat's next message: shown where it arrived; it started nothing.
     case 'note': s.events.push({ t: 'user', text: d.text, when: new Date(ev.at).toTimeString().slice(0, 5), info: d.from ?? true, fromTitle: d.fromTitle }); break;
@@ -1211,9 +1218,11 @@ async function loadChat() {
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
     for (const s of outer.S.sessions) {
+      const ed = s.hedit, boxed = ed && heldEditBack(s, ed); // A2 step 3: the rebuild has no editor; its words go in the box
       const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, images: s.images, stops: s.stops, sending: s.sending, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, stubOf(c), keep);
+      if (boxed) s.events.push({ t: 'notice', text: 'P9 caught up this chat while you edited a queued message, so the edit was not saved. Your edit is in the box; the queue shows what will go.' });
     }
     outer.liveChat.cursor = head.body.cursor; outer.keepUnseen();
     // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
@@ -1252,10 +1261,12 @@ async function loadChat() {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
     // A2 step 3: an edit open when its message leaves is kept: taken back, the box gets the edit; gone, heldEditBack.
+    // Saved (its held-text came first), the message went or came back with those words; not saved, the open words win.
     const back = ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why), ed = s.hedit;
+    if (ev.type === 'held-text' && ed?.id === ev.data?.id && ed.saving === ev.data.text) ed.saved = true;
     const left = ed && (ev.type === 'unheld' ? [ev.data?.id] : ev.type === 'user' ? ev.data?.held || [] : []).includes(ed.id);
-    if (left) { s.hedit = null; if (!back) heldEditBack(s, ed); }
-    if (back) { s.draft = (left ? ed.text : ev.data.text) + (s.draft ? '\n' + s.draft : ''); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
+    if (left) { s.hedit = null; if (!back && heldEditBack(s, ed)) s.events.push({ t: 'notice', text: 'The queued message went before your edit was saved. Your edit is in the box.' }); }
+    if (back) { s.draft = (left && !ed.saved ? ed.text : ev.data.text) + (s.draft ? '\n' + s.draft : ''); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.
