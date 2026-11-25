@@ -184,7 +184,15 @@ export function installPanel(o, { focus, stopChat, busy }) {
       + (ps.length ? `<div class="note">It reads a project's instructions and files from its next message; its folder and files stay where they are. You can also drag a chat onto a project.</div>` : '')
       || '<div class="note">No projects yet.</div>', at, anchor);
     // O261: Rename, Archive and Delete come with the project page's code; opened before it arrives, the menu fills in then.
-    if (!o.chatMenuItems) { const m = document.querySelector('.lp-menu'); pages().then(() => { if (m?.isConnected) chatMenu(id, at, anchor); }, () => {}); }
+    // The redraw keeps the focused item (the items come after it); a failed load says so in the menu.
+    if (!o.chatMenuItems) {
+      const m = document.querySelector('.lp-menu');
+      pages().then(() => {
+        if (!m?.isConnected) return;
+        const f = [...m.querySelectorAll('button')].indexOf(document.activeElement); chatMenu(id, at, anchor);
+        if (f > 0) document.querySelector('.lp-menu')?.querySelectorAll('button')[f]?.focus({ preventScroll: true });
+      }, () => m?.isConnected && m.insertAdjacentHTML('beforeend', '<div class="note">Rename, Archive and Delete did not load. Open this menu again to try again.</div>'));
+    }
   }
 
   // ---- Move to a project, with Undo. The daemon's 'project' event says the same to every window. ----
@@ -324,10 +332,12 @@ export function installPanel(o, { focus, stopChat, busy }) {
   // when one of these is used before that; a failed load is tried again on the next use.
   let pv = null;
   const pages = () => (pv ??= import('./projects-view.mjs').then(m => m.installProjects(o, api), e => { pv = null; throw e; }));
-  // A click made while it loads runs once it arrives, unless the user went somewhere else meanwhile; a failed load says so.
-  const where = () => [o.S.focus, o.S.open[0], o.S.view?.kind, o.S.view?.id].join('\n');
+  // A click made while it loads runs once it arrives, unless the user did anything after it (a press or a key, which also
+  // drops an older click still waiting); a failed load says so.
+  let acts = 0;
+  for (const t of ['pointerdown', 'keydown']) addEventListener(t, () => acts++, { capture: true, signal: o.lifetime.signal });
   const failed = () => o.toast({ kind: 'project', txt: 'Projects did not load. Try again.', level: 'warn' }, true);
-  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const was = where(); return pages().then(() => { if (where() === was) o[k](...a); }, failed); };
+  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const n = acts; return pages().then(() => { if (acts === n) o[k](...a); }, failed); };
   o.renderPage = () => { if (o.S.view) pages().then(() => o.renderPage()); };
   const idle = () => requestIdleCallback(() => pages().catch(() => {}), { timeout: 2000 });
   if (document.readyState === 'complete') idle(); else addEventListener('load', idle, { once: true, signal: o.lifetime.signal });

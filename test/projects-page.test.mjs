@@ -1702,23 +1702,24 @@ test('projects: a closed folder sprint\'s page shows its change and saves it to 
   assert.deepEqual(errors, []);
 });
 
-// O261: the project page's code (projects-view.mjs) loads after the window is usable. Held back, a chat's menu opened meanwhile
-// fills in Rename once it arrives; a project click made while it loads opens the page, unless a chat was opened meanwhile; a
-// failed load says so, and the next click loads it.
-test('O261: the project page loads late: the chat menu fills in, a stale click is dropped, a failed load says so', { timeout: 180000 }, async (t) => {
+// O261: the project page's code (projects-view.mjs) loads after the window is usable. With the idle load held off, opening a
+// chat's menu asks for it, and the menu fills in Rename once it arrives, keeping the focused item. A project click made while
+// it loads opens the page, unless anything was clicked after it (even the chat already open). A failed load says so, in the
+// menu and on a click, and the next click loads it.
+test('O261: the project page loads late: first use loads it, the menu fills in, a later click wins, a failed load says so', { timeout: 180000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.workspace, 'site'), { recursive: true });
   const site = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project.id;
+  assert.equal((await call(instance, '/projects', 'POST', { name: 'Notes', work: { kind: 'linked', folder: 'site' } })).status, 201);
   const r = await call(instance, '/chat', 'POST', { provider: 'claude' });
   await call(instance, '/chat/' + r.conversation + '/prompt', 'POST', { text: 'title Scratch' }); await ended(instance, r.conversation);
   const plain = r.conversation;
-  const r2 = await call(instance, '/chat', 'POST', { provider: 'claude' });
-  await call(instance, '/chat/' + r2.conversation + '/prompt', 'POST', { text: 'title Other' }); await ended(instance, r2.conversation);
   const astro = path.join(root, 'apps/web/dist/_astro');
   const chunk = [];
   for (const f of (await readdir(astro)).filter((f) => f.endsWith('.js'))) if ((await readFile(path.join(astro, f), 'utf8')).includes('data-sp-scripts')) chunk.push(f);
   assert.equal(chunk.length, 1, 'one chunk holds the project page: ' + chunk.join(', '));
   const { page, errors } = await launch(t, instance);
+  await page.context().addInitScript(() => { if (sessionStorage.getItem('o261-no-idle')) window.requestIdleCallback = () => 0; });
   let mode = 'hold', hits = 0, release = () => {};
   await page.route((u) => u.pathname.endsWith('/' + chunk[0]), async (route) => {
     hits++;
@@ -1726,34 +1727,47 @@ test('O261: the project page loads late: the chat menu fills in, a stale click i
     await new Promise((go) => { release = go; });
     return route.continue();
   });
-  const fresh = async (m) => { mode = m; hits = 0; await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 }); };
+  const fresh = async (m, idle = true) => {
+    mode = m; hits = 0; await page.evaluate((idle) => idle ? sessionStorage.removeItem('o261-no-idle') : sessionStorage.setItem('o261-no-idle', '1'), idle);
+    await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+    if (idle) await until(() => hits > 0, 'the idle load asked for the project page');
+  };
+  const more = async () => { await page.locator(`#navList .row[data-chat="${plain}"]`).hover(); await page.locator(`#navList [data-more="${plain}"]`).click(); await page.locator('.lp-menu').waitFor({ timeout: 5000 }); };
 
-  await fresh('hold');
-  await until(() => hits > 0, 'the idle load asked for the project page');
-  await page.locator(`#navList .row[data-chat="${plain}"]`).hover(); await page.locator(`#navList [data-more="${plain}"]`).click();
-  await page.locator('.lp-menu').waitFor({ timeout: 5000 });
+  // No idle load: opening the menu asks for the chunk; the focused item stays focused when Rename fills in.
+  await fresh('hold', false);
+  await new Promise((go) => setTimeout(go, 3000));
+  assert.equal(hits, 0, 'with the idle load held off nothing asked for the project page');
+  await more();
+  await until(() => hits === 1, 'opening the menu asked for the project page');
   assert.equal(await page.locator('.lp-menu [data-pjchat=rename]').count(), 0, 'held back: the menu has no Rename yet');
+  await page.keyboard.press('ArrowDown');
+  const focused = await page.evaluate(() => document.activeElement?.outerHTML);
+  assert.notEqual(focused, await page.evaluate(() => document.querySelector('.lp-menu button')?.outerHTML), 'the second item is focused, not the first');
   release();
   await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.outerHTML), focused, 'the item focused before the menu filled in is focused after');
   await page.keyboard.press('Escape');
 
+  // A project click, then a click on the chat already open: the chat stays. A project click alone opens the page.
   await fresh('hold');
-  await until(() => hits > 0, 'the idle load asked for the project page');
   await page.locator(`#navList .row[data-chat="${plain}"]`).click();
   await page.locator(`#navList [data-proj="${site}"]`).click();
-  await page.locator(`#navList .row[data-chat="${r2.conversation}"]`).click();
+  await page.locator(`#navList .row[data-chat="${plain}"]`).click();
   release();
   await new Promise((go) => setTimeout(go, 1500));
-  assert.equal(await page.locator('#pjName').count(), 0, 'the project click made before the chat was opened did not take the chat\'s place');
+  assert.equal(await page.locator('#pjName').count(), 0, 'the project click made before the later chat click did not take the chat\'s place');
   await fresh('hold');
-  await until(() => hits > 0, 'the idle load asked for the project page');
   await page.locator(`#navList [data-proj="${site}"]`).click();
   release();
   await page.locator('#pjName').waitFor({ timeout: 5000 });
 
+  // A failed load: the menu and a project click say so; the next click loads it.
   await fresh('fail');
-  await until(() => hits > 0, 'the idle load asked for the project page');
   await page.locator(`#navList .row[data-chat="${plain}"]`).click();
+  await more();
+  await page.locator('.lp-menu .note', { hasText: 'did not load' }).waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
   await page.locator(`#navList [data-proj="${site}"]`).click();
   await page.locator('.toast', { hasText: 'Projects did not load' }).first().waitFor({ timeout: 5000 });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o261-load-failed ' + (await page.screenshot({ type: 'png' })).toString('base64'));
