@@ -565,6 +565,11 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await quote(); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
   await until(async () => await box.count() === 0, 'Esc on the Cancel button closes the box', 5000);
   assert.ok(await composer.evaluate((b) => document.activeElement === b), 'and the message box has the typing');
+  // Another focus mode by its shortcut (the focus stays in the box) closes it, so Enter cannot add to a chat out of sight.
+  await quote(); await page.keyboard.press('Control+2');
+  await until(async () => await box.count() === 0, 'Ctrl+2 closes the box', 5000);
+  await page.keyboard.press('Control+1'); await composer.waitFor({ state: 'visible', timeout: 5000 });
+  assert.equal(await chips.count(), 1, 'and added nothing');
   // A command the agent lists goes alone; the chip waits for the next message.
   await composer.click(); await page.keyboard.type('/compact'); await page.keyboard.press('Enter');
   await until(async () => (await users(instance, id)).includes('/compact'), 'the command went as typed', 15000);
@@ -572,8 +577,10 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
   // The daemon refuses the next message once: the chip comes back as a chip, and only the typed words go back in the box.
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let once = true;
-    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'prompt' && once ? (once = false, { status: 409, body: { error: 'not-ready' } }) : h(e, ...args)); });
+    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'prompt' && once ? (once = false, globalThis.p9refused = args[1]?.text, { status: 409, body: { error: 'not-ready' } }) : h(e, ...args)); });
   await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
+  const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
+  await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the daemon was sent the quoted message and refused it', 10000);
   await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: the words in the box, the chip a chip', 10000);
   await chips.first().locator('[data-unquote]').click();
   await until(async () => await chips.count() === 0, 'the last chip goes', 5000);

@@ -145,7 +145,7 @@ function chatFilesFollow(ids) {
 function focus(id) { const s = sess(id); if (s?.hidden) s.hidden = false; show(id); outer.renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
-const show = (id, auto) => { if (!auto) outer.S.nav++; outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
+const show = (id, auto) => { if (!auto) outer.S.nav++; dispatchEvent(new Event('p9-nav')); outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
 // N1: Stop is final (no Undo): on the chat's row and first in its menu (panel.mjs), and in its header. The chat stays in
 // the panel's list; a message sent to it starts it again.
 function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
@@ -753,7 +753,7 @@ function paint(root, ss, only) {
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
     // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
-    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; if (!cmd && s.quotes?.length) (s.sentFrom ||= new Map()).set(t, { draft: typed, quotes: s.quotes }), s.quotes = []; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
+    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; const from = !cmd && s.quotes?.length ? { draft: typed, quotes: s.quotes } : undefined; if (from) s.quotes = []; sendText(s, t, now, when, from); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       plainPaste = !e.isComposing && e.shiftKey && (e.ctrlKey || e.metaKey) && e.code === 'KeyV' ? ta : null;
@@ -866,7 +866,7 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { s.quotes.splice(+b.dataset.unquote, 1); renderChats(); });
     p.querySelectorAll('[data-quote-reply]').forEach(b => b.onclick = () => { const e = s.events[b.closest('[data-at]')?.dataset.at]; if (e?.text) quote(s, p, b.getBoundingClientRect(), e.text); });
     const hist = p.querySelector('.hist');
-    if (hist) hist.onpointerup = () => setTimeout(() => { const sel = getSelection(), r = !sel.isCollapsed && sel.rangeCount && sel.getRangeAt(0), at = r && r.commonAncestorContainer, msg = at && (at.nodeType === 1 ? at : at.parentElement).closest('.msg.agent'), text = msg && hist.contains(msg) && sel.toString().trim(); if (text) quote(s, p, r.getBoundingClientRect(), text); });
+    if (hist) hist.onpointerup = () => setTimeout(() => { const sel = getSelection(), r = !sel.isCollapsed && sel.rangeCount && sel.getRangeAt(0), at = r && r.commonAncestorContainer, msg = at && (at.nodeType === 1 ? at : at.parentElement).closest('.msg.agent'), raw = msg && hist.contains(msg) && sel.toString(), text = raw && raw.trim(); if (text) quote(s, p, r.getBoundingClientRect(), text, raw); });
     const more = p.querySelector('[data-earlier]'); if (more) more.onclick = async () => {
       if (s.fetching) return;
       const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
@@ -899,12 +899,13 @@ function pickImages(s) {
 // check, and a send took s.images while a file was still being read into it.
 const adding = new Map(); // chat id -> its attach now
 // A2 step 6: quote.mjs loads on the first quote; a failed load says so, and the next quote imports it afresh.
-const quote = (s, p, rect, text) => import('./quote.mjs').then(m => {
-  // The pane it was asked from: gone or hidden by the time the box loads (another chat picked), no box.
-  const ta = () => p.querySelector('.composer textarea');
-  if (p.isConnected && p.checkVisibility()) m.quoteBox({ rect, text, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
+const quote = (s, p, rect, text, raw) => { const nav = outer.S.nav; import('./quote.mjs').then(m => {
+  // The chat it was asked from: still in this pane (the patcher reuses panes), still shown (focus modes hide with
+  // visibility), and nothing navigated since; checked when the box loads and again on Comment.
+  const ta = () => p.querySelector('.composer textarea'), alive = () => p.isConnected && p.dataset.id === s.id && outer.S.nav === nav && p.checkVisibility({ visibilityProperty: true });
+  if (alive()) m.quoteBox({ rect, text, raw, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: q => { (s.quotes ||= []).push(q); renderChats(); ta()?.focus(); } });
-}, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true));
+}, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
 function addImages(s, files) {
   const run = (adding.get(s.id) ?? Promise.resolve()).catch(() => {}).then(() => attachNow(s, files)); adding.set(s.id, run);
   run.finally(() => adding.get(s.id) === run && adding.delete(s.id)).catch(() => {}); return run; // true: every file attached
@@ -928,16 +929,17 @@ async function attachNow(s, files) {
 const loading = s => !!(s.stub || s.behind);
 const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || loading(s) || s.state === 'moving' || s.state === 'moved');
 // Review round 9: one typed while an earlier message waits in the daemon's hold goes behind it ('queue'), not past it by steering.
-function sendText(s, t, now, when) {
+// from: a send made with quote chips, { draft, quotes }, so a refusal gives them back (liveChat.prompt); it goes with this send only.
+function sendText(s, t, now, when, from) {
   const mid = !now && busy(s);
   localStorage.removeItem('p9-queue:' + s.id); // oldQueue's text was in the box: it is this send now, or let go
   if (!now && !s.live && busy(s)) { s.queue.push({ t, at: Date.now() }); renderChats(); return; }
-  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length || s.sending ? 'queue' : 'steer') : undefined); // one still on its way may be held
+  (now ? interrupt : outer.startTurn)(s, t, mid ? when || (s.held?.length || s.sending ? 'queue' : 'steer') : undefined, from); // one still on its way may be held
 }
 // O255: a live chat's interrupt is the daemon's: it holds the message first, stops the turn, and sends it at that end.
-function interrupt(s, t) {
-  if (!busy(s) || s.live) return outer.startTurn(s, t, s.live && 'now');
-  cancelTurn(s); outer.startTurn(s, t);
+function interrupt(s, t, _, from) {
+  if (!busy(s) || s.live) return outer.startTurn(s, t, s.live && 'now', from);
+  cancelTurn(s); outer.startTurn(s, t, undefined, from);
 }
 function cancelTurn(s, quiet) {
   // CP7: no turn to cancel (it ended, or its end never came) means idle: the chat stops showing working and an

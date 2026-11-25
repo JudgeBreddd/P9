@@ -497,9 +497,9 @@ const chatImgs = new Map();
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
 const bottoms = observe(() => $('.stage').style.setProperty('--chat-bottom', Math.max(0, ...[...$('#chats').querySelectorAll(':scope > .pane > .bottom')].map(b => b.offsetHeight)) + 'px')); // Chat Focus full: the artifact ends above the text box
 const wiredBars = new WeakSet(), view = {}; // 'container:session id' -> { top, pinned, selection }
-function startTurn(s, t, when) {
+function startTurn(s, t, when, from) {
   const images = s.images || []; s.images = [];
-  if (s.live) return liveChat.prompt(s, t, images, when);
+  if (s.live) return liveChat.prompt(s, t, images, when, from);
   if (s.state === 'idle') s.state = 'running';
   s.events.push({t:'user', text:t, when: new Date().toTimeString().slice(0,5), images: images.length || undefined}); view['chats:' + s.id] = view['mdlBody:' + s.id] = null;
   s.events.push({t:'tool', status:'in_progress', title:'Thinking about: ' + t.slice(0, 40)});
@@ -725,7 +725,7 @@ try { localStorage.removeItem('p9-focus-looks'); } catch {}
 const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim);
 function setFocus(f) {
   if (!focusOn(f)) return; // turned off in Settings, or not on this remote
-  S.focus = f; S.nav++; // O261: a project click still waiting for its code is dropped
+  S.focus = f; S.nav++; dispatchEvent(new Event('p9-nav')); // O261: a project click still waiting for its code is dropped; A2: an open quote box closes
   if (f === 'mission') { refreshMission(); missionLive(); } // F2: renderCards skips it while Mission is out of sight
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
@@ -1298,7 +1298,7 @@ const lines = {};
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
-liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
+liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
   // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
   // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
@@ -1306,11 +1306,11 @@ liveChat.prompt = async (s, text, images = [], when) => { usedAgent(s.agent); s.
   const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
   const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
-  if (r.status === 202) { s.sentFrom?.delete(text); // taken: its quotes went with it
+  if (r.status === 202) {
     const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
   keep(); // all of them: a box over the limit is refused when sent, and keeps its files
   // A2 step 6: a refused message sent with quotes gets its chips back, and only what was typed goes back in the box.
-  const from = s.sentFrom?.get(text); s.sentFrom?.delete(text); if (from) s.quotes = [...from.quotes, ...(s.quotes || [])];
+  if (from) s.quotes = [...from.quotes, ...(s.quotes || [])];
   const back = from ? from.draft : text; s.draft = back + (s.draft && back ? '\n' : '') + (s.draft || ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
