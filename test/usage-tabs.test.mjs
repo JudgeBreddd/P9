@@ -223,7 +223,8 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   const held = new Promise((r) => { release = r; }), oldRead = new Promise((r) => { taken = r; });
   const route = (url) => url.pathname === '/usage/turns' && url.searchParams.get('days') === days;
   await page.route(route, async (r) => { if (!holding) return r.continue(); holding = false; taken(); await held; await r.fulfill({ json: older }); });
-  await screen.locator(`[data-uh-days="${days === '7' ? '30' : '7'}"]`).click();
+  const other = days === '7' ? '30' : '7';
+  await screen.locator(`[data-uh-days="${other}"]`).click();
   await screen.locator(`[data-uh-days="${days}"]`).click();
   await oldRead;
   await refresh();
@@ -234,6 +235,21 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
   assert.match(await screen.locator('.uh-total span').textContent(), new RegExp(`(^|\\D)${before + 1} turns`), 'the older answer was dropped');
   await page.unroute(route);
+  // The same on Limits: Refresh there drops the history read still out, so opening Tokens again reads afresh.
+  let open;
+  const gate = new Promise((r) => { open = r; }), out = new Promise((r) => page.route(route, async (q) => { r(); await gate; await q.fulfill({ json: older }); }, { times: 1 }));
+  await screen.locator(`[data-uh-days="${other}"]`).click();
+  await screen.locator(`[data-uh-days="${days}"]`).click();
+  await out;
+  await screen.locator('[data-utab="limits"]').click();
+  await page.click('#refreshUsage');
+  await page.locator('#refreshUsage:not([disabled])').waitFor();
+  const dropped = page.waitForResponse((r) => new URL(r.url()).pathname === '/usage/turns');
+  open(); await dropped;
+  const reread = page.waitForRequest((r) => new URL(r.url()).pathname === '/usage/turns', { timeout: 5000 });
+  await screen.locator('[data-utab="tokens"]').click();
+  await reread;
+  await shows(before + 1);
 });
 
 // The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.

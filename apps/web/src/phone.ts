@@ -2253,7 +2253,7 @@ async function readTurns() {
   if (seq !== turnsRead) return;
   UH.reading = null; UH.at = Date.now();
   UH.page = typeof page?.state === 'string' ? { ...page, days } : { state: 'unavailable', days };
-  if (UH.page.state === 'rebuilding') setTimeout(() => { UH.at = 0; if (UH.tab !== 'limits' && document.body.dataset.view === 'usage') drawUsage(); }, 5000);
+  if (UH.page.state === 'rebuilding') setTimeout(() => { if (seq !== turnsRead) return; UH.at = 0; if (UH.tab !== 'limits' && document.body.dataset.view === 'usage') drawUsage(); }, 5000);
   if (UH.tab !== 'limits') drawUsage();
 }
 function turnsHtml() {
