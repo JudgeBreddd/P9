@@ -558,10 +558,10 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   const { app, page, pane, errors, instance, id } = await setup(t, 'a2-quote-2');
   const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea'), reply = pane.locator('.msg.agent').last();
   const quote = async (r = reply) => { await r.hover(); await r.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); };
-  await composer.evaluate((b) => { b.dataset.mark = 'kept'; });
+  await composer.evaluate((b) => { b.p9kept = true; }); // a property: the patcher copies attributes, not properties
   await quote(); await page.keyboard.press('Enter');
   await until(async () => await chips.count() === 1, 'a chip', 5000);
-  assert.equal(await composer.getAttribute('data-mark'), 'kept', 'the first chip leaves the same message box (its undo history too)');
+  assert.equal(await composer.evaluate((b) => b.p9kept), true, 'the first chip leaves the same message box (its undo history too)');
   await quote(); await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
   await until(async () => await box.count() === 0, 'Esc on the Cancel button closes the box', 5000);
   assert.ok(await composer.evaluate((b) => document.activeElement === b), 'and the message box has the typing');
@@ -577,7 +577,7 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: the words in the box, the chip a chip', 10000);
   await chips.first().locator('[data-unquote]').click();
   await until(async () => await chips.count() === 0, 'the last chip goes', 5000);
-  assert.equal(await composer.getAttribute('data-mark'), 'kept', 'and the message box is still the same one');
+  assert.equal(await composer.evaluate((b) => b.p9kept), true, 'and the message box is still the same one');
   // In the chat dialog (opened from its card), the box opens inside the dialog and its chip lands in that chat.
   await composer.fill(''); await page.keyboard.press('Escape');
   await pane.locator('.composer textarea').click(); await page.keyboard.type('ask-text'); await page.keyboard.press('Enter');
