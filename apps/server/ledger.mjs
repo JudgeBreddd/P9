@@ -139,6 +139,10 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   // E2: one chat's events (or a few chats') without reading the rest. An index, not a schema change: an older build
   // opens the file unchanged and SQLite keeps the index up to date for it, so it stays outside MIGRATIONS.
   db.exec('CREATE INDEX IF NOT EXISTS events_conversation ON events (conversation, cursor)');
+  // A2: the few updates that carry a goal, for chat.mjs goalNow (its WHERE must keep these two terms so SQLite uses it).
+  // Without it the chat list's first read after a start scanned every event, 1.6 to 3.3 s on a 2.1M-event ledger;
+  // with it, 2 ms. Built once (1.5 s on that ledger), same as the index above.
+  db.exec("CREATE INDEX IF NOT EXISTS events_goal ON events (conversation, cursor) WHERE type = 'update' AND json_type(data, '$._meta.jetbrains.air.goal') IS NOT NULL");
   // O191: the usage read joins a chat's provider profile (prefs profile:<chat>, O48). The same table chat.mjs makes, outside
   // MIGRATIONS as it is there, so a ledger opened without chat.mjs can prepare the read.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');

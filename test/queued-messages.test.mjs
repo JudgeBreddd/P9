@@ -377,27 +377,39 @@ test('A2 step 3: a queued message edited in place keeps its place and goes edite
 
 // A2 step 5 (page half): the goal the agent keeps (session_info_update _meta, chat-goal.test.mjs) shows as a line above the
 // box, with its status; it follows each change, a reload keeps it (the list's goal), and a clear removes it.
-test('A2 step 5: the agent\'s goal shows above the box with its status, follows a change, survives a reload, and a clear removes it', { timeout: 120000 }, async (t) => {
+test('A2 step 5: the agent\'s goal shows above the box with its status, follows a change, survives a reload past the tail, and a clear removes it', { timeout: 180000 }, async (t) => {
   const { id, launch, open, ends } = await setup(t, 'a2-goal');
   await until(async () => await ends() === 1, 'hello answered');
   const { page } = await launch(); let chat = await open(page);
-  const line = () => chat.pane.locator('.bottom .goal');
-  const goal = async (json, n) => { await chat.send('goal ' + json); await until(async () => await ends() === n, 'goal sent'); };
+  const line = () => chat.pane.locator('.bottom .goal'), replies = () => chat.pane.locator('.hist').getByText('goal sent', { exact: true }).count();
+  // Each goal turn ends with a 'goal sent' reply after its update: the page has read the update once the reply is drawn.
+  const goal = async (json, n) => { await chat.send('goal ' + json); await until(async () => await ends() === n && await replies() === n - 1, 'goal sent and drawn'); };
   assert.equal(await line().count(), 0, 'no goal, no line');
+  // The box is the same element while the line comes and goes (the morph keys it), so a half-typed word is not lost.
+  await chat.pane.locator('.composer textarea').evaluate(el => { el.p9Mark = 1; });
+  const sameBox = async (why) => assert.equal(await chat.pane.locator('.composer textarea').evaluate(el => el.p9Mark), 1, why);
   await goal('{"objective":"  ship the goal line  ","status":"active","iterations":2}', 2);
   await until(async () => await line().count() === 1, 'the goal shows');
   assert.equal((await line().innerText()).replace(/\s+/g, ' ').trim(), 'Goal: ship the goal line', 'active is the usual status and is not shown');
+  await sameBox('the box is kept when the goal line appears');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-goal-line ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
   await goal('{"objective":"ship the goal line","status":"paused"}', 3);
   await until(async () => (await line().innerText()).includes('paused'), 'the line follows a change of status');
+  assert.equal(await line().getAttribute('title'), 'Goal: ship the goal line · paused', 'the full text, status and all, is on hover');
   await goal('{"objective":5}', 4);
   assert.ok((await line().innerText()).includes('paused'), 'junk is not a goal and leaves the last one');
+  // Over TAIL (200) newer steps: after a reload the goal's update is not in the loaded history, so it comes from the list.
+  await chat.send('stream 250'); await until(async () => await ends() === 5, 'the long turn ended');
   await page.reload(); await page.locator('#rChat').waitFor(); chat = await open(page);
-  await until(async () => await line().count() === 1 && (await line().innerText()).includes('ship the goal line · paused'), 'a reload keeps the goal');
-  await goal('null', 5);
-  await until(async () => await line().count() === 0, 'a clear removes the line');
+  await until(async () => await chat.pane.locator('.hist').getByText('step 250 done.').count() > 0, 'the reload drew the newest steps');
+  assert.equal(await replies(), 0, 'the goal updates are out of the loaded history');
+  await until(async () => await line().count() === 1 && (await line().textContent()) === 'Goal: ship the goal line · paused', 'a reload keeps a goal older than the tail');
+  await chat.pane.locator('.composer textarea').evaluate(el => { el.p9Mark = 1; });
+  await chat.send('goal null'); await until(async () => await ends() === 6 && await replies() === 1, 'the clear sent and drawn');
+  assert.equal(await line().count(), 0, 'a clear removes the line');
+  await sameBox('the box is kept when the goal line goes');
   await page.reload(); await page.locator('#rChat').waitFor(); chat = await open(page);
-  await chat.pane.locator('.composer textarea').waitFor();
+  await until(async () => await replies() === 1, 'the reload drew the clear\'s turn');
   assert.equal(await line().count(), 0, 'a reload does not bring back a cleared goal');
-  console.log('PASS A2 step 5: the goal line shows, follows, survives a reload, and a clear removes it');
+  console.log('PASS A2 step 5: the goal line shows, follows, survives a reload past the tail, and a clear removes it');
 });
