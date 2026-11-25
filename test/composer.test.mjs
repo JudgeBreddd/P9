@@ -575,13 +575,21 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => (await users(instance, id)).includes('/compact'), 'the command went as typed', 15000);
   assert.equal(await chips.count(), 1, 'the chip waits');
   await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
-  // The daemon refuses the next message once: the chip comes back as a chip, and only the typed words go back in the box.
+  // The daemon holds the next message, then refuses it: while it waits the box is empty and the chip gone; after, the chip
+  // comes back as the same chip, and only the typed words go back in the box. (A second send while one waits is queued, not
+  // sent: liveChat.prompt marks the chat working at once, so two quoted sends are never in flight from one box.)
+  const chipText = await chips.first().textContent();
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let once = true;
-    ipcMain.handle('p9:chat', (e, ...args) => args[0] === 'prompt' && once ? (once = false, globalThis.p9refused = args[1]?.text, { status: 409, body: { error: 'not-ready' } }) : h(e, ...args)); });
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt' || !once) return h(e, ...args);
+      once = false; globalThis.p9refused = args[1]?.text; await new Promise((r) => { globalThis.p9release = r; }); return { status: 409, body: { error: 'not-ready' } }; }); });
   await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
   const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
-  await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the daemon was sent the quoted message and refused it', 10000);
+  await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the daemon was sent the quoted message', 10000);
+  assert.equal(await composer.inputValue(), '', 'while it waits the box is empty');
+  assert.equal(await chips.count(), 0, 'and the chip went with the send');
+  await app.evaluate(() => globalThis.p9release());
   await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: the words in the box, the chip a chip', 10000);
+  assert.equal(await chips.first().textContent(), chipText, 'the same chip came back');
   await chips.first().locator('[data-unquote]').click();
   await until(async () => await chips.count() === 0, 'the last chip goes', 5000);
   assert.equal(await composer.evaluate((b) => b.p9kept), true, 'and the message box is still the same one');

@@ -725,7 +725,7 @@ try { localStorage.removeItem('p9-focus-looks'); } catch {}
 const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim);
 function setFocus(f) {
   if (!focusOn(f)) return; // turned off in Settings, or not on this remote
-  S.focus = f; S.nav++; dispatchEvent(new Event('p9-nav')); // O261: a project click still waiting for its code is dropped; A2: an open quote box closes
+  S.focus = f; S.nav++; // O261: a project click still waiting for its code is dropped
   if (f === 'mission') { refreshMission(); missionLive(); } // F2: renderCards skips it while Mission is out of sight
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;

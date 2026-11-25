@@ -145,7 +145,7 @@ function chatFilesFollow(ids) {
 function focus(id) { const s = sess(id); if (s?.hidden) s.hidden = false; show(id); outer.renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
-const show = (id, auto) => { if (!auto) outer.S.nav++; dispatchEvent(new Event('p9-nav')); outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
+const show = (id, auto) => { if (!auto) outer.S.nav++; outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
 // N1: Stop is final (no Undo): on the chat's row and first in its menu (panel.mjs), and in its header. The chat stays in
 // the panel's list; a message sent to it starts it again.
 function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
@@ -899,10 +899,11 @@ function pickImages(s) {
 // check, and a send took s.images while a file was still being read into it.
 const adding = new Map(); // chat id -> its attach now
 // A2 step 6: quote.mjs loads on the first quote; a failed load says so, and the next quote imports it afresh.
-const quote = (s, p, rect, text, raw) => { const nav = outer.S.nav; import('./quote.mjs').then(m => {
+const quote = (s, p, rect, text, raw) => { import('./quote.mjs').then(m => {
   // The chat it was asked from: still in this pane (the patcher reuses panes), still shown (focus modes hide with
-  // visibility), and nothing navigated since; checked when the box loads and again on Comment.
-  const ta = () => p.querySelector('.composer textarea'), alive = () => p.isConnected && p.dataset.id === s.id && outer.S.nav === nav && p.checkVisibility({ visibilityProperty: true });
+  // visibility), and under no dialog it is not in; checked when the box loads, while it is open, and on Comment.
+  const ta = () => p.querySelector('.composer textarea'), alive = () => p.isConnected && p.dataset.id === s.id && p.checkVisibility({ visibilityProperty: true })
+    && ![...document.querySelectorAll('dialog:modal')].some(d => !d.contains(p));
   if (alive()) m.quoteBox({ rect, text, raw, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: q => { (s.quotes ||= []).push(q); renderChats(); ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };

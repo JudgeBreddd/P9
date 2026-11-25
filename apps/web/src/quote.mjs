@@ -3,8 +3,10 @@
 // chat's dialog when the chat is in one, so it is not behind it). Enter adds the quote, with what was typed as its comment,
 // to the message box as a chip; Esc, Cancel, a click outside or the focus leaving it closes it, and back() gets the focus.
 // The box takes the focus, and with it the page's selection: Ctrl+C in it with nothing selected copies the selection as it
-// was (raw: untrimmed, uncut). alive() says the chat it was asked from is still the one shown; Comment checks it, and any
-// navigation (another chat, another focus mode: the p9-nav event) closes the box.
+// was (raw: untrimmed, uncut). alive() says the chat it was asked from is still the one shown and on top; Comment checks it,
+// and while the box is open it is checked every 200 ms: another chat in its pane, another focus mode, a dialog over it or a
+// dialog's contents changed closes the box, whatever caused it.
+// ponytail: a 200 ms check rather than an event from every place that changes what is shown (they were missed: review round 3).
 // ponytail: one length, 8000 characters (an agent reply rarely runs longer); a longer quote is cut, with an ellipsis.
 const MAX = 8000;
 let shut = null, n = 0;
@@ -30,7 +32,7 @@ export function quoteBox({ rect, text: whole, raw = whole, add, host = document.
   };
   // Tab or a shortcut taking the focus out (to another chat, say) closes it as a click outside does.
   box.addEventListener('focusout', e => { if (e.relatedTarget && !box.contains(e.relatedTarget)) close(); }, { signal: ac.signal });
-  addEventListener('p9-nav', () => close(), { signal: ac.signal });
+  const watch = setInterval(() => alive() || close(), 200); ac.signal.addEventListener('abort', () => clearInterval(watch));
   document.addEventListener('pointerdown', e => { if (!box.contains(e.target)) close(); }, { capture: true, signal: ac.signal });
   ta.focus();
   return box;
