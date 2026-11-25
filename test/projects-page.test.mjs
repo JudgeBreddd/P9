@@ -1757,7 +1757,15 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   release();
   await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape'); // the code is in
   await new Promise((go) => setTimeout(go, 1500));
-  assert.equal(await page.locator('#pjName').count(), 0, 'the project click made before the later chat click did not take the chat\'s place');
+  assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count() + await page.locator('#pjName').count(), 0, 'the project click made before the later chat click did not take the chat\'s place');
+  // A mode switch after a project click drops it too.
+  await fresh('hold');
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+  await page.evaluate(() => document.querySelector('[data-focus-btn="chat"]').click());
+  release();
+  await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count(), 0, 'the project click made before the mode switch was dropped');
   // A key or a click on empty space after the project click does not drop it.
   await fresh('hold');
   await page.locator(`#navList [data-proj="${site}"]`).click();

@@ -159,8 +159,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const isOpen = id => !P.open || P.open.has(id);
   const setOpen = (id, v) => { P.open ??= new Set(projects().map(p => p.id)); v ? P.open.add(id) : P.open.delete(id); key('p9-panel-open', JSON.stringify([...P.open])); };
   // A click on a chat (row or strip) shows it in Chat Focus; with Chat Focus off in Settings, it opens as a card.
-  let acts = 0; // O261: opening a chat or a page; a project click waiting for its code runs only if none came after it
-  const openChat = id => { acts++; closeMenu(); P.overlay = false; tip.hidden = true;
+  const openChat = id => { closeMenu(); P.overlay = false; tip.hidden = true;
     if (o.S.focus !== 'chat' && !o.focusOn('chat')) return o.openModal({ kind: 'chat', id });
     if (o.S.view) o.S.view = null; const pj = find(id)?.project; if (pj && !isOpen(pj)) setOpen(pj, true); // the chat shown is never hidden in a closed project
     if (o.S.focus !== 'chat') o.setFocus('chat'); focus(id); };
@@ -189,12 +188,18 @@ export function installPanel(o, { focus, stopChat, busy }) {
     // already there stay, with their focus and any press on them. A failed load says so in the menu.
     if (!o.chatMenuItems) {
       const m = document.querySelector('.lp-menu');
-      pages().then(() => {
-        if (!m?.isConnected) return;
-        const html = o.chatMenuItems(s), last = m.lastElementChild;
+      // A press on the menu finishes first (the items could move under it); a menu with nothing to focus focuses the first.
+      const fill = () => {
+        if (!m.isConnected) return;
+        const html = o.chatMenuItems(s), last = m.lastElementChild, none = !m.querySelector('button:not(:disabled)');
         if (m.children.length === 1 && last.matches('.note')) last.outerHTML = html;
         else if (ps.length && last?.matches('.note')) last.insertAdjacentHTML('beforebegin', html); else m.insertAdjacentHTML('beforeend', html);
         m.style.top = Math.max(8, Math.min(at.y, innerHeight - m.getBoundingClientRect().height - 8)) + 'px';
+        if (none && (document.activeElement === anchor || document.activeElement === document.body)) m.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+      };
+      pages().then(() => {
+        if (!m?.isConnected) return;
+        if (m.matches(':active')) addEventListener('pointerup', () => setTimeout(fill), { once: true }); else fill();
       }, () => m?.isConnected && m.insertAdjacentHTML('beforeend', '<div class="note">Rename, Archive and Delete did not load. Open this menu again to try again.</div>'));
     }
   }
@@ -336,10 +341,10 @@ export function installPanel(o, { focus, stopChat, busy }) {
   // when one of these is used before that; a failed load is tried again on the next use.
   let pv = null;
   const pages = () => (pv ??= import('./projects-view.mjs').then(m => m.installProjects(o, api), e => { pv = null; throw e; }));
-  // A click made while it loads runs once it arrives, unless a chat or another of these was opened after it; a failed load
-  // says so.
+  // A click made while it loads runs once it arrives, unless a chat, a mode or another of these was opened after it
+  // (S.nav, which show() and setFocus() advance too); a failed load says so.
   const failed = () => o.toast({ kind: 'project', txt: 'Projects did not load. Try again.', level: 'warn' }, true);
-  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const n = ++acts; return pages().then(() => { if (acts === n) o[k](...a); }, failed); };
+  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const n = ++o.S.nav; return pages().then(() => { if (o.S.nav === n) o[k](...a); }, failed); };
   o.renderPage = () => { if (o.S.view) pages().then(() => o.renderPage()); };
   const idle = () => requestIdleCallback(() => pages().catch(() => {}), { timeout: 2000 });
   if (document.readyState === 'complete') idle(); else addEventListener('load', idle, { once: true, signal: o.lifetime.signal });
