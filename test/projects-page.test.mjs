@@ -1749,6 +1749,17 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   assert.ok(await page.evaluate((f) => f.isConnected && f === document.activeElement, focused), 'the item focused before the menu filled in is the same button, still focused');
   await page.keyboard.press('Escape');
 
+  // A press held on a menu item while the code arrives: the items wait until it ends (here a slide off, no click).
+  await fresh('hold', false);
+  await more();
+  await page.locator('.lp-menu button').first().hover(); await page.mouse.down();
+  release();
+  await new Promise((go) => setTimeout(go, 1500));
+  assert.equal(await page.locator('.lp-menu [data-pjchat=rename]').count(), 0, 'nothing went into the menu under the press');
+  await page.locator('.lp-menu .note').last().hover(); await page.mouse.up(); // released on the menu's note: no item clicked, the menu stays
+  await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
+
   // A project click, then a click on the chat already open: the chat stays. A project click alone opens the page.
   await fresh('hold');
   await page.locator(`#navList .row[data-chat="${plain}"]`).click();

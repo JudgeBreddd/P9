@@ -188,19 +188,21 @@ export function installPanel(o, { focus, stopChat, busy }) {
     // already there stay, with their focus and any press on them. A failed load says so in the menu.
     if (!o.chatMenuItems) {
       const m = document.querySelector('.lp-menu');
-      // A press on the menu finishes first (the items could move under it); a menu with nothing to focus focuses the first.
-      const fill = () => {
-        if (!m.isConnected) return;
-        const html = o.chatMenuItems(s), last = m.lastElementChild, none = !m.querySelector('button:not(:disabled)');
-        if (m.children.length === 1 && last.matches('.note')) last.outerHTML = html;
-        else if (ps.length && last?.matches('.note')) last.insertAdjacentHTML('beforebegin', html); else m.insertAdjacentHTML('beforeend', html);
+      // A press on a menu button finishes first (its click, cancel or blur; the items could move under it); a menu with
+      // nothing to focus focuses the first new item. The failure note is placed the same way.
+      let add = '', failed = false;
+      const ac = new AbortController(), place = () => {
+        ac.abort(); if (!m?.isConnected) return;
+        const last = m.lastElementChild, none = !m.querySelector('button:not(:disabled)');
+        if (failed) m.insertAdjacentHTML('beforeend', add);
+        else if (m.children.length === 1 && last.matches('.note')) last.outerHTML = add;
+        else if (ps.length && last?.matches('.note')) last.insertAdjacentHTML('beforebegin', add); else m.insertAdjacentHTML('beforeend', add);
         m.style.top = Math.max(8, Math.min(at.y, innerHeight - m.getBoundingClientRect().height - 8)) + 'px';
         if (none && (document.activeElement === anchor || document.activeElement === document.body)) m.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
       };
-      pages().then(() => {
-        if (!m?.isConnected) return;
-        if (m.matches(':active')) addEventListener('pointerup', () => setTimeout(fill), { once: true }); else fill();
-      }, () => m?.isConnected && m.insertAdjacentHTML('beforeend', '<div class="note">Rename, Archive and Delete did not load. Open this menu again to try again.</div>'));
+      const held = m ? pressHold(m, place, ac.signal) : () => false;
+      pages().then(() => { add = o.chatMenuItems(s); }, () => { failed = true; add = '<div class="note">Rename, Archive and Delete did not load. Open this menu again to try again.</div>'; })
+        .then(() => held() || place());
     }
   }
 

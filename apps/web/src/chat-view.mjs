@@ -145,7 +145,7 @@ function chatFilesFollow(ids) {
 function focus(id) { const s = sess(id); if (s?.hidden) s.hidden = false; show(id); outer.renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
-const show = id => { outer.S.nav++; outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
+const show = (id, auto) => { if (!auto) outer.S.nav++; outer.S.view = null; outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
 // N1: Stop is final (no Undo): on the chat's row and first in its menu (panel.mjs), and in its header. The chat stays in
 // the panel's list; a message sent to it starts it again.
 function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
@@ -1207,7 +1207,7 @@ async function loadChat() {
     let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
     // A7: a worker an agent started never takes the screen from the chat being read; it is listed under its parent.
     // window-10: nor does the lead chat this window's Start sprint makes; the project page keeps the press's answer.
-    if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation);
+    if (created && !ev.data?.parent && !outer.pressedStart?.(ev.conversation) && !swapIn(ev.conversation)) show(ev.conversation, true); // not a navigation: a project click waiting for its code (O261) still runs
     if (!replaying) carry(ev);
     if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
     if (ev.type === 'answered') answered_.push(ev.conversation);
