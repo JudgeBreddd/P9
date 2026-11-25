@@ -33,7 +33,7 @@ async function loadUsage() {
   // O190/O191 FIX1: each answer replaces the last one whole, so a field an older daemon does not send (tokens, profiles,
   // limits) or a failed read leaves nothing of the previous answer behind. A failed read keeps only the plan limits: they
   // carry their own age (limitLine: "N min old", muted by the daemon's stale mark), and dropping them would blank every chat's meter on a blip.
-  const kept = result.status === 200 ? result.body : { limits: usage.limits };
+  const kept = result.status === 200 ? result.body : { limits: usage.limits, telemetryTab: usage.telemetryTab };
   for (const key of Object.keys(usage)) delete usage[key];
   Object.assign(usage, noUsage(), kept);
   outer.renderMission();
@@ -217,8 +217,9 @@ const limitsBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" 
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div>${tokensSay()}<p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`)
   + profileLines(usage);
 // A3 (2): the Usage window's tabs. Limits is the plan windows above; Tokens and Cost read /usage/turns through
-// p9.usageTurns(days) and are drawn by usage-history.mjs, loaded the first time either opens. The phone and an older desktop
-// have no p9.usageTurns and keep Limits alone. The tab is kept on the window's modal, so each opening starts on Limits (the
+// p9.usageTurns(days) and are drawn by usage-history.mjs, loaded the first time either opens (the phone draws the same, phone.ts
+// loadUsage). An older desktop has no p9.usageTurns and keeps Limits alone, as does any while the daemon's telemetry-tab pref
+// is off (Settings > General, A3 (3)). The tab is kept on the window's modal, so each opening starts on Limits (the
 // pace bars); the range and breakdown are kept for the session. The answer is read again when the range changes, each
 // minute while Tokens or Cost is open, and 5 s after a 'rebuilding' answer (the daemon's first replay).
 const UH = { days: 7, by: 'model', page: null, at: 0, busy: false, draw: null, load: null };
@@ -246,7 +247,7 @@ function turnsBody(tab) {
     ? '<p class="empty">This view could not load. P9 may have been updated. <button type="button" data-slot="button" data-variant="outline" data-size="sm" data-uh-reload>Reload the window</button></p>'
     : '<p class="sm muted">Loading…</p>';
 }
-const usageBody = (tab = outer.S.modal?.utab ?? 'limits') => !window.p9?.usageTurns ? limitsBody() : `<div class="cf-tabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" tabindex="${tab === id ? 0 : -1}" data-slot="button" data-variant="ghost" data-size="sm" data-utab="${id}" aria-selected="${tab === id}">${label}</button>`).join('')}</div>`
+const usageBody = (tab = outer.S.modal?.utab ?? 'limits') => !window.p9?.usageTurns || usage.telemetryTab === false ? limitsBody() : `<div class="cf-tabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" tabindex="${tab === id ? 0 : -1}" data-slot="button" data-variant="ghost" data-size="sm" data-utab="${id}" aria-selected="${tab === id}">${label}</button>`).join('')}</div>`
   + `<div id="upanel" role="tabpanel" aria-labelledby="utab-${tab}">${tab === 'limits' ? limitsBody() : turnsBody(tab)}</div>`;
 // Arrow keys, Home and End move between the tabs and open the one reached (the tablist pattern).
 function usageTabKey(e) {

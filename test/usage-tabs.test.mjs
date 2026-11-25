@@ -9,7 +9,8 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { openLedger } from '../apps/server/ledger.mjs';
 import { historyHtml } from '../apps/web/src/usage-history.mjs';
-import { daemon, root, versionSeen, watchStartup, waitStartup } from './helpers.mjs';
+import { daemon, remoteDaemon, root, versionSeen, watchStartup, waitStartup } from './helpers.mjs';
+import { phone } from './phone-c16-helpers.mjs';
 
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const shot = async (locator, name) => { if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + (await locator.screenshot({ type: 'png' })).toString('base64')); };
@@ -108,6 +109,95 @@ test('A3 (2): the Usage window\'s Tokens and Cost tabs show the turns from telem
   assert.equal(await body.locator('[data-uh-total]').count(), 0, 'reopened on Limits');
   await body.locator('[data-utab="tokens"]').click();
   await body.locator('[data-uh-days="30"][aria-pressed="true"]').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('#mdl').waitFor({ state: 'hidden' });
+
+  // A3 (3): Settings > General hides the tabs (the ledger's telemetry-tab pref); the window is Limits alone, and back.
+  for (const show of [false, true]) {
+    await page.click('#setBtn');
+    const box = page.locator('#setDlg[open] #setUsageTabs');
+    await box.waitFor({ timeout: 5000 });
+    assert.equal(await box.isChecked(), !show);
+    await box.setChecked(show);
+    await page.locator(`#setDlg[open] #setUsageTabs${show ? ':checked' : ':not(:checked)'}`).waitFor();
+    await page.click('#setClose');
+    await page.locator('#rUsage').click();
+    await body.locator('.stats').waitFor();
+    assert.equal(await body.locator('[data-utab]').count(), show ? 3 : 0, show ? 'the tabs are back' : 'no tabs while the switch is off');
+    if (!show) await shot(body, 'usage-tabs-off');
+    await page.keyboard.press('Escape');
+    await page.locator('#mdl').waitFor({ state: 'hidden' });
+  }
+});
+
+// A3 (3): the phone's Usage screen has the same tabs over the same /usage/turns, and the switch hides them there too
+// while the watcher keeps writing telemetry.db.
+test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab off hides them and turns are still recorded', { timeout: 180000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => {
+    const dir = path.join(paths.directory, 'ownership');
+    await mkdir(dir, { mode: 0o700 });
+    const ledger = openLedger(path.join(dir, 'p9.db'));
+    const insert = ledger.db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
+    for (const [conversation, type, data, at] of seed(Date.now())) insert.run(conversation, type, JSON.stringify(data), at);
+    ledger.db.close();
+    return { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs'), '--ownership', dir] };
+  } });
+  const { page } = await phone(t, server);
+  await page.waitForSelector('h1:text("Chats")');
+  await page.click('[data-nav="usage"]');
+  const screen = page.locator('#usage');
+  await screen.locator('[data-utab="limits"][aria-selected="true"]').waitFor({ timeout: 15000 });
+  await screen.locator('.sum').waitFor();
+  await screen.locator('[data-utab="tokens"]').click();
+  const total = screen.locator('[data-uh-total]');
+  await total.filter({ hasText: '130K' }).waitFor({ timeout: 60000 });
+  let shown = await screen.innerText();
+  for (const want of ['130K', '3 turns · 2 chats', 'Cache savings', '$0.22', 'opus', 'gpt-6.1-sol']) assert.ok(shown.includes(want), `Tokens shows ${want}:\n${shown}`);
+  assert.equal(await screen.locator('.sum').count(), 0, 'Limits\' lines are on the Limits tab only');
+  // The 390 px screen: nothing is wider than the page.
+  assert.ok(await page.evaluate(() => document.querySelector('#usage').scrollWidth <= document.querySelector('#usage').clientWidth + 1), 'no sideways scroll');
+  await shot(page, 'phone-usage-tokens-7d');
+  await screen.locator('[data-utab="cost"]').click();
+  await total.filter({ hasText: '$0.08' }).waitFor();
+  shown = await screen.innerText();
+  for (const want of ['API estimate', '2 of 3 turns have a price']) assert.ok(shown.includes(want), `Cost shows ${want}:\n${shown}`);
+  await shot(page, 'phone-usage-cost-7d');
+  await screen.locator('[data-uh-days="30"]').click();
+  await total.filter({ hasText: '$0.10' }).waitFor();
+  await screen.locator('[data-uh-by="day"]').click();
+  assert.equal(await screen.locator('.uh-table tbody tr').count(), 3);
+  await screen.locator('.uh-table').scrollIntoViewIfNeeded();
+  await shot(page, 'phone-usage-cost-30d-by-day');
+  // The 20 s redraw (Refresh runs the same) keeps the tab and range: the marked strip is replaced, the figures stay.
+  await screen.locator('.utabs').evaluate((strip) => { strip.dataset.before = '1'; });
+  await page.click('#refreshUsage');
+  await screen.locator('.utabs[data-before]').waitFor({ state: 'detached' });
+  assert.equal(await screen.locator('[data-utab="cost"][aria-selected="true"]').count(), 1);
+  await total.filter({ hasText: '$0.10' }).waitFor();
+
+  // The switch is the desktop's (Settings > General); the phone's listener has no route to change it.
+  const tried = await page.evaluate(() => fetch('/telemetry-tab', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"show":false}' }).then((r) => r.status));
+  assert.notEqual(tried, 200, 'the phone cannot turn the tabs off');
+  // After the refused change the tabs are still there.
+  await screen.locator('.utabs').evaluate((strip) => { strip.dataset.before = '1'; });
+  await page.click('#refreshUsage');
+  await screen.locator('.utabs[data-before]').waitFor({ state: 'detached' });
+  assert.equal(await screen.locator('[data-utab="cost"][aria-selected="true"]').count(), 1);
+  assert.deepEqual((await server.desk('/telemetry-tab', 'POST', { show: false })).body, { show: false });
+  assert.equal((await server.desk('/telemetry-tab', 'POST', { show: 'no' })).status, 400);
+  await page.click('#refreshUsage');
+  await screen.locator('[data-utab]').first().waitFor({ state: 'detached' });
+  await screen.locator('.sum').waitFor();
+  await shot(page, 'phone-usage-tabs-off');
+  // Off hides the view only: a turn that ends now (the fake agent's, through the daemon) still reaches telemetry.db.
+  const made = await server.desk('/chat', 'POST', { provider: 'claude' });
+  assert.equal((await server.desk('/chat/' + made.body.conversation + '/prompt', 'POST', { text: 'hello' })).status, 202);
+  const count = async () => ((await server.desk('/usage/turns?days=1')).body.rows ?? []).reduce((n, r) => n + r.turns, 0);
+  for (const end = Date.now() + 30000; await count() !== 3 && Date.now() < end;) await new Promise((r) => setTimeout(r, 500));
+  assert.equal(await count(), 3, 'the turn ended while the switch was off is in telemetry.db');
+  assert.deepEqual((await server.desk('/telemetry-tab', 'POST', { show: true })).body, { show: true });
+  await page.click('#refreshUsage');
+  await screen.locator('[data-utab="limits"][aria-selected="true"]').waitFor();
 });
 
 // The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.

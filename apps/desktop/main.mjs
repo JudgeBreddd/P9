@@ -1636,6 +1636,13 @@ export async function createDesktop({ state, open } = {}) {
     else await shell.openExternal(PETDEX_URL);
     return { opened: true };
   });
+  // A3 (3) Settings > General: show (true) or hide (false) the Usage tabs; the answer is { show } as the daemon keeps it.
+  ipcMain.handle('p9:telemetry-tab', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('ipc-sender-refused');
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try { return await daemonRequest(state, 'POST', '/telemetry-tab', { show: args[0] }); }
+    catch (error) { return failedReply(error); }
+  });
   // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,
   // which the page can neither draw nor answer; turning it on never asks.
   ipcMain.handle('p9:file-protection', async (event, ...args) => {

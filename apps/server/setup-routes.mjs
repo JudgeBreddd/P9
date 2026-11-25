@@ -1,4 +1,4 @@
-// The setup wizard's routes (/setup*, /terminal-greeting) on the desktop app and api. Split out of server.mjs's createListener (F9) with no change in behaviour; names that stay in createListener come in through outer.
+// The setup wizard's routes (/setup*, /terminal-greeting, /telemetry-tab) on the desktop app and api. Split out of server.mjs's createListener (F9) with no change in behaviour; names that stay in createListener come in through outer.
 import { parseSettings, createMission } from './mission.mjs';
 import path from 'node:path';
 import { agentDirs } from './limits.mjs';
@@ -206,6 +206,14 @@ export function setupRoutes(outer) {
     if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'show' || typeof body.show !== 'boolean') return c.json({ error: 'request-refused' }, 400);
     outer.ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('terminal-greeting', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.show ? 'on' : 'off');
     return c.json({ show: outer.greeting() });
+  });
+  // Desktop only, Settings > General: { show: boolean }, whether the Usage window and the phone's Usage screen have the
+  // Tokens and Cost tabs (A3). Recording is not touched.
+  outer.app.post('/telemetry-tab', async (c) => {
+    const body = await outer.json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'show' || typeof body.show !== 'boolean') return c.json({ error: 'request-refused' }, 400);
+    outer.ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('telemetry-tab', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.show ? 'on' : 'off');
+    return c.json({ show: outer.telemetryTab() });
   });
   // Desktop only, Settings > Delegation: who may start workers, how many workers a chat may run, and what each one runs on.
   outer.app.get('/delegation', (c) => c.json(outer.chat.delegation()));

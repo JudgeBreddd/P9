@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   getStatus: () => ipcRenderer.invoke('p9:get-status'),
   usage: () => ipcRenderer.invoke('p9:usage'),
   usageTurns: (days) => ipcRenderer.invoke('p9:usage-turns', days),
+  telemetryTab: (show) => ipcRenderer.invoke('p9:telemetry-tab', show),
   anymouse: (note) => ipcRenderer.invoke('p9:anymouse', note),
   mission: (action, payload) => ipcRenderer.invoke('p9:mission', action, payload),
   pickPicture: () => ipcRenderer.invoke('p9:pick-picture'),
