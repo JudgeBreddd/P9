@@ -1506,6 +1506,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // leaves the queue as 'replaced' (unheld, never dropped); another sender's ID, or one no longer waiting, replaces nothing.
   // A message that replaces one still waiting is held with it, whatever its path would have been (FIX1: a steer would
   // send the correction now and leave the old wording to go later). A foreign sender's ID, or one no longer waiting, is not a replace.
+  // A2 step 3: the window's own words only: another chat's, a joined prompt with another sender's, a note, a question or a command keeps its sender's words.
+  const editable = (body) => !senders.has(body) && !mixed.has(body) && !notes.has(body) && !solos.has(body) && !commands.has(body);
   const waitingReplace = (session, body) => body.replaces !== undefined && [...session.held, ...session.queued].find((x) => x.id === body.replaces && senders.get(x.body) === senders.get(body));
   // was: the IDs it waited under before (a restart's replay, O109 FIX1); its 'user' or 'unheld' event names them too.
   function hold(id, session, body, images, when, repicks = false, was = []) {
@@ -1541,7 +1543,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     if (old) unheld(id, [old], 'replaced');
-    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }) }); // info: a note, which has no send-now
+    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }), ...(!editable(body) && { fixed: true }) }); // info: a note, which has no send-now; fixed: no pencil (editable)
     if (kept) crashAt('held-event');
     crashHook(body);
     if (kept) crashAt('hold-write');
@@ -2079,9 +2081,31 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body.now) return session ? sendNow(id, session, body.held) : refused(409, 'not-held'); // a promise: the route awaits it
       for (const list of session ? [session.held, session.queued] : []) {
         const at = list.findIndex((item) => item.id === body.held);
-        if (at >= 0) { unheld(id, list.splice(at, 1), 'removed'); return { status: 200, ok: true }; }
+        if (at >= 0) { const [item] = list.splice(at, 1); unheld(id, [item], 'removed'); return { status: 200, ok: true, text: item.body.text }; } // text: as edited (A2 step 3)
       }
       return refused(409, 'not-held');
+    },
+    // A2 step 3: the pencil on a message still waiting in this turn changes its text in place: its place in the queue, its
+    // files and its picks stay. Gone already (sent, or handed back): 409, and the page puts the edit in the box.
+    // Only the window's own messages: another chat's, a note or a command keeps the words its sender chose.
+    // op: the request's operation ID, in the event, so the window that saved knows its own save from an equal one (round 7).
+    editHeld(id, body, op) {
+      const session = ID.test(id) && live.get(id);
+      // was: the words the editor opened with; another window's save meanwhile is a 409 changed with the words now, never overwritten.
+      if (typeof body?.held !== 'string' || typeof body.text !== 'string' || typeof body.was !== 'string' || body.text.length > MAX_TEXT) return refused(400, 'request-refused');
+      const item = session && [...session.held, ...session.queued].find((x) => x.id === body.held);
+      if (!item) return refused(409, 'not-held');
+      if (!editable(item.body)) return refused(409, 'not-editable');
+      if (item.body.text !== body.was) return { status: 409, error: 'changed', text: item.body.text };
+      if (!body.text.trim() && !item.images.length) return refused(400, 'request-refused');
+      // O109: the restart copy and the event (windows settle a save and rebuild the queue from it) are written first, in one
+      // transaction, so a failure or a crash between them changes nothing; only then the live body (deliver() reads it at send time; the object stays, so what is keyed on it stays).
+      db.exec('BEGIN');
+      try { setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i))); ledger.append(id, 'held-text', { id: item.id, text: body.text, ...(ID.test(op ?? '') && { op }) }); db.exec('COMMIT'); }
+      catch (error) { db.exec('ROLLBACK'); console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation: id, type: 'held-text', error: String(error.code ?? error.message).slice(0, 200) })); return refused(500, 'not-saved'); }
+      item.body.text = body.text;
+      wakeAll('held-text', id);
+      return { status: 200, ok: true };
     },
     // close: the tab's x (closing a chat stops it, running or idle); 'closed' takes its tab out of
     // every window, and History opens it again.

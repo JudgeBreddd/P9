@@ -1073,6 +1073,7 @@ const turn = perChat((events) => {
     else if (['interrupted', 'exited', 'stopped', 'error'].includes(kind)) held.clear();
     else if (kind === 'held') held.set(String(data.id), { text: String(data.text), when: String(data.when), at: Number(event.at) });
     else if (kind === 'unheld') held.delete(String(data.id));
+    else if (kind === 'held-text') { const item = held.get(String(data.id)); if (item) item.text = String(data.text); } // A2 step 3: edited in the window
   }
   return { held };
 });
@@ -1186,7 +1187,7 @@ one<HTMLElement>('#queued').onclick = async (event) => {
     hold.disabled = true;
     try {
       const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: hold.dataset.unhold }, SEND_DEADLINE);
-      if (result.status === 200 && item) putBack(id, item.text);
+      if (result.status === 200 && item) putBack(id, typeof result.body.text === 'string' ? result.body.text : item.text); // the daemon's words: an edit may be newer than this copy
       else if (result.status !== 200 && result.status !== 409) note(`Not taken back: ${result.body.error ?? result.status}`); // 409: it was sent already, and the events show it
     } catch (error) { hold.disabled = false; note(`Not taken back: ${(error as Error).message === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : 'P9 could not be reached'}. It is still waiting; tap Take back to try again.`); return; }
     await fetchEvents().catch(() => {}); render(); return;
