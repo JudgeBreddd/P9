@@ -603,8 +603,12 @@ protocol ever carries them, that becomes the source and these reads go.
 - **Who can see it.** The same usage summary as before, on the desktop and a signed-in phone.
 - **Tokens and cost.** `GET /usage/turns?days=1|7|30|90` (desktop or signed-in phone) opens `telemetry.db`
   read-only and returns, per day, provider and model, the turn count and token sums, the chat count per provider,
-  and a dollar estimate from a fixed price table in the code (Claude models only; any other model is no price).
-  No chat id, title, folder or text, and nothing is sent anywhere.
+  and a dollar estimate from a fixed price table in the code (Claude models only; any other model, and every chat on
+  a provider profile, is no price). Only turns that reported all four token counts are priced, and each row says how
+  many were. The figures are the turns P9 recorded, of chats not deleted. The read never waits: while telemetry.db is
+  being rebuilt it answers `rebuilding`, and when the file is busy or damaged `unavailable`. telemetry.db holds a 0/1
+  profile flag per turn and an index on the turn's end time, nothing more. No chat id, title, folder or text, and
+  nothing is sent anywhere.
 
 ## Provider profiles
 

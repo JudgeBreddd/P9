@@ -5,7 +5,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { openLedger } from '../apps/server/ledger.mjs';
 import { startTelemetry } from '../apps/server/telemetry.mjs';
@@ -14,15 +15,19 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 
 const T = 1767000000000, DAY = 86400000, NOW = T + 2 * DAY, CUT = NOW - DAY; // CUT: where the 24-hour view starts
 const id = (n) => n.repeat(8) + '-0000-4000-8000-' + n.repeat(12);
-const [A, B, C, D, E, F, G, J, K] = ['a', 'b', 'c', 'd', 'e', 'f', '1', '2', '3'].map(id);
+const [A, B, C, D, E, F, G, H, J, K, Q] = ['a', 'b', 'c', 'd', 'e', 'f', '1', '5', '2', '3', '4'].map(id);
 const usage = (inputTokens, outputTokens, cachedReadTokens, cachedWriteTokens) =>
   ({ stopReason: 'end_turn', usage: { inputTokens, outputTokens, cachedReadTokens, cachedWriteTokens, totalTokens: inputTokens + outputTokens + cachedReadTokens + cachedWriteTokens } });
 // A chat: created, model set, then each turn a prompt at +10 + 100i and its end at +50 + 100i.
 const chat = (conversation, provider, model, at, turns, extra = {}) => [[conversation, 'created', { provider, title: 't', folder: '', ...extra }, at],
   [conversation, 'config', { model: { current: model, options: [{ value: model }] }, pickers: [] }, at + 1],
   ...turns.flatMap((end, i) => [[conversation, 'user', { text: 'x' }, at + 10 + i * 100], [conversation, 'turn-end', end, at + 50 + i * 100]])];
+// 5000 events that make no row, after the 40-day-old chat: the replay's first page (LIMIT 5000) ends inside them, so
+// the rebuild commits that chat's row a page before the rest (the partial-history window the upgrade test watches).
+const FILLER = Array.from({ length: 5000 }, (_, i) => [Q, 'answered', { request: 'r' + i }, NOW - 39 * DAY + i]);
 const EVENTS = [
   ...chat(E, 'claude', 'opus', NOW - 40 * DAY, [usage(1000000, 0, 0, 0)]), // 40 days old: only in the 90-day view, $4.00
+  ...FILLER,
   // Day 1
   ...chat(A, 'claude', 'opus', T, [usage(1000, 2000, 100000, 10000), usage(0, 500, 50000, 0)]), // $0.144 + $0.020
   ...chat(B, 'claude', 'sonnet', T + 1000, [usage(500, 1000, 200000, 0)]), // $0.031
@@ -35,6 +40,8 @@ const EVENTS = [
   ...chat(F, 'claude', 'opus', T + DAY + 1000, [{ ...usage(0, 0, 0, 0), counted: { inputTokens: 100, outputTokens: 1000, cachedReadTokens: 0, cachedWriteTokens: 5000 } },
     { stopReason: 'end_turn' }]), // $0.0004 + $0.02 + $0.04; then a turn with no counts
   ...chat(G, 'claude', 'sonnet', T + DAY + 2000, [usage(1000, 1000, 0, 0)], { profile: 'p1' }),
+  // haiku: one whole turn ($0.0001) and one that reported no cache-write count: its tokens show, it is not priced.
+  ...chat(H, 'claude', 'haiku', T + DAY + 3000, [usage(1000, 0, 0, 0), { stopReason: 'end_turn', usage: { inputTokens: 1000000, outputTokens: 0, cachedReadTokens: 0 } }]),
   ...chat(J, 'codex', 'gpt-6.1-sol', CUT - 50, [usage(1, 0, 0, 0)]),
   ...chat(K, 'codex', 'gpt-6.1-sol', CUT - 49, [usage(2, 0, 0, 0)]),
 ];
@@ -42,26 +49,44 @@ const close = (actual, expected, label) => assert.ok(Math.abs(actual - expected)
 const priced = (rows) => rows.reduce((total, row) => total + (row.usd ?? 0), 0);
 const local = (ms) => new Date(ms).toLocaleDateString('sv'); // the daemon's local date, as SQLite's 'localtime' gives it
 
-test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no price is null, never $0', async (t) => {
+test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no price is null, never $0', { timeout: 60000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-usage-turns-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const ledgerFile = path.join(dir, 'p9.db'), file = path.join(dir, 'telemetry.db');
   const ledger = openLedger(ledgerFile);
   const insert = ledger.db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
   for (const [conversation, type, data, at] of EVENTS) insert.run(conversation, type, JSON.stringify(data), at);
-  const telemetry = startTelemetry({ ledgerFile, file });
-  await telemetry.idle();
+  // An upgrade: a schema-1 telemetry.db is there. The watcher sets it aside and rebuilds from the ledger, a page at a
+  // time (delayMs holds each write); while it runs the route says unavailable (the old file) or rebuilding, never ok
+  // with part of the history.
+  const old = new DatabaseSync(file);
+  old.exec('CREATE TABLE turns (key INTEGER PRIMARY KEY); PRAGMA user_version = 1');
+  old.close();
+  const read = (days, at = NOW) => readTurns({ file, exists: true, days, now: at });
+  const telemetry = startTelemetry({ ledgerFile, file, delayMs: 1500 });
+  const seen = [];
+  let done = false;
+  const idle = telemetry.idle().then(() => { done = true; });
+  while (!done) { seen.push(read(90)); await new Promise((resolve) => setTimeout(resolve, 50)); }
+  await idle;
   await telemetry.close();
+  assert.ok((await readdir(dir)).some((name) => name.startsWith('telemetry.db.set-aside-')), 'the schema-1 file is kept aside');
+  assert.ok(seen.some((page) => page.state === 'rebuilding'), 'rebuilding seen: ' + [...new Set(seen.map((page) => page.state))]);
+  const final = JSON.stringify(read(90));
+  assert.ok(seen.every((page) => page.state !== 'ok' || JSON.stringify(page) === final), 'no ok answer with part of the history');
 
-  const month = readTurns({ file, days: 30, now: NOW });
+  const month = read(30);
   assert.equal(month.state, 'ok');
   assert.equal(month.pricesAsOf, '2026-11-03');
   const one = local(T + 50), two = local(T + DAY + 50);
   assert.notEqual(one, two);
-  assert.deepEqual(month.rows.map((row) => [row.day, row.provider, row.model, row.profile, row.turns, row.measured]), [
-    [one, 'claude', 'glm-5.3:cloud', false, 1, 1], [one, 'claude', 'opus', false, 2, 2], [one, 'claude', 'sonnet', false, 1, 1], [one, 'codex', 'gpt-6.1-sol', false, 1, 1],
-    [two, 'claude', 'opus', false, 3, 2], [two, 'claude', 'sonnet', true, 1, 1], [two, 'codex', 'gpt-6.1-sol', false, 2, 2]]);
-  const [glm, opus, sonnet, codex, opus2, profile] = month.rows;
+  // [day, provider, model, profile, turns, measured, priced, estimated]
+  assert.deepEqual(month.rows.map((row) => [row.day, row.provider, row.model, row.profile, row.turns, row.measured, row.priced, row.estimated]), [
+    [one, 'claude', 'glm-5.3:cloud', false, 1, 1, 0, 0], [one, 'claude', 'opus', false, 2, 2, 2, 0], [one, 'claude', 'sonnet', false, 1, 1, 1, 0], [one, 'codex', 'gpt-6.1-sol', false, 1, 1, 0, 0],
+    [two, 'claude', 'haiku', false, 2, 2, 1, 0], [two, 'claude', 'opus', false, 3, 2, 2, 1], [two, 'claude', 'sonnet', true, 1, 1, 0, 0], [two, 'codex', 'gpt-6.1-sol', false, 2, 2, 0, 0]]);
+  const [glm, opus, sonnet, codex, haiku, opus2, profile] = month.rows;
+  assert.deepEqual([haiku.input, haiku.cacheWrite], [1001000, 0], 'both haiku turns show their tokens');
+  close(haiku.usd, 0.0001, 'only the whole haiku turn is priced: 1000 x $0.10 / 1M');
   assert.deepEqual([opus.input, opus.output, opus.cacheRead, opus.cacheWrite, opus.total], [1000, 2500, 150000, 10000, 163500]);
   close(opus.usd, 0.164, 'opus dollars');
   close(opus.cost.input, 0.004, 'opus input: 1000 x $4 / 1M'); close(opus.cost.output, 0.05, 'opus output: 2500 x $20 / 1M');
@@ -75,22 +100,38 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
   assert.deepEqual([profile.total, profile.cost, profile.usd, profile.saved], [2000, null, null, null], "a profile's 'sonnet' is another service: no price");
   assert.deepEqual([codex.total, codex.cost, codex.usd], [53400, null, null], 'Codex shows its tokens with no price');
   assert.equal(glm.usd, null, 'unknown model: no price');
-  close(priced(month.rows), 0.2574, '30-day dollars');
-  assert.deepEqual(month.chats, { claude: 5, codex: 3 }, 'chat A, on two days, counts once');
+  close(priced(month.rows), 0.2575, '30-day dollars');
+  assert.deepEqual(month.chats, { claude: 6, codex: 3 }, 'chat A, on two days, counts once');
 
-  const quarter = readTurns({ file, days: 90, now: NOW });
-  close(priced(quarter.rows), 4.2574, 'the 40-day-old turn joins the 90-day view');
-  assert.deepEqual(quarter.chats, { claude: 6, codex: 3 });
-  const day = readTurns({ file, days: 1, now: NOW });
+  const quarter = read(90);
+  close(priced(quarter.rows), 4.2575, 'the 40-day-old turn joins the 90-day view');
+  assert.deepEqual(quarter.chats, { claude: 7, codex: 3 });
+  const day = read(1);
   assert.deepEqual(day.rows.map((row) => [row.provider, row.model, row.turns, row.total]),
-    [['claude', 'opus', 3, 16100], ['claude', 'sonnet', 1, 2000], ['codex', 'gpt-6.1-sol', 1, 2]], 'J ends at the cut and is out; K, 1 ms later, is in');
-  assert.deepEqual(day.chats, { claude: 3, codex: 1 });
-  assert.equal(readTurns({ file, days: 'all', now: NOW }).days, 7, 'an unknown range is 7 days');
-  const fresh = readTurns({ file: path.join(dir, 'missing.db'), days: 7 });
+    [['claude', 'haiku', 2, 1000], ['claude', 'opus', 3, 16100], ['claude', 'sonnet', 1, 2000], ['codex', 'gpt-6.1-sol', 1, 2]], 'J ends at the cut and is out; K, 1 ms later, is in');
+  assert.deepEqual(day.chats, { claude: 4, codex: 1 });
+  assert.equal(read('all').days, 7, 'an unknown range is 7 days');
+  const plan = new DatabaseSync(file, { readOnly: true });
+  const steps = plan.prepare("EXPLAIN QUERY PLAN SELECT count(*) FROM turns WHERE end_at > ? AND end_at <= ?").all(0, NOW).map((row) => row.detail).join('; ');
+  plan.close();
+  assert.match(steps, /turns_end_at/, 'the window reads through the end_at index: ' + steps);
+
+  // A start that finds a rebuild cut short (user_version still 0) replays into it, then marks it whole; no row twice.
+  const cut = new DatabaseSync(file);
+  cut.exec('PRAGMA user_version = 0');
+  cut.close();
+  assert.equal(read(90).state, 'rebuilding');
+  const again = startTelemetry({ ledgerFile, file });
+  await again.idle();
+  await again.close();
+  assert.equal(JSON.stringify(read(90)), final, 'the same history after the second replay');
+
+  const fresh = readTurns({ file: path.join(dir, 'missing.db'), exists: false, days: 7 });
   assert.deepEqual([fresh.state, fresh.rows, fresh.chats], ['ok', [], {}], 'no telemetry.db yet (no turn recorded): empty, not an error');
   const damaged = path.join(dir, 'damaged.db');
   await writeFile(damaged, 'not a database '.repeat(100));
-  assert.equal(readTurns({ file: damaged, days: 7 }).state, 'unavailable', 'a file that is not a database: unavailable, not empty');
+  assert.equal(readTurns({ file: damaged, exists: true, days: 7 }).state, 'unavailable', 'a file that is not a database: unavailable, not empty');
+  assert.equal(readTurns({ file: path.join(dir, 'nowhere', 'telemetry.db'), exists: true, days: 7 }).state, 'unavailable', 'there but cannot be opened: unavailable, not empty');
 });
 
 test('A3: the daemon answers /usage/turns from its own telemetry.db', { timeout: 90000 }, async (t) => {
@@ -103,7 +144,7 @@ test('A3: the daemon answers /usage/turns from its own telemetry.db', { timeout:
   const chat = (await call('/chat', 'POST', { provider: 'claude' })).conversation;
   await call(`/chat/${chat}/prompt`, 'POST', { text: 'spend' });
   let page;
-  for (let i = 0; i < 80 && !page?.rows?.length; i += 1) { page = await call('/usage/turns?days=1'); if (!page.rows.length) await new Promise((resolve) => setTimeout(resolve, 250)); }
+  for (let i = 0; i < 80 && !page?.rows?.length; i += 1) { page = await call('/usage/turns?days=1'); if (!page?.rows?.length) await new Promise((resolve) => setTimeout(resolve, 250)); }
   assert.equal(page.state, 'ok', JSON.stringify(page));
   assert.deepEqual([page.rows.length, page.rows[0].provider, page.rows[0].turns, page.chats], [1, 'claude', 1, { claude: 1 }], JSON.stringify(page));
   assert.ok(!JSON.stringify(page).includes(chat), 'no chat id in the answer');

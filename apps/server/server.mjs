@@ -564,7 +564,11 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     ...(process.env.P9_TEST_HOME && Number(process.env.P9_USAGE_HISTORY_MS) > 0 && { everyMs: Number(process.env.P9_USAGE_HISTORY_MS) }) });
   api.get('/usage', async (c) => c.json(await usageNow()));
   // A3: the Tokens and Cost views, from the watcher's telemetry.db (usage-turns.mjs). ?days=1|7|30|90.
-  api.get('/usage/turns', (c) => c.json(ownership ? readTurns({ file: path.join(ownership, 'telemetry.db'), days: c.req.query('days') }) : { state: 'unavailable' }));
+  api.get('/usage/turns', (c) => {
+    if (!ownership) return c.json({ state: 'unavailable' });
+    const file = path.join(ownership, 'telemetry.db');
+    return c.json(readTurns({ file, exists: existsSync(file), days: c.req.query('days') }));
+  });
   api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));

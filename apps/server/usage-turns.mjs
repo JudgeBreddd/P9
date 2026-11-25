@@ -2,6 +2,7 @@
 // read-only: one row per day, provider and model over the last 1, 7, 30 or 90 days, with an API-price estimate in dollars
 // for Claude models in PRICES. Any other model, and every Codex turn, gets usd: null ("no price"), never $0.
 import { DatabaseSync } from 'node:sqlite';
+import { SCHEMA } from './telemetry.mjs';
 
 export const PRICES_AS_OF = '2026-11-03';
 // $ per million tokens: input, output, cache read, cache write. Cache writes at the 1-hour rate (2x input), the cache P9's
@@ -15,33 +16,45 @@ export const RANGES = [1, 7, 30, 90];
 // A provider profile's chat (profile 1) talks to another service under a model name of its own: no price, whatever the name.
 const priceOf = (row) => (row.provider === 'claude' && !row.profile && Object.hasOwn(PRICES, row.model) ? PRICES[row.model] : null);
 const TYPES = ['input', 'output', 'cacheRead', 'cacheWrite'];
-const CANTOPEN = 14; // SQLITE_CANTOPEN
 
-// days: one of RANGES (anything else is 7), the window ending at now. Days are the daemon's local dates. The watcher makes
-// telemetry.db at the first turn it records, so a file that cannot be opened means no turns yet (empty rows). Any other
-// failure (busy while the watcher rebuilds it, damaged) is { state: 'unavailable' }, at once: the read never waits on a
-// lock, as it runs on the daemon's one thread.
-export function readTurns({ file, days, now = Date.now() }) {
+// days: one of RANGES (anything else is 7), the window ending at now. Days are the daemon's local dates. Scope: the turns
+// the watcher recorded, of chats not deleted (a deleted chat's turns go with it, O35); a run the agent started itself (a
+// 'usage' event, no turn) is not here, so these are estimates beside the Usage view's totals, not the same figure.
+// exists: whether telemetry.db is there (the caller checks; the watcher makes it at the first turn it records). No file is
+// no turns yet (empty rows). A file whose first replay has not finished is { state: 'rebuilding' }. Any other failure
+// (busy, damaged, cannot open) is { state: 'unavailable' }, at once: the read never waits on a lock, as it runs on the
+// daemon's one thread.
+// Per row: turns; measured, the turns that reported any count; priced, the turns with all four counts and a price, the
+// only ones in cost, usd and saved; estimated, the priced turns whose counts include calls outside the main loop
+// (compactions, subagents), all priced at the chat's model though some may have run on another.
+const WHOLE = 'input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_write_tokens IS NOT NULL';
+export function readTurns({ file, exists, days, now = Date.now() }) {
   days = RANGES.includes(Number(days)) ? Number(days) : 7;
   const since = now - days * 86400000, empty = { state: 'ok', days, since, pricesAsOf: PRICES_AS_OF, rows: [], chats: {} };
+  if (!exists) return empty;
   let db;
-  try { db = new DatabaseSync(file, { readOnly: true }); } catch (error) { return (error?.errcode & 0xff) === CANTOPEN ? empty : { state: 'unavailable', days, since }; }
+  try { db = new DatabaseSync(file, { readOnly: true }); } catch { return { state: 'unavailable', days, since }; }
   try {
-    db.exec('PRAGMA busy_timeout = 0; BEGIN'); // one read snapshot for both queries
-    // measured: the turns that reported token counts; the sums cover only those, and are null when none did.
+    db.exec('PRAGMA busy_timeout = 0; BEGIN'); // one read snapshot for all three reads
+    const version = db.prepare('PRAGMA user_version').get().user_version;
+    if (version !== SCHEMA) return { state: version === 0 ? 'rebuilding' : 'unavailable', days, since };
     const rows = db.prepare(`SELECT date(end_at / 1000, 'unixepoch', 'localtime') AS day, provider, model, profile, count(*) AS turns,
-      sum(usage) AS measured, sum(input_tokens) AS input, sum(output_tokens) AS output, sum(cached_read_tokens) AS cacheRead,
-      sum(cached_write_tokens) AS cacheWrite, sum(total_tokens) AS total
+      sum(usage) AS measured, sum(${WHOLE}) AS whole, sum(${WHOLE} AND side_calls) AS sides,
+      sum(input_tokens) AS input, sum(output_tokens) AS output, sum(cached_read_tokens) AS cacheRead,
+      sum(cached_write_tokens) AS cacheWrite, sum(total_tokens) AS total,
+      total(iif(${WHOLE}, input_tokens, 0)) AS p_input, total(iif(${WHOLE}, output_tokens, 0)) AS p_output,
+      total(iif(${WHOLE}, cached_read_tokens, 0)) AS p_cacheRead, total(iif(${WHOLE}, cached_write_tokens, 0)) AS p_cacheWrite
       FROM turns WHERE end_at > ? AND end_at <= ? GROUP BY day, provider, model, profile ORDER BY day, provider, model, profile`).all(since, now).map((row) => {
-      const price = priceOf(row);
-      const known = price && TYPES.every((type) => row[type] != null);
+      const price = priceOf(row), priced = price ? row.whole : 0;
+      const p = (type) => row['p_' + type]; // the type's sum over the priced turns
       // cost: dollars by token type (the Cost view's bar). saved: what the cached tokens would have cost as plain input,
       // less what they cost as cache reads and writes; below zero when the writes' premium outran the reads' discount.
-      const cost = known ? Object.fromEntries(TYPES.map((type, i) => [type, row[type] * price[i] / 1e6])) : null;
+      const cost = priced ? Object.fromEntries(TYPES.map((type, i) => [type, p(type) * price[i] / 1e6])) : null;
       return { day: row.day, provider: row.provider, model: row.model, profile: row.profile === 1, turns: row.turns,
-        measured: row.measured, input: row.input, output: row.output, cacheRead: row.cacheRead, cacheWrite: row.cacheWrite, total: row.total,
+        measured: row.measured, priced, estimated: priced ? row.sides : 0,
+        input: row.input, output: row.output, cacheRead: row.cacheRead, cacheWrite: row.cacheWrite, total: row.total,
         cost, usd: cost && TYPES.reduce((sum, type) => sum + cost[type], 0),
-        saved: cost && ((row.cacheRead + row.cacheWrite) * price[0] - row.cacheRead * price[2] - row.cacheWrite * price[3]) / 1e6 };
+        saved: cost && ((p('cacheRead') + p('cacheWrite')) * price[0] - p('cacheRead') * price[2] - p('cacheWrite') * price[3]) / 1e6 };
     });
     // Chats are counted apart: one chat runs on several days and models, so the rows' counts would add it twice.
     const chats = Object.fromEntries(db.prepare('SELECT provider, count(DISTINCT conversation) AS n FROM turns WHERE end_at > ? AND end_at <= ? GROUP BY provider')

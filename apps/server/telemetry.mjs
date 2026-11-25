@@ -17,8 +17,10 @@ import { open as openFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
-export const SCHEMA = 2; // PRAGMA user_version of telemetry.db; another value is set aside and rebuilt (2: profile, A3)
-export const DERIVER = 2; // bump when derive() changes what it writes, so rows say which rules made them (2: counted, profile)
+export const SCHEMA = 2; // PRAGMA user_version of telemetry.db; another value is set aside and rebuilt (2: profile, side_calls, A3)
+// A new turns file keeps user_version 0 until its first replay has finished, so a reader can tell a rebuild part-way from
+// the whole history (usage-turns.mjs says 'rebuilding'); a start that finds 0 replays into it and then sets SCHEMA.
+export const DERIVER = 2; // bump when derive() changes what it writes, so rows say which rules made them (2: counted, profile, side_calls)
 export const SAMPLES_SCHEMA = 1; // PRAGMA user_version of telemetry-samples.db; another value is renamed aside, never rebuilt
 const GAP_MS = 180000; // samples further apart than this (sleep, restart, a stalled worker) leave a gap row
 
@@ -40,7 +42,7 @@ const list = (values) => values.map((value) => "'" + value + "'").join(', ');
 
 export const COLUMNS = ['key', 'conversation', 'end_cursor', 'deriver', 'outcome', 'unprompted', 'steers', 'stop_reason', 'error_code',
   'provider', 'model', 'model_source', 'profile', 'folder_id', 'turn_number', 'start_at', 'end_at', 'first_output_ms', 'total_ms', 'tool_count',
-  'tool_ms', 'approval_wait_ms', ...KINDS.map((kind) => 'tools_' + kind), 'usage', ...USAGE.map(([, column]) => column),
+  'tool_ms', 'approval_wait_ms', ...KINDS.map((kind) => 'tools_' + kind), 'usage', 'side_calls', ...USAGE.map(([, column]) => column),
   'cache_read_share', 'layers'];
 
 // STRICT plus a CHECK on every TEXT column: no column can hold free text (telemetry.test reads this back).
@@ -70,12 +72,14 @@ CREATE TABLE IF NOT EXISTS turns (
   approval_wait_ms INTEGER NOT NULL,
   ${KINDS.map((kind) => 'tools_' + kind + ' INTEGER NOT NULL').join(',\n  ')},
   usage INTEGER NOT NULL CHECK (usage IN (0, 1)),
+  side_calls INTEGER NOT NULL CHECK (side_calls IN (0, 1)),
   ${USAGE.map(([, column]) => column + ' INTEGER').join(',\n  ')},
   cache_read_share REAL,
   layers TEXT NOT NULL DEFAULT 'baseline' CHECK (layers IN ('baseline')),
   cpu_ms REAL,
   mem_peak_bytes INTEGER
-) STRICT;`;
+) STRICT;
+CREATE INDEX IF NOT EXISTS turns_end_at ON turns (end_at);`;
 
 // The privacy gate: one ledger event (data as the object chat.mjs emitted, or the stored JSON) to the few fields derive()
 // reads, or null when the watcher has no use for it.
@@ -114,8 +118,11 @@ export function project(event) {
         totalTokens: four.every((n) => Number.isSafeInteger(n) && n >= 0) ? four.reduce((sum, n) => sum + n, 0) : null };
       const usage = raw && typeof raw === 'object' ? Object.fromEntries(USAGE.map(([field]) =>
         [field, Number.isSafeInteger(raw[field]) && raw[field] >= 0 ? raw[field] : null])) : null;
+      // sideCalls: counted is more than the reply's own usage, so the turn's counts include calls outside its main loop
+      // (a compaction, a subagent, a side call), which may have run on another model than the chat's.
+      const sideCalls = Boolean(counted) && COUNTED.some((field) => counted[field] !== (data.usage?.[field] ?? 0));
       return { ...base, stop: data.stopReason == null ? null : STOPS.includes(data.stopReason) ? data.stopReason : 'other',
-        unprompted: data.unprompted === true, usage };
+        unprompted: data.unprompted === true, usage: usage && Object.values(usage).some((n) => n !== null) ? usage : null, sideCalls };
     }
     case 'error': {
       const message = String(data.message ?? '');
@@ -193,7 +200,7 @@ function close(chat, turn, event, outcome, end, unprompted = event.unprompted ==
     folder_id: chat.folder, turn_number: chat.turns, start_at: turn.start, end_at: end,
     first_output_ms: turn.output === null ? null : turn.output - turn.start, total_ms: end - turn.start,
     tool_count: turn.tools.size, tool_ms: toolMs, approval_wait_ms: waitMs, ...kinds,
-    usage: usage ? 1 : 0, ...tokens,
+    usage: usage ? 1 : 0, side_calls: event.type === 'turn-end' && event.sideCalls ? 1 : 0, ...tokens,
     // Rounded to 6 places so a hand-worked fixture can state it exactly.
     cache_read_share: share === null || !Number.isFinite(share) ? null : Math.round(share * 1e6) / 1e6,
     layers: 'baseline',
@@ -414,7 +421,7 @@ const CORRUPT = new Set([11, 26]); // SQLITE_CORRUPT, SQLITE_NOTADB
 // One SQLite file the worker writes: WAL, busy_timeout and user_version. An unknown version, a failed quick_check or a
 // corrupt error renames it (with its -wal and -shm) aside under a timestamped name, at most 5 times per start, and a new
 // one starts; nothing here deletes a file. onOpen prepares the statements.
-function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
+function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen, ready = () => true) {
   const store = { db: null };
   store.corrupt = (error) => CORRUPT.has(error?.errcode & 0xff);
   store.setAside = () => {
@@ -425,6 +432,11 @@ function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
     for (const suffix of ['', '-wal', '-shm']) if (existsSync(file + suffix)) renameSync(file + suffix, name + suffix);
     aside.push(name);
   };
+  // ready() false: a new file stays at user_version 0 until stamp() (the turns file, after its first full replay).
+  store.stamp = () => {
+    try { if (store.db?.prepare('PRAGMA user_version').get().user_version === 0) store.db.exec('PRAGMA user_version = ' + version); }
+    catch (error) { stats[errorKey] = error.errstr ?? error.message; }
+  };
   store.opened = () => {
     if (store.db) return true;
     try {
@@ -433,7 +445,7 @@ function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
       const found = store.db.prepare('PRAGMA user_version').get().user_version;
       const check = store.db.prepare('PRAGMA quick_check').all();
       if (((found !== 0 && found !== version) || check.length !== 1 || check[0].quick_check !== 'ok') && aside.length < 5) { store.setAside(); return store.opened(); }
-      store.db.exec(tables + (found === 0 ? ' PRAGMA user_version = ' + version + ';' : '')); // no write on an existing file: a locked one still opens
+      store.db.exec(tables + (found === 0 && ready() ? ' PRAGMA user_version = ' + version + ';' : '')); // no write on an existing file: a locked one still opens
       onOpen(store.db);
       return true;
     } catch (error) {
@@ -453,9 +465,10 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   let insert = null;
   let state = freshState();
   let ledger = null;
+  let replayed = false; // the last replay reached the ledger's end with every row written
   const turns = sqliteFile(file, SCHEMA, TABLES, stats.setAside, stats, 'lastError', (db) => {
     insert = db.prepare('INSERT OR IGNORE INTO turns (' + COLUMNS.join(', ') + ') VALUES (' + COLUMNS.map(() => '?').join(', ') + ')');
-  });
+  }, () => replayed);
   // O35: a deleted chat's turns, and their resource rows in the samples file. After the batch's own rows, so none is left
   // behind; on every replay too, so rows a failed write or an older daemon left are removed at the next start.
   const forget = (events) => {
@@ -490,6 +503,8 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   // ponytail: a full pass per start (the server's 204k events, 2026-11-05); keep a progress cursor if starts get slow.
   // The SQL trims update and user events to the fields project() reads, so replay never parses prompt or reply text.
   const catchUp = () => {
+    replayed = false;
+    const dropped = stats.droppedRows;
     try {
       ledger ??= new DatabaseSync(ledgerFile, { readOnly: true });
       const page = ledger.prepare(`SELECT cursor, conversation, type, at, CASE WHEN NOT json_valid(data) THEN '{}'
@@ -506,6 +521,7 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
         write(rows);
         forget(events);
       }
+      if (stats.droppedRows === dropped) { replayed = true; turns.stamp(); }
     } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
 

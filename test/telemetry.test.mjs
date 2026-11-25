@@ -60,18 +60,18 @@ const EXPECTED = [
   { key: 2, conversation: A, end_cursor: 12, deriver: 2, outcome: 'finished', unprompted: 0, steers: 0, stop_reason: 'end_turn', error_code: null,
     provider: 'claude', model: 'opus', model_source: 'set', profile: 0, folder_id: 'e3b0c44298fc1c14', turn_number: 1, start_at: T + 1000, end_at: T + 9000,
     first_output_ms: 500, total_ms: 8000, tool_count: 2, tool_ms: 3000, approval_wait_ms: 2000, ...NONE, tools_read: 1, tools_edit: 1,
-    usage: 1, input_tokens: 2, output_tokens: 446, cached_read_tokens: 11946, cached_write_tokens: 30545, thought_tokens: null, total_tokens: 42939,
+    usage: 1, side_calls: 0, input_tokens: 2, output_tokens: 446, cached_read_tokens: 11946, cached_write_tokens: 30545, thought_tokens: null, total_tokens: 42939,
     cache_read_share: 0.281129, layers: 'baseline', cpu_ms: null, mem_peak_bytes: null },
   { key: 15, conversation: B, end_cursor: 20, deriver: 2, outcome: 'finished', unprompted: 0, steers: 0, stop_reason: 'end_turn', error_code: null,
     provider: 'codex', model: 'gpt-6.1-sol', model_source: 'carried', profile: 0, folder_id: '0e837629b59802ef', turn_number: 1, start_at: T + 11000, end_at: T + 15000,
     first_output_ms: 800, total_ms: 4000, tool_count: 2, tool_ms: 1000, approval_wait_ms: 0, ...NONE, tools_execute: 1, tools_search: 1,
-    usage: 1, input_tokens: 12429, output_tokens: 13, cached_read_tokens: 12288, cached_write_tokens: null, thought_tokens: 512, total_tokens: 24730,
+    usage: 1, side_calls: 0, input_tokens: 12429, output_tokens: 13, cached_read_tokens: 12288, cached_write_tokens: null, thought_tokens: 512, total_tokens: 24730,
     cache_read_share: 0.497148, layers: 'baseline', cpu_ms: null, mem_peak_bytes: null },
   // t5 is still open at the error: 23000 - 20400 = 2600 ms; q1 unanswered: 23000 - 20500 = 2500 ms.
   { key: 21, conversation: A, end_cursor: 24, deriver: 2, outcome: 'failed', unprompted: 0, steers: 0, stop_reason: null, error_code: 'agent-error',
     provider: 'claude', model: 'opus', model_source: 'carried', profile: 0, folder_id: 'e3b0c44298fc1c14', turn_number: 2, start_at: T + 20000, end_at: T + 23000,
     first_output_ms: 400, total_ms: 3000, tool_count: 1, tool_ms: 2600, approval_wait_ms: 2500, ...NONE, tools_execute: 1,
-    usage: 0, input_tokens: null, output_tokens: null, cached_read_tokens: null, cached_write_tokens: null, thought_tokens: null, total_tokens: null,
+    usage: 0, side_calls: 0, input_tokens: null, output_tokens: null, cached_read_tokens: null, cached_write_tokens: null, thought_tokens: null, total_tokens: null,
     cache_read_share: null, layers: 'baseline', cpu_ms: null, mem_peak_bytes: null },
 ];
 // Turn identity: a failed turn, a cut-off one (daemon restart), a steered one, Codex's startedNewTurn (a steer after the
