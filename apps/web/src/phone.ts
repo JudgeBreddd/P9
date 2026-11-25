@@ -2285,8 +2285,8 @@ async function loadUsage() {
   try {
     const data = await request('/usage', deadline(20000)) as Usage;
     if (seq !== usageRead) return;
-    // The daemon always sends the switch: an answer without it was cut short (the body stalled), and is a failed read.
-    if (typeof data?.telemetryTab !== 'boolean') throw new Error('cut short');
+    // request() turns a body it could not parse (cut short, stalled) into {}: that is a failed read, not an empty one.
+    if (!data || !Object.keys(data).length) throw new Error('cut short');
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
     // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
