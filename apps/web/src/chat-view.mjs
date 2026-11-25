@@ -827,11 +827,14 @@ function paint(root, ss, only) {
         if (e.key !== 'Enter' || e.shiftKey) return;
         e.preventDefault(); e.stopPropagation(); if (ed.saving != null) return;
         if (ed.text === ed.was) { s.hedit = null; return renderChats(); }
-        ed.saving = ed.text; renderChats();
-        outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).catch(() => ({})).then(r => { if (s.hedit !== ed) return; ed.saving = null;
+        ed.saving = ed.text; renderChats(); const base = ed.base;
+        outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).catch(() => ({})).then(r => { if (s.hedit !== ed) return; const sent = ed.saving; ed.saving = null;
           if (r.status === 200) s.hedit = null;
-          else if (r.body?.error === 'changed') { ed.was = ed.base = r.body.text; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + r.body.text + ' Enter saves yours over it; Esc keeps that one.' }); }
-          else if (r.body?.error !== 'not-held') s.events.push({ t: 'notice', text: 'Your edit was not saved (' + (r.body?.error || r.status || 'no answer') + '). It is still open.' }); // not-held: it left; its event settles the edit (carry)
+          // A newer held-text event that came first already moved base on; the answer's older words do not set it back.
+          else if (r.body?.error === 'changed') { if (ed.base === base) ed.base = r.body.text; ed.was = ed.base; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + ed.base + ' Enter saves yours over it; Esc keeps that one.' }); }
+          // not-held: it left before the save; its event settles the edit (carry), or, if a catch-up skipped it, this does.
+          else if (r.body?.error === 'not-held') { if (!s.stub && !s.held?.some(h => h.id === ed.id)) editGone(s, false); }
+          else { if (!r.status) ed.lost = sent; s.events.push({ t: 'notice', text: 'Your edit ' + (r.status ? 'was not saved (' + (r.body?.error || r.status) + ')' : 'got no answer, so it may or may not be saved') + '. It is still open.' }); }
           renderChats(); }); }; });
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
@@ -1036,8 +1039,9 @@ function history(s, until = outer.liveChat.cursor) {
       after = r.body.cursor;
       if (r.body.events.length < 500) break;
     }
-    // A2 step 3: an open edit whose message left in events no carry saw (the catch-up's read of them failed).
-    if (s.hedit && !s.held?.some(h => h.id === s.hedit.id)) editGone(s, false);
+    // A2 step 3: an open edit whose message left in events no carry saw (a catch-up skips them, O251). A save in flight is
+    // settled by its answer instead (heldText below).
+    if (s.hedit && s.hedit.saving == null && !s.held?.some(h => h.id === s.hedit.id)) editGone(s, false);
     s.stub = false; outer.renderTabs(); renderChats();
   })();
 }
@@ -1074,7 +1078,7 @@ function editSeen(s, ev) {
 function editGone(s, back) {
   const ed = s.hedit, changed = ed.text !== ed.base; s.hedit = null;
   if (back) return changed ? ed.text : undefined;
-  if (changed && ed.text.trim()) { s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; s.events.push({ t: 'notice', text: 'The queued message went before your edit was saved. Your edit is in the box.' }); }
+  if (changed && ed.text.trim()) { s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; s.events.push({ t: 'notice', text: ed.text === ed.lost ? 'The queued message left while your edit\'s save had no answer, so it may have gone with these words. They are in the box; check before sending.' : 'The queued message left before your edit was saved. Your edit is in the box.' }); }
 }
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
@@ -1239,17 +1243,6 @@ async function loadChat() {
     // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
     caughtUp(listed);
     for (const ev of skipped) carry(ev); // after caughtUp, so a chat made in the gap gets its own too
-    // A2 step 3: a chat with an edit open gets the rest of the gap carried too, every event of it in order, so its save,
-    // its message leaving or a take-back (text and files) settle the edit as they would live. A read that fails leaves it
-    // to history(), which puts unsaved-looking words in the box rather than lose them.
-    // ponytail: one chat's whole gap, read only when an edit was open over it.
-    for (const s of outer.S.sessions) for (let after = page.at(-1)?.cursor ?? head.body.cursor; s.hedit && after < head.body.cursor;) {
-      const r = await window.p9.chat('events', { after, only: [s.id], until: head.body.cursor }).catch(() => ({}));
-      if (r.status !== 200) break;
-      for (const ev of r.body.events) carry(ev);
-      if (r.body.events.length < 500) break;
-      after = r.body.cursor;
-    }
     outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
     lastTwo();
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }
