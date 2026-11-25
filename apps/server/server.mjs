@@ -27,6 +27,7 @@ import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits, usageReport } from './limits.mjs';
+import { startUsageHistory } from './usage-history.mjs';
 import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
 import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
 import { loginPage, loginScript } from './login-page.mjs';
@@ -546,14 +547,20 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail), c.req.query('shots') === '1')); });
   // P8: a signed-out Codex has no plan figure (its old sessions would show one months old) and is named signed out. Claude
   // is left out: on a Mac its login is in the Keychain, so a missing credentials file says nothing.
-  // One answer for the page and for a sprint script's input (sprint-hooks.mjs).
-  const usageNow = async () => {
+  // One answer for the page and for a sprint script's input (sprint-hooks.mjs). look = false (the usage history's tick)
+  // takes each poll's last answer and starts no read, and leaves the projection to the tick. O244: each window carries
+  // its projected % at the reset.
+  const usageNow = async (look = true) => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
-    const limits = await planLimits({ home: os.homedir(), polled: Object.fromEntries(Object.entries(polls).map(([id, poll]) => [id, poll.look()])), live: { claude: claudeLive } });
+    const limits = await planLimits({ home: os.homedir(), polled: Object.fromEntries(Object.entries(polls).map(([id, poll]) => [id, look ? poll.look() : poll.peek?.() ?? null])), live: { claude: claudeLive } });
     const on = await signedIn(), signedOut = CATALOG.filter((a) => a.usage.hideSignedOut && !on[a.id]).map((a) => a.id);
-    return { ...usage, ...(contexts && { contexts }), limits: { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut } };
+    const all = { ...limits, ...Object.fromEntries(signedOut.map((id) => [id, null])), signedOut };
+    return { ...usage, ...(contexts && { contexts }), limits: look && history ? history.annotate(all) : all };
   };
+  // O244 (b): a row per provider and window every 10 min in usage-limits.db beside the ledger (P9_USAGE_HISTORY_MS: tests).
+  const history = ownership && startUsageHistory({ file: path.join(ownership, 'usage-limits.db'), read: async () => (await usageNow(false)).limits,
+    ...(process.env.P9_TEST_HOME && Number(process.env.P9_USAGE_HISTORY_MS) > 0 && { everyMs: Number(process.env.P9_USAGE_HISTORY_MS) }) });
   api.get('/usage', async (c) => c.json(await usageNow()));
   api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
@@ -917,6 +924,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   server.maxConnections = 32;
   Object.assign(server, { chat, mission, terminals, lifecycle, auth });
+  if (history) server.on('close', () => history.close());
   if (auth) server.remote = remoteListener();
   server.editor = editor;
   return server;
