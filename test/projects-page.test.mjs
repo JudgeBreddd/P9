@@ -1794,6 +1794,7 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   await page.keyboard.press('Shift'); await page.mouse.click(800, 400);
   release();
   await page.locator('#pjName').waitFor({ timeout: 5000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o261-first-click ' + (await page.screenshot({ type: 'png' })).toString('base64'));
 
   // A failed load: the menu and a project click say so; the next click loads it.
   await fresh('fail');
