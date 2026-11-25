@@ -1426,7 +1426,8 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
   });
 }); // A2 step 1: a big paste of text attaches as a file
 // Round 14 review: the text goes back into the box first, so removing the file never loses the only copy; only a paste P9 made.
-function pasteHint(list: Attached[]) { return list.some((image) => image.paste) ? ' Or, to queue the big paste as text: paste it into the box again, and once its text is there, remove pasted.txt with ✕.' : ''; }
+// Round 15: only when one chip is named pasted.txt, so the ✕ to tap is never in doubt.
+function pasteHint(list: Attached[]) { const named = list.filter((image) => image.name === 'pasted.txt'); return named.length === 1 && named[0].paste ? ' Or, to queue the big paste as text: paste it into the box again, and once its text is there, remove pasted.txt with ✕.' : ''; }
 // A dropped file attaches the same way (spec §4); dropped text still goes into the box.
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
