@@ -590,7 +590,10 @@ protocol ever carries them, that becomes the source and these reads go.
 - **What reaches the network.** The agent's own program asks its own service, signed in as
   you, exactly as its `/usage` or status screen would. P9 adds no request of its own and
   never reads, holds or sends the agent's credentials.
-- **What P9 keeps.** The percent used, the window's length and its reset time, in memory only.
+- **What P9 keeps.** The percent used, the window's length and its reset time, in memory. Every
+  10 minutes the daemon also writes the reading it already has (no new read) to `usage-limits.db`
+  beside the ledger: per provider and window the percent, the reset, the projected percent at the
+  reset and the pace, and when it was read. No account id is written.
   The Codex answer also carries an account id; P9 drops it. A failed read logs one fixed line
   per kind of failure, never the agent's error text (it can name the account) and never the
   process's error output. The rows then fall back to the other sources: the figures a running
