@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 
@@ -373,4 +374,64 @@ test('A2 step 3: a queued message edited in place keeps its place and goes edite
   await until(async () => await chat.pane.locator('.composer textarea').inputValue() === 'second, still typing', 'the open edit lands in the box');
   assert.equal(await chat.pane.locator('.queue').count(), 0);
   console.log('PASS A2 step 3: an edit keeps its place and goes edited; an edit open when its message went came into the box');
+});
+
+// A2 step 5 (page half): the goal the agent keeps (session_info_update _meta, chat-goal.test.mjs) shows as a line above the
+// box, with its status; it follows each change, a reload keeps it (the list's goal), and a clear removes it.
+test('A2 step 5: the agent\'s goal shows above the box with its status, follows a change, survives a reload past the tail, and a clear removes it', { timeout: 180000 }, async (t) => {
+  const { instance, id, launch, open, ends } = await setup(t, 'a2-goal');
+  await until(async () => await ends() === 1, 'hello answered');
+  let { app, page } = await launch(); let chat = await open(page);
+  const line = () => chat.pane.locator('.bottom .goal'), replies = () => chat.pane.locator('.hist').getByText('goal sent', { exact: true }).count();
+  // Each goal turn ends with a 'goal sent' reply after its update: the page has read the update once the reply is drawn.
+  const goal = async (json, n) => { await chat.send('goal ' + json); await until(async () => await ends() === n && await replies() === n - 1, 'goal sent and drawn'); };
+  assert.equal(await line().count(), 0, 'no goal, no line');
+  // The box is the same element while the line comes and goes (the morph keys it), so a half-typed word is not lost.
+  await chat.pane.locator('.composer textarea').evaluate(el => { el.p9Mark = 1; });
+  const sameBox = async (why) => assert.equal(await chat.pane.locator('.composer textarea').evaluate(el => el.p9Mark), 1, why);
+  await goal('{"objective":"  ship the goal line  ","status":"active","iterations":2}', 2);
+  await until(async () => await line().count() === 1, 'the goal shows');
+  assert.equal((await line().innerText()).replace(/\s+/g, ' ').trim(), 'Goal: ship the goal line', 'active is the usual status and is not shown');
+  await sameBox('the box is kept when the goal line appears');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-goal-line ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
+  await goal('{"objective":"ship the goal line","status":"paused"}', 3);
+  await until(async () => (await line().innerText()).includes('paused'), 'the line follows a change of status');
+  assert.equal(await line().getAttribute('title'), 'Goal: ship the goal line · paused', 'the full text, status and all, is on hover');
+  await goal('{"objective":5}', 4);
+  assert.ok((await line().innerText()).includes('paused'), 'junk is not a goal and leaves the last one');
+  // Over TAIL (200) newer steps: after a reload the goal's update is not in the loaded history, so it comes from the list.
+  await chat.send('stream 250'); await until(async () => await ends() === 5, 'the long turn ended');
+  await page.reload(); await page.locator('#rChat').waitFor(); chat = await open(page);
+  await until(async () => await chat.pane.locator('.hist').getByText('step 250 done.').count() > 0, 'the reload drew the newest steps');
+  assert.equal(await replies(), 0, 'the goal updates are out of the loaded history');
+  await until(async () => await line().count() === 1 && (await line().textContent()) === 'Goal: ship the goal line · paused', 'a reload keeps a goal older than the tail');
+  await chat.pane.locator('.composer textarea').evaluate(el => { el.p9Mark = 1; });
+  await chat.send('goal null'); await until(async () => await ends() === 6 && await replies() === 1, 'the clear sent and drawn');
+  assert.equal(await line().count(), 0, 'a clear removes the line');
+  await sameBox('the box is kept when the goal line goes');
+  await page.reload(); await page.locator('#rChat').waitFor(); chat = await open(page);
+  await until(async () => await replies() === 1, 'the reload drew the clear\'s turn');
+  assert.equal(await line().count(), 0, 'a reload does not bring back a cleared goal');
+  // A long objective is cut on its own; the status stays in view.
+  // (After the reload only the clear's reply is drawn, so this one is the second, not the helper's n - 1.)
+  await chat.send('goal ' + JSON.stringify({ objective: 'ship the goal line '.repeat(40).trim(), status: 'paused' }));
+  await until(async () => await ends() === 7 && await replies() === 2, 'the long goal sent and drawn');
+  await until(async () => await line().count() === 1, 'the long goal shows');
+  const fit = await line().evaluate(el => { const r = el.getBoundingClientRect(), st = el.querySelector('.st').getBoundingClientRect(), cut = el.querySelector('.truncate');
+    return { cut: cut.scrollWidth > cut.clientWidth, shown: st.width > 0 && st.left >= r.left && st.right <= r.right + 0.5 }; });
+  assert.deepEqual(fit, { cut: true, shown: true }, 'the objective is cut and the status stays visible');
+  await chat.send('goal null'); await until(async () => await ends() === 8 && await replies() === 3, 'the second clear sent and drawn');
+  // Review round 2: the history is older than the list. A goal in it the list no longer gives (here written into the ledger
+  // while the window is shut, as a clear landing between the page's two reads leaves it) is not drawn again.
+  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'update', JSON.stringify({ sessionUpdate: 'session_info_update', _meta: { jetbrains: { air: { goal: { objective: 'an old goal', status: 'active' } } } } }), Date.now());
+  db.close();
+  ({ app, page } = await launch()); chat = await open(page);
+  await until(async () => await replies() === 3, 'the relaunch drew the history');
+  assert.equal(await line().count(), 0, 'an older goal in the history does not override the list');
+  // Review round 3: the list says "no goal" as null, so the page tells it from an older daemon's row without the field.
+  const row = (await call(instance, '/chat')).conversations.find(c => c.id === id);
+  assert.ok(Object.hasOwn(row, 'goal') && row.goal === null, 'the list gives a cleared goal as null, not a missing field');
+  console.log('PASS A2 step 5: the goal line shows, follows, survives a reload past the tail, and a clear removes it');
 });

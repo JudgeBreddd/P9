@@ -396,6 +396,9 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 .card-pin li:has(>input[type=checkbox]){list-style:none;margin-left:-1.2em}
 .notice{font-size:12.5px;color:var(--muted-foreground);text-align:center;padding:4px}
 .working{display:flex;align-items:center;gap:8px;color:var(--muted-foreground);font-size:12.5px}
+.bottom .goal{display:flex;color:var(--muted-foreground);font-size:12.5px}
+.bottom .goal .truncate{min-width:0}
+.bottom .goal .st{flex:none;white-space:pre}
 .working .glyph{color:var(--primary);width:1em;text-align:center;font-size:14px}
 @keyframes pulse{50%{opacity:.3}}
 .pending{border:1px solid color-mix(in oklch,var(--warn) 45%,var(--border));border-left:3px solid var(--warn);border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--warn) 6%,var(--card));padding:12px 14px;box-shadow:0 12px 30px -16px color-mix(in oklch,var(--warn) 50%,transparent)}
