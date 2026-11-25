@@ -346,7 +346,7 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await send(page, 'look'); await hit;
   assert.equal(await pasteText('z'.repeat(5001)), true, 'a big paste while the send is on its way');
   await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
-  const log = 'the log said: look\n  at line 4 ';
+  const log = 'lookup failed: look\n  at line 4 '; // starts with the sent text and holds it again
   await page.fill('#prompt', log);
   release();
   await replied('echo:look' + seen);
@@ -357,6 +357,16 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await page.click('#attached [aria-label="Remove pasted.txt"]');
   assert.equal(await page.isHidden('#attached'), true);
   assert.equal(await page.isHidden('#composerNote'), true);
+  // A send of only a photo leaves the box alone: what is typed while it is on its way stays, spaces and all.
+  await paste(1); await chips(1);
+  let release2, reached2; const gate2 = new Promise((r) => { release2 = r; }), hit2 = new Promise((r) => { reached2 = r; });
+  await page.route(onPrompt, async (route) => { reached2(); await gate2; await route.continue(); }, { times: 1 });
+  await send(page, ''); await hit2;
+  await page.fill('#prompt', '  next ');
+  release2();
+  await chips(0);
+  assert.equal(await page.inputValue('#prompt'), '  next ', 'a photo-only send leaves what was typed meanwhile byte for byte');
+  await page.fill('#prompt', '');
   // The sent photo shows in its message, fetched from the daemon by hash.
   await page.waitForSelector('#events .user-imgs img[src^="data:image/png;base64,"]', { timeout: 10000 });
   await page.locator('#events .user-imgs img').last().scrollIntoViewIfNeeded(); await shot(page, 'phone-sent-photo');
@@ -376,7 +386,7 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await replied('echo:look' + seen.repeat(4));
   // After a reload the sent photos still show, fetched again by hash.
   await page.reload();
-  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 5, null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 6, null, { timeout: 15000 });
   // A2 step 1: any file goes as a file. The agent gets its real path in the chat's own folder and its edit is on disk; the sent
   // message names the file. One over 6 MiB is refused before sending, with the reason.
   await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('from the phone') }]);
