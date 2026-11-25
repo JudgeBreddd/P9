@@ -346,8 +346,10 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await send(page, 'look'); await hit;
   assert.equal(await pasteText('z'.repeat(5001)), true, 'a big paste while the send is on its way');
   await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  // The tap takes the sent text out of the box, so what is added while it is on its way is the next message and nothing goes twice.
+  assert.equal(await page.inputValue('#prompt'), '', 'the box empties at the tap');
   const log = 'lookup failed: look\n  at line 4 '; // starts with the sent text and holds it again
-  await page.fill('#prompt', log);
+  await page.$eval('#prompt', (el, more) => { el.value += more; el.dispatchEvent(new Event('input', { bubbles: true })); }, log); // added, not replaced
   release();
   await replied('echo:look' + seen);
   await chips(0);
@@ -720,7 +722,7 @@ test('O55 round 3: Interrupt with a stalled event read lets go of the composer, 
   await page.route((url) => url.pathname.endsWith('/chat/events') && url.search.includes('wait=1000'), async (route) => { await held; await route.abort().catch(() => {}); });
   await page.click('#midTurn [data-when="now"]');
   // Either the turn ended and the message went, or the box says it is still stopping and keeps the text: never locked.
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '' || (!document.querySelector('#composerNote').hidden && !/^Stopping/.test(document.querySelector('#composerNote').textContent)), null, { timeout: 60000 });
+  await page.waitForFunction(() => document.querySelector('#composerNote').hidden || (!document.querySelector('#composerNote').hidden && !/^Stopping/.test(document.querySelector('#composerNote').textContent)), null, { timeout: 60000 });
   await page.fill('#prompt', 'later one');
   await page.evaluate(() => document.querySelector('#composer').requestSubmit());
   // Sent or queued behind the turn, the box empties; a locked composer would leave the text there.
@@ -1013,7 +1015,7 @@ test('O204 review: a refused send clears its pick, a newer pick stays pending, a
   let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
   await page.route(prompts, async (route) => { await held; await refuse(route).catch(() => {}); });
   await pick('opus'); await send(page, 'refused two');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'refused two', null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 5000 }); // on its way: the tap took the text out of the box
   await pick('haiku'); release(); await noted('Not sent: model-refused');
   await is(['Claude · Default (recommended) → Haiku', 'Model: Default (recommended), Haiku pending'], 'a newer pick made during a refused send');
   await page.unroute(prompts);
@@ -1068,7 +1070,7 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   let held = new Promise((resolve) => { release = resolve; });
   await page.route(prompts, async (route) => { await held; await refuse(route).catch(() => {}); });
   await pick('opus'); await send(page, 'refused box');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'refused box', null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 5000 }); // on its way: the tap took the text out of the box
   await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
   await is(opusPending, 'box: the newer Opus pick was cleared by the old refusal');
   await page.unroute(prompts);
@@ -1144,7 +1146,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   let calls = 0;
   await page.route(prompts, async (route) => { if (++calls === 1) { await held; return busy(route).catch(() => {}); } return refuse(route); });
   await pick('opus'); await send(page, 'held');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'held', null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 5000 }); // on its way: the tap took the text out of the box
   await pick('haiku'); await pick('opus'); await clear(); release(); await noted('Not sent: model-refused');
   assert.equal(calls, 2, 'the held send moved to the queue and the queue sent it');
   await is(opusPending, 'held: moving the send to the queue spent the newer Opus pick');
@@ -1179,7 +1181,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   calls = 0;
   await page.route(prompts, async (route) => { if (++calls === 1) { await heldConfig; return busy(route).catch(() => {}); } return refuse(route); });
   await page.fill('#prompt', ''); await clear(); await setEffort('high'); await send(page, 'held effort');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'held effort', null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 5000 }); // on its way: the tap took the text out of the box
   await setEffort(other); await setEffort('high'); await clear(); release(); await noted('Not sent: model-refused');
   assert.equal(calls, 2, 'the held effort send moved to the queue and the queue sent it');
   await page.unroute(prompts);
@@ -1196,7 +1198,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   calls = 0;
   await page.route(prompts, async (route) => { if (++calls === 1) { await heldTaken; return busy(route).catch(() => {}); } return route.continue(); });
   await page.fill('#prompt', ''); await clear(); await pick('opus'); await send(page, 'taken');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'taken', null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 5000 }); // on its way: the tap took the text out of the box
   await pick('haiku'); await pick('opus'); release();
   await page.waitForFunction(() => document.querySelector('#model').dataset.current === 'opus', null, { timeout: 15000 });
   assert.equal(calls, 2, 'the held send moved to the queue and the queue sent it');
