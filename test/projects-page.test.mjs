@@ -1752,6 +1752,7 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   // A press held on a menu item while the code arrives: the items wait until it ends (here a slide off, no click).
   await fresh('hold', false);
   await more();
+  await until(() => hits === 1, 'opening the menu asked for the project page'); // release() is this load's
   await page.locator('.lp-menu button').first().hover(); await page.mouse.down();
   release();
   await page.evaluate((u) => import(u).then(() => 0), chunkUrl); // resolves once the held chunk has run: the code is in
