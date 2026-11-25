@@ -601,6 +601,19 @@ protocol ever carries them, that becomes the source and these reads go.
   process's error output. The rows then fall back to the other sources: the figures a running
   chat reports, and the agents' own files on this computer. The newest reading wins.
 - **Who can see it.** The same usage summary as before, on the desktop and a signed-in phone.
+- **Tokens and cost.** `GET /usage/turns?days=1|7|30|90` (desktop or signed-in phone) opens `telemetry.db`
+  read-only and returns, per day, provider and model, the turn count and token sums, the chat count per provider,
+  and a dollar estimate from a fixed price table in the code (Claude models only; any other model, and every chat on
+  a provider profile, is no price). Only turns that reported all four token counts are priced, and each row says how
+  many were. The figures are the turns P9 recorded, of chats not deleted. The read never waits: while telemetry.db is
+  being rebuilt it answers `rebuilding`, and when the file is busy or damaged `unavailable`. The answer carries no
+  chat id, title, folder or text, and nothing is sent anywhere.
+- **What this adds to telemetry.db.** Each turn row (already a chat id, provider, model alias and token counts) gains
+  two 0/1 flags: whether the chat is on a provider profile, and whether the turn's counts include calls outside its
+  main loop (a compaction or subagent). Plus an index on the turn's end time. Still no prompt, reply, path or key.
+  The schema change sets the old file aside (kept, `telemetry.db.set-aside-<time>`) and rebuilds it from the ledger
+  once. That kept copy is not touched again: a chat deleted after the upgrade is removed from telemetry.db, not from
+  the copy. Delete the copy to remove what it holds; nothing reads it.
 
 ## Provider profiles
 

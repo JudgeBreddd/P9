@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { constants as fsConstants, existsSync, realpathSync } from 'node:fs';
+import { constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
@@ -27,6 +27,7 @@ import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits, usageReport } from './limits.mjs';
+import { readTurns } from './usage-turns.mjs';
 import { startUsageHistory } from './usage-history.mjs';
 import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
 import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
@@ -562,6 +563,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const history = ownership && startUsageHistory({ file: path.join(ownership, 'usage-limits.db'), read: async () => (await usageNow(false)).limits,
     ...(process.env.P9_TEST_HOME && Number(process.env.P9_USAGE_HISTORY_MS) > 0 && { everyMs: Number(process.env.P9_USAGE_HISTORY_MS) }) });
   api.get('/usage', async (c) => c.json(await usageNow()));
+  // A3: the Tokens and Cost views, from the watcher's telemetry.db (usage-turns.mjs). ?days=1|7|30|90.
+  api.get('/usage/turns', (c) => {
+    if (!ownership) return c.json({ state: 'unavailable' });
+    const file = path.join(ownership, 'telemetry.db');
+    let exists = true; // only a confirmed absence (ENOENT) is no turns yet; a stat that fails otherwise lets the reader say unavailable
+    try { exists = Boolean(statSync(file, { throwIfNoEntry: false })); } catch {}
+    return c.json(readTurns({ file, exists, days: c.req.query('days') }));
+  });
   api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));

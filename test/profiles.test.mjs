@@ -165,7 +165,7 @@ test('profile: a profile chat is not handed off to a terminal, and says why; a p
   const handed = await call(instance, '/chat/' + id + '/handoff', 'POST');
   assert.deepEqual([handed.status, handed.error], [409, 'handoff-unavailable'], handed.text);
   assert.match(handed.message, /provider profile .* Claude sign-in/);
-  assert.match((await events(instance, id)).at(-1).data.message, /cannot be handed to a terminal/);
+  assert.equal((await events(instance, id)).some((e) => e.type === 'error'), false, 'a refused hand-off writes no error event: it would end a running turn');
   assert.equal((await events(instance, id)).some((e) => e.type === 'handed-off'), false, 'the profile chat was stopped for a hand-off');
   const own = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await said(instance, own, 'hello');

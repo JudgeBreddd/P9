@@ -6,6 +6,7 @@
 // usage: reader, the limits.mjs reader of its plan limits; poll, the daemon's live poll of them (main.mjs POLLS), if any; staleMs, how old a reading may be before it is marked stale (the
 // ledger's own 15 min line); pool, the plan the reading counts against; hideSignedOut, the limits are shown as signed out
 // (null) when the sign-in file is missing. Claude's is false: on a Mac its sign-in can live in the keychain, not a file.
+// apiPrice (optional): its turns get an API-price estimate from usage-turns.mjs PRICES; without it they show no price.
 // acp: the ACP version P9 asks the agent for (chat.mjs ACP_ASK says why each is what it is). tellStart: the start mode P9
 // sets on a new or resumed session is shown at once; false, it is set quietly and the window's mode comes with the first
 // prompt (Claude's, as its adapter's own start was).
@@ -19,7 +20,7 @@ export const CATALOG = Object.freeze([
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
       'Accept edits': { value: 'acceptEdits', tier: 2 }, 'Bypass permissions': { value: 'bypassPermissions', tier: 4 } },
     acp: 1, tellStart: false,
-    start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', poll: 'claude-sdk', staleMs: STALE, pool: 'claude', hideSignedOut: false },
+    start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', poll: 'claude-sdk', staleMs: STALE, pool: 'claude', hideSignedOut: false, apiPrice: true },
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
     why: 'Claude Code, for Claude chats and a terminal.',
     short: 'Claude', pick: 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.', account: 'A Claude account. After you sign in the browser shows a code: paste it here.' }),
@@ -44,6 +45,7 @@ export const TIER = each((a) => Object.freeze(Object.fromEntries(Object.entries(
 export const NARROW = each((a) => a.narrow);
 export const START = each((a) => a.start);
 export const AUTO = each((a) => a.auto);
+export const API_PRICED = each((a) => a.usage.apiPrice === true);
 export const LOGIN = each((a) => Object.freeze([...a.login.args]));
 export const COMMANDS = each((a) => Object.freeze({ login: a.login.command }));
 export const PASS = each((a) => a.cliPass);

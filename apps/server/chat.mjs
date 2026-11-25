@@ -2113,10 +2113,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!conversation) return refused(404, 'unknown-conversation');
       if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '') || ['moving', 'moved'].includes(conversation.state)) return refused(409, 'handoff-unavailable');
       // PD-1 (a): the terminal's claude runs on this computer's own sign-in, not the profile's service and key, so a
-      // profile chat stays in P9. Said in the chat too, as the page shows no reason for a refused hand-off.
+      // profile chat stays in P9. The page shows the message as a notice. No ledger error: the turn may still be running,
+      // and an error event ends it, on the page and in telemetry, which would then count its reply as a second turn.
       if (profileOf(id)) {
         const message = 'A chat on a provider profile cannot be handed to a terminal: there it would run on the Claude sign-in, not the profile.';
-        emit(id, 'error', { message });
         return { status: 409, error: 'handoff-unavailable', message };
       }
       const cwd = await startOf(conversation).catch(() => null);

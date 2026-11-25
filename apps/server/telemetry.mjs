@@ -3,7 +3,7 @@
 // at start. telemetry.db holds only what the ledger can rebuild, so a damaged or out-of-date one is renamed aside (kept)
 // and rebuilt. Off the chat path: push() only projects an event and queues it; a worker thread writes, so a locked,
 // read-only, slow or corrupt file drops rows (counted) and never delays a chat or the ledger.
-// Privacy: project() is the gate. Rows hold ids, provider, model alias, stop reason, error code and tool kind; never prompt
+// Privacy: project() is the gate. Rows hold ids, provider, model alias, a profile flag, stop reason, error code and tool kind; never prompt
 // text, file contents, paths or keys. The schema's CHECKs refuse anything else (telemetry.test's privacy check).
 // Resources (phase 3): CPU and peak memory per live turn from the chat's cgroup, a 60 s sample of the daemon and p9.slice,
 // coverage gaps and the watcher's own cost go to telemetry-samples.db, which nothing can rebuild: it is never rebuilt or
@@ -17,8 +17,10 @@ import { open as openFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
-export const SCHEMA = 1; // PRAGMA user_version of telemetry.db; another value is set aside and rebuilt
-export const DERIVER = 1; // bump when derive() changes what it writes, so rows say which rules made them
+export const SCHEMA = 2; // PRAGMA user_version of telemetry.db; another value is set aside and rebuilt (2: profile, side_calls, A3)
+// A new turns file keeps user_version 0 until its first replay has finished, so a reader can tell a rebuild part-way from
+// the whole history (usage-turns.mjs says 'rebuilding'); a start that finds 0 replays into it and then sets SCHEMA.
+export const DERIVER = 2; // bump when derive() changes what it writes, so rows say which rules made them (2: counted, profile, side_calls)
 export const SAMPLES_SCHEMA = 1; // PRAGMA user_version of telemetry-samples.db; another value is renamed aside, never rebuilt
 const GAP_MS = 180000; // samples further apart than this (sleep, restart, a stalled worker) leave a gap row
 
@@ -31,6 +33,7 @@ const ERRORS = [['Mode ', 'mode-failed'], ['This agent does not offer that model
 const CODES = ['agent-error', 'exited', 'config-failed', ...new Set(ERRORS.map(([, code]) => code))];
 const USAGE = [['inputTokens', 'input_tokens'], ['outputTokens', 'output_tokens'], ['cachedReadTokens', 'cached_read_tokens'],
   ['cachedWriteTokens', 'cached_write_tokens'], ['thoughtTokens', 'thought_tokens'], ['totalTokens', 'total_tokens']];
+const COUNTED = ['inputTokens', 'outputTokens', 'cachedReadTokens', 'cachedWriteTokens'];
 const ENDS = new Set(['turn-end', 'error', 'exited', 'interrupted']);
 const RELEVANT = new Set([...ENDS, 'user', 'update', 'config', 'created', 'approval', 'question', 'answered', 'deleted']);
 const UUID = /^[0-9a-f-]{36}$/;
@@ -38,8 +41,8 @@ const ALIAS = /^[A-Za-z0-9._:[\]-]{1,64}$/;
 const list = (values) => values.map((value) => "'" + value + "'").join(', ');
 
 export const COLUMNS = ['key', 'conversation', 'end_cursor', 'deriver', 'outcome', 'unprompted', 'steers', 'stop_reason', 'error_code',
-  'provider', 'model', 'model_source', 'folder_id', 'turn_number', 'start_at', 'end_at', 'first_output_ms', 'total_ms', 'tool_count',
-  'tool_ms', 'approval_wait_ms', ...KINDS.map((kind) => 'tools_' + kind), 'usage', ...USAGE.map(([, column]) => column),
+  'provider', 'model', 'model_source', 'profile', 'folder_id', 'turn_number', 'start_at', 'end_at', 'first_output_ms', 'total_ms', 'tool_count',
+  'tool_ms', 'approval_wait_ms', ...KINDS.map((kind) => 'tools_' + kind), 'usage', 'side_calls', ...USAGE.map(([, column]) => column),
   'cache_read_share', 'layers'];
 
 // STRICT plus a CHECK on every TEXT column: no column can hold free text (telemetry.test reads this back).
@@ -57,6 +60,7 @@ CREATE TABLE IF NOT EXISTS turns (
   provider TEXT CHECK (provider IN ('claude', 'codex')),
   model TEXT CHECK (length(model) <= 64 AND model NOT GLOB '*[^][A-Za-z0-9._:-]*'),
   model_source TEXT NOT NULL CHECK (model_source IN ('set', 'carried', 'missing')),
+  profile INTEGER NOT NULL CHECK (profile IN (0, 1)),
   folder_id TEXT CHECK (length(folder_id) = 16 AND folder_id NOT GLOB '*[^0-9a-f]*'),
   turn_number INTEGER NOT NULL,
   start_at INTEGER NOT NULL,
@@ -68,12 +72,14 @@ CREATE TABLE IF NOT EXISTS turns (
   approval_wait_ms INTEGER NOT NULL,
   ${KINDS.map((kind) => 'tools_' + kind + ' INTEGER NOT NULL').join(',\n  ')},
   usage INTEGER NOT NULL CHECK (usage IN (0, 1)),
+  side_calls INTEGER NOT NULL CHECK (side_calls IN (0, 1)),
   ${USAGE.map(([, column]) => column + ' INTEGER').join(',\n  ')},
   cache_read_share REAL,
   layers TEXT NOT NULL DEFAULT 'baseline' CHECK (layers IN ('baseline')),
   cpu_ms REAL,
   mem_peak_bytes INTEGER
-) STRICT;`;
+) STRICT;
+CREATE INDEX IF NOT EXISTS turns_end_at ON turns (end_at);`;
 
 // The privacy gate: one ledger event (data as the object chat.mjs emitted, or the stored JSON) to the few fields derive()
 // reads, or null when the watcher has no use for it.
@@ -88,7 +94,8 @@ export function project(event) {
     case 'user': return { ...base, steered: Boolean(data.steered) };
     case 'created': return { ...base, provider: ['claude', 'codex'].includes(data.provider) ? data.provider : null,
       // '' is the chat's default workspace: it gets an id of its own, so NULL means only "unknown".
-      folder: typeof data.folder === 'string' ? createHash('sha256').update(data.folder).digest('hex').slice(0, 16) : null };
+      folder: typeof data.folder === 'string' ? createHash('sha256').update(data.folder).digest('hex').slice(0, 16) : null,
+      profile: Boolean(data.profile) }; // a provider profile's chat: another service, so its tokens get no Claude price (A3)
     case 'config': {
       const current = data.model?.current;
       return { ...base, model: typeof current !== 'string' ? null : ALIAS.test(current) ? current : 'other' };
@@ -103,13 +110,25 @@ export function project(event) {
     }
     case 'approval': case 'question': case 'answered': return { ...base, request: String(data.request) };
     case 'turn-end': {
-      const usage = data.usage && typeof data.usage === 'object' ? Object.fromEntries(USAGE.map(([field]) =>
-        [field, Number.isSafeInteger(data.usage[field]) && data.usage[field] >= 0 ? data.usage[field] : null])) : null;
+      // O190: counted (the reply's per-model counts, compactions included; ledger.mjs) stands in for usage when the reply
+      // has it, as the usage view does, with the total made from its four counts.
+      const counted = data.counted && typeof data.counted === 'object' ? data.counted : null;
+      const four = counted && COUNTED.map((field) => counted[field]);
+      const raw = !counted ? data.usage : { ...data.usage, ...counted,
+        totalTokens: four.every((n) => Number.isSafeInteger(n) && n >= 0) ? four.reduce((sum, n) => sum + n, 0) : null };
+      const usage = raw && typeof raw === 'object' ? Object.fromEntries(USAGE.map(([field]) =>
+        [field, Number.isSafeInteger(raw[field]) && raw[field] >= 0 ? raw[field] : null])) : null;
+      // sideCalls: counted is more than the reply's own usage, so the turn's counts include calls outside its main loop
+      // (a compaction, a subagent, a side call), which may have run on another model than the chat's.
+      const sideCalls = Boolean(counted) && COUNTED.some((field) => counted[field] !== (data.usage?.[field] ?? 0));
       return { ...base, stop: data.stopReason == null ? null : STOPS.includes(data.stopReason) ? data.stopReason : 'other',
-        unprompted: data.unprompted === true, usage };
+        unprompted: data.unprompted === true, usage: usage && Object.values(usage).some((n) => n !== null) ? usage : null, sideCalls };
     }
     case 'error': {
       const message = String(data.message ?? '');
+      // Before review round 7 of A3 (1), a refused hand-off of a profile chat wrote this as an error while its turn ran on:
+      // not an end, or a replay would split that turn in two.
+      if (!data.ends && message === 'A chat on a provider profile cannot be handed to a terminal: there it would run on the Claude sign-in, not the profile.') return null;
       const known = ERRORS.find(([start]) => message.startsWith(start));
       return { ...base, code: known ? known[1] : / could not be set; nothing was sent\.$/.test(message) ? 'config-failed' : 'agent-error' };
     }
@@ -129,14 +148,14 @@ export function derive(state, event) {
   // O35: the chat was deleted; the worker removes its rows (forget), and derive forgets it.
   if (event.type === 'deleted') { state.conversations.delete(event.conversation); return []; }
   let chat = state.conversations.get(event.conversation);
-  if (!chat) state.conversations.set(event.conversation, chat = { provider: null, folder: null, model: null, turns: 0, open: null });
+  if (!chat) state.conversations.set(event.conversation, chat = { provider: null, folder: null, profile: false, model: null, turns: 0, open: null });
   const turn = chat.open;
   const rows = [];
   const open = (steers) => { chat.open = { key: event.cursor, start: event.at, last: event.at, model: chat.model, set: false, steers,
     output: null, tools: new Map(), waits: new Map() }; };
   if (turn && !ENDS.has(event.type) && !(event.type === 'user' && !event.steered)) turn.last = event.at;
   switch (event.type) {
-    case 'created': chat.provider = event.provider; chat.folder = event.folder; break;
+    case 'created': chat.provider = event.provider; chat.folder = event.folder; chat.profile = event.profile; break;
     case 'config':
       chat.model = event.model;
       if (turn) { turn.model = event.model; turn.set = true; }
@@ -180,11 +199,11 @@ function close(chat, turn, event, outcome, end, unprompted = event.unprompted ==
     key: turn.key, conversation: event.conversation, end_cursor: event.cursor, deriver: DERIVER, outcome, unprompted: unprompted ? 1 : 0,
     steers: turn.steers, stop_reason: event.type === 'turn-end' ? event.stop : null,
     error_code: event.type === 'error' ? event.code : event.type === 'exited' ? 'exited' : null,
-    provider: chat.provider, model: turn.model, model_source: turn.set ? 'set' : turn.model === null ? 'missing' : 'carried',
+    provider: chat.provider, model: turn.model, model_source: turn.set ? 'set' : turn.model === null ? 'missing' : 'carried', profile: chat.profile ? 1 : 0,
     folder_id: chat.folder, turn_number: chat.turns, start_at: turn.start, end_at: end,
     first_output_ms: turn.output === null ? null : turn.output - turn.start, total_ms: end - turn.start,
     tool_count: turn.tools.size, tool_ms: toolMs, approval_wait_ms: waitMs, ...kinds,
-    usage: usage ? 1 : 0, ...tokens,
+    usage: usage ? 1 : 0, side_calls: event.type === 'turn-end' && event.sideCalls ? 1 : 0, ...tokens,
     // Rounded to 6 places so a hand-worked fixture can state it exactly.
     cache_read_share: share === null || !Number.isFinite(share) ? null : Math.round(share * 1e6) / 1e6,
     layers: 'baseline',
@@ -405,7 +424,7 @@ const CORRUPT = new Set([11, 26]); // SQLITE_CORRUPT, SQLITE_NOTADB
 // One SQLite file the worker writes: WAL, busy_timeout and user_version. An unknown version, a failed quick_check or a
 // corrupt error renames it (with its -wal and -shm) aside under a timestamped name, at most 5 times per start, and a new
 // one starts; nothing here deletes a file. onOpen prepares the statements.
-function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
+function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen, ready = () => true) {
   const store = { db: null };
   store.corrupt = (error) => CORRUPT.has(error?.errcode & 0xff);
   store.setAside = () => {
@@ -416,6 +435,11 @@ function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
     for (const suffix of ['', '-wal', '-shm']) if (existsSync(file + suffix)) renameSync(file + suffix, name + suffix);
     aside.push(name);
   };
+  // ready() false: a new file stays at user_version 0 until stamp() (the turns file, after its first full replay).
+  store.stamp = () => {
+    try { if (store.db?.prepare('PRAGMA user_version').get().user_version === 0) store.db.exec('PRAGMA user_version = ' + version); }
+    catch (error) { stats[errorKey] = error.errstr ?? error.message; }
+  };
   store.opened = () => {
     if (store.db) return true;
     try {
@@ -424,7 +448,7 @@ function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
       const found = store.db.prepare('PRAGMA user_version').get().user_version;
       const check = store.db.prepare('PRAGMA quick_check').all();
       if (((found !== 0 && found !== version) || check.length !== 1 || check[0].quick_check !== 'ok') && aside.length < 5) { store.setAside(); return store.opened(); }
-      store.db.exec(tables + (found === 0 ? ' PRAGMA user_version = ' + version + ';' : '')); // no write on an existing file: a locked one still opens
+      store.db.exec(tables + (found === 0 && ready() ? ' PRAGMA user_version = ' + version + ';' : '')); // no write on an existing file: a locked one still opens
       onOpen(store.db);
       return true;
     } catch (error) {
@@ -444,19 +468,26 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   let insert = null;
   let state = freshState();
   let ledger = null;
+  // A new turns file is marked whole (user_version) only when a replay from the ledger's start wrote every row (whole is
+  // droppedRows when it ended; -1 until then, and any row dropped since unmarks it) and no deleted chat's rows are left
+  // (owed: their ids, retried with every batch). Checked again after every batch, so a mark that failed is retried too.
+  let whole = -1, owed = new Set();
+  const isWhole = () => whole === stats.droppedRows && !owed.size;
   const turns = sqliteFile(file, SCHEMA, TABLES, stats.setAside, stats, 'lastError', (db) => {
     insert = db.prepare('INSERT OR IGNORE INTO turns (' + COLUMNS.join(', ') + ') VALUES (' + COLUMNS.map(() => '?').join(', ') + ')');
-  });
+  }, isWhole);
   // O35: a deleted chat's turns, and their resource rows in the samples file. After the batch's own rows, so none is left
   // behind; on every replay too, so rows a failed write or an older daemon left are removed at the next start.
   const forget = (events) => {
-    const ids = events.filter((event) => event?.type === 'deleted').map((event) => event.conversation);
+    owed = new Set([...owed, ...events.filter((event) => event?.type === 'deleted').map((event) => event.conversation)]);
+    const ids = [...owed];
     if (!ids.length || !turns.opened()) return;
     try {
       const list = JSON.stringify(ids), keys = turns.db.prepare('SELECT key FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').all(list).map((row) => row.key);
       // The turns stay until their resource rows are gone: the keys are how the next start finds those.
       if (keys.length && !inSamples(keys.length, 'droppedResources', () => statements.unresource.run(JSON.stringify(keys)))) return;
       stats.rowsForgotten += Number(turns.db.prepare('DELETE FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').run(list).changes);
+      owed = new Set();
     } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
   const write = (rows) => {
@@ -481,6 +512,10 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   // ponytail: a full pass per start (the server's 204k events, 2026-11-05); keep a progress cursor if starts get slow.
   // The SQL trims update and user events to the fields project() reads, so replay never parses prompt or reply text.
   const catchUp = () => {
+    // Only a replay from the ledger's start can make a new file whole: a later one (a queue gap) starts past pages an
+    // earlier one may have dropped.
+    const fromStart = state.cursor === 0, dropped = stats.droppedRows;
+    if (fromStart) whole = -1;
     try {
       ledger ??= new DatabaseSync(ledgerFile, { readOnly: true });
       const page = ledger.prepare(`SELECT cursor, conversation, type, at, CASE WHEN NOT json_valid(data) THEN '{}'
@@ -497,6 +532,8 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
         write(rows);
         forget(events);
       }
+      if (fromStart && stats.droppedRows === dropped) whole = dropped;
+      if (isWhole()) turns.stamp();
     } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
 
@@ -556,13 +593,14 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
 
   tick(clockMs ?? Date.now()); // before the replay: a restart's gap is found from the last sample, and the replay's cost lands in the next self row
   catchUp();
-  if (sampleMs > 0) setInterval(() => tick(Date.now()), sampleMs).unref();
+  // Each sample also retries what a lock held back (a deleted chat's rows, the mark), so an idle app still catches up.
+  if (sampleMs > 0) setInterval(() => { tick(Date.now()); if (owed.size) forget([]); if (isWhole()) turns.stamp(); }, sampleMs).unref();
   parentPort.postMessage(stats);
   parentPort.on('message', ({ events, gap, resources, ticks, mainUs }) => {
     since.main += mainUs ?? 0;
     writeResources(resources); // first, so a deleted chat's last resource row in this batch goes with its turns below
     if (gap) catchUp(); // events were dropped from the queue: the ledger has them all
-    else { const rows = []; for (const event of events) rows.push(...derive(state, event)); write(rows); forget(events); }
+    else { const rows = []; for (const event of events) rows.push(...derive(state, event)); write(rows); forget(events); if (isWhole()) turns.stamp(); }
     for (const at of ticks ?? []) tick(at);
     parentPort.postMessage(stats);
   });

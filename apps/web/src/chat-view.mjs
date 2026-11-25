@@ -786,7 +786,11 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-handoff]').forEach(b => b.onclick = async () => {
       b.disabled = true;
       const r = await outer.liveChat.call('handoff', { id: s.id });
-      if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
+      if (!r.body?.terminal) {
+        const text = r.body?.command ? 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command : r.body?.message;
+        if (text) { s.events.push({ t: 'notice', text }); renderChats(); }
+        b.disabled = false; return;
+      }
       outer.showTerminal(r.body.terminal);
     });
     // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
