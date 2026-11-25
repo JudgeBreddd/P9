@@ -49,6 +49,12 @@ test('pace: one row says what is left, the pace, where the tick is and when it r
   // A window with no reset time keeps its figure and has no tick.
   const bare = paceRow('Session', { usedPercent: 20, resetsAt: null }, 300, NOW);
   assert.match(bare, /<b>80% left<\/b>/); assert.doesNotMatch(bare, /<u |data-pace/);
+  // O244 (a): the daemon's projection follows the pace word, and only with a pace (a window with a reset ahead).
+  const on = paceRow('Session', { usedPercent: 80, resetsAt: NOW + HOUR, windowMins: 300, projected: 98.8 }, 300, NOW);
+  assert.match(on, /<span class="prow-p" title="[^"]+">On pace · 98\.8% at reset<\/span>/);
+  assert.match(on, /aria-label="Session: 80% used, 80% of the window gone\. [^"]+ 98\.8% used at the reset at this rate\."/);
+  assert.match(paceRow('Session', { usedPercent: 80, resetsAt: NOW + HOUR, windowMins: 300, projected: null }, 300, NOW), /">On pace<\/span>/, 'no projection: the word alone');
+  assert.match(paceRow('Weekly', { usedPercent: 61, resetsAt: NOW - HOUR, projected: 70 }, 10080, NOW), /">new window<\/span>/, 'a reset window shows no projection');
   // A model's name comes from the daemon: it is text, never markup.
   const rows = planWindows({ fiveHour: null, sevenDay: null, models: [{ name: '<b>x', usedPercent: 1, resetsAt: null }] });
   assert.deepEqual(rows.map((r) => r[0]), ['Session', 'Weekly', 'Weekly · <b>x']);
@@ -109,12 +115,12 @@ test('window: the panel\'s Usage button opens each plan\'s rows from Chat Focus,
     return { label: r.querySelector('.prow-l').textContent, left: r.querySelector('.prow-h b').textContent, word: r.querySelector('.prow-p').textContent, reset: r.querySelector('.prow-r')?.textContent ?? '', pace: r.dataset.pace ?? '',
       fill: Math.round(fill.width / bar.width * 100), tick: tick ? Math.round((tick.left + tick.width / 2 - bar.left) / bar.width * 100) : null, shown: !!tick && tick.height > bar.height }; }));
   const [session, weekly] = await read('claude');
-  assert.deepEqual({ ...session, reset: '' }, { label: 'Session', left: '58% left', word: 'Room to spare', reset: '', pace: 'headroom', fill: 42, tick: 80, shown: true });
+  assert.deepEqual({ ...session, reset: '' }, { label: 'Session', left: '58% left', word: 'Room to spare · 52.5% at reset', reset: '', pace: 'headroom', fill: 42, tick: 80, shown: true });
   assert.match(session.reset, /^resets in (1h 0m|59m|58m)$/);
-  assert.deepEqual({ ...weekly, reset: '' }, { label: 'Weekly', left: '10% left', word: 'Over pace', reset: '', pace: 'ahead', fill: 90, tick: 75, shown: true });
+  assert.deepEqual({ ...weekly, reset: '' }, { label: 'Weekly', left: '10% left', word: 'Over pace · 120% at reset', reset: '', pace: 'ahead', fill: 90, tick: 75, shown: true });
   assert.match(weekly.reset, /^resets in 1d 1[78]h$/);
   const [codexSession, codexWeekly] = await read('codex');
-  assert.deepEqual([codexSession.left, codexSession.word, codexSession.tick, codexWeekly.left, codexWeekly.tick], ['100% left', 'new window', null, '67% left', 50]);
+  assert.deepEqual([codexSession.left, codexSession.word, codexSession.tick, codexWeekly.left, codexWeekly.word, codexWeekly.tick], ['100% left', 'new window', null, '67% left', 'Room to spare · 66% at reset', 50]);
   await shot('usage-window');
   await page.keyboard.press('Escape');
   // Also from Ctrl K, and with the panel collapsed to its strip.
@@ -125,7 +131,7 @@ test('window: the panel\'s Usage button opens each plan\'s rows from Chat Focus,
   await claude.locator('.prow').first().waitFor({ timeout: 10000 });
   await shot('usage-window-strip');
   assert.deepEqual(errors, []);
-  console.log('PASS usage window: Claude Session 58% left, Room to spare, tick at 80%; Weekly 10% left, Over pace, tick at 75%; Codex new window with no tick');
+  console.log('PASS usage window: Claude Session 58% left, Room to spare · 52.5% at reset, tick at 80%; Weekly 10% left, Over pace · 120% at reset, tick at 75%; Codex new window with no tick');
 });
 
 // The live Codex read: one Codex account used on several computers moves the windows where this computer's session

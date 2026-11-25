@@ -128,11 +128,13 @@ export const planWindows = (limits) => [...WINDOWS.map(([key, label, mins]) => [
 export function paceRow(label, w, mins, now = Date.now()) {
   const fresh = !!w?.resetsAt && w.resetsAt <= now, used = !w || fresh ? 0 : Math.min(100, Math.max(0, Math.round(w.usedPercent)));
   const pace = paceOf(w, mins, now), at = pace && Math.round(pace.elapsed * 1000) / 10;
-  const left = !w ? '—' : (100 - used) + '% left', word = !w ? 'not recorded' : fresh ? 'new window' : pace ? PACE[pace.state][0] : '';
+  // O244 (a): the daemon's projection (usage-history.mjs projectAt), shown only beside a pace word.
+  const proj = pace && Number.isFinite(w.projected) ? w.projected : null;
+  const left = !w ? '—' : (100 - used) + '% left', word = !w ? 'not recorded' : fresh ? 'new window' : pace ? PACE[pace.state][0] + (proj === null ? '' : ` · ${proj}% at reset`) : '';
   const reset = w?.resetsAt && !fresh ? `<span class="prow-r" title="Resets ${esc(new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}">resets in ${countdown(w.resetsAt - now)}</span>` : '';
   return `<div class="prow"${pace ? ` data-pace="${pace.state}"` : ''}${used >= 90 ? ' data-hot="2"' : used >= 75 ? ' data-hot="1"' : ''}><div class="prow-h"><span class="prow-l">${esc(label)}</span><b>${left}</b>`
     + `<span class="prow-p"${pace ? ` title="${PACE[pace.state][1]}"` : ''}>${word}</span>${reset}</div>`
-    + `<div class="pbar" role="img" aria-label="${esc(label)}: ${!w ? 'not recorded' : used + '% used' + (pace ? ', ' + Math.round(pace.elapsed * 100) + '% of the window gone. ' + PACE[pace.state][1] : '')}"><i style="width:${used}%"></i>${pace ? `<u style="left:${at}%"></u>` : ''}</div></div>`;
+    + `<div class="pbar" role="img" aria-label="${esc(label)}: ${!w ? 'not recorded' : used + '% used' + (pace ? ', ' + Math.round(pace.elapsed * 100) + '% of the window gone. ' + PACE[pace.state][1] + (proj === null ? '' : `; ${proj}% used at the reset at this rate.`) : '')}"><i style="width:${used}%"></i>${pace ? `<u style="left:${at}%"></u>` : ''}</div></div>`;
 }
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed

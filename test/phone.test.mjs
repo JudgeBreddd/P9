@@ -313,11 +313,16 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.match(await page.locator('#usage').innerText(), /Claude · [\s\S]*%[\s\S]*of [\d,]+ tokens/);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
   // A3: each window is a row: what is left, the pace word, the time to the reset, and a bar with the pace tick.
-  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+Session\s*58% left\s*Room to spare\s*resets in (2h 0m|1h 59m)\s+Weekly\s*83% left\s*Room to spare\s*resets in 3d 1[78]h/);
+  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+Session\s*58% left\s*Room to spare · (70|69\.\d)% at reset\s*resets in (2h 0m|1h 59m)\s+Weekly\s*83% left\s*Room to spare · 3\d(\.\d)?% at reset\s*resets in 3d 1[78]h/);
   assert.match(phoneLimits, /Codex plan\s+Last read 3 h ago\s+Session\s*100% left\s*new window\s+Weekly\s*67% left/);
   const tick = await page.evaluate(() => { const bar = document.querySelector('#usage [data-limits] .pbar'), b = bar.getBoundingClientRect(), t = bar.querySelector('u').getBoundingClientRect();
     return { at: Math.round((t.left + t.width / 2 - b.left) / b.width * 100), taller: t.height > b.height, fill: Math.round(bar.querySelector('i').getBoundingClientRect().width / b.width * 100) }; });
   assert.deepEqual(tick, { at: 60, taller: true, fill: 42 });
+  // O244 (a): the longer word stays on one line and inside the row at phone width (the reset wraps under it instead).
+  const fit = () => [...document.querySelectorAll('#usage [data-limits] .prow-h')].map((h) => ({ lines: h.querySelector('.prow-p').getClientRects().length, w: h.clientWidth, sw: h.scrollWidth, view: document.body.dataset.view }));
+  const fitted = await page.waitForFunction((f) => { const r = eval(f)(); return r.length && r.every((x) => x.lines === 1 && x.sw <= x.w) && r; }, fit.toString(), { timeout: 5000 }).then((h) => h.jsonValue()).catch(async () => page.evaluate((f) => eval(f)(), fit.toString()));
+  assert.ok(fitted.length && fitted.every((x) => x.lines === 1 && x.sw <= x.w), 'each pace word is one line inside its row: ' + JSON.stringify(fitted));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-usage-rows ' + (await page.screenshot()).toString('base64'));
   // P5: each context bar names its chat (the fixture's chats are titled by their agent).
   assert.match(await page.locator('#usage .ctxs').innerText(), /^claude\b/);
   await page.screenshot({ path: path.join(evidence, 'phone-usage.png') });
