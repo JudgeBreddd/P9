@@ -111,12 +111,13 @@ test('A3 (2): the Usage window\'s Tokens and Cost tabs show the turns from telem
 });
 
 // The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.
-test('A3 (2): a missing count is a dash, never 0; a remote day ahead stays on the chart; an older daemon says so', () => {
+test('A3 (2): a missing count is a dash, never 0; a partial one is marked everywhere; the chart keeps the daemon\'s days; an older daemon says so', () => {
   const day = (n) => new Date(Date.now() + n * DAY).toLocaleDateString('sv');
   const row = (d, input, total, kInput, kTotal) => ({ day: d, provider: 'p', model: 'm', profile: false, turns: 2, measured: 2,
     known: { input: kInput, output: 0, cacheRead: 0, cacheWrite: 0, total: kTotal }, priced: 0, estimated: 0,
     input, output: null, cacheRead: null, cacheWrite: null, total, cost: null, usd: null, saved: -0.001 });
-  const page = { state: 'ok', days: 7, since: Date.now() - 7 * DAY, pricesAsOf: '2026-11-03', chats: { p: 1 },
+  // The daemon is a day ahead of this desktop: its range runs to tomorrow here.
+  const page = { state: 'ok', days: 7, since: Date.now() - 7 * DAY, from: day(-6), to: day(1), pricesAsOf: '2026-11-03', chats: { p: 1 },
     rows: [row(day(0), 1000000, null, 2, 0), row(day(1), 500, 800, 1, 1)] };
   const html = historyHtml({ tab: 'tokens', days: 7, by: 'model', page }, esc, {});
   const text = html.replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/\s+/g, ' ');
@@ -126,5 +127,18 @@ test('A3 (2): a missing count is a dash, never 0; a remote day ahead stays on th
   assert.match(text, /Cache savings −<\$0\.01/, 'a net cache cost reads negative, never $-0.00');
   assert.ok(html.includes(`title="${day(1)}: `), 'the daemon\'s day ahead of this desktop has its column');
   assert.match(text, /1 of 4 turns reported a token total/);
-  assert.match(historyHtml({ tab: 'cost', days: 7, page: { state: 'unsupported', days: 7 } }, esc, {}), /older than this app/);
+  assert.ok(html.includes(`<div class="uh-axis"><span>${day(-6)}</span>`), "the axis starts at the daemon's first day");
+  // A partial figure is marked wherever it shows, not only in the totals.
+  assert.match(text, /p 1 chat 100% \* 800 \* /, 'the provider line: share and total marked');
+  assert.match(text, /1 m no price 100% \* 800 \* /, 'the breakdown row: share and tokens marked');
+  assert.match(text, /Input 1M \* /, 'the legend marks a partial type');
+  assert.ok(html.includes(`title="${day(1)}: 800 (1 of 2 turns)"`), 'the hover says how many turns the day counts');
+  assert.match(html, /aria-label="Input 100%, Cache read not reported, Cache write not reported, Output not reported"/);
+  // A turn with no provider: its chats are under 'unknown', as the daemon counts them. A sub-cent cost reads <$0.01.
+  const priced = { ...row(day(0), 10, 10, 1, 1), provider: null, model: 'opus', priced: 1, usd: 0.006, cost: { input: 0.006, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const cost = historyHtml({ tab: 'cost', days: 7, by: 'model', page: { ...page, chats: { unknown: 1 }, rows: [priced] } }, esc, {})
+    .replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/\s+/g, ' ');
+  assert.match(cost, /unknown 1 chat 100% \* <\$0\.01 \* /, 'the unknown provider has its chat; the sub-cent cost is <$0.01, marked 1 of 2 priced');
+  assert.match(cost, /Estimated cost <\$0\.01 1 of 2 turns/);
+  assert.match(historyHtml({ tab: 'cost', days: 30, page: { state: 'unsupported', days: 7 } }, esc, {}), /older than this app/, 'for any range');
 });

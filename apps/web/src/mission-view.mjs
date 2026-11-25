@@ -236,11 +236,14 @@ function readTurns() {
   });
 }
 function turnsBody(tab) {
-  if (!UH.busy && (UH.page?.days !== UH.days || Date.now() - UH.at > 60000)) readTurns();
-  // A failed load (an update replaced the files under a running page) waits for Try again instead of retrying at each redraw.
+  // An older daemon's 404 holds for every range: it is asked again only once the answer is a minute old.
+  const stale = Date.now() - UH.at > 60000;
+  if (!UH.busy && (stale || (UH.page?.days !== UH.days && UH.page?.state !== 'unsupported'))) readTurns();
+  // A failed load (an update replaced the files under a running page, so the old file name is gone) offers a reload,
+  // which reads the new names; no retry at each redraw.
   if (!UH.draw && !UH.failed) UH.load ??= import('./usage-history.mjs').then(m => { UH.draw = m.historyHtml; redrawUsage(); }, () => { UH.load = null; UH.failed = true; redrawUsage(); });
   return UH.draw ? UH.draw({ ...UH, tab }, esc, outer.names) : UH.failed
-    ? '<p class="empty">This view could not load. <button type="button" data-slot="button" data-variant="outline" data-size="sm" data-uh-retry>Try again</button></p>'
+    ? '<p class="empty">This view could not load. P9 may have been updated. <button type="button" data-slot="button" data-variant="outline" data-size="sm" data-uh-reload>Reload the window</button></p>'
     : '<p class="sm muted">Loading…</p>';
 }
 const usageBody = (tab = outer.S.modal?.utab ?? 'limits') => !window.p9?.usageTurns ? limitsBody() : `<div class="cf-tabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" tabindex="${tab === id ? 0 : -1}" data-slot="button" data-variant="ghost" data-size="sm" data-utab="${id}" aria-selected="${tab === id}">${label}</button>`).join('')}</div>`
@@ -511,9 +514,10 @@ async function launchLive(name, req) {
 }
 // A section window's buttons; back returns to the window
 function bindWin(root, m) {
-  root.querySelectorAll('[data-utab],[data-uh-days],[data-uh-by],[data-uh-retry]').forEach(b => b.onclick = () => {
+  root.querySelectorAll('[data-utab],[data-uh-days],[data-uh-by]').forEach(b => b.onclick = () => {
     const d = b.dataset; if (d.utab) outer.S.modal.utab = d.utab; if (d.uhDays) UH.days = +d.uhDays; if (d.uhBy) UH.by = d.uhBy;
-    if (d.uhRetry !== undefined) UH.failed = false; outer.renderModal(); });
+    outer.renderModal(); });
+  root.querySelector('[data-uh-reload]')?.addEventListener('click', () => location.reload());
   root.querySelectorAll('[data-utab]').forEach(b => b.onkeydown = usageTabKey);
   root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
     if (!outer.live.on) return outer.toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
