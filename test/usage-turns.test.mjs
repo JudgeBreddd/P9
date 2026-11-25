@@ -78,6 +78,7 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
   assert.ok(seen.every((page) => page.state !== 'ok' || JSON.stringify(page) === final), 'no ok answer with part of the history');
 
   const month = read(30);
+  assert.deepEqual([month.from, month.to], [new Date(NOW - 30 * 86400000).toLocaleDateString('sv'), new Date(NOW).toLocaleDateString('sv')], 'the axis ends, in the daemon\'s dating');
   assert.equal(month.state, 'ok');
   assert.equal(month.pricesAsOf, '2026-11-03');
   const one = local(T + 50), two = local(T + DAY + 50);

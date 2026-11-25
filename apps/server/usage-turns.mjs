@@ -32,7 +32,9 @@ const TYPES = ['input', 'output', 'cacheRead', 'cacheWrite'];
 const WHOLE = 'input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_write_tokens IS NOT NULL';
 export function readTurns({ file, exists, days, now = Date.now() }) {
   days = RANGES.includes(Number(days)) ? Number(days) : 7;
-  const since = now - days * 86400000, empty = { state: 'ok', days, since, pricesAsOf: PRICES_AS_OF, rows: [], chats: {} };
+  // from, to: the range's first and last day as the rows date them (the daemon's local dates), the chart's axis.
+  const since = now - days * 86400000, day = (t) => new Date(t).toLocaleDateString('sv');
+  const empty = { state: 'ok', days, since, from: day(since), to: day(now), pricesAsOf: PRICES_AS_OF, rows: [], chats: {} };
   if (!exists) return empty;
   let db;
   try { db = new DatabaseSync(file, { readOnly: true }); } catch { return { state: 'unavailable', days, since }; }
