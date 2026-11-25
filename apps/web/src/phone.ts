@@ -373,7 +373,7 @@ function history(id: string) {
 type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; files?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
-type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
+type Attached = { mimeType?: string; data: string; name: string; file?: true; paste?: true }; // A2 step 1: file marks one that is not a photo (paste: a big paste P9 made into pasted.txt)
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
@@ -1368,18 +1368,18 @@ function renderAttached() {
 // One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file
 // check, and a send went without a file still being read. Notes only for the chat on screen.
 const adding = new Map<string, Promise<boolean>>(); // chat id -> its attach now
-function addImages(files: Iterable<File>): Promise<boolean> {
+function addImages(files: Iterable<File>, paste = false): Promise<boolean> {
   const id = openId; if (!id) return Promise.resolve(false);
-  const run = (adding.get(id) ?? Promise.resolve(true)).catch(() => true).then(() => attachNow(id, files)); adding.set(id, run);
+  const run = (adding.get(id) ?? Promise.resolve(true)).catch(() => true).then(() => attachNow(id, files, paste)); adding.set(id, run);
   void run.finally(() => { if (adding.get(id) === run) adding.delete(id); }).catch(() => {}); return run;
 }
-async function attachNow(id: string, files: Iterable<File>) {
+async function attachNow(id: string, files: Iterable<File>, paste: boolean) {
   const say = (text = '') => { if (openId === id) note(text); };
   say(); let ok = true; // true: every file attached
   for (const file of files) {
     const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
     // the list as it is now: a send answered meanwhile took its own files from it
-    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], paste ? { ...got, paste: true as const } : got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
@@ -1420,12 +1420,13 @@ one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
   // Round 9 review: a file does not queue, so while this message would queue (agent busy or asking, a queue, offline) a big paste stays text.
   if (text && (!navigator.onLine || running(id) || asking(id) || queued(id).length)) { note('A big paste stays as text while the agent is busy or the phone is offline, so it can wait in the queue.'); return; }
   event.preventDefault();
-  void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
+  void addImages(files, !!text).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
     if (!text || !id) return; if (ok) { if (openId === id) note('A big paste went in as pasted.txt. Remove it with ✕.'); return; }
     editDraft(id, (now) => now === was ? now.slice(0, at) + text + now.slice(at) : now + (now ? '\n' : '') + text); // where it was pasted, or after what was typed since
   });
 }); // A2 step 1: a big paste of text attaches as a file
-function pasteHint(list: Attached[]) { return list.some((image) => image.name === 'pasted.txt') ? ' To queue a big paste as text, remove pasted.txt with ✕ and paste it again.' : ''; }
+// Round 14 review: the text goes back into the box first, so removing the file never loses the only copy; only a paste P9 made.
+function pasteHint(list: Attached[]) { return list.some((image) => image.paste) ? ' Or, to queue the big paste as text: paste it into the box again, and once its text is there, remove pasted.txt with ✕.' : ''; }
 // A dropped file attaches the same way (spec §4); dropped text still goes into the box.
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }

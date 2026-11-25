@@ -324,17 +324,39 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   for (let i = 0; i < 4; i += 1) await page.click('#attached [aria-label="Remove pasted.txt"] >> nth=0');
   await page.fill('#prompt', '');
   // Round 9 review: a file does not queue. A message that cannot go now (here the phone is offline) says how to queue an attached
-  // big paste as text, and a big paste made while it would queue stays text in the box.
+  // big paste as text, and a big paste made while it would queue stays text in the box (round 14: the text is back before the file
+  // is removed, and it queues whole). A picked file named pasted.txt gets no such advice.
   const online = (on) => page.evaluate((on) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true }), on);
-  assert.equal(await pasteText('x'.repeat(5001)), true);
+  const submit = () => page.evaluate(() => document.querySelector('#composer').requestSubmit());
+  await choose([{ name: 'pasted.txt', mimeType: 'text/plain', buffer: Buffer.from('picked') }]);
   await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
-  await online(false); await page.fill('#prompt', 'wait'); await page.evaluate(() => document.querySelector('#composer').requestSubmit());
-  await noted('To queue a big paste as text, remove pasted.txt with ✕ and paste it again.');
+  await online(false); await page.fill('#prompt', 'wait'); await submit();
+  await noted('attachments go only with a message sent now');
+  assert.doesNotMatch(await page.textContent('#composerNote'), /✕/, 'a picked pasted.txt is not a paste');
+  await page.click('#attached [aria-label="Remove pasted.txt"]'); await online(true);
+  assert.equal(await pasteText('w'.repeat(5001)), true);
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  await online(false); await submit();
+  await noted('Or, to queue the big paste as text: paste it into the box again, and once its text is there, remove pasted.txt with ✕.');
   await page.locator('#composer').scrollIntoViewIfNeeded(); await shot(page, 'phone-paste-queue-hint');
-  assert.equal(await pasteText('w'.repeat(5001)), false, 'offline, a big paste stays text');
+  // The paste again, with what the phone does when the handler leaves it alone: the text goes in at the caret.
+  assert.equal(await page.evaluate((text) => {
+    const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length;
+    const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev); if (!ev.defaultPrevented) document.execCommand('insertText', false, text); return ev.defaultPrevented;
+  }, 'w'.repeat(5001)), false, 'offline, a big paste stays text');
   await noted('A big paste stays as text');
   assert.equal(await page.locator('#attached .chip-file').count(), 1, 'no second pasted.txt');
-  await page.click('#attached [aria-label="Remove pasted.txt"]'); await online(true); await page.fill('#prompt', '');
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
+  await page.click('#attached [aria-label="Remove shot.png"]'); // the photo does not queue either
+  await submit();
+  await page.waitForFunction(() => document.querySelector('[data-unqueue]')?.closest('article').querySelector('p').textContent === 'wait' + 'w'.repeat(5001), null, { timeout: 10000 });
+  await page.click('#queued summary'); // the queue opens from its strip
+  await page.click('[data-unqueue]');
+  await online(true);
+  await choose([{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]);
+  await chips(1);
+  await page.fill('#prompt', '');
   await choose([{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]);
   await chips(2);
   await paste(1);
