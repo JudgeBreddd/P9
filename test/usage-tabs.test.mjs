@@ -119,10 +119,10 @@ test('A3 (2): the Usage window\'s Tokens and Cost tabs show the turns from telem
     await box.waitFor({ timeout: 5000 });
     assert.equal(await box.isChecked(), !show);
     await box.setChecked(show);
-    // Saved: the daemon's /usage says so (the box is checked as soon as the click lands).
-    const saved = async () => (await page.evaluate(() => window.p9.usage())).body.telemetryTab;
-    for (const end = Date.now() + 10000; await saved() !== show && Date.now() < end;) await new Promise((r) => setTimeout(r, 200));
-    assert.equal(await saved(), show, 'the daemon kept the switch');
+    // The box is off until the daemon's answer lands in the window; then it shows what the daemon kept.
+    await page.locator('#setDlg[open] #setUsageTabs:not([disabled])').waitFor({ timeout: 10000 });
+    assert.equal(await box.isChecked(), show);
+    assert.equal((await page.evaluate(() => window.p9.usage())).body.telemetryTab, show, 'the daemon kept the switch');
     await page.click('#setClose');
     await page.locator('#rUsage').click();
     await body.locator('.stats').waitFor();
@@ -206,13 +206,18 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   // Refresh shows a turn that ended after the last read, even within the minute the answer is otherwise kept.
   await screen.locator('[data-utab="tokens"]').click();
   await refresh();
-  const turns = async () => Number((await screen.locator('.uh-total span').textContent()).match(/(\d+) turns?/)[1]);
-  const before = await turns();
+  // The figure the phone must show: the daemon's own count for the range picked.
+  const days = await screen.locator('[data-uh-days][aria-pressed="true"]').getAttribute('data-uh-days');
+  const inRange = async () => ((await server.desk('/usage/turns?days=' + days)).body.rows ?? []).reduce((n, r) => n + r.turns, 0);
+  const shows = (n) => screen.locator('.uh-total span', { hasText: new RegExp(`(^|\\D)${n} turns`) }).waitFor({ timeout: 5000 });
+  const before = await inRange();
+  await shows(before);
   assert.equal((await server.desk('/chat/' + made.body.conversation + '/prompt', 'POST', { text: 'again' })).status, 202);
   for (const end = Date.now() + 30000; await count() !== 4 && Date.now() < end;) await new Promise((r) => setTimeout(r, 500));
   assert.equal(await count(), 4);
   await refresh();
-  await screen.locator('.uh-total span', { hasText: `${before + 1} turns` }).waitFor({ timeout: 5000 });
+  assert.equal(await inRange(), before + 1);
+  await shows(before + 1);
 });
 
 // The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.

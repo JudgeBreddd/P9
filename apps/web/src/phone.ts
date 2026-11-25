@@ -2224,7 +2224,7 @@ const UTABS = [['limits', 'Limits'], ['tokens', 'Tokens'], ['cost', 'Cost']];
 // shows changed (the 20 s redraw of an unchanged view touches nothing).
 function drawUsage() {
   const root = one('#usage');
-  if (!UH.shown) { UH.tab = 'limits'; UH.html = ''; root.innerHTML = UH.limits; return; }
+  if (!UH.shown) { UH.tab = 'limits'; UH.html = ''; root.innerHTML = UH.limits; keepMore(root); return; }
   if (!root.querySelector('.utabs')) {
     root.innerHTML = `<div class="utabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" data-utab="${id}">${label}</button>`).join('')}</div><div id="upanel" role="tabpanel"></div>`;
     UH.html = '';
@@ -2232,8 +2232,16 @@ function drawUsage() {
   root.querySelectorAll<HTMLElement>('[data-utab]').forEach((tab) => { const on = tab.dataset.utab === UH.tab; tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1; });
   const panel = one('#upanel'), html = UH.tab === 'limits' ? UH.limits : turnsHtml();
   panel.setAttribute('aria-labelledby', 'utab-' + UH.tab);
-  if (html !== UH.html) { panel.innerHTML = html; UH.html = html; }
+  if (html !== UH.html) {
+    // The range and breakdown buttons are inside the panel: the one focused comes back focused (a key press on 30 days).
+    const was = panel.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset : {};
+    panel.innerHTML = html; UH.html = html; keepMore(panel);
+    const key = (['uhDays', 'uhBy'] as const).find((k) => was[k]);
+    if (key) panel.querySelector<HTMLElement>(`[data-${key === 'uhDays' ? 'uh-days' : 'uh-by'}="${was[key]}"]`)?.focus();
+  }
 }
+// Details (the sample counts) opens as it was left, whatever the Limits HTML was drawn with.
+function keepMore(root: HTMLElement) { const more = root.querySelector<HTMLDetailsElement>('details.more'); if (more) more.open = UH.more; }
 let turnsRead = 0, usageRead = 0; // the newest read of each; an older answer that lands later is dropped
 async function readTurns() {
   const days = UH.days, seq = ++turnsRead; UH.busy = true;
@@ -2286,15 +2294,14 @@ async function loadUsage() {
     // it stalls (P5). A stopped chat's last fill is history and is left out.
     const chat = (id: string) => state.conversations.find((item) => item.id === id);
     const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
-    const more = UH.more ? ' open' : ''; // the redraw (startup twice, Refresh, every 20 s) keeps an opened Details open
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
     UH.limits = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
-      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"${more}><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
+      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
     drawUsage();
   } catch { if (seq === usageRead) { UH.limits = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; drawUsage(); } }
 }
-// Refresh reads Tokens and Cost again too, even while an earlier read is still out (the newest answer wins).
-one<HTMLButtonElement>('#refreshUsage').onclick = (event) => { UH.at = 0; UH.busy = false; void refreshing(event.currentTarget as HTMLButtonElement, loadUsage); };
+// Refresh reads Tokens and Cost again too (a newer read supersedes one still out) and spins until both answer.
+one<HTMLButtonElement>('#refreshUsage').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, () => Promise.all([loadUsage(), UH.shown && readTurns()]));
 // P7: the Usage screen reads again every 20 s while it is shown (the plan limits move with every turn anywhere).
 setInterval(() => { if (document.body.dataset.view === 'usage' && !document.hidden && navigator.onLine) void loadUsage(); }, 20000);
 

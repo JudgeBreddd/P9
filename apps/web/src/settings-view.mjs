@@ -367,7 +367,10 @@ function refreshDefaults() {
   bindDefaults();
   if (!outer.$('#setDelegation')?.contains(document.activeElement)) drawDelegation();
 }
-let tabFailed = false; // the last Show Tokens and Cost change did not reach the daemon
+// The Show Tokens and Cost switch: the last change did not reach the daemon; the value being saved (null: none). Kept
+// here, not on the box, so a Settings reopened mid-save draws it saving too (one change at a time).
+let tabFailed = false, tabSaving = null;
+const tabNote = () => tabFailed ? 'P9 did not answer; try again in a moment.' : 'Off: Usage shows Limits alone, here and on the phone. P9 still records every turn.';
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -378,7 +381,7 @@ function renderSettings() {
     // The daemon keeps this one (it starts the shells, the phone's too); null: it did not answer, so the box is disabled.
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     // A3 (3): the daemon keeps this one too (the ledger's telemetry-tab), so the phone follows it; /usage says how it is set.
-    + (window.p9?.telemetryTab ? box('setUsageTabs', 'Show Tokens and Cost in Usage', outer.usage.telemetryTab !== false, tabFailed ? 'P9 did not answer; try again in a moment.' : 'Off: Usage shows Limits alone, here and on the phone. P9 still records every turn.', false, 'The Tokens and Cost tabs beside Limits in the Usage window and on the phone\'s Usage screen.') : '')
+    + (window.p9?.telemetryTab ? box('setUsageTabs', 'Show Tokens and Cost in Usage', tabSaving ?? outer.usage.telemetryTab !== false, tabNote(), tabSaving !== null, 'The Tokens and Cost tabs beside Limits in the Usage window and on the phone\'s Usage screen.') : '')
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + profilesGroup()
     + delegationGroup() + sprintGroup() + noticesGroup()
@@ -406,11 +409,13 @@ function renderSettings() {
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
   if (outer.$('#setUsageTabs')) outer.$('#setUsageTabs').onchange = async e => {
-    // One change at a time (the box is off until the daemon answers), so two quick changes cannot land out of order.
-    e.target.disabled = true;
-    const r = await window.p9.telemetryTab(e.target.checked).catch(() => null); tabFailed = r?.status !== 200;
+    // One change at a time (the box is off until the daemon answers), so two quick changes cannot land out of order. When it
+    // settles only this row changes: a whole redraw would drop a Your name edit not yet committed.
+    tabSaving = e.target.checked; e.target.disabled = true;
+    const r = await window.p9.telemetryTab(tabSaving).catch(() => null); tabFailed = r?.status !== 200; tabSaving = null;
     if (!tabFailed) Object.assign(outer.usage, { telemetryTab: r.body.show, tabSetAt: Date.now() });
-    renderSettings();
+    const b = outer.$('#setUsageTabs'); if (!b) return;
+    b.checked = outer.usage.telemetryTab !== false; b.disabled = false; b.closest('label').querySelector('.muted.sm').textContent = tabNote();
   };
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
   bindDefaults(); bindProfiles(); bindDelegation(); bindNotices();

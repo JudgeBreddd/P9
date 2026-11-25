@@ -39,9 +39,13 @@ async function loadUsage() {
   // A3 (3): a read that began before Settings > General's switch was saved (tabSetAt) keeps the saved value.
   const kept = { ...(result.status === 200 ? result.body : { limits: usage.limits, telemetryTab: usage.telemetryTab }),
     ...(usage.tabSetAt > started && { telemetryTab: usage.telemetryTab, tabSetAt: usage.tabSetAt }) };
+  const was = usage.telemetryTab;
   for (const key of Object.keys(usage)) delete usage[key];
   Object.assign(usage, noUsage(), kept);
   outer.renderMission();
+  // A changed switch shows at once in an open Usage window (Mission's onboarding draws no panels) and in Settings > General
+  // (unless a change of its own is being saved there).
+  if (usage.telemetryTab !== was) { redrawUsage(); const box = document.getElementById('setUsageTabs'); if (box && !box.disabled) box.checked = usage.telemetryTab !== false; }
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
 // ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
