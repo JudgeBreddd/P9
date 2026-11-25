@@ -3,7 +3,7 @@
 // at start. telemetry.db holds only what the ledger can rebuild, so a damaged or out-of-date one is renamed aside (kept)
 // and rebuilt. Off the chat path: push() only projects an event and queues it; a worker thread writes, so a locked,
 // read-only, slow or corrupt file drops rows (counted) and never delays a chat or the ledger.
-// Privacy: project() is the gate. Rows hold ids, provider, model alias, stop reason, error code and tool kind; never prompt
+// Privacy: project() is the gate. Rows hold ids, provider, model alias, a profile flag, stop reason, error code and tool kind; never prompt
 // text, file contents, paths or keys. The schema's CHECKs refuse anything else (telemetry.test's privacy check).
 // Resources (phase 3): CPU and peak memory per live turn from the chat's cgroup, a 60 s sample of the daemon and p9.slice,
 // coverage gaps and the watcher's own cost go to telemetry-samples.db, which nothing can rebuild: it is never rebuilt or
@@ -17,8 +17,8 @@ import { open as openFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
-export const SCHEMA = 1; // PRAGMA user_version of telemetry.db; another value is set aside and rebuilt
-export const DERIVER = 1; // bump when derive() changes what it writes, so rows say which rules made them
+export const SCHEMA = 2; // PRAGMA user_version of telemetry.db; another value is set aside and rebuilt (2: profile, A3)
+export const DERIVER = 2; // bump when derive() changes what it writes, so rows say which rules made them (2: counted, profile)
 export const SAMPLES_SCHEMA = 1; // PRAGMA user_version of telemetry-samples.db; another value is renamed aside, never rebuilt
 const GAP_MS = 180000; // samples further apart than this (sleep, restart, a stalled worker) leave a gap row
 
@@ -31,6 +31,7 @@ const ERRORS = [['Mode ', 'mode-failed'], ['This agent does not offer that model
 const CODES = ['agent-error', 'exited', 'config-failed', ...new Set(ERRORS.map(([, code]) => code))];
 const USAGE = [['inputTokens', 'input_tokens'], ['outputTokens', 'output_tokens'], ['cachedReadTokens', 'cached_read_tokens'],
   ['cachedWriteTokens', 'cached_write_tokens'], ['thoughtTokens', 'thought_tokens'], ['totalTokens', 'total_tokens']];
+const COUNTED = ['inputTokens', 'outputTokens', 'cachedReadTokens', 'cachedWriteTokens'];
 const ENDS = new Set(['turn-end', 'error', 'exited', 'interrupted']);
 const RELEVANT = new Set([...ENDS, 'user', 'update', 'config', 'created', 'approval', 'question', 'answered', 'deleted']);
 const UUID = /^[0-9a-f-]{36}$/;
@@ -38,7 +39,7 @@ const ALIAS = /^[A-Za-z0-9._:[\]-]{1,64}$/;
 const list = (values) => values.map((value) => "'" + value + "'").join(', ');
 
 export const COLUMNS = ['key', 'conversation', 'end_cursor', 'deriver', 'outcome', 'unprompted', 'steers', 'stop_reason', 'error_code',
-  'provider', 'model', 'model_source', 'folder_id', 'turn_number', 'start_at', 'end_at', 'first_output_ms', 'total_ms', 'tool_count',
+  'provider', 'model', 'model_source', 'profile', 'folder_id', 'turn_number', 'start_at', 'end_at', 'first_output_ms', 'total_ms', 'tool_count',
   'tool_ms', 'approval_wait_ms', ...KINDS.map((kind) => 'tools_' + kind), 'usage', ...USAGE.map(([, column]) => column),
   'cache_read_share', 'layers'];
 
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS turns (
   provider TEXT CHECK (provider IN ('claude', 'codex')),
   model TEXT CHECK (length(model) <= 64 AND model NOT GLOB '*[^][A-Za-z0-9._:-]*'),
   model_source TEXT NOT NULL CHECK (model_source IN ('set', 'carried', 'missing')),
+  profile INTEGER NOT NULL CHECK (profile IN (0, 1)),
   folder_id TEXT CHECK (length(folder_id) = 16 AND folder_id NOT GLOB '*[^0-9a-f]*'),
   turn_number INTEGER NOT NULL,
   start_at INTEGER NOT NULL,
@@ -88,7 +90,8 @@ export function project(event) {
     case 'user': return { ...base, steered: Boolean(data.steered) };
     case 'created': return { ...base, provider: ['claude', 'codex'].includes(data.provider) ? data.provider : null,
       // '' is the chat's default workspace: it gets an id of its own, so NULL means only "unknown".
-      folder: typeof data.folder === 'string' ? createHash('sha256').update(data.folder).digest('hex').slice(0, 16) : null };
+      folder: typeof data.folder === 'string' ? createHash('sha256').update(data.folder).digest('hex').slice(0, 16) : null,
+      profile: Boolean(data.profile) }; // a provider profile's chat: another service, so its tokens get no Claude price (A3)
     case 'config': {
       const current = data.model?.current;
       return { ...base, model: typeof current !== 'string' ? null : ALIAS.test(current) ? current : 'other' };
@@ -103,8 +106,14 @@ export function project(event) {
     }
     case 'approval': case 'question': case 'answered': return { ...base, request: String(data.request) };
     case 'turn-end': {
-      const usage = data.usage && typeof data.usage === 'object' ? Object.fromEntries(USAGE.map(([field]) =>
-        [field, Number.isSafeInteger(data.usage[field]) && data.usage[field] >= 0 ? data.usage[field] : null])) : null;
+      // O190: counted (the reply's per-model counts, compactions included; ledger.mjs) stands in for usage when the reply
+      // has it, as the usage view does, with the total made from its four counts.
+      const counted = data.counted && typeof data.counted === 'object' ? data.counted : null;
+      const four = counted && COUNTED.map((field) => counted[field]);
+      const raw = !counted ? data.usage : { ...data.usage, ...counted,
+        totalTokens: four.every((n) => Number.isSafeInteger(n) && n >= 0) ? four.reduce((sum, n) => sum + n, 0) : null };
+      const usage = raw && typeof raw === 'object' ? Object.fromEntries(USAGE.map(([field]) =>
+        [field, Number.isSafeInteger(raw[field]) && raw[field] >= 0 ? raw[field] : null])) : null;
       return { ...base, stop: data.stopReason == null ? null : STOPS.includes(data.stopReason) ? data.stopReason : 'other',
         unprompted: data.unprompted === true, usage };
     }
@@ -129,14 +138,14 @@ export function derive(state, event) {
   // O35: the chat was deleted; the worker removes its rows (forget), and derive forgets it.
   if (event.type === 'deleted') { state.conversations.delete(event.conversation); return []; }
   let chat = state.conversations.get(event.conversation);
-  if (!chat) state.conversations.set(event.conversation, chat = { provider: null, folder: null, model: null, turns: 0, open: null });
+  if (!chat) state.conversations.set(event.conversation, chat = { provider: null, folder: null, profile: false, model: null, turns: 0, open: null });
   const turn = chat.open;
   const rows = [];
   const open = (steers) => { chat.open = { key: event.cursor, start: event.at, last: event.at, model: chat.model, set: false, steers,
     output: null, tools: new Map(), waits: new Map() }; };
   if (turn && !ENDS.has(event.type) && !(event.type === 'user' && !event.steered)) turn.last = event.at;
   switch (event.type) {
-    case 'created': chat.provider = event.provider; chat.folder = event.folder; break;
+    case 'created': chat.provider = event.provider; chat.folder = event.folder; chat.profile = event.profile; break;
     case 'config':
       chat.model = event.model;
       if (turn) { turn.model = event.model; turn.set = true; }
@@ -180,7 +189,7 @@ function close(chat, turn, event, outcome, end, unprompted = event.unprompted ==
     key: turn.key, conversation: event.conversation, end_cursor: event.cursor, deriver: DERIVER, outcome, unprompted: unprompted ? 1 : 0,
     steers: turn.steers, stop_reason: event.type === 'turn-end' ? event.stop : null,
     error_code: event.type === 'error' ? event.code : event.type === 'exited' ? 'exited' : null,
-    provider: chat.provider, model: turn.model, model_source: turn.set ? 'set' : turn.model === null ? 'missing' : 'carried',
+    provider: chat.provider, model: turn.model, model_source: turn.set ? 'set' : turn.model === null ? 'missing' : 'carried', profile: chat.profile ? 1 : 0,
     folder_id: chat.folder, turn_number: chat.turns, start_at: turn.start, end_at: end,
     first_output_ms: turn.output === null ? null : turn.output - turn.start, total_ms: end - turn.start,
     tool_count: turn.tools.size, tool_ms: toolMs, approval_wait_ms: waitMs, ...kinds,
