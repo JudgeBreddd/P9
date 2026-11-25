@@ -2216,21 +2216,34 @@ one('#signIn').addEventListener('submit', async (event) => {
 // Tokens and Cost read /usage/turns and are drawn by usage-history.mjs, loaded the first time one opens. None while the
 // daemon's telemetry-tab pref is off (the desktop's Settings > General). The answer is read again when the range changes,
 // on the 20 s redraw once it is a minute old, and 5 s after a 'rebuilding' answer (the daemon's first replay).
-const UH: { tab: string; days: number; by: string; page: Json | null; at: number; busy: boolean; failed: boolean; shown: boolean; more: boolean; limits: string;
+const UH: { tab: string; days: number; by: string; page: Json | null; at: number; busy: boolean; failed: boolean; shown: boolean; more: boolean; limits: string; html: string;
   draw: ((u: Json, esc: (v: unknown) => string, names: Record<string, string>) => string) | null; load: Promise<void> | null } =
-  { tab: 'limits', days: 7, by: 'model', page: null, at: 0, busy: false, failed: false, shown: false, more: false, limits: '', draw: null, load: null };
+  { tab: 'limits', days: 7, by: 'model', page: null, at: 0, busy: false, failed: false, shown: false, more: false, limits: '', html: '', draw: null, load: null };
 const UTABS = [['limits', 'Limits'], ['tokens', 'Tokens'], ['cost', 'Cost']];
+// The strip stays mounted, so a press on it or the focus in it survives a redraw; the panel is replaced only when what it
+// shows changed (the 20 s redraw of an unchanged view touches nothing).
 function drawUsage() {
-  if (!UH.shown) UH.tab = 'limits';
-  one('#usage').innerHTML = !UH.shown ? UH.limits : `<div class="utabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" aria-selected="${UH.tab === id}" tabindex="${UH.tab === id ? 0 : -1}" data-utab="${id}">${label}</button>`).join('')}</div>`
-    + `<div id="upanel" role="tabpanel" aria-labelledby="utab-${UH.tab}">${UH.tab === 'limits' ? UH.limits : turnsHtml()}</div>`;
+  const root = one('#usage');
+  if (!UH.shown) { UH.tab = 'limits'; UH.html = ''; root.innerHTML = UH.limits; return; }
+  if (!root.querySelector('.utabs')) {
+    root.innerHTML = `<div class="utabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" data-utab="${id}">${label}</button>`).join('')}</div><div id="upanel" role="tabpanel"></div>`;
+    UH.html = '';
+  }
+  root.querySelectorAll<HTMLElement>('[data-utab]').forEach((tab) => { const on = tab.dataset.utab === UH.tab; tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1; });
+  const panel = one('#upanel'), html = UH.tab === 'limits' ? UH.limits : turnsHtml();
+  panel.setAttribute('aria-labelledby', 'utab-' + UH.tab);
+  if (html !== UH.html) { panel.innerHTML = html; UH.html = html; }
 }
+let turnsRead = 0, usageRead = 0; // the newest read of each; an older answer that lands later is dropped
 async function readTurns() {
-  const days = UH.days; UH.busy = true;
-  // This page comes from the daemon it reads, so the route is always there; a failed read says so and is tried again in a minute.
-  try { UH.page = await request('/usage/turns?days=' + days) as Json; } catch { UH.page = { state: 'unavailable', days }; }
+  const days = UH.days, seq = ++turnsRead; UH.busy = true;
+  // A deadline, so a stalled read cannot hold the busy mark. This page comes from the daemon it reads, so the route is
+  // there; a failed read, or an answer that is not one (cut short), is unavailable and is tried again in a minute.
+  const page = await request('/usage/turns?days=' + days, AbortSignal.timeout(20000)).catch(() => null) as Json | null;
+  if (seq !== turnsRead) return;
   UH.busy = false; UH.at = Date.now();
-  if (UH.page?.state === 'rebuilding') setTimeout(() => { UH.at = 0; if (UH.tab !== 'limits' && document.body.dataset.view === 'usage') drawUsage(); }, 5000);
+  UH.page = typeof page?.state === 'string' ? { ...page, days } : { state: 'unavailable', days };
+  if (UH.page.state === 'rebuilding') setTimeout(() => { UH.at = 0; if (UH.tab !== 'limits' && document.body.dataset.view === 'usage') drawUsage(); }, 5000);
   if (UH.tab !== 'limits') drawUsage();
 }
 function turnsHtml() {
@@ -2247,6 +2260,8 @@ one('#usage').addEventListener('click', (event) => {
   if (d.utab) UH.tab = d.utab; if (d.uhDays) UH.days = +d.uhDays; if (d.uhBy) UH.by = d.uhBy;
   drawUsage();
 });
+// Details (the sample counts) stays as it was left across redraws and tab changes.
+one('#usage').addEventListener('toggle', (event) => { const more = event.target as HTMLDetailsElement; if (more.matches('details.more')) UH.more = more.open; }, true);
 // Arrow keys, Home and End move between the tabs and open the one reached (the tablist pattern).
 one('#usage').addEventListener('keydown', (event) => {
   const at = UTABS.findIndex(([id]) => id === (event.target as HTMLElement).dataset.utab), to = at < 0 ? undefined : { ArrowRight: at + 1, ArrowLeft: at + 2, Home: 0, End: 2 }[event.key];
@@ -2255,8 +2270,10 @@ one('#usage').addEventListener('keydown', (event) => {
 });
 async function loadUsage() {
   void loadSignIn();
+  const seq = ++usageRead;
   try {
     const data = await request('/usage') as Usage;
+    if (seq !== usageRead) return;
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
     // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
@@ -2269,17 +2286,15 @@ async function loadUsage() {
     // it stalls (P5). A stopped chat's last fill is history and is left out.
     const chat = (id: string) => state.conversations.find((item) => item.id === id);
     const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
-    // The redraw (startup twice, Refresh, every 20 s) keeps an opened Details open, also while another tab is shown.
-    const was = one('#usage').querySelector<HTMLDetailsElement>('details.more');
-    if (was) UH.more = was.open;
-    const more = UH.more ? ' open' : '';
+    const more = UH.more ? ' open' : ''; // the redraw (startup twice, Refresh, every 20 s) keeps an opened Details open
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
     UH.limits = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
       + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"${more}><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
     drawUsage();
-  } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
+  } catch { if (seq === usageRead) { UH.limits = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; drawUsage(); } }
 }
-one<HTMLButtonElement>('#refreshUsage').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadUsage);
+// Refresh reads Tokens and Cost again too, even while an earlier read is still out (the newest answer wins).
+one<HTMLButtonElement>('#refreshUsage').onclick = (event) => { UH.at = 0; UH.busy = false; void refreshing(event.currentTarget as HTMLButtonElement, loadUsage); };
 // P7: the Usage screen reads again every 20 s while it is shown (the plan limits move with every turn anywhere).
 setInterval(() => { if (document.body.dataset.view === 'usage' && !document.hidden && navigator.onLine) void loadUsage(); }, 20000);
 

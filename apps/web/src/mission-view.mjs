@@ -27,13 +27,18 @@ const secWorst = (g, l) => { const w = worst(l), v = secLv[g]; return w === 'bad
 const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
 const noUsage = () => ({ state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } });
 const usage = noUsage();
+let usageRead = 0; // the newest read; an older answer that lands later is dropped
 async function loadUsage() {
   if (!window.p9?.usage) return;
+  const seq = ++usageRead, started = Date.now();
   const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
+  if (seq !== usageRead) return;
   // O190/O191 FIX1: each answer replaces the last one whole, so a field an older daemon does not send (tokens, profiles,
   // limits) or a failed read leaves nothing of the previous answer behind. A failed read keeps only the plan limits: they
   // carry their own age (limitLine: "N min old", muted by the daemon's stale mark), and dropping them would blank every chat's meter on a blip.
-  const kept = result.status === 200 ? result.body : { limits: usage.limits, telemetryTab: usage.telemetryTab };
+  // A3 (3): a read that began before Settings > General's switch was saved (tabSetAt) keeps the saved value.
+  const kept = { ...(result.status === 200 ? result.body : { limits: usage.limits, telemetryTab: usage.telemetryTab }),
+    ...(usage.tabSetAt > started && { telemetryTab: usage.telemetryTab, tabSetAt: usage.tabSetAt }) };
   for (const key of Object.keys(usage)) delete usage[key];
   Object.assign(usage, noUsage(), kept);
   outer.renderMission();
@@ -229,7 +234,7 @@ function readTurns() {
   const days = UH.days; UH.busy = true;
   window.p9.usageTurns(days).catch(() => null).then(r => {
     // 404: a daemon older than the route (a remote not yet updated); it is not read again on a timer.
-    UH.busy = false; UH.page = r?.status === 200 ? r.body : { state: r?.status === 404 ? 'unsupported' : 'unavailable', days }; UH.at = Date.now();
+    UH.busy = false; UH.page = r?.status === 200 && typeof r.body?.state === 'string' ? { ...r.body, days } : { state: r?.status === 404 ? 'unsupported' : 'unavailable', days }; UH.at = Date.now();
     // The next read: a redraw when this answer is stale, which reads again only if Tokens or Cost is still on screen.
     const soon = UH.page.state === 'rebuilding';
     if (UH.page.state !== 'unsupported') outer.setTimeout(() => { if (soon) UH.at = 0; redrawUsage(); }, soon ? 5000 : 60500);

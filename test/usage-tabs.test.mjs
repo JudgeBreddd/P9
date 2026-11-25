@@ -119,7 +119,10 @@ test('A3 (2): the Usage window\'s Tokens and Cost tabs show the turns from telem
     await box.waitFor({ timeout: 5000 });
     assert.equal(await box.isChecked(), !show);
     await box.setChecked(show);
-    await page.locator(`#setDlg[open] #setUsageTabs${show ? ':checked' : ':not(:checked)'}`).waitFor();
+    // Saved: the daemon's /usage says so (the box is checked as soon as the click lands).
+    const saved = async () => (await page.evaluate(() => window.p9.usage())).body.telemetryTab;
+    for (const end = Date.now() + 10000; await saved() !== show && Date.now() < end;) await new Promise((r) => setTimeout(r, 200));
+    assert.equal(await saved(), show, 'the daemon kept the switch');
     await page.click('#setClose');
     await page.locator('#rUsage').click();
     await body.locator('.stats').waitFor();
@@ -168,20 +171,21 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   assert.equal(await screen.locator('.uh-table tbody tr').count(), 3);
   await screen.locator('.uh-table').scrollIntoViewIfNeeded();
   await shot(page, 'phone-usage-cost-30d-by-day');
-  // The 20 s redraw (Refresh runs the same) keeps the tab and range: the marked strip is replaced, the figures stay.
-  await screen.locator('.utabs').evaluate((strip) => { strip.dataset.before = '1'; });
-  await page.click('#refreshUsage');
-  await screen.locator('.utabs[data-before]').waitFor({ state: 'detached' });
+  // Refresh (as the 20 s redraw) keeps the tab and range; it reads Tokens and Cost again too.
+  const turnsRead = () => page.waitForResponse((r) => new URL(r.url()).pathname === '/usage/turns');
+  const refresh = async () => { const read = turnsRead(); await page.click('#refreshUsage'); await read; };
+  await refresh();
   assert.equal(await screen.locator('[data-utab="cost"][aria-selected="true"]').count(), 1);
   await total.filter({ hasText: '$0.10' }).waitFor();
 
   // The switch is the desktop's (Settings > General); the phone's listener has no route to change it.
-  const tried = await page.evaluate(() => fetch('/telemetry-tab', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"show":false}' }).then((r) => r.status));
-  assert.notEqual(tried, 200, 'the phone cannot turn the tabs off');
+  // Sent as the phone sends its own changes (its CSRF token and an operation id), so only the missing route can refuse it.
+  const tried = await page.evaluate(() => fetch('/telemetry-tab', { method: 'POST', headers: { 'content-type': 'application/json',
+    'x-p9-op': crypto.randomUUID(), 'x-p9-csrf': sessionStorage.getItem('p9-csrf') ?? JSON.parse(localStorage.getItem('p9-csrf') ?? '{}').token }, body: '{"show":false}' }).then((r) => r.status));
+  assert.equal(tried, 404, 'the phone cannot turn the tabs off');
+  assert.equal((await server.desk('/usage')).body.telemetryTab, true, 'the switch is unchanged');
   // After the refused change the tabs are still there.
-  await screen.locator('.utabs').evaluate((strip) => { strip.dataset.before = '1'; });
-  await page.click('#refreshUsage');
-  await screen.locator('.utabs[data-before]').waitFor({ state: 'detached' });
+  await refresh();
   assert.equal(await screen.locator('[data-utab="cost"][aria-selected="true"]').count(), 1);
   assert.deepEqual((await server.desk('/telemetry-tab', 'POST', { show: false })).body, { show: false });
   assert.equal((await server.desk('/telemetry-tab', 'POST', { show: 'no' })).status, 400);
@@ -198,6 +202,17 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   assert.deepEqual((await server.desk('/telemetry-tab', 'POST', { show: true })).body, { show: true });
   await page.click('#refreshUsage');
   await screen.locator('[data-utab="limits"][aria-selected="true"]').waitFor();
+
+  // Refresh shows a turn that ended after the last read, even within the minute the answer is otherwise kept.
+  await screen.locator('[data-utab="tokens"]').click();
+  await refresh();
+  const turns = async () => Number((await screen.locator('.uh-total span').textContent()).match(/(\d+) turns?/)[1]);
+  const before = await turns();
+  assert.equal((await server.desk('/chat/' + made.body.conversation + '/prompt', 'POST', { text: 'again' })).status, 202);
+  for (const end = Date.now() + 30000; await count() !== 4 && Date.now() < end;) await new Promise((r) => setTimeout(r, 500));
+  assert.equal(await count(), 4);
+  await refresh();
+  await screen.locator('.uh-total span', { hasText: `${before + 1} turns` }).waitFor({ timeout: 5000 });
 });
 
 // The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.

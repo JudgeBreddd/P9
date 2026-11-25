@@ -405,7 +405,13 @@ function renderSettings() {
     if (!Number.isFinite(n)) { el.value = outer.settings.xfer[k]; return; }
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
-  if (outer.$('#setUsageTabs')) outer.$('#setUsageTabs').onchange = async e => { const r = await window.p9.telemetryTab(e.target.checked).catch(() => null); tabFailed = r?.status !== 200; if (!tabFailed) outer.usage.telemetryTab = r.body.show; renderSettings(); };
+  if (outer.$('#setUsageTabs')) outer.$('#setUsageTabs').onchange = async e => {
+    // One change at a time (the box is off until the daemon answers), so two quick changes cannot land out of order.
+    e.target.disabled = true;
+    const r = await window.p9.telemetryTab(e.target.checked).catch(() => null); tabFailed = r?.status !== 200;
+    if (!tabFailed) Object.assign(outer.usage, { telemetryTab: r.body.show, tabSetAt: Date.now() });
+    renderSettings();
+  };
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
   bindDefaults(); bindProfiles(); bindDelegation(); bindNotices();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
