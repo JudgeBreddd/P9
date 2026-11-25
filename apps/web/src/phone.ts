@@ -373,12 +373,7 @@ function history(id: string) {
 type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; files?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
-type Attached = { mimeType?: string; data: string; name: string; file?: true; paste?: string }; // A2 step 1: file marks one that is not a photo; paste is the id of a big paste P9 made into pasted.txt (never sent)
-// Round 12 review: what happened to each paste (by its id), in localStorage beside the drafts and written before the step goes on, so
-// a reload cannot see one without the other: the tag of a send carrying it that has no answer yet (it may have arrived, so it stays a
-// file until that same send is answered), or 'used' once its text is in the box (a launch drops the file if its removal was not stored).
-const pastes: Record<string, string> = (() => { try { return JSON.parse(localStorage.getItem('p9-pastes') ?? '{}'); } catch { return {}; } })();
-function keepPastes() { try { const all = JSON.stringify(pastes); localStorage.setItem('p9-pastes', all); return localStorage.getItem('p9-pastes') === all; } catch { return false; } }
+type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
@@ -1239,7 +1234,7 @@ async function submitFromBox(event: Event) {
   // fit this phone's storage): they stay attached and the box says why.
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
-    if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.') + asTextHint(images)); return; }
+    if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.') + pasteHint(images)); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
@@ -1256,16 +1251,11 @@ async function submitFromBox(event: Event) {
   // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
   const sent = { ...first, ...attachBody(images) };
-  const op = (again && inFlight.get(id)!.op) || crypto.randomUUID(), locks = images.filter((image) => image.paste && !(image.paste in pastes));
-  for (const image of locks) pastes[image.paste!] = op;
-  if (locks.length && !keepPastes()) { for (const image of locks) delete pastes[image.paste!]; note('Not sent: this phone\'s storage is full, so it cannot keep track of pasted.txt. Your message is still in the box.'); return false; }
-  inFlight.set(id, { draft, sent: first, pids: sentPids, op }); keepInFlight();
+  inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
   inFlight.delete(id); keepInFlight();
-  // Refused for sure: its pastes are free again (accepted, they leave the box; a launch clears their entries).
-  if (result.status !== 202) { for (const [key, tag] of Object.entries(pastes)) if (tag === op) delete pastes[key]; keepPastes(); }
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
@@ -1274,7 +1264,7 @@ async function submitFromBox(event: Event) {
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
-    if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.' + asTextHint(images));
+    if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.' + pasteHint(images));
     else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
@@ -1297,7 +1287,7 @@ function dropRefused(id: string, value: string | undefined, pid: string | undefi
 const SEND_DEADLINE = 30000;
 // O62: per chat, the send that got no answer, kept in this phone's storage with the settings chosen for it: after a reload
 // the same text sent again is that same send (its first body and operation ID), so it does not arrive twice.
-const inFlight = new Map<string, { draft: string; sent: Json; pids: Record<string, string>; op?: string }>(); // pids: the picks the first try carried, by key (O206, O209)
+const inFlight = new Map<string, { draft: string; sent: Json; pids: Record<string, string> }>(); // pids: the picks the first try carried, by key (O206, O209)
 function keepInFlight() {
   try {
     if (inFlight.size) localStorage.setItem('p9-inflight', JSON.stringify(Object.fromEntries([...inFlight].map(([id, kept]) => [id, { ...kept, picks: [...chosen.get(id) ?? []] }]))));
@@ -1322,12 +1312,12 @@ function spend(id: string, picked: Map<string, string>, queued?: Record<string, 
   if (!own.size) chosen.delete(id);
 }
 try {
-  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; pick?: string; pids?: Record<string, string>; op?: string; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
+  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; pick?: string; pids?: Record<string, string>; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
     // O206: a send kept before picks had a pid gets one here, and that one is the pick it carried, so its refusal still clears it.
     if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
     // O209: a send kept before pids were kept per key carries its restored picks' pids (the model's own pid if O206 kept one).
     const pids = kept.pids ?? { ...Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid!])), ...(kept.pick && { model: kept.pick }) };
-    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent, pids, ...(kept.op && { op: kept.op }) }); // op: its pastes' tag, so the retry frees them
+    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent, pids });
   }
 } catch {}
 const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
@@ -1368,52 +1358,32 @@ function attachedStore(mode: IDBTransactionMode, use: (store: IDBObjectStore) =>
 }
 let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
 function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
-const seenPastes = new Set<string>(); // the pastes kept in this phone's store at launch: an entry for any other is done with
-try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; prunePastes(); return renderAttached(); } for (const image of at.value as Attached[]) if (image.paste) seenPastes.add(image.paste); if (!attached.has(String(at.key))) attached.set(String(at.key), (at.value as Attached[]).filter((image) => !image.paste || pastes[image.paste] !== 'used')); at.continue(); }; }); } catch {}
-function prunePastes() { const live = [...attached.values()].flat().map((image) => image.paste); for (const key of Object.keys(pastes)) if (!seenPastes.has(key) && !live.includes(key)) delete pastes[key]; keepPastes(); }
-function pasteText(image: Attached) { return new TextDecoder('utf-8', { ignoreBOM: true }).decode(Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0))); } // a leading U+FEFF is part of the paste
+try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
 function renderAttached() {
   const list = attached.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length; keepAttached();
-  box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span>${isPaste(image) ? `<button type="button" class="as-text" data-astext="${i}">Use as text</button>` : ''}<button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
 // One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file
 // check, and a send went without a file still being read. Notes only for the chat on screen.
 const adding = new Map<string, Promise<boolean>>(); // chat id -> its attach now
-function addImages(files: Iterable<File>, paste = false): Promise<boolean> {
+function addImages(files: Iterable<File>): Promise<boolean> {
   const id = openId; if (!id) return Promise.resolve(false);
-  const run = (adding.get(id) ?? Promise.resolve(true)).catch(() => true).then(() => attachNow(id, files, paste)); adding.set(id, run);
+  const run = (adding.get(id) ?? Promise.resolve(true)).catch(() => true).then(() => attachNow(id, files)); adding.set(id, run);
   void run.finally(() => { if (adding.get(id) === run) adding.delete(id); }).catch(() => {}); return run;
 }
-async function attachNow(id: string, files: Iterable<File>, paste: boolean) {
+async function attachNow(id: string, files: Iterable<File>) {
   const say = (text = '') => { if (openId === id) note(text); };
   say(); let ok = true; // true: every file attached
   for (const file of files) {
     const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
     // the list as it is now: a send answered meanwhile took its own files from it
-    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], paste ? { ...got, paste: crypto.randomUUID() } : got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
-// A big paste attached as pasted.txt can go back into the box as text, after what is typed there: a file does not queue, and
-// removing the chip would drop the paste. Only a paste P9 made (a picked file of the same name stays a file).
-function isPaste(image: Attached) { return !!image.paste; }
-function asTextHint(list: Attached[]) { return list.some((image) => isPaste(image) && !(image.paste! in pastes)) ? ' Tap Use as text on pasted.txt to send the paste as text.' : ''; }
 one<HTMLElement>('#attached').onclick = (event) => {
-  const astext = (event.target as Element).closest<HTMLButtonElement>('[data-astext]'), id = openId;
-  if (astext) {
-    const list = attached.get(id) ?? [], image = list[Number(astext.dataset.astext)]; if (!image) return;
-    // Round 10 review: not while a send that carries it has no answer yet (it may have arrived: the text would go twice).
-    if (submitting || image.paste! in pastes) { note('pasted.txt went with a send P9 has not answered, and may have arrived, so it stays a file. Send that same message again to learn whether it went, or remove pasted.txt with ✕.'); return; }
-    // The text is stored before the file is removed, so a closed page or a full storage never loses the paste.
-    const text = pasteText(image);
-    if (!text.trim()) { note('pasted.txt is only spaces and line breaks, so there is no text to put in the box.'); return; }
-    let before = '', want = ''; editDraft(id, (now) => (want = (before = now) + (now ? '\n' : '') + text)); keepDraft(); pastes[image.paste!] = 'used';
-    let saved = keepPastes(); try { saved &&= JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')[id] === want; } catch { saved = false; }
-    if (!saved) { delete pastes[image.paste!]; keepPastes(); editDraft(id, () => before); keepDraft(); note('Not changed: this phone\'s storage is full, so pasted.txt stays attached.'); return; }
-    list.splice(list.indexOf(image), 1); renderAttached(); note(); return;
-  }
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
   attached.get(openId)?.splice(Number(button.dataset.unattach), 1); renderAttached();
 };
@@ -1446,12 +1416,16 @@ picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value 
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
   const box = event.currentTarget as HTMLTextAreaElement, files = event.clipboardData ? pastedFiles(event.clipboardData, box.selectionStart !== box.selectionEnd) : [];
   if (!files.length) return; // over a selection it stays text, so it replaces what was selected as any paste does
-  event.preventDefault(); const id = openId, was = box.value, at = box.selectionStart, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
-  void addImages(files, !!text).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
+  const id = openId, was = box.value, at = box.selectionStart, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
+  // Round 9 review: a file does not queue, so while this message would queue (agent busy or asking, a queue, offline) a big paste stays text.
+  if (text && (!navigator.onLine || running(id) || asking(id) || queued(id).length)) { note('A big paste stays as text while the agent is busy or the phone is offline, so it can wait in the queue.'); return; }
+  event.preventDefault();
+  void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
     if (!text || !id) return; if (ok) { if (openId === id) note('A big paste went in as pasted.txt. Remove it with ✕.'); return; }
     editDraft(id, (now) => now === was ? now.slice(0, at) + text + now.slice(at) : now + (now ? '\n' : '') + text); // where it was pasted, or after what was typed since
   });
 }); // A2 step 1: a big paste of text attaches as a file
+function pasteHint(list: Attached[]) { return list.some((image) => image.name === 'pasted.txt') ? ' To queue a big paste as text, remove pasted.txt with ✕ and paste it again.' : ''; }
 // A dropped file attaches the same way (spec §4); dropped text still goes into the box.
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
