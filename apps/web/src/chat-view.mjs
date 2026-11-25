@@ -880,10 +880,12 @@ function addImages(s, files) {
 async function attachNow(s, files) {
   const m = await import('./attach.mjs').catch(() => null);
   if (!m) return outer.toast({ kind: 'not attached', txt: 'Could not load attaching; nothing was attached. Try again.', level: 'warn' }, true), false;
-  const { attachFull, readAttachment } = m; let ok = true; // true: every file attached
+  const { attachFull, readAttachment, tooBig } = m; let ok = true; // true: every file attached
   for (const file of files) {
     const full = attachFull(file, s.images ||= []); if (full) { ok = false; outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
-    try { const got = await readAttachment(file, s.images); (s.images ||= []).push(got); } // the list as it is now: a send refused or a message taken back meanwhile replaced it
+    try { // checked again against the list as it is now: a send refused or a message taken back meanwhile replaced it
+      const got = await readAttachment(file, s.images), late = attachFull(file, s.images ||= []) || tooBig(got, s.images); if (late) throw new Error(late); s.images.push(got);
+    }
     catch (e) { ok = false; outer.toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
   }
   renderChats(); return ok;

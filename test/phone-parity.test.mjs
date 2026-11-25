@@ -346,10 +346,14 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await send(page, 'look'); await hit;
   assert.equal(await pasteText('z'.repeat(5001)), true, 'a big paste while the send is on its way');
   await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  const log = 'the log said: look\n  at line 4 ';
+  await page.fill('#prompt', log);
   release();
   await replied('echo:look' + seen);
   await chips(0);
   assert.equal(await page.locator('#attached .chip-file', { hasText: 'pasted.txt' }).count(), 1, 'the paste made meanwhile is still attached');
+  assert.equal(await page.inputValue('#prompt'), log, 'what was typed meanwhile stays byte for byte, though it holds the sent text');
+  await page.fill('#prompt', '');
   await page.click('#attached [aria-label="Remove pasted.txt"]');
   assert.equal(await page.isHidden('#attached'), true);
   assert.equal(await page.isHidden('#composerNote'), true);

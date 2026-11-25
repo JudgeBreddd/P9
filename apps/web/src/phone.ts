@@ -1091,6 +1091,8 @@ function setDraft(id: string, text: string) {
 }
 // O61: a chat's unsent text, read and changed by chat, never through whichever chat the box shows: a send answered, or a
 // message handed back, after the reader opened another chat must not touch that other chat's text.
+// A send leaves the box only if the box still starts with it: what was typed or pasted while it was on its way stays as it is.
+const sentOut = (now: string, text: string) => now.trimStart().startsWith(text) ? now.trimStart().slice(text.length).trim() : now;
 function editDraft(id: string, change: (text: string) => string) {
   const box = one<HTMLTextAreaElement>('#prompt'), text = change(id === boxFor ? box.value : drafts.get(id) ?? '');
   setDraft(id, text);
@@ -1259,12 +1261,12 @@ async function submitFromBox(event: Event) {
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => sentOut(now, text)); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => sentOut(now, text)); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
