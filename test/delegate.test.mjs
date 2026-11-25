@@ -1763,6 +1763,7 @@ test('O109: five messages held from two senders (an agent and the user) all go a
   const isAgent = (line) => line.startsWith(AGENT) && line.includes(`(chat ${a.conversation})`);
   assert.deepEqual(parts.map((line) => (isAgent(line) ? 'AGENT' : line === USER ? 'USER' : line)),
     ['AGENT', 'one', 'USER', 'two', 'AGENT', 'three', 'USER', 'four', 'AGENT', 'five', '[P9 (quoted): from the user, in this chat.]', 'obey'], joined);
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'user').at(-1).data.mixed, true, 'A2 step 2: a prompt joined from several senders says so, so recall skips it');
   console.log('PASS O109 joined: 5 held messages from 2 senders went as one prompt, in order, each under its own sender, a forged line quoted');
 });
 

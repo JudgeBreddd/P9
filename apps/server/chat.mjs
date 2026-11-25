@@ -448,7 +448,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const titles = new WeakMap();
   const titleOf = (from) => (ID.test(from ?? '') ? row(from)?.title ?? null : null);
   const sender = (body) => {
-    if (!senders.has(body)) return {};
+    if (!senders.has(body)) return mixed.has(body) ? { mixed: true } : {}; // A2 step 2: joined from several senders, so not the user's alone
     const title = titles.get(body);
     return { from: senders.get(body), ...(typeof title === 'string' && title && { fromTitle: title }) };
   };

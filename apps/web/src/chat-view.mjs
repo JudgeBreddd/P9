@@ -745,7 +745,7 @@ function paint(root, ss, only) {
       slash.querySelectorAll('[data-cmd]').forEach(b => b.onmousedown = e => { e.preventDefault(); ta.value = s.draft = '/' + b.dataset.cmd + ' '; showSlash(); ta.focus(); });
     };
     showSlash();
-    ta.oninput = () => { s.draft = ta.value; showSlash(); };
+    ta.oninput = () => { s.draft = ta.value; s.recall = null; showSlash(); }; // any typing ends an up-arrow recall
     if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
     // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
@@ -756,14 +756,18 @@ function paint(root, ss, only) {
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
-      // A2 step 2: Up in an empty box, or on a prompt it brought back, gives the one you sent before; Down goes forward, then
-      // empty. Up acts only on the first line and Down only on the last, so the caret still moves through a long prompt.
-      // Typed or edited text is never replaced (s.recall must still match the box).
-      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) && ta.selectionStart === ta.selectionEnd) {
-        const sent = s.events.filter(v => v.t === 'user' && v.text && !v.from && !v.info && !v.ask).map(v => v.text), up = e.key === 'ArrowUp';
-        const at = !ta.value ? sent.length : sent[s.recall] === ta.value ? s.recall : -1, to = at + (up ? -1 : 1);
-        if (at >= 0 && to >= 0 && (up || ta.value) && !(up ? ta.value.slice(0, ta.selectionStart) : ta.value.slice(ta.selectionEnd)).includes('\n')) {
-          e.preventDefault(); s.recall = to; ta.value = s.draft = sent[to] ?? ''; ta.setSelectionRange(ta.value.length, ta.value.length); showSlash(); return;
+      // A2 step 2: Up in an empty box, or on a prompt it brought back, gives the one you sent before (caret at its start, so
+      // Up again goes further back); Down goes forward (caret at its end), then empty. Up acts with the caret at the very start,
+      // Down at the very end, and either at either end of an unedited recall, so walking back and forth is one press each and
+      // moving through a long or wrapped prompt (caret inside it) still works. Typing ends a recall
+      // (oninput), so typed or edited text is never replaced. s.recall is the event itself, so loading earlier history keeps
+      // it. Only your own prompts: not another chat's, and not one joined from several senders (mixed).
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) && ta.selectionStart === ta.selectionEnd) {
+        const sent = s.events.filter(v => v.t === 'user' && v.text && !v.from && !v.info && !v.ask && !v.mixed), up = e.key === 'ArrowUp';
+        const at = !ta.value ? sent.length : s.recall?.text === ta.value ? sent.indexOf(s.recall) : -1, to = at + (up ? -1 : 1);
+        const edge = ta.selectionStart === 0 || ta.selectionStart === ta.value.length, recalled = at >= 0 && at < sent.length;
+        if (at >= 0 && to >= 0 && (up || ta.value) && (recalled ? edge : up && !ta.value)) {
+          e.preventDefault(); s.recall = sent[to] ?? null; ta.value = s.draft = s.recall?.text ?? ''; const c = up ? 0 : ta.value.length; ta.setSelectionRange(c, c); showSlash(); return;
         }
       }
       // Tab with an empty box still moves focus on.
@@ -1028,7 +1032,7 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }), ...(d.mixed === true && { mixed: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
