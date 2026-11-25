@@ -139,6 +139,8 @@ function csrfToken() {
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
 const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
   for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); fillLoose(agents); }, () => {});
+// A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
+const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
   const response = await fetch(path, { cache: 'no-store', signal });
   if (response.status === 401) toLogin();
@@ -2216,9 +2218,9 @@ one('#signIn').addEventListener('submit', async (event) => {
 // Tokens and Cost read /usage/turns and are drawn by usage-history.mjs, loaded the first time one opens. None while the
 // daemon's telemetry-tab pref is off (the desktop's Settings > General). The answer is read again when the range changes,
 // on the 20 s redraw once it is a minute old, and 5 s after a 'rebuilding' answer (the daemon's first replay).
-const UH: { tab: string; days: number; by: string; page: Json | null; at: number; busy: boolean; failed: boolean; shown: boolean; more: boolean; limits: string; html: string;
+const UH: { tab: string; days: number; by: string; page: Json | null; at: number; reading: number | null; failed: boolean; shown: boolean; more: boolean; limits: string; html: string;
   draw: ((u: Json, esc: (v: unknown) => string, names: Record<string, string>) => string) | null; load: Promise<void> | null } =
-  { tab: 'limits', days: 7, by: 'model', page: null, at: 0, busy: false, failed: false, shown: false, more: false, limits: '', html: '', draw: null, load: null };
+  { tab: 'limits', days: 7, by: 'model', page: null, at: 0, reading: null, failed: false, shown: false, more: false, limits: '', html: '', draw: null, load: null };
 const UTABS = [['limits', 'Limits'], ['tokens', 'Tokens'], ['cost', 'Cost']];
 // The strip stays mounted, so a press on it or the focus in it survives a redraw; the panel is replaced only when what it
 // shows changed (the 20 s redraw of an unchanged view touches nothing).
@@ -2244,18 +2246,19 @@ function drawUsage() {
 function keepMore(root: HTMLElement) { const more = root.querySelector<HTMLDetailsElement>('details.more'); if (more) more.open = UH.more; }
 let turnsRead = 0, usageRead = 0; // the newest read of each; an older answer that lands later is dropped
 async function readTurns() {
-  const days = UH.days, seq = ++turnsRead; UH.busy = true;
-  // A deadline, so a stalled read cannot hold the busy mark. This page comes from the daemon it reads, so the route is
+  const days = UH.days, seq = ++turnsRead; UH.reading = days;
+  // A deadline, so a stalled read cannot hold the reading mark. This page comes from the daemon it reads, so the route is
   // there; a failed read, or an answer that is not one (cut short), is unavailable and is tried again in a minute.
-  const page = await request('/usage/turns?days=' + days, AbortSignal.timeout(20000)).catch(() => null) as Json | null;
+  const page = await request('/usage/turns?days=' + days, deadline(20000)).catch(() => null) as Json | null;
   if (seq !== turnsRead) return;
-  UH.busy = false; UH.at = Date.now();
+  UH.reading = null; UH.at = Date.now();
   UH.page = typeof page?.state === 'string' ? { ...page, days } : { state: 'unavailable', days };
   if (UH.page.state === 'rebuilding') setTimeout(() => { UH.at = 0; if (UH.tab !== 'limits' && document.body.dataset.view === 'usage') drawUsage(); }, 5000);
   if (UH.tab !== 'limits') drawUsage();
 }
 function turnsHtml() {
-  if (!UH.busy && (Date.now() - UH.at > 60000 || UH.page?.days !== UH.days)) void readTurns();
+  // A range picked while another is being read is read at once (the older answer is dropped when it lands).
+  if (UH.reading !== UH.days && (Date.now() - UH.at > 60000 || UH.page?.days !== UH.days)) void readTurns();
   // A failed load (an update replaced the files under the open page) offers a reload, which reads the new names.
   if (!UH.draw && !UH.failed) UH.load ??= import('./usage-history.mjs').then((m) => { UH.draw = m.historyHtml; drawUsage(); }, () => { UH.load = null; UH.failed = true; drawUsage(); });
   return UH.draw ? UH.draw(UH, esc, names) : UH.failed
@@ -2280,7 +2283,7 @@ async function loadUsage() {
   void loadSignIn();
   const seq = ++usageRead;
   try {
-    const data = await request('/usage') as Usage;
+    const data = await request('/usage', deadline(20000)) as Usage;
     if (seq !== usageRead) return;
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
@@ -2300,8 +2303,12 @@ async function loadUsage() {
     drawUsage();
   } catch { if (seq === usageRead) { UH.limits = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; drawUsage(); } }
 }
-// Refresh reads Tokens and Cost again too (a newer read supersedes one still out) and spins until both answer.
-one<HTMLButtonElement>('#refreshUsage').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, () => Promise.all([loadUsage(), UH.shown && readTurns()]));
+// Refresh reads what is shown: on Tokens or Cost their history too (superseding a read still out), and spins until it
+// answers; on Limits the history is marked old, so opening Tokens or Cost reads it again.
+one<HTMLButtonElement>('#refreshUsage').onclick = (event) => {
+  if (UH.tab === 'limits') UH.at = 0;
+  void refreshing(event.currentTarget as HTMLButtonElement, () => Promise.all([loadUsage(), UH.tab !== 'limits' && readTurns()]));
+};
 // P7: the Usage screen reads again every 20 s while it is shown (the plan limits move with every turn anywhere).
 setInterval(() => { if (document.body.dataset.view === 'usage' && !document.hidden && navigator.onLine) void loadUsage(); }, 20000);
 

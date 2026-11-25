@@ -212,12 +212,26 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   const shows = (n) => screen.locator('.uh-total span', { hasText: new RegExp(`(^|\\D)${n} turns`) }).waitFor({ timeout: 5000 });
   const before = await inRange();
   await shows(before);
+  // A read still out when Refresh is tapped cannot put its older figure back: picking the range again starts a read whose
+  // answer (taken before the next turn) is held until after Refresh has shown the new count.
+  let holding = true, release, taken;
+  const held = new Promise((r) => { release = r; }), oldRead = new Promise((r) => { taken = r; });
+  const route = (url) => url.pathname === '/usage/turns' && url.searchParams.get('days') === days;
+  await page.route(route, async (r) => { if (!holding) return r.continue(); holding = false; const answer = (await server.desk('/usage/turns?days=' + days)).body; taken(); await held; await r.fulfill({ json: answer }); });
+  await screen.locator(`[data-uh-days="${days === '7' ? '30' : '7'}"]`).click();
+  await screen.locator(`[data-uh-days="${days}"]`).click();
+  await oldRead;
   assert.equal((await server.desk('/chat/' + made.body.conversation + '/prompt', 'POST', { text: 'again' })).status, 202);
   for (const end = Date.now() + 30000; await count() !== 4 && Date.now() < end;) await new Promise((r) => setTimeout(r, 500));
   assert.equal(await count(), 4);
   await refresh();
   assert.equal(await inRange(), before + 1);
   await shows(before + 1);
+  const late = page.waitForResponse((r) => new URL(r.url()).pathname === '/usage/turns');
+  release(); await late;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
+  assert.match(await screen.locator('.uh-total span').textContent(), new RegExp(`(^|\\D)${before + 1} turns`), 'the older answer was dropped');
+  await page.unroute(route);
 });
 
 // The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.
