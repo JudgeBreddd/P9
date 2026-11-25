@@ -1033,7 +1033,8 @@ function history(s, until = outer.liveChat.cursor) {
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
       const was = s.state; // review round 9: a Stop clicked while this loads stays; history is older than it
-      for (const ev of r.body.events) try { applyChat(ev); } catch {}
+      // A2 step 3: the open edit's own save (its op) in the replay settles it, as live; a replay's other events do not (carry).
+      for (const ev of r.body.events) { try { applyChat(ev); } catch {} if (ev.type === 'held-text' && ev.data?.op && ev.data.op === s.hedit?.op) editSeen(s, ev); }
       if (was === 'stopping') s.state = was;
       // An ask loaded from history was there before: it goes to the bell without its notice (bell-notice.mjs). Review round
       // 8: by its request, so a new ask of the same kind after it was answered is new.
@@ -1076,7 +1077,9 @@ async function earlier(s) {
 // Returns the take-back's words for the box, or undefined.
 function editSeen(s, ev) {
   const ed = s.hedit, d = ev.data; if (!ed || !d) return;
-  if (ev.type === 'held-text' && d.id === ed.id) { if (ed.saving != null && d.op === ed.op) s.hedit = null; else { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; } return; }
+  // Its own save, also after an answer that was unsure: saved, and words typed since stay open on top of it, not a conflict.
+  if (ev.type === 'held-text' && d.id === ed.id && d.op && d.op === ed.op) { if (ed.lost != null) s.events.push({ t: 'notice', text: 'Your edit that got no sure answer was saved.' }); if (ed.saving != null || ed.text === d.text) s.hedit = null; else { ed.was = ed.base = d.text; ed.lost = null; } return; }
+  if (ev.type === 'held-text' && d.id === ed.id) { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; return; }
   if (!(ev.type === 'unheld' ? [d.id] : ev.type === 'user' ? d.held || [] : []).includes(ed.id)) return;
   return editGone(s, ev.type === 'unheld' && ['removed', 'cancelled'].includes(d.why));
 }
