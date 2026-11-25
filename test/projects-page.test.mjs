@@ -5,7 +5,7 @@
 // delete leaves a folder the user chose alone and moves the chats to Chats; a gone folder shows Locate.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1700,4 +1700,113 @@ test('projects: a closed folder sprint\'s page shows its change and saves it to 
   assert.deepEqual((await page.locator('[data-sv-copy] li').allTextContents()).sort(), ['a.txt', 'b.txt', 'c.txt', 'd.txt'], 'what was written');
   assert.equal(await page.locator('[data-pj="spapply"]').count(), 0, 'no second yes');
   assert.deepEqual(errors, []);
+});
+
+// O261: the project page's code (projects-view.mjs) loads after the window is usable. With the idle load held off, opening a
+// chat's menu asks for it, and the menu fills in Rename once it arrives, keeping the focused item. A project click made while
+// it loads opens the page, unless anything was clicked after it (even the chat already open). A failed load says so, in the
+// menu and on a click, and the next click loads it.
+test('O261: the project page loads late: first use loads it, the menu fills in, a later click wins, a failed load says so', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'site'), { recursive: true });
+  const site = (await call(instance, '/projects', 'POST', { name: 'Site', work: { kind: 'linked', folder: 'site' } })).project.id;
+  assert.equal((await call(instance, '/projects', 'POST', { name: 'Notes', work: { kind: 'linked', folder: 'site' } })).status, 201);
+  const r = await call(instance, '/chat', 'POST', { provider: 'claude' });
+  await call(instance, '/chat/' + r.conversation + '/prompt', 'POST', { text: 'title Scratch' }); await ended(instance, r.conversation);
+  const plain = r.conversation;
+  const astro = path.join(root, 'apps/web/dist/_astro');
+  const chunk = [];
+  for (const f of (await readdir(astro)).filter((f) => f.endsWith('.js'))) if ((await readFile(path.join(astro, f), 'utf8')).includes('data-sp-scripts')) chunk.push(f);
+  assert.equal(chunk.length, 1, 'one chunk holds the project page: ' + chunk.join(', '));
+  const { page, errors } = await launch(t, instance);
+  await page.context().addInitScript(() => { if (sessionStorage.getItem('o261-no-idle')) window.requestIdleCallback = () => 0; });
+  let mode = 'hold', hits = 0, release = () => {}, chunkUrl = '';
+  await page.route((u) => u.pathname.endsWith('/' + chunk[0]), async (route) => {
+    hits++; chunkUrl = route.request().url();
+    if (mode === 'fail') return route.abort();
+    await new Promise((go) => { release = go; });
+    return route.continue();
+  });
+  const fresh = async (m, idle = true) => {
+    mode = m; hits = 0; await page.evaluate((idle) => idle ? sessionStorage.removeItem('o261-no-idle') : sessionStorage.setItem('o261-no-idle', '1'), idle);
+    await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+    if (idle) await until(() => hits > 0, 'the idle load asked for the project page');
+  };
+  const more = async () => { await page.locator(`#navList .row[data-chat="${plain}"]`).hover(); await page.locator(`#navList [data-more="${plain}"]`).click(); await page.locator('.lp-menu').waitFor({ timeout: 5000 }); };
+
+  // No idle load: opening the menu asks for the chunk; the focused item stays focused when Rename fills in.
+  await fresh('hold', false);
+  await new Promise((go) => setTimeout(go, 3000));
+  assert.equal(hits, 0, 'with the idle load held off nothing asked for the project page');
+  await more();
+  await until(() => hits === 1, 'opening the menu asked for the project page');
+  assert.equal(await page.locator('.lp-menu [data-pjchat=rename]').count(), 0, 'held back: the menu has no Rename yet');
+  await page.keyboard.press('ArrowDown');
+  const focused = await page.evaluateHandle(() => document.activeElement);
+  assert.ok(await page.evaluate((f) => f !== document.querySelector('.lp-menu button') && f.matches('.lp-menu button'), focused), 'the second item is focused, not the first');
+  release();
+  await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 });
+  assert.ok(await page.evaluate((f) => f.isConnected && f === document.activeElement, focused), 'the item focused before the menu filled in is the same button, still focused');
+  await page.keyboard.press('Escape');
+
+  // A press held on a menu item while the code arrives: the items wait until it ends (here a slide off, no click).
+  await fresh('hold', false);
+  await more();
+  await until(() => hits === 1, 'opening the menu asked for the project page'); // release() is this load's
+  await page.locator('.lp-menu button').first().hover(); await page.mouse.down();
+  release();
+  await page.evaluate((u) => import(u).then(() => 0), chunkUrl); // resolves once the held chunk has run: the code is in
+  await new Promise((go) => setTimeout(go, 500));
+  assert.equal(await page.locator('.lp-menu [data-pjchat=rename]').count(), 0, 'nothing went into the menu under the press');
+  await page.locator('.lp-menu .note').last().hover(); await page.mouse.up(); // released on the menu's note: no item clicked, the menu stays
+  await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
+
+  // A project click, then a click on the chat already open: the chat stays. A project click alone opens the page.
+  await fresh('hold');
+  await page.locator(`#navList .row[data-chat="${plain}"]`).click();
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.locator(`#navList .row[data-chat="${plain}"]`).click();
+  release();
+  await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape'); // the code is in
+  await new Promise((go) => setTimeout(go, 1500));
+  assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count() + await page.locator('#pjName').count(), 0, 'the project click made before the later chat click did not take the chat\'s place');
+  // A mode switch after a project click drops it too.
+  await fresh('hold');
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.evaluate(() => document.querySelector('[data-focus-btn="mission"]').click());
+  await page.evaluate(() => document.querySelector('[data-focus-btn="chat"]').click());
+  release();
+  await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count(), 0, 'the project click made before the mode switch was dropped');
+  // New chat after a project click drops it too, even when the daemon's new chat is shown before the code arrives.
+  await fresh('hold');
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  const rows = await page.locator('#navList .row[data-chat]').count();
+  await page.click('#newBtn');
+  await until(async () => await page.locator('#navList .row[data-chat]').count() > rows, 'the new chat is listed');
+  release();
+  await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count(), 0, 'the project click made before New chat was dropped');
+  // A key or a click on empty space after the project click does not drop it.
+  await fresh('hold');
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.keyboard.press('Shift'); await page.mouse.click(800, 400);
+  release();
+  await page.locator('#pjName').waitFor({ timeout: 5000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o261-first-click ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+
+  // A failed load: the menu and a project click say so; the next click loads it.
+  await fresh('fail');
+  await page.locator(`#navList .row[data-chat="${plain}"]`).click();
+  await more();
+  await page.locator('.lp-menu .note', { hasText: 'did not load' }).waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.locator('.toast', { hasText: 'Projects did not load' }).first().waitFor({ timeout: 5000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o261-load-failed ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await page.unrouteAll();
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  await page.locator('#pjName').waitFor({ timeout: 5000 });
+  assert.deepEqual(errors.filter((e) => !/projects-view|dynamically imported|Failed to fetch/i.test(e)), []);
 });

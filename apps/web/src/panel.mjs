@@ -5,7 +5,6 @@
 // menu, drag onto a project, the strip's title card, Ctrl B and Ctrl Tab. State lives on the sessions (controller's S).
 import { svg, esc, dragBar } from './helpers.mjs';
 import { agentIcon } from './agent-icons.mjs';
-import { installProjects } from './projects-view.mjs';
 import { pressHold } from './press-hold.mjs';
 
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
@@ -184,6 +183,27 @@ export function installPanel(o, { focus, stopChat, busy }) {
       + extra
       + (ps.length ? `<div class="note">It reads a project's instructions and files from its next message; its folder and files stay where they are. You can also drag a chat onto a project.</div>` : '')
       || '<div class="note">No projects yet.</div>', at, anchor);
+    // O261: Rename, Archive and Delete come with the project page's code; opened before it arrives, the menu fills in then.
+    // They go in where a fresh menu has them (before the projects note, or in place of "No projects yet"); the buttons
+    // already there stay, with their focus and any press on them. A failed load says so in the menu.
+    if (!o.chatMenuItems) {
+      const m = document.querySelector('.lp-menu');
+      // A press on a menu button finishes first (its click, cancel or blur; the items could move under it); a menu with
+      // nothing to focus focuses the first new item. The failure note is placed the same way.
+      let add = '', failed = false;
+      const ac = new AbortController(), place = () => {
+        ac.abort(); if (!m?.isConnected) return;
+        const last = m.lastElementChild, none = !m.querySelector('button:not(:disabled)');
+        if (failed) m.insertAdjacentHTML('beforeend', add);
+        else if (m.children.length === 1 && last.matches('.note')) last.outerHTML = add;
+        else if (ps.length && last?.matches('.note')) last.insertAdjacentHTML('beforebegin', add); else m.insertAdjacentHTML('beforeend', add);
+        m.style.top = Math.max(8, Math.min(at.y, innerHeight - m.getBoundingClientRect().height - 8)) + 'px';
+        if (none && (document.activeElement === anchor || document.activeElement === document.body)) m.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+      };
+      const held = m ? pressHold(m, place, ac.signal) : () => false;
+      pages().then(() => { add = o.chatMenuItems(s); }, () => { failed = true; add = '<div class="note">Rename, Archive and Delete did not load. Open this menu again to try again.</div>'; })
+        .then(() => held() || place());
+    }
   }
 
   // ---- Move to a project, with Undo. The daemon's 'project' event says the same to every window. ----
@@ -318,6 +338,17 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (o.openProject) return o.openProject(id);
     setOpen(id, true); if (P.collapsed) setCollapsed(false); else if (P.narrow) P.overlay = true; renderPanel(); list.querySelector(`[data-proj="${CSS.escape(id)}"]`)?.focus(); }, { signal: o.lifetime.signal });
   const api = { renderPanel, jumps, openChat, move, setOpen, loadProjects, closeMenu, openMenu, undoToast, panel: P };
-  installProjects(o, api); // N1 points 9 and 10: the project page, New project, a chat's Rename, Archive and Delete
+  // N1 points 9 and 10: the project page, New project, Archived, a chat's Rename, Archive and Delete (projects-view.mjs).
+  // O261: not on the startup path. It loads once the window has loaded and is idle, as O118's terminal chunk, or at once
+  // when one of these is used before that; a failed load is tried again on the next use.
+  let pv = null;
+  const pages = () => (pv ??= import('./projects-view.mjs').then(m => m.installProjects(o, api), e => { pv = null; throw e; }));
+  // A click made while it loads runs once it arrives, unless a chat, a mode or another of these was opened after it
+  // (S.nav, which show() and setFocus() advance too); a failed load says so.
+  const failed = () => o.toast({ kind: 'project', txt: 'Projects did not load. Try again.', level: 'warn' }, true);
+  for (const k of ['openProject', 'newProject', 'openArchived']) o[k] = (...a) => { const n = ++o.S.nav; return pages().then(() => { if (o.S.nav === n) o[k](...a); }, failed); };
+  o.renderPage = () => { if (o.S.view) pages().then(() => o.renderPage()); };
+  const idle = () => requestIdleCallback(() => pages().catch(() => {}), { timeout: 2000 });
+  if (document.readyState === 'complete') idle(); else addEventListener('load', idle, { once: true, signal: o.lifetime.signal });
   return api;
 }

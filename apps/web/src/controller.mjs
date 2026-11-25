@@ -256,7 +256,7 @@ const looseOk = (agent, m) => new Promise(done => {
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
   d.showModal();
 });
-const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startMode(s.agent), queue: [] })), open: sampleView ? ['s-claude-1','s-codex-1'] : [], split: false, files: false,
+const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startMode(s.agent), queue: [] })), open: sampleView ? ['s-claude-1','s-codex-1'] : [], split: false, files: false, nav: 0,
   focus: 'chat', termOpen: { chat: false, dev: false, mission: false }, termMode: { chat: 'float', dev: 'drawer', mission: 'float' },
   quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
   docs: {}, dev: { tabs: [], active: null } };
@@ -725,7 +725,7 @@ try { localStorage.removeItem('p9-focus-looks'); } catch {}
 const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim);
 function setFocus(f) {
   if (!focusOn(f)) return; // turned off in Settings, or not on this remote
-  S.focus = f;
+  S.focus = f; S.nav++; // O261: a project click still waiting for its code is dropped
   if (f === 'mission') { refreshMission(); missionLive(); } // F2: renderCards skips it while Mission is out of sight
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
