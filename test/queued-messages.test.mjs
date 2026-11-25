@@ -430,5 +430,8 @@ test('A2 step 5: the agent\'s goal shows above the box with its status, follows 
   ({ app, page } = await launch()); chat = await open(page);
   await until(async () => await replies() === 3, 'the relaunch drew the history');
   assert.equal(await line().count(), 0, 'an older goal in the history does not override the list');
+  // Review round 3: the list says "no goal" as null, so the page tells it from an older daemon's row without the field.
+  const row = (await call(instance, '/chat')).conversations.find(c => c.id === id);
+  assert.ok(Object.hasOwn(row, 'goal') && row.goal === null, 'the list gives a cleared goal as null, not a missing field');
   console.log('PASS A2 step 5: the goal line shows, follows, survives a reload past the tail, and a clear removes it');
 });

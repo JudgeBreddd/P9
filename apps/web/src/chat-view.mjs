@@ -1034,11 +1034,12 @@ function history(s, until = outer.liveChat.cursor) {
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
       const was = s.state; // review round 9: a Stop clicked while this loads stays; history is older than it
       // A2 step 5: so does the goal the list gave (read after this history's cursor): an older goal in it is not drawn again.
+      // A daemon from before the list's goal (undefined, not null) leaves it to the history.
       const goal = s.goal;
       // A2 step 3: the open edit's own save (its op) in the replay settles it, as live; a replay's other events do not (carry).
       for (const ev of r.body.events) { try { applyChat(ev); } catch {} if (ev.type === 'held-text' && ev.data?.op && ev.data.op === s.hedit?.op) editSeen(s, ev); }
       if (was === 'stopping') s.state = was;
-      s.goal = goal;
+      if (goal !== undefined) s.goal = goal;
       // An ask loaded from history was there before: it goes to the bell without its notice (bell-notice.mjs). Review round
       // 8: by its request, so a new ask of the same kind after it was answered is new.
       s.pendingOld = askId(s);
@@ -1209,7 +1210,7 @@ async function loadChat() {
   // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
   // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.
   // A chat from the daemon's list, not loaded yet (its events read when opened). O251: the launch and jump() both make them.
-  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, askable: !!c.askable, goal: c.goal ?? null });
+  const stubOf = (c) => ({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used, parent: c.parent ?? null, archived: !!c.archived, askable: !!c.askable, goal: c.goal });
   const lastTwo = () => { if (!outer.S.open.length) outer.S.open = outer.S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id); };
   const caughtUp = (listed) => {
     // Tabs keep the order the chats were made in; History sorts by last used.
@@ -1218,7 +1219,7 @@ async function loadChat() {
     outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...stubOf(c), ...sprintFields({}, c) }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
     // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out). So does its goal (A2). O126: so does a
     // name the user gave (its renamed event may be out of the tail, and the agent's title in it), through sprintFields.
-    for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; s.goal = c.goal ?? null; sprintFields(s, c); } }
+    for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; s.askable = !!c.askable; s.parent = c.parent ?? null; if (Object.hasOwn(c, 'goal')) s.goal = c.goal; sprintFields(s, c); } }
     outer.loadProjects?.();
     // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
     try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
