@@ -601,7 +601,7 @@ export async function createDesktop({ state, open } = {}) {
       || args.length !== 1 || ![1, 7, 30, 90].includes(args[0])) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { state: 'unavailable' } };
     try { return await daemonRequest(state, 'GET', '/usage/turns?days=' + args[0]); }
-    catch { return { status: 503, body: { state: 'unavailable' } }; }
+    catch (error) { return error?.status === 404 ? { status: 404, body: { state: 'unsupported' } } : { status: 503, body: { state: 'unavailable' } }; }
   });
   // Anymouse: the daemon files the note, or answers with GitHub's prefilled new-issue page for P9's repo, which only
   // this exact prefix (anymouse.mjs NEW_ISSUE) may open (in the user's browser). ponytail: P9_OPEN_URL swaps the browser for a test logger.

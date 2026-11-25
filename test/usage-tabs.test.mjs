@@ -8,8 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { openLedger } from '../apps/server/ledger.mjs';
+import { historyHtml } from '../apps/web/src/usage-history.mjs';
 import { daemon, root, versionSeen, watchStartup, waitStartup } from './helpers.mjs';
 
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const shot = async (locator, name) => { if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + (await locator.screenshot({ type: 'png' })).toString('base64')); };
 const HOUR = 3600000, DAY = 24 * HOUR;
 const id = (n) => n.repeat(8) + '-0000-4000-8000-' + n.repeat(12);
@@ -56,7 +58,11 @@ test('A3 (2): the Usage window\'s Tokens and Cost tabs show the turns from telem
   await page.locator('#rUsage').click();
   const body = page.locator('#mdlBody');
   await body.locator('[data-utab="limits"][aria-selected="true"]').waitFor();
-  await body.locator('[data-utab="tokens"]').click();
+  // The tablist's keys: ArrowRight from Limits opens Tokens and keeps the focus on its tab.
+  await body.locator('[data-utab="limits"]').focus();
+  await page.keyboard.press('ArrowRight');
+  await body.locator('[data-utab="tokens"][aria-selected="true"]').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.utab), 'tokens');
   // The first start rebuilds telemetry.db from the ledger; the tab says so and reads again until it is done.
   const total = body.locator('[data-uh-total]');
   await total.filter({ hasText: '130K' }).waitFor({ timeout: 60000 });
@@ -102,4 +108,23 @@ test('A3 (2): the Usage window\'s Tokens and Cost tabs show the turns from telem
   assert.equal(await body.locator('[data-uh-total]').count(), 0, 'reopened on Limits');
   await body.locator('[data-utab="tokens"]').click();
   await body.locator('[data-uh-days="30"][aria-pressed="true"]').waitFor();
+});
+
+// The figures' edge cases, on the renderer alone: a count no turn reported, a remote daemon a day ahead, a net cache cost.
+test('A3 (2): a missing count is a dash, never 0; a remote day ahead stays on the chart; an older daemon says so', () => {
+  const day = (n) => new Date(Date.now() + n * DAY).toLocaleDateString('sv');
+  const row = (d, input, total, kInput, kTotal) => ({ day: d, provider: 'p', model: 'm', profile: false, turns: 2, measured: 2,
+    known: { input: kInput, output: 0, cacheRead: 0, cacheWrite: 0, total: kTotal }, priced: 0, estimated: 0,
+    input, output: null, cacheRead: null, cacheWrite: null, total, cost: null, usd: null, saved: -0.001 });
+  const page = { state: 'ok', days: 7, since: Date.now() - 7 * DAY, pricesAsOf: '2026-11-03', chats: { p: 1 },
+    rows: [row(day(0), 1000000, null, 2, 0), row(day(1), 500, 800, 1, 1)] };
+  const html = historyHtml({ tab: 'tokens', days: 7, by: 'model', page }, esc, {});
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/\s+/g, ' ');
+  assert.match(text, /Processed tokens 800 1 of 4 turns/, 'the total over the one turn that reported it, marked partial');
+  assert.match(text, /Uncached input 1M 3 of 4 turns/);
+  assert.match(text, /Output — /, 'no turn reported output: a dash, not 0');
+  assert.match(text, /Cache savings −<\$0\.01/, 'a net cache cost reads negative, never $-0.00');
+  assert.ok(html.includes(`title="${day(1)}: `), 'the daemon\'s day ahead of this desktop has its column');
+  assert.match(text, /1 of 4 turns reported a token total/);
+  assert.match(historyHtml({ tab: 'cost', days: 7, page: { state: 'unsupported', days: 7 } }, esc, {}), /older than this app/);
 });

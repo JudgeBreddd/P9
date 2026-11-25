@@ -227,19 +227,32 @@ const usageOpen = () => outer.S.modal?.kind === 'win' && outer.S.modal.id === 'm
 function readTurns() {
   const days = UH.days; UH.busy = true;
   window.p9.usageTurns(days).catch(() => null).then(r => {
-    UH.busy = false; UH.page = r?.status === 200 ? r.body : { state: 'unavailable', days }; UH.at = Date.now();
+    // 404: a daemon older than the route (a remote not yet updated); it is not read again on a timer.
+    UH.busy = false; UH.page = r?.status === 200 ? r.body : { state: r?.status === 404 ? 'unsupported' : 'unavailable', days }; UH.at = Date.now();
     // The next read: a redraw when this answer is stale, which reads again only if Tokens or Cost is still on screen.
-    const soon = UH.page.state === 'rebuilding'; outer.setTimeout(() => { if (soon) UH.at = 0; redrawUsage(); }, soon ? 5000 : 60500);
+    const soon = UH.page.state === 'rebuilding';
+    if (UH.page.state !== 'unsupported') outer.setTimeout(() => { if (soon) UH.at = 0; redrawUsage(); }, soon ? 5000 : 60500);
     redrawUsage();
   });
 }
 function turnsBody(tab) {
   if (!UH.busy && (UH.page?.days !== UH.days || Date.now() - UH.at > 60000)) readTurns();
-  if (!UH.draw) UH.load ??= import('./usage-history.mjs').then(m => { UH.draw = m.historyHtml; redrawUsage(); }, () => { UH.load = null; });
-  return UH.draw ? UH.draw({ ...UH, tab }, esc, outer.names) : '<p class="sm muted">Loading…</p>';
+  // A failed load (an update replaced the files under a running page) waits for Try again instead of retrying at each redraw.
+  if (!UH.draw && !UH.failed) UH.load ??= import('./usage-history.mjs').then(m => { UH.draw = m.historyHtml; redrawUsage(); }, () => { UH.load = null; UH.failed = true; redrawUsage(); });
+  return UH.draw ? UH.draw({ ...UH, tab }, esc, outer.names) : UH.failed
+    ? '<p class="empty">This view could not load. <button type="button" data-slot="button" data-variant="outline" data-size="sm" data-uh-retry>Try again</button></p>'
+    : '<p class="sm muted">Loading…</p>';
 }
-const usageBody = (tab = outer.S.modal?.utab ?? 'limits') => !window.p9?.usageTurns ? limitsBody() : `<div class="cf-tabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" data-slot="button" data-variant="ghost" data-size="sm" data-utab="${id}" aria-selected="${tab === id}">${label}</button>`).join('')}</div>`
-  + (tab === 'limits' ? limitsBody() : turnsBody(tab));
+const usageBody = (tab = outer.S.modal?.utab ?? 'limits') => !window.p9?.usageTurns ? limitsBody() : `<div class="cf-tabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" tabindex="${tab === id ? 0 : -1}" data-slot="button" data-variant="ghost" data-size="sm" data-utab="${id}" aria-selected="${tab === id}">${label}</button>`).join('')}</div>`
+  + `<div id="upanel" role="tabpanel" aria-labelledby="utab-${tab}">${tab === 'limits' ? limitsBody() : turnsBody(tab)}</div>`;
+// Arrow keys, Home and End move between the tabs and open the one reached (the tablist pattern).
+function usageTabKey(e) {
+  const ids = UTABS.map(([id]) => id), at = ids.indexOf(e.currentTarget.dataset.utab);
+  const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + ids.length, Home: 0, End: ids.length - 1 }[e.key];
+  if (to === undefined) return;
+  e.preventDefault(); outer.S.modal.utab = ids[to % ids.length]; outer.renderModal();
+  document.getElementById('utab-' + outer.S.modal.utab)?.focus();
+}
 // Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
 // shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
 const art = (kind, key) => outer.M.art?.[kind]?.[key] || {};
@@ -498,8 +511,10 @@ async function launchLive(name, req) {
 }
 // A section window's buttons; back returns to the window
 function bindWin(root, m) {
-  root.querySelectorAll('[data-utab],[data-uh-days],[data-uh-by]').forEach(b => b.onclick = () => {
-    const d = b.dataset; if (d.utab) outer.S.modal.utab = d.utab; if (d.uhDays) UH.days = +d.uhDays; if (d.uhBy) UH.by = d.uhBy; outer.renderModal(); });
+  root.querySelectorAll('[data-utab],[data-uh-days],[data-uh-by],[data-uh-retry]').forEach(b => b.onclick = () => {
+    const d = b.dataset; if (d.utab) outer.S.modal.utab = d.utab; if (d.uhDays) UH.days = +d.uhDays; if (d.uhBy) UH.by = d.uhBy;
+    if (d.uhRetry !== undefined) UH.failed = false; outer.renderModal(); });
+  root.querySelectorAll('[data-utab]').forEach(b => b.onkeydown = usageTabKey);
   root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
     if (!outer.live.on) return outer.toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
     // A link that is not http(s) opens another program: the full link is shown first, and only Open sends confirm (M6).
