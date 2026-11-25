@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
@@ -1365,12 +1365,12 @@ function renderAttached() {
 async function addImages(files: Iterable<File>) {
   const id = openId; if (!id) return;
   const list = attached.get(id) ?? []; attached.set(id, list);
-  note();
+  note(); let ok = true; // true: every file attached
   for (const file of files) {
-    const full = attachFull(file, list); if (full) { note('Not attached: ' + full.toLowerCase() + '.'); continue; }
-    try { list.push(await readAttachment(file, list)); } catch (error) { note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    const full = attachFull(file, list); if (full) { ok = false; note('Not attached: ' + full.toLowerCase() + '.'); continue; }
+    try { list.push(await readAttachment(file, list)); } catch (error) { ok = false; note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
-  renderAttached();
+  renderAttached(); return ok;
 }
 one<HTMLElement>('#attached').onclick = (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
@@ -1403,8 +1403,13 @@ one('#sheetBody').addEventListener('click', (event) => {
 });
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
-  const files = [...event.clipboardData?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
-});
+  const files = event.clipboardData ? pastedFiles(event.clipboardData, false) : []; if (!files.length) return;
+  event.preventDefault(); const box = event.currentTarget as HTMLTextAreaElement, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
+  void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes into the box as text, not lost
+    if (!text) return; if (ok) return note('A big paste went in as pasted.txt. Remove it with ✕.');
+    box.setRangeText(text, box.selectionStart, box.selectionEnd, 'end'); box.dispatchEvent(new Event('input'));
+  });
+}); // A2 step 1: a big paste of text attaches as a file
 // A dropped file attaches the same way (spec §4); dropped text still goes into the box.
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }

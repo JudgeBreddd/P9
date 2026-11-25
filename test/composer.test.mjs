@@ -370,6 +370,40 @@ test('A2 step 1: the desktop paperclip attaches any file; the agent gets its pat
   console.log('PASS A2 step 1 desktop: report.docx attached as a file beside a photo, saved in attachments/<chat>/, edited there by the agent, named in the sent message; an empty file went and was edited too; CON.txt refused with the reason when attached');
 });
 
+// A2 step 1: a big paste of text attaches as a file, so a long log does not fill the box; a short one, or Ctrl Shift V, stays text.
+test('A2 step 1: a big paste of text attaches as pasted.txt; a short paste or Ctrl Shift V stays text', { timeout: 90000 }, async (t) => {
+  const { instance, id, page, pane, send, errors } = await setup(t, 'a2-paste');
+  const box = pane.locator('.composer textarea'), big = 'log line\n'.repeat(600);
+  const paste = (text, plain) => box.evaluate((ta, [text, plain]) => {
+    if (plain) ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true, bubbles: true }));
+    const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev); return ev.defaultPrevented;
+  }, [text, plain]);
+  assert.equal(await paste('a short paste'), false, 'a short paste stays text');
+  assert.equal(await paste('x'.repeat(5000)), false, '5000 characters is not big');
+  assert.equal(await paste(big, true), false, 'Ctrl Shift V pastes a big one as text');
+  assert.equal(await pane.locator('.attach').count(), 0, 'nothing attached yet');
+  assert.equal(await paste(big), true, 'a big paste is taken from the box');
+  await pane.locator('.attach .att-file', { hasText: 'pasted.txt' }).waitFor({ timeout: 10000 });
+  await page.locator('#toasts .toast', { hasText: 'Ctrl Shift V pastes it as text' }).waitFor({ timeout: 10000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-paste-chip ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
+  await send('edit attached');
+  let reply;
+  await until(async () => (reply = (await said(instance, id, 'update')).map((e) => e.data.content?.text).find((text) => text?.startsWith('edited:'))), 'the agent edited the file');
+  const uri = Object.fromEntries(reply.slice('edited:'.length).split(',').map((pair) => pair.split('=')))['pasted.txt'];
+  assert.equal(await readFile(fileURLToPath(uri), 'utf8'), big + ' edited by the agent', 'the paste reached the agent whole, as a file');
+  // Four files a message: a fifth big paste is refused, and goes into the box as text instead of being lost.
+  for (let i = 0; i < 4; i += 1) assert.equal(await paste(big), true);
+  await until(async () => await pane.locator('.attach .att-file').count() === 4, 'four pasted files');
+  const fifth = 'fifth\n'.repeat(1000);
+  assert.equal(await paste(fifth), true);
+  await page.locator('#toasts .toast', { hasText: 'Four files a message at most' }).waitFor({ timeout: 10000 });
+  await until(async () => await pane.locator('.composer textarea').inputValue() === fifth, 'the refused paste is in the box');
+  assert.equal(await pane.locator('.attach .att-file').count(), 4);
+  assert.deepEqual(errors, []);
+  console.log('PASS A2 step 1 paste: a 5400-character paste went as pasted.txt and the agent edited it; short, 5000 and Ctrl Shift V pastes stayed text; a fifth file went in as text');
+});
+
 // RS2: the agent asks through P9's MCP server, as a real one would. The native "Restart P9?" dialog is answered Cancel,
 // so nothing restarts; it opening proves the button reached the restart.
 test('RS2: an agent\'s restart request shows a Restart P9 button that asks to restart P9', { timeout: 90000 }, async (t) => {

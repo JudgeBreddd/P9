@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -755,6 +755,7 @@ function paint(root, ss, only) {
     const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
+      plainPaste = e.shiftKey && (e.ctrlKey || e.metaKey) && e.code === 'KeyV';
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
       // A2 step 2: Up in an empty box, or on a prompt it brought back, gives the one you sent before (caret at its start, so
       // Up again goes further back); Down on a recall goes forward (caret at its end), then empty. Up acts only with the caret
@@ -825,7 +826,15 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-pill]').forEach(b => b.onclick = () => PM.btn === b ? closePill() : openPill(b, s, b.dataset.pill));
     p.querySelector('[data-attach]').onclick = () => pickImages(s);
     // A pasted screenshot or files dropped anywhere on the chat attach like the paperclip; pasted text pastes as before.
-    ta.onpaste = e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
+    // A2 step 1: a big paste of text attaches as a file (pastedFiles); Ctrl Shift V pastes it as text.
+    ta.onpaste = e => {
+      const files = pastedFiles(e.clipboardData, plainPaste); plainPaste = false; if (!files.length) return;
+      e.preventDefault(); const text = e.clipboardData.files.length ? '' : e.clipboardData.getData('text/plain'), d = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+      addImages(s, files).then(ok => { // a refused big paste (four files already, or over 6 MiB) goes into the box as text, not lost
+        if (!text) return; if (!ok) { s.draft = d.slice(0, a) + text + d.slice(b); return renderChats(); }
+        outer.toast({ kind: 'pasted', txt: 'A big paste went in as pasted.txt. Ctrl Shift V pastes it as text.', level: 'ok' }, true);
+      });
+    };
     p.ondragover = e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); };
     p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
@@ -859,14 +868,14 @@ function pickImages(s) {
 // attach.mjs loads on the first attach; a failed load says so and changes nothing, and the next attach imports it afresh.
 async function addImages(s, files) {
   const m = await import('./attach.mjs').catch(() => null);
-  if (!m) return outer.toast({ kind: 'not attached', txt: 'Could not load attaching; nothing was attached. Try again.', level: 'warn' }, true);
-  const { attachFull, readAttachment } = m;
+  if (!m) return outer.toast({ kind: 'not attached', txt: 'Could not load attaching; nothing was attached. Try again.', level: 'warn' }, true), false;
+  const { attachFull, readAttachment } = m; let ok = true; // true: every file attached
   for (const file of files) {
-    const full = attachFull(file, s.images ||= []); if (full) { outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
+    const full = attachFull(file, s.images ||= []); if (full) { ok = false; outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
     try { s.images.push(await readAttachment(file, s.images)); }
-    catch (e) { outer.toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
+    catch (e) { ok = false; outer.toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
   }
-  renderChats();
+  renderChats(); return ok;
 }
 // The composer's send (go) and an artifact's Send comments (item 19) share it: queued behind a running turn, or sent.
 // Review round 8: not while the chat loads (stub, or events buffered behind its load): it would send in the default mode, or
@@ -909,6 +918,7 @@ function finished(s) {
 // resume the chat). Review round 8: whether a turn runs is the daemon's to say, not this window's guess (an unprompted
 // run's end never reaches it, a refused prompt leaves Working on): the send goes as when 'queue', so the daemon holds it
 // for a turn running there and sends it at that turn's end, and starts it when none runs.
+let plainPaste = false; // the paste now was Ctrl Shift V (A2 step 1)
 const turnsOf = new Map(), sentImgs = new Map(), takenBack = new Map(); // chat id -> 'user' events applied (cancelTurn); sentImgs, takenBack: carry (takenBack: id -> its files go back, for a 202 that comes after the event. ponytail: ids whose 202 never comes here, other windows' and text-only ones, stay for the page's life; a few bytes each)
 const free = (s) => !['stopped', 'stopping', 'moved', 'moving'].includes(s.state);
 // send false: the turn's artifact and mode change still happen, but no queued message goes (free()).

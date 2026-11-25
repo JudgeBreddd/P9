@@ -299,6 +299,20 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]);
   await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
   await page.click('#attached [aria-label="Remove notes.txt"]');
+  // A2 step 1: a big paste of text attaches as pasted.txt; a short one stays text (not taken from the box).
+  const pasteText = (text) => page.evaluate((text) => { const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); document.querySelector('#prompt').dispatchEvent(ev); return ev.defaultPrevented; }, text);
+  assert.equal(await pasteText('short'), false, 'a short paste stays text');
+  assert.equal(await pasteText('x'.repeat(5001)), true, 'a big paste is taken from the box');
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  assert.match(await page.textContent('#composerNote'), /A big paste went in as pasted\.txt/);
+  // Four files a message: a fifth big paste is refused, and goes into the box as text instead of being lost.
+  for (let i = 0; i < 3; i += 1) assert.equal(await pasteText('x'.repeat(5001)), true);
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-file').length === 4);
+  assert.equal(await pasteText('y'.repeat(5001)), true);
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'y'.repeat(5001));
+  assert.match(await page.textContent('#composerNote'), /four files a message at most/);
+  for (let i = 0; i < 4; i += 1) await page.click('#attached [aria-label="Remove pasted.txt"] >> nth=0');
+  await page.fill('#prompt', '');
   await choose([{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]);
   await chips(2);
   await paste(1);
