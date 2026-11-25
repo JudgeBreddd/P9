@@ -296,9 +296,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const goalNow = (id) => {
     if (!goals.has(id)) {
-      const rows = db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'update' AND json_extract(data, '$.sessionUpdate') = 'session_info_update' AND json_type(data, '$._meta.jetbrains.air.goal') IS NOT NULL ORDER BY cursor DESC").iterate(id);
+      const rows = db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'update' AND CASE WHEN json_valid(data) THEN json_type(data, '$._meta.jetbrains.air.goal') END IS NOT NULL ORDER BY cursor DESC").iterate(id);
       let found = null;
-      for (const { data } of rows) { const g = goalSaid(JSON.parse(data)); if (g !== undefined) { found = g; break; } }
+      for (const { data } of rows) { let g; try { g = goalSaid(JSON.parse(data)); } catch {} if (g !== undefined) { found = g; break; } }
       goals.set(id, found);
     }
     return goals.get(id);

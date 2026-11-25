@@ -1033,9 +1033,12 @@ function history(s, until = outer.liveChat.cursor) {
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
       const was = s.state; // review round 9: a Stop clicked while this loads stays; history is older than it
+      // A2 step 5: so does the goal the list gave (read after this history's cursor): an older goal in it is not drawn again.
+      const goal = s.goal;
       // A2 step 3: the open edit's own save (its op) in the replay settles it, as live; a replay's other events do not (carry).
       for (const ev of r.body.events) { try { applyChat(ev); } catch {} if (ev.type === 'held-text' && ev.data?.op && ev.data.op === s.hedit?.op) editSeen(s, ev); }
       if (was === 'stopping') s.state = was;
+      s.goal = goal;
       // An ask loaded from history was there before: it goes to the bell without its notice (bell-notice.mjs). Review round
       // 8: by its request, so a new ask of the same kind after it was answered is new.
       s.pendingOld = askId(s);
