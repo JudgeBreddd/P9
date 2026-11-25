@@ -323,26 +323,17 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   assert.match(await page.textContent('#composerNote'), /four files a message at most/);
   for (let i = 0; i < 4; i += 1) await page.click('#attached [aria-label="Remove pasted.txt"] >> nth=0');
   await page.fill('#prompt', '');
-  // Round 9 review: a file does not queue. A message that cannot go now (here the phone is offline) says how to queue an attached
-  // big paste as text, and a big paste made while it would queue stays text in the box (round 14: the text is back before the file
-  // is removed, and it queues whole). A picked file named pasted.txt gets no such advice.
+  // Round 9 review: a file does not queue. A message with pasted.txt that cannot go now (here the phone is offline) is refused, and
+  // a big paste made while it would queue stays text in the box, so with the file removed it queues whole (round 14: all 5001).
+  // Rounds 13 to 16: advice to swap pasted.txt for its text could delete the only copy of a paste, so the note gives none.
   const online = (on) => page.evaluate((on) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true }), on);
   const submit = () => page.evaluate(() => document.querySelector('#composer').requestSubmit());
-  await choose([{ name: 'pasted.txt', mimeType: 'text/plain', buffer: Buffer.from('picked') }]);
+  assert.equal(await pasteText('w'.repeat(5001)), true);
   await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
   await online(false); await page.fill('#prompt', 'wait'); await submit();
   await noted('attachments go only with a message sent now');
-  assert.doesNotMatch(await page.textContent('#composerNote'), /✕/, 'a picked pasted.txt is not a paste');
-  // Round 15 review: with two chips named pasted.txt (here the picked one and a paste), which ✕ to tap is unclear, so no advice.
-  await online(true); assert.equal(await pasteText('w'.repeat(5001)), true);
-  await page.waitForFunction(() => document.querySelectorAll('#attached [aria-label="Remove pasted.txt"]').length === 2, null, { timeout: 10000 });
-  await online(false); await page.evaluate(() => { document.querySelector('#composerNote').textContent = ''; }); await submit();
-  await noted('attachments go only with a message sent now');
-  assert.doesNotMatch(await page.textContent('#composerNote'), /✕/, 'two pasted.txt chips: no advice');
-  await page.locator('#attached [aria-label="Remove pasted.txt"]').first().click(); // the picked one, added first
-  await submit();
-  await noted('Or, to queue the big paste as text: paste it into the box again, and once its text is there, remove pasted.txt with ✕.');
-  await page.locator('#composer').scrollIntoViewIfNeeded(); await shot(page, 'phone-paste-queue-hint');
+  assert.doesNotMatch(await page.textContent('#composerNote'), /✕/, 'no advice to remove the paste');
+  await page.locator('#composer').scrollIntoViewIfNeeded(); await shot(page, 'phone-paste-offline-note');
   // The paste again, with what the phone does when the handler leaves it alone: the text goes in at the caret.
   assert.equal(await page.evaluate((text) => {
     const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length;
