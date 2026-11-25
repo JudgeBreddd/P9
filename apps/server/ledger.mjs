@@ -165,8 +165,9 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       + " CASE WHEN json_valid(data) THEN json_extract(data, '$.stopReason') END AS r FROM events WHERE conversation = ? AND cursor <= ? ORDER BY cursor DESC LIMIT ?"),
     span: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor >= ? AND cursor <= ? ORDER BY cursor'),
     kept: db.prepare("SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type IN ('card', 'unpin', 'config')"),
-    // O251: a message still held at the read's cursor (no user event up to it took it, no unheld named it); the queue is drawn from these.
-    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type = 'held' AND NOT EXISTS ("
+    // O251: a message still held at the read's cursor (no user event up to it took it, no unheld named it); the queue is drawn from these,
+    // with its edits (held-text, A2 step 3), so a reload shows the words it will go with.
+    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type IN ('held', 'held-text') AND NOT EXISTS ("
       + "SELECT 1 FROM events x WHERE x.conversation = h.conversation AND x.cursor > h.cursor AND x.cursor <= ? AND x.type IN ('user', 'unheld') AND ("
       + "x.type = 'unheld' AND json_extract(CASE WHEN json_valid(x.data) THEN x.data END, '$.id') = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id') OR "
       + "x.type = 'user' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(x.data) THEN x.data ELSE '{}' END, '$.held') AS j WHERE j.value = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id'))))"),

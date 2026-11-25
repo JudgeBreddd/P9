@@ -587,6 +587,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       ? await chat.note(c.req.param('id'), body.text, 'user', 'You, from the Sprint View') : { status: 400, error: 'request-refused' }); });
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/unhold', async (c) => reply(c, await chat.unhold(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/held-text', async (c) => reply(c, chat.editHeld(c.req.param('id'), await json(c))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'), c.req.header('content-type') ? await json(c) : {})));
   // Hand off (PH5): the chat stops; a new P9 terminal opens in its folder with the claude command typed in. The user
   // presses Enter, so nothing reaches claude.ai before they do.

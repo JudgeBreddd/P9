@@ -793,6 +793,7 @@ export async function createDesktop({ state, open } = {}) {
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
     note: ({ id: chat, text, ...rest }) => uuid(chat) && typeof text === 'string' && text.length <= 20000 && !Object.keys(rest).length && ['POST', `/chat/${chat}/note`, { text }], // I3: the Sprint View's Note
     unhold: ({ id: chat, held, now }) => uuid(chat) && uuid(held) && (now === undefined || now === true) && ['POST', `/chat/${chat}/unhold`, { held, ...(now && { now }) }], // now (O255): the bolt, send it now
+    heldText: ({ id: chat, held, text }) => uuid(chat) && uuid(held) && typeof text === 'string' && text.length <= 100000 && ['POST', `/chat/${chat}/held-text`, { held, text }], // A2 step 3: edit a queued one
     stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
     // O48 provider profiles (threat model "Provider profiles"): the daemon checks the body and never sends a key back.

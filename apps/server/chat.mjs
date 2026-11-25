@@ -1541,7 +1541,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     if (old) unheld(id, [old], 'replaced');
-    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }) }); // info: a note, which has no send-now
+    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }), ...(senders.has(body) && { from: true }) }); // info: a note, which has no send-now; from: another chat's, not editable here
     if (kept) crashAt('held-event');
     crashHook(body);
     if (kept) crashAt('hold-write');
@@ -2082,6 +2082,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (at >= 0) { unheld(id, list.splice(at, 1), 'removed'); return { status: 200, ok: true }; }
       }
       return refused(409, 'not-held');
+    },
+    // A2 step 3: the pencil on a message still waiting in this turn changes its text in place: its place in the queue, its
+    // files and its picks stay. Gone already (sent, or handed back): 409, and the page puts the edit in the box.
+    // Only the window's own messages: another chat's, a note or a command keeps the words its sender chose.
+    editHeld(id, body) {
+      const session = ID.test(id) && live.get(id);
+      if (typeof body?.held !== 'string' || typeof body.text !== 'string' || body.text.length > MAX_TEXT) return refused(400, 'request-refused');
+      const item = session && [...session.held, ...session.queued].find((x) => x.id === body.held);
+      if (!item) return refused(409, 'not-held');
+      if (senders.has(item.body) || notes.has(item.body) || solos.has(item.body) || commands.has(item.body)) return refused(409, 'not-editable');
+      if (!body.text.trim() && !item.images.length) return refused(400, 'request-refused');
+      item.body.text = body.text; // deliver() reads it at send time; the body object stays, so what is keyed on it stays
+      setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i))); // O109: a restart sends the edit
+      emit(id, 'held-text', { id: item.id, text: body.text });
+      return { status: 200, ok: true };
     },
     // close: the tab's x (closing a chat stops it, running or idle); 'closed' takes its tab out of
     // every window, and History opens it again.

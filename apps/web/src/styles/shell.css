@@ -238,6 +238,7 @@ select option::checkmark{color:var(--primary)}
 .queue .qs{display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow:auto;margin-top:4px}
 .queue .q{display:flex;align-items:center;gap:8px;padding:5px 6px 5px 10px;border:1px dashed var(--border);border-radius:8px;font-size:12px;color:var(--muted-foreground)}
 .queue .q span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.queue .q textarea{flex:1;min-width:0;resize:vertical;font:inherit;color:var(--foreground);background:var(--background);border:1px solid var(--ring);border-radius:6px;padding:4px 6px}
 .queue .q button{border:0;background:none;color:inherit;cursor:pointer;padding:2px;display:grid}
 .queue .q svg{width:13px;height:13px}
 /* note 7: a mode picked mid-turn waits for the turn to end */

@@ -331,3 +331,38 @@ test('A message queued behind a turn that fails goes when the failure comes', { 
   assert.deepEqual(await users(), ['hello', 'slow fail', 'first']);
   console.log('PASS failed turn: the message queued behind a turn that ended in an error went at the error');
 });
+
+// A2 step 3: the pencil on a queued message edits it where it waits: it keeps its place, and goes with the new words.
+// An edit still open when its message goes is not lost: it lands in the box, with a notice that the message went as it was.
+test('A2 step 3: a queued message edited in place keeps its place and goes edited; an edit open when it goes lands in the box', { timeout: 150000 }, async (t) => {
+  const { id, launch, open, users, ends } = await setup(t, 'a2-edit', ['no-steering']);
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(); let chat = await open(page);
+  await chat.send('tools 8');
+  await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ timeout: 15000 });
+  await chat.send('first'); await until(async () => (await chat.queued()).length === 1, 'first queued');
+  await chat.send('second'); await until(async () => (await chat.queued()).length === 2, 'second queued');
+  const row = (text) => chat.pane.locator('.queue [data-held]', { hasText: text });
+  await row('first').locator('[data-hedit]').click();
+  let editor = chat.pane.locator('.queue textarea[name="heldEdit"]');
+  assert.equal(await editor.inputValue(), 'first', 'the editor opens with the message');
+  assert.equal(await chat.pane.locator('.queue [data-hedit]').count(), 0, 'one edit at a time: no other pencil while it is open');
+  await editor.fill('never saved'); await editor.press('Escape');
+  assert.deepEqual(await chat.queued(), ['Queued: first', 'Queued: second'], 'Esc leaves it as it was');
+  assert.equal(await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').count(), 1, 'Esc in the editor does not stop the turn');
+  await row('first').locator('[data-hedit]').click();
+  await editor.fill('first, edited'); await editor.press('Enter');
+  await until(async () => JSON.stringify(await chat.queued()) === JSON.stringify(['Queued: first, edited', 'Queued: second']), 'the edit shows in its place');
+  await page.reload(); await page.locator('#rChat').waitFor(); chat = await open(page); editor = chat.pane.locator('.queue textarea[name="heldEdit"]');
+  await until(async () => JSON.stringify(await chat.queued()) === JSON.stringify(['Queued: first, edited', 'Queued: second']), 'a reload keeps the edit');
+  if (!process.env.GITHUB_ACTIONS) {
+    await row('second').locator('[data-hedit]').click(); await editor.fill('second, still typing');
+    console.log('P9_SHOT a2-queue-edit ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
+  } else { await row('second').locator('[data-hedit]').click(); await editor.fill('second, still typing'); }
+  // The turn ends with the second one's edit still open: it goes as it was, and the open edit comes into the box.
+  await until(async () => (await users()).slice(2).join('\n').includes('second'), 'the queue went out', 40000);
+  assert.deepEqual((await users()).slice(2).join('\n').split('\n').filter((l) => /first|second/.test(l)), ['first, edited', 'second']);
+  await until(async () => await chat.pane.locator('.composer textarea').inputValue() === 'second, still typing', 'the open edit lands in the box');
+  assert.equal(await chat.pane.locator('.queue').count(), 0);
+  console.log('PASS A2 step 3: an edit keeps its place and goes edited; an edit open when its message went came into the box');
+});

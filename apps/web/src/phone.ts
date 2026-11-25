@@ -1073,6 +1073,7 @@ const turn = perChat((events) => {
     else if (['interrupted', 'exited', 'stopped', 'error'].includes(kind)) held.clear();
     else if (kind === 'held') held.set(String(data.id), { text: String(data.text), when: String(data.when), at: Number(event.at) });
     else if (kind === 'unheld') held.delete(String(data.id));
+    else if (kind === 'held-text') { const item = held.get(String(data.id)); if (item) item.text = String(data.text); } // A2 step 3: edited in the window
   }
   return { held };
 });
