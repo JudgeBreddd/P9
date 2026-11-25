@@ -638,7 +638,7 @@ function pane(s, i, bare) {
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get(), shelved)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? esc(outer.names[s.agent]) + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.goal ? (st => `<div class="goal" data-key="goal" title="Goal: ${esc(s.goal.objective + st)}"><span class="truncate">Goal: ${esc(s.goal.objective)}</span>${st ? `<span class="st">${esc(st)}</span>` : ''}</div>`)(s.goal.status === 'active' ? '' : ' · ' + s.goal.status) : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="${loading(s) ? 'Loading this chat…' : 'Interrupt and send this now'}" data-qnow="${j}"${loading(s) ? ' disabled' : ''}>${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
-      <div class="composer" data-key="composer"><div class="slash" data-slash hidden></div>${s.images?.length || s.quotes?.length ? `<div class="attach" data-key="attach">${(s.quotes || []).map((q, i) => `<span class="att att-file att-quote" title="${esc(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><span class="truncate">“${esc(q.text.slice(0, 80))}”${q.comment ? ' · ' + esc(q.comment.slice(0, 80)) : ''}</span><button data-unquote="${i}" title="Remove" aria-label="Remove this quote">×</button></span>`).join('')}${(s.images || []).map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer" data-key="composer"><div class="slash" data-slash hidden></div>${s.images?.length || s.quotes?.length ? `<div class="attach" data-key="attach">${(s.quotes || []).map((q, i) => `<span class="att att-file att-quote" title="${esc(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><span class="truncate">“${esc(q.text.slice(0, 80))}”${q.comment ? ' · ' + esc(q.comment.slice(0, 80)) : ''}</span><button data-unquote="${i}" title="Remove" aria-label="Remove this quote">×</button></span>`).join('')}${(s.images || []).map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span>${(n => n ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="drafts-btn" data-key="drafts" title="Saved drafts (Ctrl+S in the box saves one)" data-drafts>Drafts ${n}</button>` : '')(draftsN())}<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
@@ -771,6 +771,8 @@ function paint(root, ss, only) {
           e.preventDefault(); s.recall = sent[to] ?? null; ta.value = s.draft = s.recall?.text ?? ''; const c = up ? 0 : ta.value.length; ta.setSelectionRange(c, c); showSlash(); return;
         }
       }
+      // A2 step 7: Ctrl+S saves the box's text as a draft and empties the box; in an empty box it opens the saved drafts.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyS') { e.preventDefault(); return ta.value.trim() ? putAside(s, ta) : draftsOf(s, p); }
       // Tab with an empty box still moves focus on.
       const key = busy(s) && !s.readonly && turnKey(e);
       if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
@@ -846,6 +848,7 @@ function paint(root, ss, only) {
     // The Mode, Model and Effort pills each open their menu (#pillMenu, outside the panes; the pill menu code above pane).
     p.querySelectorAll('[data-pill]').forEach(b => b.onclick = () => PM.btn === b ? closePill() : openPill(b, s, b.dataset.pill));
     p.querySelector('[data-attach]').onclick = () => pickImages(s);
+    const db = p.querySelector('[data-drafts]'); if (db) db.onclick = () => draftsOf(s, p);
     // A pasted screenshot or files dropped anywhere on the chat attach like the paperclip; pasted text pastes as before.
     // A2 step 1: a big paste of text attaches as a file (pastedFiles); Ctrl Shift V pastes it as text.
     // Over a selection it stays text, so it replaces what was selected as any paste does.
@@ -908,6 +911,20 @@ const quote = (s, p, rect, text, raw) => { import('./quote.mjs').then(m => {
   if (alive()) m.quoteBox({ rect, text, raw, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: q => { (s.quotes ||= []).push(q); renderChats(); ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
+
+// A2 step 7: drafts saved aside with Ctrl+S in the box, newest first, in this machine's window storage, so any chat can take
+// one back. The menu (drafts.mjs) loads on first use. ponytail: text only, the last 20 kept; files and quotes stay in the box.
+const DRAFTS = 'p9-drafts', boxOf = s => document.querySelector(`.pane[data-id="${CSS.escape(s.id)}"] .composer textarea`);
+const draftsN = () => { try { return JSON.parse(localStorage.getItem(DRAFTS) || '[]').length || 0; } catch { return 0; } };
+function putAside(s, ta) {
+  let d; try { d = JSON.parse(localStorage.getItem(DRAFTS) || '[]'); if (!Array.isArray(d)) d = []; } catch { d = []; }
+  try { localStorage.setItem(DRAFTS, JSON.stringify([{ text: ta.value, at: Date.now() }, ...d].slice(0, 20))); }
+  catch { return outer.toast({ kind: 'draft not saved', txt: 'The window storage is full, so the draft stays in the box.', level: 'warn' }, true); }
+  ta.value = s.draft = ''; s.recall = null; renderChats(); boxOf(s)?.focus();
+}
+const draftsOf = (s, p) => import('./drafts.mjs').then(m => p.isConnected && p.checkVisibility() && m.draftsMenu({ host: p.closest('dialog') || document.body, rect: (p.querySelector('[data-drafts]') || p.querySelector('[data-attach]')).getBoundingClientRect(), key: DRAFTS,
+  take: text => { const ta = boxOf(s); if (ta?.value.trim()) putAside(s, ta); s.draft = text; s.recall = null; renderChats(); const b = boxOf(s); if (b) { b.value = text; b.focus(); b.setSelectionRange(text.length, text.length); } },
+  changed: renderChats, back: () => boxOf(s)?.focus() }), () => outer.toast({ kind: 'chat', txt: 'The drafts did not load. Try again.', level: 'bad' }, true));
 function addImages(s, files) {
   const run = (adding.get(s.id) ?? Promise.resolve()).catch(() => {}).then(() => attachNow(s, files)); adding.set(s.id, run);
   run.finally(() => adding.get(s.id) === run && adding.delete(s.id)).catch(() => {}); return run; // true: every file attached

@@ -620,3 +620,34 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   assert.deepEqual(errors.filter((e) => !/not-ready|409/.test(e)), [], 'no page errors');
   console.log('PASS A2 step 6 round 2: box kept, Esc from a button, command alone, refusal keeps chips, the dialog');
 });
+
+// A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,
+// lists them, newest first; one picked goes back in the box and leaves the list; its x deletes it; Esc closes the list.
+test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked comes back, x deletes, Esc closes', { timeout: 90000 }, async (t) => {
+  const { page, pane, errors } = await setup(t, 'a2-drafts');
+  const composer = pane.locator('.composer textarea'), btn = pane.locator('[data-drafts]'), menu = page.locator('.drafts-menu');
+  await composer.click(); await page.keyboard.type('first idea'); await page.keyboard.press('Control+s');
+  await until(async () => (await composer.inputValue()) === '' && (await btn.textContent())?.trim() === 'Drafts 1', 'saved aside, the box empty', 5000);
+  await page.keyboard.type('second idea'); await page.keyboard.press('Control+s');
+  await until(async () => (await btn.textContent())?.trim() === 'Drafts 2', 'two drafts', 5000);
+  await page.keyboard.press('Control+s');
+  await menu.waitFor({ timeout: 5000 });
+  assert.deepEqual(await menu.locator('.draft-take .truncate').allTextContents(), ['second idea', 'first idea'], 'newest first');
+  assert.equal(await menu.locator('.draft-take').first().evaluate((b) => document.activeElement === b), true, 'the list has the keys');
+  const png = await page.screenshot({ type: 'png', clip: await menu.evaluate((m) => { const r = m.getBoundingClientRect(); return { x: Math.max(0, r.left - 20), y: Math.max(0, r.top - 20), width: r.width + 40, height: r.height + 80 }; }) });
+  if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'a2-drafts.png'), png); else console.log('P9_SHOT a2-drafts ' + png.toString('base64'));
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await until(async () => (await composer.inputValue()) === 'first idea' && await menu.count() === 0, 'the picked draft is back in the box', 5000);
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the box has the typing');
+  assert.equal((await btn.textContent())?.trim(), 'Drafts 1', 'and it left the list');
+  await btn.click(); await menu.waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
+  await until(async () => await menu.count() === 0, 'Esc closes the list', 5000);
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the box has the typing again');
+  await btn.click(); await menu.locator('.draft-del').first().click();
+  await until(async () => await menu.count() === 0 && await btn.count() === 0, 'x deleted the last draft; no list, no Drafts', 5000);
+  assert.equal(await composer.inputValue(), 'first idea', 'the box kept its text');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-drafts')), '[]', 'the store is empty');
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS A2 step 7: Ctrl+S puts aside, Drafts lists newest first, pick brings back, x deletes, Esc closes');
+});
