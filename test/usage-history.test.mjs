@@ -39,6 +39,7 @@ test('O244: stub readings at known times give the projection and pace word, and 
   at.now = T0 + 60 * MIN; reading = { third: third(46, at.now - MIN) };
   const shown = history.annotate(reading).third;
   assert.equal(shown.fiveHour.projected, 58.1, 'the projection from the rate since the reading 61 min before');
+  assert.equal(history.annotate({ third: { ...third(46, at.now - MIN), stale: true } }).third.fiveHour.projected, null, 'a stale reading gives no forecast');
   assert.equal(await history.tick(), 2);
   history.close();
   const db = new DatabaseSync(f, { readOnly: true });

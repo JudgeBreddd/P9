@@ -56,10 +56,11 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
     if (closed || !Number.isFinite(w.resetsAt)) return null;
     try { open(); return base.get(provider, win, Math.round(w.resetsAt), at - 90 * MIN, at - 35 * MIN) ?? null; } catch (error) { logOnce(error); return null; }
   };
-  // The limits with each window's projected % (none once its reset has passed, however old the reading).
+  // The limits with each window's projected % (none once its reset has passed, however old the reading, and none from a
+  // stale reading: use since then, on another machine say, is not in it).
   const annotate = (limits) => mapWindows(limits, (provider, win, w, asOf) => {
     const at = asOf ?? now();
-    return { ...w, projected: w.resetsAt > now() ? projectAt(w, at, baseOf(provider, win, w, at)) : null };
+    return { ...w, projected: w.resetsAt > now() && limits[provider].stale !== true ? projectAt(w, at, baseOf(provider, win, w, at)) : null };
   });
   // One read, one row per window not written yet. Answers how many rows it wrote. The database is never waited on
   // (busy_timeout 0): a writer holding it costs this tick, and the next one tries again.
