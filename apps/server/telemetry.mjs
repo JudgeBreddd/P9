@@ -590,7 +590,8 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
 
   tick(clockMs ?? Date.now()); // before the replay: a restart's gap is found from the last sample, and the replay's cost lands in the next self row
   catchUp();
-  if (sampleMs > 0) setInterval(() => tick(Date.now()), sampleMs).unref();
+  // Each sample also retries what a lock held back (a deleted chat's rows, the mark), so an idle app still catches up.
+  if (sampleMs > 0) setInterval(() => { tick(Date.now()); if (owed.size) forget([]); if (isWhole()) turns.stamp(); }, sampleMs).unref();
   parentPort.postMessage(stats);
   parentPort.on('message', ({ events, gap, resources, ticks, mainUs }) => {
     since.main += mainUs ?? 0;

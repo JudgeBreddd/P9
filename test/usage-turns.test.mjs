@@ -31,10 +31,10 @@ const EVENTS = [
   // Day 1
   ...chat(A, 'claude', 'opus', T, [usage(1000, 2000, 100000, 10000), usage(0, 500, 50000, 0)]), // $0.144 + $0.020
   ...chat(B, 'claude', 'sonnet', T + 1000, [usage(500, 1000, 200000, 0)]), // $0.031
-  ...chat(C, 'codex', 'gpt-6.1-sol', T + 2000, [usage(3000, 400, 50000, 0)]), // Codex: no price
+  ...chat(C, 'codex', 'gpt-6.1-sol', T + 2000, [usage(3000, 400, 50000, 0)]), // codex provider: no price
   ...chat(D, 'claude', 'glm-5.3:cloud', T + 3000, [usage(10, 20, 300, 0)]), // a model with no price
   // Day 2: chat A again (one chat, two days), a compaction turn whose usage says 0 but counted has the tokens (O190), a
-  // turn that reported no counts, a provider profile's chat that calls its model "sonnet", and two Codex turns that end
+  // turn that reported no counts, a provider profile's chat that calls its model "sonnet", and two codex turns that end
   // at the 24-hour view's edge (J at CUT, outside; K at CUT + 1, inside).
   [A, 'user', { text: 'x' }, T + DAY], [A, 'turn-end', usage(0, 0, 10000, 0), T + DAY + 50], // $0.002
   ...chat(F, 'claude', 'opus', T + DAY + 1000, [{ ...usage(0, 0, 0, 0), counted: { inputTokens: 100, outputTokens: 1000, cachedReadTokens: 0, cachedWriteTokens: 5000 } },
@@ -99,7 +99,7 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
   close(opus2.usd, 0.0624, 'day 2 opus: $0.002 + $0.0604');
   close(opus2.saved, 0.018, 'day 2 opus net cache saving: 15000 x $4 - 10000 x $0.20 - 5000 x $8, per 1M');
   assert.deepEqual([profile.total, profile.cost, profile.usd, profile.saved], [2000, null, null, null], "a profile's 'sonnet' is another service: no price");
-  assert.deepEqual([codex.total, codex.cost, codex.usd], [53400, null, null], 'Codex shows its tokens with no price');
+  assert.deepEqual([codex.total, codex.cost, codex.usd], [53400, null, null], 'the codex provider shows its tokens with no price');
   assert.equal(glm.usd, null, 'unknown model: no price');
   close(priced(month.rows), 0.2575, '30-day dollars');
   assert.deepEqual(month.chats, { claude: 6, codex: 3 }, 'chat A, on two days, counts once');
@@ -139,22 +139,21 @@ test('A3: turns from telemetry.db give the hand-worked tokens and dollars; no pr
   await again.close();
   assert.equal(JSON.stringify(read(90)), final, 'the next start backfills the missing turns, each once');
 
-  // A deleted chat (B) whose rows cannot go yet (the samples file held locked) keeps a new file unmarked; the next batch
-  // after the lock clears removes them and marks it, with no restart.
+  // A deleted chat (B) whose rows cannot go yet (the samples file held locked) keeps a new file unmarked; the next sample
+  // after the lock clears removes them and marks it, with no restart and no other event.
   insert.run(B, 'deleted', JSON.stringify({}), NOW);
   const samplesLock = new DatabaseSync(path.join(dir, 'telemetry-samples.db'));
   samplesLock.exec('BEGIN IMMEDIATE');
   new DatabaseSync(file).exec('PRAGMA user_version = 0');
-  const owing = startTelemetry({ ledgerFile, file });
+  const owing = startTelemetry({ ledgerFile, file, sampleMs: 100 });
   await owing.idle();
   assert.equal(read(90).state, 'rebuilding', 'a deleted chat still counted: not whole');
   samplesLock.exec('COMMIT');
   samplesLock.close();
-  owing.push({ cursor: 1e9 + 3, conversation: Q, type: 'answered', data: { request: 'late3' }, at: NOW });
-  await owing.idle();
+  let after = read(90);
+  for (const until = Date.now() + 5000; after.state !== 'ok' && Date.now() < until;) { await new Promise((r) => setTimeout(r, 50)); after = read(90); }
   await owing.close();
-  const after = read(90);
-  assert.deepEqual([after.state, after.chats?.claude], ['ok', 6], 'the next batch removed chat B and marked the file');
+  assert.deepEqual([after.state, after.chats?.claude], ['ok', 6], 'the next sample removed chat B and marked the file');
 
   const fresh = readTurns({ file: path.join(dir, 'missing.db'), exists: false, days: 7 });
   assert.deepEqual([fresh.state, fresh.rows, fresh.chats], ['ok', [], {}], 'no telemetry.db yet (no turn recorded): empty, not an error');

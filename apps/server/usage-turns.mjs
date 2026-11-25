@@ -1,6 +1,6 @@
 // A3: what the turns used, for the Usage window's Tokens and Cost views. Reads telemetry.db (telemetry.mjs, the watcher)
 // read-only: one row per day, provider and model over the last 1, 7, 30 or 90 days, with an API-price estimate in dollars
-// for Claude models in PRICES. Any other model, and every Codex turn, gets usd: null ("no price"), never $0.
+// for Claude models in PRICES. Any other model, and every turn of the codex provider, gets usd: null ("no price"), never $0.
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA } from './telemetry.mjs';
 
