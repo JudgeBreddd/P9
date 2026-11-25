@@ -575,38 +575,45 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => (await users(instance, id)).includes('/compact'), 'the command went as typed', 15000);
   assert.equal(await chips.count(), 1, 'the chip waits');
   await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
-  // The daemon holds the next message, then refuses it: while it waits the box is empty and the chip gone; after, the chip
-  // comes back as the same chip, and only the typed words go back in the box. Review round 4: a second, identical quoted send
-  // made while the first waits (its call waits behind the first's) is taken, and must not take the first one's chip and words.
+  // The daemon holds the next message, then takes it; a second, identical quoted send made while it waits (its call waits
+  // behind the first's) is refused. While they wait the box is empty and the chip gone; after, the refused one's chip comes
+  // back as the same chip and only its typed words go back in the box. Review round 5: the first is taken and the second
+  // refused, so a recovery shared by identical sends (taken one clears it) fails here.
   const chipText = await chips.first().textContent();
-  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let once = true;
-    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt' || !once) return h(e, ...args);
-      once = false; globalThis.p9refused = args[1]?.text; await new Promise((r) => { globalThis.p9release = r; }); return { status: 409, body: { error: 'not-ready' } }; }); });
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); let n = 0;
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt' || n > 1) return h(e, ...args);
+      if (n++ === 0) { await new Promise((r) => { globalThis.p9release = r; }); return h(e, ...args); }
+      globalThis.p9refused = args[1]?.text; return { status: 409, body: { error: 'not-ready' } }; }); });
   await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
-  const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
-  await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the daemon was sent the quoted message', 10000);
+  await until(async () => await app.evaluate(() => !!globalThis.p9release), 'the first send reached the daemon and waits', 10000);
   assert.equal(await composer.inputValue(), '', 'while it waits the box is empty');
   assert.equal(await chips.count(), 0, 'and the chip went with the send');
   await quote(); await page.keyboard.press('Enter'); await until(async () => await chips.count() === 1, 'the same quote again', 5000);
   await composer.click(); await page.keyboard.type('my words'); await page.keyboard.press('Enter');
   await until(async () => (await composer.inputValue()) === '' && await chips.count() === 0, 'the second send left the box', 5000);
+  const ends = (await said(instance, id, 'turn-end')).length;
   await app.evaluate(() => globalThis.p9release());
-  await until(async () => (await users(instance, id)).filter((u) => u.startsWith('> ') && u.endsWith('my words')).length === 1, 'the identical second send was taken', 15000);
-  await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: the words in the box, the chip a chip', 10000);
+  await until(async () => (await users(instance, id)).filter((u) => u.startsWith('> ') && u.endsWith('my words')).length === 1, 'the first send was taken', 15000);
+  const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
+  await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the identical second send was refused', 15000);
+  await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: its words in the box, its chip a chip', 10000);
   assert.equal(await chips.first().textContent(), chipText, 'the same chip came back');
-  await until(async () => (await pane.locator('.working').count()) === 0, 'the second send\'s turn ended', 15000);
+  await until(async () => (await said(instance, id, 'turn-end')).length > ends, 'the taken send\'s turn ended', 15000);
   await chips.first().locator('[data-unquote]').click();
   await until(async () => await chips.count() === 0, 'the last chip goes', 5000);
   assert.equal(await composer.evaluate((b) => b.p9kept), true, 'and the message box is still the same one');
-  // In the chat dialog (opened from its card), the box opens inside the dialog and its chip lands in that chat.
+  // In the chat dialog (opened from its card in Notification Center, over Settings left open), the box opens inside the
+  // dialog and its chip lands in that chat: only the top dialog counts (review round 5).
   await composer.fill(''); await page.keyboard.press('Escape');
   await pane.locator('.composer textarea').click(); await page.keyboard.type('ask-text'); await page.keyboard.press('Enter');
   await pane.locator('[data-question]').waitFor({ timeout: 15000 });
-  await page.click('#rBell'); await page.locator('#mdlBody .mlist [data-i]').first().click();
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+  await page.keyboard.press('Control+Shift+N'); await page.locator('#mdlBody .mlist [data-i]').first().click();
   const mbtn = page.locator('#mdlBody .mlist button').first(); if (await mbtn.count()) await mbtn.click();
   const dpane = page.locator('#mdlBody .pane'); await dpane.waitFor({ timeout: 10000 });
   await quote(dpane.locator('.msg.agent').first());
   assert.ok(await box.evaluate((b) => !!b.closest('dialog[open]')), 'the box is inside the open dialog');
+  assert.equal(await page.locator('#setDlg[open]').count(), 1, 'with Settings still open under it');
   await page.keyboard.type('from the dialog'); await page.keyboard.press('Enter');
   await until(async () => await dpane.locator('.attach .att-quote').count() === 1, 'the chip in the dialog\'s chat', 5000);
   assert.ok(await dpane.locator('.composer textarea').evaluate((b) => document.activeElement === b), 'the dialog\'s message box has the typing');
