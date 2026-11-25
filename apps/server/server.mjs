@@ -124,7 +124,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     get STARTER_WAITING() { return STARTER_WAITING; }, get WIZARD_KEYS() { return WIZARD_KEYS; },
     get agentsFetching() { return agentsFetching; }, set agentsFetching(v) { agentsFetching = v; }, get allowed() { return allowed; }, get lastRuns() { return lastRuns; },
     get api() { return api; }, get app() { return app; }, get chat() { return chat; }, get drafts() { return drafts; },
-    get existing() { return existing; }, get greeting() { return greeting; }, get instance() { return instance; }, get json() { return json; },
+    get existing() { return existing; }, get greeting() { return greeting; }, get telemetryTab() { return telemetryTab; }, get instance() { return instance; }, get json() { return json; },
     get ledger() { return ledger; }, get lifecycle() { return lifecycle; }, get loose() { return loose; },
     get mcp() { return mcp; }, get mission() { return mission; }, set mission(v) { mission = v; }, get planFor() { return planFor; }, get present() { return present; },
     get recovery() { return recovery; }, get reloadSettings() { return reloadSettings; }, get remote() { return remote; },
@@ -165,6 +165,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // Settings > General: the shell's welcome message is shown unless the desktop hid it (createChat made the prefs table).
   const greeting = () => ledger.db.prepare("SELECT value FROM prefs WHERE key = 'terminal-greeting'").get()?.value !== 'off';
+  // A3 (3): Settings > General shows the Usage window's Tokens and Cost tabs (desktop and phone) unless it hid them. The
+  // watcher writes telemetry.db either way.
+  const telemetryTab = () => ledger.db.prepare("SELECT value FROM prefs WHERE key = 'telemetry-tab'").get()?.value !== 'off';
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform, greeting });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
@@ -562,7 +565,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // O244 (b): a row per provider and window every 10 min in usage-limits.db beside the ledger (P9_USAGE_HISTORY_MS: tests).
   const history = ownership && startUsageHistory({ file: path.join(ownership, 'usage-limits.db'), read: async () => (await usageNow(false)).limits,
     ...(process.env.P9_TEST_HOME && Number(process.env.P9_USAGE_HISTORY_MS) > 0 && { everyMs: Number(process.env.P9_USAGE_HISTORY_MS) }) });
-  api.get('/usage', async (c) => c.json(await usageNow()));
+  api.get('/usage', async (c) => c.json({ ...await usageNow(), telemetryTab: telemetryTab() }));
   // A3: the Tokens and Cost views, from the watcher's telemetry.db (usage-turns.mjs). ?days=1|7|30|90.
   api.get('/usage/turns', (c) => {
     if (!ownership) return c.json({ state: 'unavailable' });

@@ -210,7 +210,7 @@ Astro's compiled hydration scripts; no unsafe-eval or inline script wildcard.
 Inline styles remain allowed for the approved shell's layout and theme variables.
 Fonts are local. Connections, frames, forms, objects and base changes are restricted.
 
-The exact contextBridge allowlist is p9.getStatus(), p9.usage() (since phase 11; no arguments, returns the daemon's usage summary), p9.usageTurns(days) (since 0.1.9, A3; days only 1, 7, 30 or 90, else refused; returns /usage/turns, the turns' tokens and API-price estimate per day and model, no chat ids), p9.mission(action, payload),
+The exact contextBridge allowlist is p9.getStatus(), p9.usage() (since phase 11; no arguments, returns the daemon's usage summary), p9.usageTurns(days) (since 0.1.9, A3; days only 1, 7, 30 or 90, else refused; returns /usage/turns, the turns' tokens and API-price estimate per day and model, no chat ids), p9.telemetryTab(show) (since 0.1.9, A3; a boolean only; shows or hides the Usage window's Tokens and Cost tabs, the ledger's telemetry-tab pref, without touching what is recorded), p9.mission(action, payload),
 p9.chat(action, payload), p9.lifecycle(action, payload), since phase 13 p9.anymouse(note) (the daemon files the note, or
 returns GitHub's prefilled new-issue page, which the main process opens only if it starts with
 https://github.com/JudgeBreddd/p9/issues/new?), and since phase 8 p9.devView(bounds) (places the editor view over

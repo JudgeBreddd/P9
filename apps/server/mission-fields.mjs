@@ -237,7 +237,7 @@ export const SECTION = {
     example: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] },
   // Fresh-install finding 3a (threat model row 72): P9's built-in panels draw on a space only where a section names them.
   widget: { type: 'string', check: (value) => WIDGETS.includes(value),
-    doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage), apps (Apps and pages) or notifications (Notifications)'
+    doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage: the plan limits; its window adds Tokens and Cost tabs unless Settings > General hides them), apps (Apps and pages) or notifications (Notifications)'
       + ' or primary (the Main project card). Without a space the first four show; on a space only the ones a section names. Or one of P9\'s built-in tiles, '
       + 'drawn where the section is under its title: idea (+ New idea), sprint (Sprint status; its window has this section\'s buttons and script refs in its footer, '
       + 'beside Open tmux) or edit (Edit names and icons). While no section names a built-in tile, all three '

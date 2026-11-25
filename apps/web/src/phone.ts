@@ -18,7 +18,7 @@ import { onLookChange } from './lib/theme';
 import { pressHold } from './press-hold.mjs';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: Record<string, Limits | null> & { signedOut?: string[] }; profiles?: { id: string; name: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; turns: number }[] };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; tokens?: string; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: Record<string, Limits | null> & { signedOut?: string[] }; profiles?: { id: string; name: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; turns: number }[]; telemetryTab?: boolean };
 type Window = { usedPercent: number; resetsAt: number | null; windowMins?: number };
 type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Window & { name: string })[]; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
@@ -139,6 +139,8 @@ function csrfToken() {
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
 const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
   for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); fillLoose(agents); }, () => {});
+// A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
+const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
   const response = await fetch(path, { cache: 'no-store', signal });
   if (response.status === 401) toLogin();
@@ -196,7 +198,7 @@ function show(view: string) {
   document.querySelectorAll<HTMLElement>('[data-view]').forEach((section) => { section.hidden = section.dataset.view !== view; });
   document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => button.setAttribute('aria-current', button.dataset.nav === view ? 'page' : 'false'));
   if (view === 'mission') { if (!missionDrawn && lastMission) void loadMission(true); void loadMission(); }
-  if (view === 'usage') void loadUsage();
+  if (view === 'usage') { UH.tab = 'limits'; if (UH.limits) drawUsage(); void loadUsage(); } // opens on Limits, as the desktop's window does
   if (view === 'files' && !state.file) void loadFolder();
   if (view === 'terminal' && !term.open) void loadTerminals();
 }
@@ -2212,29 +2214,104 @@ one('#signIn').addEventListener('submit', async (event) => {
   // The typed code stays in the box until the daemon takes it.
   if (await signIn('/phone/sign-in/code', { agent, code }, agent)) input.value = '';
 });
+// A3 (3): the Usage screen's tabs, as in the desktop's Usage window (mission-view.mjs): Limits is the lines loadUsage draws;
+// Tokens and Cost read /usage/turns and are drawn by usage-history.mjs, loaded the first time one opens. None while the
+// daemon's telemetry-tab pref is off (the desktop's Settings > General). The answer is read again when the range changes,
+// on the 20 s redraw once it is a minute old, and 5 s after a 'rebuilding' answer (the daemon's first replay).
+const UH: { tab: string; days: number; by: string; page: Json | null; at: number; reading: number | null; failed: boolean; shown: boolean; more: boolean; limits: string; html: string;
+  draw: ((u: Json, esc: (v: unknown) => string, names: Record<string, string>) => string) | null; load: Promise<void> | null } =
+  { tab: 'limits', days: 7, by: 'model', page: null, at: 0, reading: null, failed: false, shown: false, more: false, limits: '', html: '', draw: null, load: null };
+const UTABS = [['limits', 'Limits'], ['tokens', 'Tokens'], ['cost', 'Cost']];
+// The strip stays mounted, so a press on it or the focus in it survives a redraw; the panel is replaced only when what it
+// shows changed (the 20 s redraw of an unchanged view touches nothing).
+function drawUsage() {
+  const root = one('#usage');
+  if (!UH.shown) { UH.tab = 'limits'; UH.html = ''; root.innerHTML = UH.limits; keepMore(root); return; }
+  if (!root.querySelector('.utabs')) {
+    root.innerHTML = `<div class="utabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" id="utab-${id}" aria-controls="upanel" data-utab="${id}">${label}</button>`).join('')}</div><div id="upanel" role="tabpanel"></div>`;
+    UH.html = '';
+  }
+  root.querySelectorAll<HTMLElement>('[data-utab]').forEach((tab) => { const on = tab.dataset.utab === UH.tab; tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1; });
+  const panel = one('#upanel'), html = UH.tab === 'limits' ? UH.limits : turnsHtml();
+  panel.setAttribute('aria-labelledby', 'utab-' + UH.tab);
+  if (html !== UH.html) {
+    // The range and breakdown buttons are inside the panel: the one focused comes back focused (a key press on 30 days).
+    const was = panel.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset : {};
+    panel.innerHTML = html; UH.html = html; keepMore(panel);
+    const key = (['uhDays', 'uhBy'] as const).find((k) => was[k]);
+    if (key) panel.querySelector<HTMLElement>(`[data-${key === 'uhDays' ? 'uh-days' : 'uh-by'}="${was[key]}"]`)?.focus();
+  }
+}
+// Details (the sample counts) opens as it was left, whatever the Limits HTML was drawn with.
+function keepMore(root: HTMLElement) { const more = root.querySelector<HTMLDetailsElement>('details.more'); if (more) more.open = UH.more; }
+let turnsRead = 0, usageRead = 0; // the newest read of each; an older answer that lands later is dropped
+async function readTurns() {
+  const days = UH.days, seq = ++turnsRead; UH.reading = days;
+  // A deadline, so a stalled read cannot hold the reading mark. This page comes from the daemon it reads, so the route is
+  // there; a failed read, or an answer that is not one (cut short), is unavailable and is tried again in a minute.
+  const page = await request('/usage/turns?days=' + days, deadline(20000)).catch(() => null) as Json | null;
+  if (seq !== turnsRead) return;
+  UH.reading = null; UH.at = Date.now();
+  UH.page = typeof page?.state === 'string' ? { ...page, days } : { state: 'unavailable', days };
+  if (UH.page.state === 'rebuilding') setTimeout(() => { if (seq !== turnsRead) return; UH.at = 0; if (UH.tab !== 'limits' && document.body.dataset.view === 'usage') drawUsage(); }, 5000);
+  if (UH.tab !== 'limits') drawUsage();
+}
+function turnsHtml() {
+  // A range picked while another is being read is read at once (the older answer is dropped when it lands).
+  if (UH.reading !== UH.days && (Date.now() - UH.at > 60000 || UH.page?.days !== UH.days)) void readTurns();
+  // A failed load (an update replaced the files under the open page) offers a reload, which reads the new names.
+  if (!UH.draw && !UH.failed) UH.load ??= import('./usage-history.mjs').then((m) => { UH.draw = m.historyHtml; drawUsage(); }, () => { UH.load = null; UH.failed = true; drawUsage(); });
+  return UH.draw ? UH.draw(UH, esc, names) : UH.failed
+    ? '<p class="muted">This view could not load. P9 may have been updated. <button type="button" data-uh-reload>Reload</button></p>' : '<p class="muted">Loading…</p>';
+}
+one('#usage').addEventListener('click', (event) => {
+  const d = (event.target as HTMLElement).closest<HTMLElement>('[data-utab],[data-uh-days],[data-uh-by],[data-uh-reload]')?.dataset;
+  if (!d) return;
+  if ('uhReload' in d) return location.reload();
+  if (d.utab) UH.tab = d.utab; if (d.uhDays) UH.days = +d.uhDays; if (d.uhBy) UH.by = d.uhBy;
+  drawUsage();
+});
+// Details (the sample counts) stays as it was left across redraws and tab changes.
+one('#usage').addEventListener('toggle', (event) => { const more = event.target as HTMLDetailsElement; if (more.matches('details.more')) UH.more = more.open; }, true);
+// Arrow keys, Home and End move between the tabs and open the one reached (the tablist pattern).
+one('#usage').addEventListener('keydown', (event) => {
+  const at = UTABS.findIndex(([id]) => id === (event.target as HTMLElement).dataset.utab), to = at < 0 ? undefined : { ArrowRight: at + 1, ArrowLeft: at + 2, Home: 0, End: 2 }[event.key];
+  if (to === undefined) return;
+  event.preventDefault(); UH.tab = UTABS[to % 3][0]; drawUsage(); document.getElementById('utab-' + UH.tab)?.focus();
+});
 async function loadUsage() {
   void loadSignIn();
+  const seq = ++usageRead;
   try {
-    const data = await request('/usage') as Usage;
+    const data = await request('/usage', deadline(20000)) as Usage;
+    if (seq !== usageRead) return;
+    // request() turns a body it could not parse (cut short, stalled) into {}: that is a failed read, not an empty one.
+    if (!data || !Object.keys(data).length) throw new Error('cut short');
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
     // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
     const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
     const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id])).join('')}</div>` : '';
-    if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); return; }
+    UH.shown = data.telemetryTab !== false;
+    if (data.state === 'unavailable') { UH.limits = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); drawUsage(); return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
     // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before
     // it stalls (P5). A stopped chat's last fill is history and is left out.
     const chat = (id: string) => state.conversations.find((item) => item.id === id);
     const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
-    // The redraw (startup twice, Refresh, every 20 s) keeps an opened Details open.
-    const more = one('#usage').querySelector('details.more')?.open ? ' open' : '';
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
-      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"${more}><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
-  } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
+    UH.limits = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
+      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
+    drawUsage();
+  } catch { if (seq === usageRead) { UH.limits = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; drawUsage(); } }
 }
-one<HTMLButtonElement>('#refreshUsage').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadUsage);
+// Refresh reads what is shown: on Tokens or Cost their history too (superseding a read still out), and spins until it
+// answers; on Limits the history is marked old, so opening Tokens or Cost reads it again.
+one<HTMLButtonElement>('#refreshUsage').onclick = (event) => {
+  // On Limits a history read still out is dropped too, or its older answer would count as fresh.
+  if (UH.tab === 'limits') { turnsRead++; UH.reading = null; UH.at = 0; }
+  void refreshing(event.currentTarget as HTMLButtonElement, () => Promise.all([loadUsage(), UH.tab !== 'limits' && readTurns()]));
+};
 // P7: the Usage screen reads again every 20 s while it is shown (the plan limits move with every turn anywhere).
 setInterval(() => { if (document.body.dataset.view === 'usage' && !document.hidden && navigator.onLine) void loadUsage(); }, 20000);
 
