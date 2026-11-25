@@ -752,21 +752,20 @@ function paint(root, ss, only) {
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
     // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
-    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
+    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
       // A2 step 2: Up in an empty box, or on a prompt it brought back, gives the one you sent before (caret at its start, so
-      // Up again goes further back); Down goes forward (caret at its end), then empty. Up acts with the caret at the very start,
-      // Down at the very end, and either at either end of an unedited recall, so walking back and forth is one press each and
-      // moving through a long or wrapped prompt (caret inside it) still works. Typing ends a recall
-      // (oninput), so typed or edited text is never replaced. s.recall is the event itself, so loading earlier history keeps
-      // it. Only your own prompts: not another chat's, and not one joined from several senders (mixed).
+      // Up again goes further back); Down on a recall goes forward (caret at its end), then empty. Up acts only with the caret
+      // at the very start and Down only at the very end, so the caret still moves through a long or wrapped prompt. Typing
+      // and sending end a recall, so typed or edited text is never replaced. s.recall is the event itself, so loading earlier
+      // history keeps it. Only your own prompts: not another chat's, and not one joined from several senders (each part of
+      // a joined prompt starts with its sender's [P9: ...] line, in old history too).
       if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) && ta.selectionStart === ta.selectionEnd) {
-        const sent = s.events.filter(v => v.t === 'user' && v.text && !v.from && !v.info && !v.ask && !v.mixed), up = e.key === 'ArrowUp';
+        const sent = s.events.filter(v => v.t === 'user' && v.text && !v.from && !v.info && !v.ask && !v.text.startsWith('[P9: ')), up = e.key === 'ArrowUp';
         const at = !ta.value ? sent.length : s.recall?.text === ta.value ? sent.indexOf(s.recall) : -1, to = at + (up ? -1 : 1);
-        const edge = ta.selectionStart === 0 || ta.selectionStart === ta.value.length, recalled = at >= 0 && at < sent.length;
-        if (at >= 0 && to >= 0 && (up || ta.value) && (recalled ? edge : up && !ta.value)) {
+        if (at >= 0 && to >= 0 && (up ? ta.selectionStart === 0 : at < sent.length && ta.selectionStart === ta.value.length)) {
           e.preventDefault(); s.recall = sent[to] ?? null; ta.value = s.draft = s.recall?.text ?? ''; const c = up ? 0 : ta.value.length; ta.setSelectionRange(c, c); showSlash(); return;
         }
       }
@@ -1032,7 +1031,7 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }), ...(d.mixed === true && { mixed: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -1216,7 +1215,7 @@ async function loadChat() {
   const carry = (ev) => {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
-    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
+    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.

@@ -428,11 +428,13 @@ test('A2 step 2: Up in an empty box brings back the prompts sent before, Down go
   await key('ArrowUp'); assert.deepEqual([await value(), await caret()], ['second\none', 0], 'Up in an empty box: the last prompt, caret at its start');
   await key('ArrowUp'); assert.equal(await value(), 'hello', 'Up again: the one before');
   await key('ArrowUp'); assert.equal(await value(), 'hello', 'the first prompt stays');
-  await key('ArrowDown'); assert.deepEqual([await value(), await caret()], ['second\none', 10], 'Down: forward again, caret at its end');
-  await key('ArrowLeft'); await key('ArrowUp'); assert.equal(await value(), 'second\none', 'Up with the caret inside a recall moves the caret, recalls nothing');
-  assert.ok(await caret() > 0 && await caret() < 9, 'the caret went up a line');
-  await key('Control+End'); await key('ArrowUp'); assert.equal(await value(), 'hello', 'Up at the end of an unedited recall: the one before');
-  await key('ArrowDown'); await key('ArrowDown'); assert.equal(await value(), '', 'Down past the newest: an empty box');
+  await key('ArrowDown'); assert.equal(await value(), 'hello', 'Down with the caret at the start moves the caret, recalls nothing');
+  await key('End'); await key('ArrowDown'); assert.deepEqual([await value(), await caret()], ['second\none', 10], 'Down at the end: forward again, caret at its end');
+  await key('ArrowUp'); assert.equal(await value(), 'second\none', 'Up with the caret not at the start moves the caret, recalls nothing');
+  assert.ok(await caret() > 0 && await caret() < 7, 'the caret went up a line');
+  await key('ArrowDown'); assert.equal(await value(), 'second\none', 'Down from the first line moves the caret down a line, recalls nothing');
+  await key('Control+End'); await key('ArrowDown'); assert.equal(await value(), '', 'Down at the end of the newest: an empty box');
+  await key('ArrowDown'); assert.equal(await value(), '', 'Down in an empty box does nothing');
   await page.keyboard.type('hello'); await key('Home'); await key('ArrowUp');
   assert.equal(await value(), 'hello', 'typed text is never replaced, even when it matches a sent prompt');
   await box.fill(''); await key('ArrowUp'); await key('Control+End'); await page.keyboard.type('x'); await key('Backspace'); await key('ArrowDown');
