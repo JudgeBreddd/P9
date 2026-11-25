@@ -299,6 +299,11 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]);
   await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
   await page.click('#attached [aria-label="Remove notes.txt"]');
+  // A picked file named pasted.txt is a file, not a paste: no Use as text.
+  await choose([{ name: 'pasted.txt', mimeType: 'text/plain', buffer: Buffer.from('picked') }]);
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  assert.equal(await page.locator('#attached [data-astext]').count(), 0, 'a picked pasted.txt has no Use as text');
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
   // A2 step 1: a big paste of text attaches as pasted.txt; a short one stays text (not taken from the box).
   const pasteText = (text) => page.evaluate((text) => { const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); document.querySelector('#prompt').dispatchEvent(ev); return ev.defaultPrevented; }, text);
   assert.equal(await pasteText('short'), false, 'a short paste stays text');
@@ -319,14 +324,35 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   // back in the box as text, after what is typed there.
   // (the init script above says online; the dev space has no network, so the phone is told it is offline the same way)
   const online = (on) => page.evaluate((on) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true }), on);
+  // A send carrying it that got no answer may have arrived: Use as text waits for the answer, so the text cannot go twice.
+  await page.route('**/prompt', (route) => route.abort(), { times: 1 });
+  await page.click('#composer button[type="submit"]');
+  await noted('P9 could not be reached');
+  await page.click('#attached [data-astext]');
+  await noted('stays a file until P9 answers');
   await online(false);
+  await page.fill('#prompt', 'wait'); // a new message (the unanswered one was without text): offline it would queue
   await page.click('#composer button[type="submit"]');
   await page.waitForFunction(() => /Use as text/.test(document.querySelector('#composerNote').textContent), null, { timeout: 10000 });
   await shot(page, 'phone-paste-use-as-text');
   await page.fill('#prompt', 'see');
+  // Storage full: the text cannot be kept, so the file stays and the box is as it was.
+  await page.evaluate(() => { const set = Storage.prototype.setItem; window.__set = set; Storage.prototype.setItem = function (key, value) { if (key === 'p9-drafts') throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.click('#attached [data-astext]');
+  await noted("storage is full, so pasted.txt stays attached");
+  assert.equal(await page.inputValue('#prompt'), 'see');
+  await page.evaluate(() => { Storage.prototype.setItem = window.__set; });
   await page.click('#attached [data-astext]');
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && !document.querySelector('#attached [data-astext]'), null, { timeout: 10000 });
+  // The photo still attached does not queue either; without it the text queues whole, and Take back returns it.
+  await page.click('#attached [aria-label="Remove shot.png"]');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('[data-unqueue]')?.closest('article').querySelector('p').textContent === 'see\n' + 'x'.repeat(5001), null, { timeout: 10000 });
+  await page.click('#queued summary'); // the queue opens from its strip
+  await page.click('[data-unqueue]');
   await online(true);
+  await choose([{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]);
+  await chips(1);
   await page.fill('#prompt', '');
   assert.equal(await pasteText('x'.repeat(5001)), true);
   // Four files a message: a fifth big paste is refused, and goes into the box as text instead of being lost.
