@@ -1213,7 +1213,11 @@ async function submitFromBox(event: Event) {
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
-  const boxWas = art === null ? input.value : null, text = (art ?? input.value).trim();
+  // A send a reload put back in front of the box (lead) goes as itself, with its first body and operation ID, and what was typed after it
+  // stays for the next tap: the two are never joined into a new message, which would run the first again if it had arrived.
+  const lead = art === null && !images.length && inFlight.get(id)?.lead ? String((JSON.parse(inFlight.get(id)!.draft) as [unknown])[0]) : null;
+  const rest = lead !== null && (input.value === lead || input.value.startsWith(lead + '\n')) ? input.value.slice(lead.length + 1) : null;
+  const tapped = input.value, boxWas = art === null ? (rest !== null ? lead! : tapped) : null, text = (art ?? boxWas!).trim();
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
   note(); one<HTMLElement>('#slash').hidden = true; // an earlier why is not about this send
@@ -1237,34 +1241,39 @@ async function submitFromBox(event: Event) {
     if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
-  if (!again && submitter?.dataset.when === 'now' && running(id)) {
-    // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
-    // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended, and the box takes no typing
-    // meanwhile: nothing typed after the tap becomes part of this message.
-    note('Stopping this turn, then sending.');
-    if (art === null) input.readOnly = true;
-    try {
-      const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
-      if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
-      // Each read has its own deadline (a stalled one counts as "still running"), so the wait ends after about 25 s and the guard lets go.
-      for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await within(fetchEvents(1000), 5000).catch(() => {}); await new Promise((done) => setTimeout(done, 250)); }
-      if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
-    } finally { input.readOnly = false; }
-  }
-  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
+  // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt (the daemon refuses a prompt while the
+  // stopped turn is still ending), so it goes without a 'when'.
+  const interrupt = !again && submitter?.dataset.when === 'now' && running(id);
+  const when = !interrupt && running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
   // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
   const sent = { ...first, ...attachBody(images) };
-  inFlight.set(id, { draft, sent: first, pids: sentPids, box: art === null }); keepInFlight();
-  // The send's text leaves the box once it is kept as this send (a reload from here puts it back): what is typed or pasted while it is on
-  // its way is the next message. Left in the box and cut out on the answer, it either went twice or changed what was typed. One that
-  // does not go, or throws (no answer in time, offline, signed out: the caller says it is still in the box), puts its text back in front
-  // of anything typed since. An artifact's comments never came from the box.
-  if (art === null) { editDraft(id, () => ''); keepDraft(); } // stored now, so a reload sees only what is typed since
-  const unsent = () => { if (boxWas !== null) putBack(id, boxWas); };
-  const result = await mutate(prompt, sent, SEND_DEADLINE).catch((error) => { unsent(); throw error; });
+  inFlight.set(id, { draft, sent: first, pids: sentPids, box: art === null });
+  // The send's text leaves the box at the tap, once it is stored as this send (a reload from here puts it back): what is typed, pasted or
+  // handed back by a Stop while it is on its way is the next message. Left in the box and cut out on the answer, it either went twice
+  // or changed what was typed. One that does not go, or throws (no answer in time, offline, signed out: the caller says it is still in
+  // the box), puts its text back in front of anything in the box since. An artifact's comments never came from the box. With storage
+  // full the text stays in the box, as nothing else would keep it, and leaves on the answer only if the box still holds just that.
+  const cleared = keepInFlight() && art === null;
+  if (cleared) { editDraft(id, () => rest ?? ''); keepDraft(); }
+  const unsent = (back = boxWas!) => { if (cleared) putBack(id, back); };
+  const drop = () => { inFlight.delete(id); keepInFlight(); unsent(); };
+  // No answer: the text goes back as this same send (lead), so what was typed meanwhile stays the next message, not joined to it.
+  const unanswered = () => { const kept = inFlight.get(id); if (kept && cleared) { kept.lead = true; keepInFlight(); } unsent(text); }; // trimmed, as kept, so the next tap knows it
+  if (interrupt) {
+    note('Stopping this turn, then sending.');
+    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE).catch((error) => { drop(); throw error; });
+    if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); drop(); return; }
+    // Each read has its own deadline (a stalled one counts as "still running"), so the wait ends after about 25 s and the guard lets go.
+    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await within(fetchEvents(1000), 5000).catch(() => {}); await new Promise((done) => setTimeout(done, 250)); }
+    if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); drop(); render(); return; }
+  }
+  const result = await mutate(prompt, sent, SEND_DEADLINE).catch((error) => { unanswered(); throw error; });
+  // Storage full: a send that went (or queued) leaves the box only if the box still holds just what was tapped.
+  const tidy = () => { if (!cleared && art === null) editDraft(id, (now) => now === tapped ? rest ?? '' : now); };
+  if (result.status === 202) tidy();
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
-  if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); unsent(); return false; }
+  if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); unanswered(); return false; }
   inFlight.delete(id); keepInFlight();
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
@@ -1274,7 +1283,7 @@ async function submitFromBox(event: Event) {
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) { note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.'); unsent(); }
-    else { try { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); } catch (error) { unsent(); throw error; } spend(id, picked, sentPids); label(); note(); renderQueue(); void drain(); return true; }
+    else { try { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); } catch (error) { unsent(); throw error; } tidy(); spend(id, picked, sentPids); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); unsent(); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
@@ -1296,12 +1305,13 @@ function dropRefused(id: string, value: string | undefined, pid: string | undefi
 const SEND_DEADLINE = 30000;
 // O62: per chat, the send that got no answer, kept in this phone's storage with the settings chosen for it: after a reload
 // the same text sent again is that same send (its first body and operation ID), so it does not arrive twice.
-const inFlight = new Map<string, { draft: string; sent: Json; pids: Record<string, string>; box?: boolean }>(); // pids: the picks the first try carried, by key (O206, O209)
-function keepInFlight() {
+const inFlight = new Map<string, { draft: string; sent: Json; pids: Record<string, string>; box?: boolean; lead?: boolean }>(); // pids: the picks the first try carried, by key (O206, O209)
+function keepInFlight() { // false: storage refused it
   try {
     if (inFlight.size) localStorage.setItem('p9-inflight', JSON.stringify(Object.fromEntries([...inFlight].map(([id, kept]) => [id, { ...kept, picks: [...chosen.get(id) ?? []] }]))));
     else localStorage.removeItem('p9-inflight');
-  } catch {}
+    return true;
+  } catch { return false; }
 }
 // Round 5 review: the identity of a pending send holds the settings the user chose and that took effect, never a count of events (a
 // cancelled warning, a no-op pick or an away-and-back would raise it) and never the adapter's own redraws (they set values, not choices).
@@ -1321,17 +1331,18 @@ function spend(id: string, picked: Map<string, string>, queued?: Record<string, 
   if (!own.size) chosen.delete(id);
 }
 try {
-  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; pick?: string; pids?: Record<string, string>; box?: boolean; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
+  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; pick?: string; pids?: Record<string, string>; box?: boolean; lead?: boolean; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
     // O206: a send kept before picks had a pid gets one here, and that one is the pick it carried, so its refusal still clears it.
     if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
     // O209: a send kept before pids were kept per key carries its restored picks' pids (the model's own pid if O206 kept one).
     const pids = kept.pids ?? { ...Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid!])), ...(kept.pick && { model: kept.pick }) };
-    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent, pids, box: kept.box });
-    // A send from the box left it once kept: a reload before the answer puts its text back in front of what was typed since (not twice
-    // over a second reload), so the next tap is this send again.
-    const [was] = JSON.parse(String(kept.draft)) as [unknown], now = drafts.get(id) ?? '';
-    if (kept.box && typeof was === 'string' && was && !now.startsWith(was)) drafts.set(id, now ? was + '\n' + now : was);
+    // A send from the box left it once stored: a reload before the answer puts its text back in front of what was typed since, once
+    // (lead, kept with it), and the next tap sends it as itself.
+    const [was] = JSON.parse(String(kept.draft)) as [unknown], now = drafts.get(id) ?? '', lead = !!kept.box && typeof was === 'string' && !!was;
+    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent, pids, box: kept.box, lead });
+    if (lead && !kept.lead) { drafts.set(id, now ? was + '\n' + now : was as string); draftDirty = true; }
   }
+  keepInFlight(); keepDraft(); // stored with its lead mark, so a second reload does not put it back twice
 } catch {}
 const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
 // The model and the agent's own pickers have no warning: a change is accepted when it fires. (Mode is recorded in its own handler, once its warning is confirmed.)
@@ -1427,8 +1438,7 @@ one('#sheetBody').addEventListener('click', (event) => {
 });
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
-  const box = event.currentTarget as HTMLTextAreaElement; if (box.readOnly) return; // Interrupt's wait: the box takes nothing
-  const files = event.clipboardData ? pastedFiles(event.clipboardData, box.selectionStart !== box.selectionEnd) : [];
+  const box = event.currentTarget as HTMLTextAreaElement, files = event.clipboardData ? pastedFiles(event.clipboardData, box.selectionStart !== box.selectionEnd) : [];
   if (!files.length) return; // over a selection it stays text, so it replaces what was selected as any paste does
   event.preventDefault(); const id = openId, was = box.value, at = box.selectionStart, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
   void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
