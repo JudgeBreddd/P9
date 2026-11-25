@@ -27,6 +27,7 @@ import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits, usageReport } from './limits.mjs';
+import { readTurns } from './usage-turns.mjs';
 import { startUsageHistory } from './usage-history.mjs';
 import { CATALOG, COMMANDS, publicAgents } from './agents.mjs';
 import { SIGN_IN_KIND } from './agents.mjs'; // its own line: CAT-1a edits the one above
@@ -562,6 +563,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const history = ownership && startUsageHistory({ file: path.join(ownership, 'usage-limits.db'), read: async () => (await usageNow(false)).limits,
     ...(process.env.P9_TEST_HOME && Number(process.env.P9_USAGE_HISTORY_MS) > 0 && { everyMs: Number(process.env.P9_USAGE_HISTORY_MS) }) });
   api.get('/usage', async (c) => c.json(await usageNow()));
+  // A3: the Tokens and Cost views, from the watcher's telemetry.db (usage-turns.mjs). ?days=1|7|30|90.
+  api.get('/usage/turns', (c) => c.json(ownership ? readTurns({ file: path.join(ownership, 'telemetry.db'), days: c.req.query('days') }) : { state: 'unavailable' }));
   api.get('/usage/plan', async (c) => c.json(usageReport((await usageNow()).limits))); // USE-1: plan_usage's answer
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.get('/chat/:id/notes', (c) => reply(c, chat.workerNotes(c.req.param('id'))));
