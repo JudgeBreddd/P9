@@ -1234,7 +1234,7 @@ async function submitFromBox(event: Event) {
   // fit this phone's storage): they stay attached and the box says why.
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
-    if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
+    if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.') + asTextHint(images)); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
@@ -1264,7 +1264,7 @@ async function submitFromBox(event: Event) {
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
-    if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
+    if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.' + asTextHint(images));
     else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
@@ -1362,7 +1362,7 @@ try { attachedStore('readonly', (store) => { const all = store.openCursor(); all
 function renderAttached() {
   const list = attached.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length; keepAttached();
-  box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span>${isPaste(image) ? `<button type="button" class="as-text" data-astext="${i}">Use as text</button>` : ''}<button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
 // One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file
@@ -1383,7 +1383,17 @@ async function attachNow(id: string, files: Iterable<File>) {
   }
   renderAttached(); return ok;
 }
+// A big paste attached as pasted.txt can go back into the box as text, after what is typed there: a file does not queue, and
+// removing the chip would drop the paste.
+function isPaste(image: { file?: boolean; name: string; mimeType?: string }) { return !!image.file && image.name === 'pasted.txt' && image.mimeType === 'text/plain'; }
+function asTextHint(list: { file?: boolean; name: string; mimeType?: string }[]) { return list.some(isPaste) ? ' Tap Use as text on pasted.txt to send the paste as text.' : ''; }
 one<HTMLElement>('#attached').onclick = (event) => {
+  const astext = (event.target as Element).closest<HTMLButtonElement>('[data-astext]'), id = openId;
+  if (astext) {
+    const [image] = attached.get(id)?.splice(Number(astext.dataset.astext), 1) ?? []; renderAttached(); note(); if (!image) return;
+    const text = new TextDecoder().decode(Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0)));
+    editDraft(id, (now) => now + (now ? '\n' : '') + text); return;
+  }
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
   attached.get(openId)?.splice(Number(button.dataset.unattach), 1); renderAttached();
 };

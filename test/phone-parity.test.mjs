@@ -315,6 +315,20 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   assert.equal(await page.inputValue('#prompt'), 'hi', 'nothing was sent while attaching');
   await page.fill('#prompt', '');
   assert.match(await page.textContent('#composerNote'), /A big paste went in as pasted\.txt/);
+  // Offline the message waits in the phone's queue, and a file does not queue: the note points to Use as text, which puts the paste
+  // back in the box as text, after what is typed there.
+  // (the init script above says online; the dev space has no network, so the phone is told it is offline the same way)
+  const online = (on) => page.evaluate((on) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true }), on);
+  await online(false);
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => /Use as text/.test(document.querySelector('#composerNote').textContent), null, { timeout: 10000 });
+  await shot(page, 'phone-paste-use-as-text');
+  await page.fill('#prompt', 'see');
+  await page.click('#attached [data-astext]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && !document.querySelector('#attached [data-astext]'), null, { timeout: 10000 });
+  await online(true);
+  await page.fill('#prompt', '');
+  assert.equal(await pasteText('x'.repeat(5001)), true);
   // Four files a message: a fifth big paste is refused, and goes into the box as text instead of being lost.
   for (let i = 0; i < 3; i += 1) assert.equal(await pasteText('x'.repeat(5001)), true);
   await page.waitForFunction(() => document.querySelectorAll('#attached .chip-file').length === 4);

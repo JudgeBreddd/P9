@@ -37,6 +37,7 @@ form.question{display:grid;gap:10px;margin-top:8px}form.question fieldset{border
 .chip-file{position:relative;display:flex;align-items:center;height:48px;max-width:200px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font-size:13px}.chip-file span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sent-files{margin-top:6px;font-size:12px;color:var(--dim)}
 .chip-file button{position:absolute;top:-10px;right:-10px;width:28px;height:28px;min-height:0;padding:0;border-radius:50%;font-size:13px;line-height:1}.chip-file button::after{content:"";position:absolute;inset:-8px}
+.chip-file .as-text{position:static;width:auto;height:32px;margin-left:8px;padding:0 10px;border-radius:6px;white-space:nowrap}.chip-file .as-text::after{content:none}
 .user-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.user-imgs img{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
 /* P4 (spec §4): one rounded box docked under the chat. Chips and slash commands, then the message (1 to 6 lines of
    22 px, then it scrolls), then +, the mode pill, Queue during a turn, and a 36 px round send (44 px hit area). The form is
