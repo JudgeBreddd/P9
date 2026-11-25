@@ -212,10 +212,33 @@ const icmSpace = () => outer.sampleView || outer.M.space.some(namesPanel) || out
 const allNotes = () => outer.S.alerts;
 // O190: what the token totals count, in the daemon's words (/usage tokens, ledger.mjs TOKENS); an older daemon sends none.
 const tokensSay = () => usage.tokens ? `<p class="sm" data-tokens>Tokens counted: ${esc(usage.tokens)}</p>` : '';
-const usageBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${limitItems(usage.limits, outer.names)}</ul>` : '')
+const limitsBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${limitItems(usage.limits, outer.names)}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div>${tokensSay()}<p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`)
   + profileLines(usage);
+// A3 (2): the Usage window's tabs. Limits is the plan windows above; Tokens and Cost read /usage/turns through
+// p9.usageTurns(days) and are drawn by usage-history.mjs, loaded the first time either opens. The phone and an older desktop
+// have no p9.usageTurns and keep Limits alone. The tab is kept on the window's modal, so each opening starts on Limits (the
+// pace bars); the range and breakdown are kept for the session. The answer is read again when the range changes, at any
+// redraw a minute after the last read (an opening, a click, a Mission refresh), and 5 s after a 'rebuilding' answer.
+const UH = { days: 7, by: 'model', page: null, at: 0, busy: false, draw: null, load: null };
+const UTABS = [['limits', 'Limits'], ['tokens', 'Tokens'], ['cost', 'Cost']];
+const usageOpen = () => outer.S.modal?.kind === 'win' && outer.S.modal.id === 'musage', redrawUsage = () => { if (usageOpen()) outer.renderModal(); };
+function readTurns() {
+  const days = UH.days; UH.busy = true;
+  window.p9.usageTurns(days).catch(() => null).then(r => {
+    UH.busy = false; UH.page = r?.status === 200 ? r.body : { state: 'unavailable', days }; UH.at = Date.now();
+    if (UH.page.state === 'rebuilding') outer.setTimeout(() => { UH.at = 0; redrawUsage(); }, 5000);
+    redrawUsage();
+  });
+}
+function turnsBody(tab) {
+  if (!UH.busy && (UH.page?.days !== UH.days || Date.now() - UH.at > 60000)) readTurns();
+  if (!UH.draw) UH.load ??= import('./usage-history.mjs').then(m => { UH.draw = m.historyHtml; redrawUsage(); }, () => { UH.load = null; });
+  return UH.draw ? UH.draw({ ...UH, tab }, esc, outer.names) : '<p class="sm muted">Loading…</p>';
+}
+const usageBody = (tab = outer.S.modal?.utab ?? 'limits') => !window.p9?.usageTurns ? limitsBody() : `<div class="cf-tabs" role="tablist" aria-label="Usage views">${UTABS.map(([id, label]) => `<button type="button" role="tab" data-slot="button" data-variant="ghost" data-size="sm" data-utab="${id}" aria-selected="${tab === id}">${label}</button>`).join('')}</div>`
+  + (tab === 'limits' ? limitsBody() : turnsBody(tab));
 // Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
 // shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
 const art = (kind, key) => outer.M.art?.[kind]?.[key] || {};
@@ -474,6 +497,8 @@ async function launchLive(name, req) {
 }
 // A section window's buttons; back returns to the window
 function bindWin(root, m) {
+  root.querySelectorAll('[data-utab],[data-uh-days],[data-uh-by]').forEach(b => b.onclick = () => {
+    const d = b.dataset; if (d.utab) outer.S.modal.utab = d.utab; if (d.uhDays) UH.days = +d.uhDays; if (d.uhBy) UH.by = d.uhBy; outer.renderModal(); });
   root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
     if (!outer.live.on) return outer.toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
     // A link that is not http(s) opens another program: the full link is shown first, and only Open sends confirm (M6).
