@@ -745,17 +745,30 @@ function paint(root, ss, only) {
       slash.querySelectorAll('[data-cmd]').forEach(b => b.onmousedown = e => { e.preventDefault(); ta.value = s.draft = '/' + b.dataset.cmd + ' '; showSlash(); ta.focus(); });
     };
     showSlash();
-    ta.oninput = () => { s.draft = ta.value; showSlash(); };
+    ta.oninput = () => { s.draft = ta.value; s.recall = null; showSlash(); }; // any typing ends an up-arrow recall
     if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
     // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
     // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
-    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
+    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; sendText(s, t, now, when); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
+      // A2 step 2: Up in an empty box, or on a prompt it brought back, gives the one you sent before (caret at its start, so
+      // Up again goes further back); Down on a recall goes forward (caret at its end), then empty. Up acts only with the caret
+      // at the very start and Down only at the very end, so the caret still moves through a long or wrapped prompt. Typing
+      // and sending end a recall, so typed or edited text is never replaced. s.recall is the event itself, so loading earlier
+      // history keeps it. Only your own prompts: not another chat's, and not one joined from several senders (each part of
+      // a joined prompt starts with its sender's [P9: ...] line, in old history too).
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) && ta.selectionStart === ta.selectionEnd) {
+        const sent = s.events.filter(v => v.t === 'user' && v.text && !v.from && !v.info && !v.ask && !v.text.startsWith('[P9: ')), up = e.key === 'ArrowUp';
+        const at = !ta.value ? sent.length : s.recall?.text === ta.value ? sent.indexOf(s.recall) : -1, to = at + (up ? -1 : 1);
+        if (at >= 0 && to >= 0 && (up ? ta.selectionStart === 0 : at < sent.length && ta.selectionStart === ta.value.length)) {
+          e.preventDefault(); s.recall = sent[to] ?? null; ta.value = s.draft = s.recall?.text ?? ''; const c = up ? 0 : ta.value.length; ta.setSelectionRange(c, c); showSlash(); return;
+        }
+      }
       // Tab with an empty box still moves focus on.
       const key = busy(s) && !s.readonly && turnKey(e);
       if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
@@ -1202,7 +1215,7 @@ async function loadChat() {
   const carry = (ev) => {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
-    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
+    if (ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why)) { s.draft = ev.data.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.

@@ -418,3 +418,32 @@ test('A2 step 1: a failed load of the attach code says so, keeps the draft, and 
   assert.equal(await pane.locator('.composer textarea').inputValue(), 'keep this draft', 'the draft is still there');
   assert.equal(await app.evaluate(() => globalThis.attachRequests), 2, 'the chunk was requested again on the next attach');
 });
+
+test('A2 step 2: Up in an empty box brings back the prompts sent before, Down goes forward again; typed text is never replaced', { timeout: 90000 }, async (t) => {
+  const { page, pane, type, agentSaid, errors, instance, id } = await setup(t, 'a2-recall');
+  const box = pane.locator('.composer textarea'), key = (k) => page.keyboard.press(k), value = () => box.inputValue(), caret = () => box.evaluate((b) => b.selectionStart);
+  await type('second'); await key('Shift+Enter'); await page.keyboard.type('one'); await key('Enter');
+  await until(() => agentSaid('echo:second\none'), 'second answered');
+  await box.click();
+  await key('ArrowUp'); assert.deepEqual([await value(), await caret()], ['second\none', 0], 'Up in an empty box: the last prompt, caret at its start');
+  await key('ArrowUp'); assert.equal(await value(), 'hello', 'Up again: the one before');
+  await key('ArrowUp'); assert.equal(await value(), 'hello', 'the first prompt stays');
+  await key('ArrowDown'); assert.equal(await value(), 'hello', 'Down with the caret at the start moves the caret, recalls nothing');
+  await key('End'); await key('ArrowDown'); assert.deepEqual([await value(), await caret()], ['second\none', 10], 'Down at the end: forward again, caret at its end');
+  await key('ArrowUp'); assert.equal(await value(), 'second\none', 'Up with the caret not at the start moves the caret, recalls nothing');
+  assert.ok(await caret() > 0 && await caret() < 7, 'the caret went up a line');
+  await key('ArrowDown'); assert.equal(await value(), 'second\none', 'Down from the first line moves the caret down a line, recalls nothing');
+  await key('Control+End'); await key('ArrowDown'); assert.equal(await value(), '', 'Down at the end of the newest: an empty box');
+  await key('ArrowDown'); assert.equal(await value(), '', 'Down in an empty box does nothing');
+  await page.keyboard.type('hello'); await key('Home'); await key('ArrowUp');
+  assert.equal(await value(), 'hello', 'typed text is never replaced, even when it matches a sent prompt');
+  await box.fill(''); await key('ArrowUp'); await key('Control+End'); await page.keyboard.type('x'); await key('Backspace'); await key('ArrowDown');
+  assert.equal(await value(), 'second\none', 'typing ends a recall, even when the text matches again');
+  await box.fill(''); await key('ArrowUp'); await key('ArrowUp'); await key('End'); await page.keyboard.type(' again');
+  await key('Enter');
+  await until(async () => (await users(instance, id)).join('|') === 'hello|second\none|hello again', 'the edited recall sent');
+  await until(async () => (await pane.innerText()).includes('hello again'), 'the page shows it'); // the daemon has it before the page does
+  await key('ArrowUp'); assert.equal(await value(), 'hello again', 'the newest sent prompt comes back first');
+  assert.deepEqual(errors, []);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-recall ' + (await pane.screenshot({ type: 'png' })).toString('base64'));
+});
