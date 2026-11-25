@@ -324,29 +324,37 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   // back in the box as text, after what is typed there.
   // (the init script above says online; the dev space has no network, so the phone is told it is offline the same way)
   const online = (on) => page.evaluate((on) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true }), on);
-  // A send carrying it that got no answer may have arrived: Use as text waits for the answer, so the text cannot go twice.
-  await page.route('**/prompt', (route) => route.abort(), { times: 1 });
-  await page.click('#composer button[type="submit"]');
-  await noted('P9 could not be reached');
+  // A send carrying it that got no answer may have arrived: Use as text waits for that same send's answer, so the text cannot go twice.
+  const send1 = async (route, said) => { await page.route('**/prompt', route, { times: 1 }); await page.click('#composer button[type="submit"]'); await noted(said); };
+  await send1((route) => route.abort(), 'P9 could not be reached');
   await page.click('#attached [data-astext]');
-  await noted('stays a file until P9 answers');
+  await noted('it stays a file');
+  // The same send again (the box as it was), refused for sure: the paste is free, and the note says so.
+  await send1((route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }), 'Tap Use as text on pasted.txt');
+  // Unanswered again, then a different message refused for sure: that answer is not the first send's, so the paste stays a file.
+  await send1((route) => route.abort(), 'P9 could not be reached');
+  await page.fill('#prompt', 'wait');
+  await send1((route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }), 'attachments go only when the agent is free');
+  assert.doesNotMatch(await page.textContent('#composerNote'), /Use as text/);
+  await page.click('#attached [data-astext]');
+  await noted('it stays a file');
+  // A paste's mark is stored before the send leaves: with storage full, the send does not go.
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
+  await page.fill('#prompt', '');
+  assert.equal(await pasteText('x'.repeat(5001)), true);
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  await page.fill('#prompt', 'wait');
+  await page.evaluate(() => { const set = Storage.prototype.setItem; window.__set = set; window.__full = 'p9-pastes'; Storage.prototype.setItem = function (key, value) { if (key === window.__full) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.click('#composer button[type="submit"]');
+  await noted('storage is full, so it cannot keep track of pasted.txt');
+  await page.evaluate(() => { window.__full = ''; });
   await online(false);
-  await page.fill('#prompt', 'wait'); // a new message (the unanswered one was without text): offline it would queue
   await page.click('#composer button[type="submit"]');
   await page.waitForFunction(() => /Use as text/.test(document.querySelector('#composerNote').textContent), null, { timeout: 10000 });
   await shot(page, 'phone-paste-use-as-text');
-  // The file went with that unanswered send, which may have arrived: a new message does not free it, a definitive answer does
-  // (here a refusal: the agent is busy).
-  await page.click('#attached [data-astext]');
-  await noted('stays a file until P9 answers');
-  await online(true);
-  await page.route('**/prompt', (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }), { times: 1 });
-  await page.click('#composer button[type="submit"]');
-  await noted('attachments go only when the agent is free');
-  await online(false);
   await page.fill('#prompt', 'see');
   // Storage full: the text cannot be kept, so the file stays and the box is as it was.
-  await page.evaluate(() => { const set = Storage.prototype.setItem; window.__set = set; Storage.prototype.setItem = function (key, value) { if (key === 'p9-drafts') throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.evaluate(() => { window.__full = 'p9-drafts'; });
   await page.click('#attached [data-astext]');
   await noted("storage is full, so pasted.txt stays attached");
   assert.equal(await page.inputValue('#prompt'), 'see');
@@ -355,9 +363,22 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await page.evaluate(() => { const tx = IDBDatabase.prototype.transaction; IDBDatabase.prototype.transaction = function (names, mode) { if (mode === 'readwrite') throw new Error('closed'); return tx.call(this, names, mode); }; });
   await page.click('#attached [data-astext]');
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && !document.querySelector('#attached [data-astext]'), null, { timeout: 10000 });
-  await page.reload();
-  await online(false);
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && document.querySelectorAll('#attached .chip-img').length === 1 && !document.querySelector('#attached .chip-file'), null, { timeout: 15000 });
+  const atEnd = () => page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.selectionStart = ta.selectionEnd = ta.value.length; });
+  const reloaded = async (files) => {
+    await page.reload(); await online(false);
+    await page.waitForFunction((files) => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && document.querySelectorAll('#attached .chip-img').length === 1 && document.querySelectorAll('#attached .chip-file').length === files, files, { timeout: 15000 });
+  };
+  await reloaded(0);
+  // Only the converted paste goes at a launch: the same text pasted again as a file stays a file through a reload.
+  await atEnd(); assert.equal(await pasteText('x'.repeat(5001)), true);
+  await page.waitForFunction(() => new Promise((done) => { const open = indexedDB.open('p9-attached', 1); open.onerror = () => done(false); open.onsuccess = () => { const all = open.result.transaction('chats').objectStore('chats').getAll(); all.onsuccess = () => { open.result.close(); const used = JSON.parse(localStorage.getItem('p9-pastes') ?? '{}'); done(all.result.flat().some((image) => image.paste && used[image.paste] !== 'used')); }; }; }), null, { timeout: 10000 });
+  await reloaded(1);
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
+  // A paste of only spaces has no text to give back: the file stays, and the note says why.
+  await atEnd(); assert.equal(await pasteText(' '.repeat(5001)), true);
+  await page.click('#attached [data-astext]');
+  await noted('only spaces and line breaks');
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
   // The photo still attached does not queue either; without it the text queues whole, and Take back returns it.
   await page.click('#attached [aria-label="Remove shot.png"]');
   await page.click('#composer button[type="submit"]');
