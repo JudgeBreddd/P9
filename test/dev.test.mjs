@@ -659,10 +659,10 @@ async function shot(page, name) {
   console.log('SHOT ' + name + ' ' + png.toString('base64'));
   if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(path.join(evidence, name + '.jpg'), png); }
 }
-async function openDevFocus(t, editor, extra = {}) {
+async function openDevFocus(t, editor, extra = {}, flags = []) {
   const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
   const env = { ...process.env, HOME: home, PATH: editor.path, P9_EDITOR_HOST: editor.host, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
-  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const app = await _electron.launch({ args: [...flags, path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
@@ -898,5 +898,22 @@ test('Dev Focus: a light look turns the editor light', { skip: process.platform 
   console.log('NOTE remote status item: ' + JSON.stringify(status));
   assert.ok(status, 'the status bar has a remote item');
   assert.deepEqual(status.got, status.want, 'the remote status item wears the look accent: ' + JSON.stringify(status));
+  assert.deepEqual(online(errors), []);
+}));
+
+// O268: with a GPU there, the editor terminal used the GPU renderer, which drew every letter tiny and faded in its cell (reported
+// 2026-11-25). Software WebGL stands in for the GPU; the default must still draw the page renderer's rows at the terminal's size.
+test('O268: the editor terminal draws its text at full size when WebGL is there (the GPU renderer is off by default)', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const { dev, errors } = await openDevFocus(t, editor, {}, ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist']);
+  assert.equal(await dev.evaluate(() => !!document.createElement('canvas').getContext('webgl2')), true, 'WebGL is there, as with a GPU');
+  assert.equal(await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('terminal.integrated').get('gpuAcceleration')), 'off');
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.terminal.new'));
+  const row = dev.locator('.terminal-wrapper .xterm-rows > div').first();
+  await dev.waitForFunction(() => /\$\s*$/.test(document.querySelector('.terminal-wrapper .xterm-rows > div')?.textContent ?? ''), null, { timeout: 60000 });
+  const drawn = await row.evaluate(el => ({ size: getComputedStyle(el).fontSize, family: getComputedStyle(el).fontFamily, webgl: !!document.querySelector('.terminal-wrapper canvas:not([class])') }));
+  assert.deepEqual(drawn, { size: '14px', family: '"Droid Sans Mono", monospace, monospace', webgl: false }, 'page renderer rows at the terminal font size');
+  await shot(dev, 'o268-terminal');
   assert.deepEqual(online(errors), []);
 }));

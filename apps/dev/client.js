@@ -73,7 +73,10 @@ const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.
     // Defaults, not user settings: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles wrap.
     // files.autoSave: the web workbench defaults to afterDelay, which wrote every edit a second after the last key (saving is
     // only on Ctrl S or the Save button). Off: an edit stays in the editor, with the unsaved dot on its tab, until Save.
-    configurationDefaults: { 'editor.wordWrap': 'on', 'files.autoSave': 'off' } } }, ExtensionHostKind.LocalProcess);
+    // terminal.integrated.gpuAcceleration (O268): the GPU renderer draws each letter tiny and faded in its wide cell, whatever the
+    // font size; the page renderer draws them right. ponytail: off by default (page renderer, slower only on floods of output);
+    // a user setting can still turn it on. Revisit when the workbench's xterm GPU add-on moves past 0.20.0-beta.218.
+    configurationDefaults: { 'editor.wordWrap': 'on', 'files.autoSave': 'off', 'terminal.integrated.gpuAcceleration': 'off' } } }, ExtensionHostKind.LocalProcess);
 theme.registerFileUrl('./prime-theme.json', new URL('./prime-theme.json', location.href).href);
 theme.registerFileUrl('./event-horizon-azure-theme.json', new URL('./event-horizon-azure-theme.json', location.href).href);
 
