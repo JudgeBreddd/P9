@@ -212,18 +212,20 @@ test('A3 (3): the phone\'s Usage screen has Tokens and Cost tabs; telemetry-tab 
   const shows = (n) => screen.locator('.uh-total span', { hasText: new RegExp(`(^|\\D)${n} turns`) }).waitFor({ timeout: 5000 });
   const before = await inRange();
   await shows(before);
-  // A read still out when Refresh is tapped cannot put its older figure back: picking the range again starts a read whose
-  // answer (taken before the next turn) is held until after Refresh has shown the new count.
-  let holding = true, release, taken;
-  const held = new Promise((r) => { release = r; }), oldRead = new Promise((r) => { taken = r; });
-  const route = (url) => url.pathname === '/usage/turns' && url.searchParams.get('days') === days;
-  await page.route(route, async (r) => { if (!holding) return r.continue(); holding = false; const answer = (await server.desk('/usage/turns?days=' + days)).body; taken(); await held; await r.fulfill({ json: answer }); });
-  await screen.locator(`[data-uh-days="${days === '7' ? '30' : '7'}"]`).click();
-  await screen.locator(`[data-uh-days="${days}"]`).click();
-  await oldRead;
+  // A read still out when Refresh is tapped cannot put its older figure back: the answer from before the next turn is held
+  // for a read started by picking the range again, and given to it only after Refresh has shown the new count (a second
+  // or two, well inside the read's 20 s deadline).
+  const older = (await server.desk('/usage/turns?days=' + days)).body;
   assert.equal((await server.desk('/chat/' + made.body.conversation + '/prompt', 'POST', { text: 'again' })).status, 202);
   for (const end = Date.now() + 30000; await count() !== 4 && Date.now() < end;) await new Promise((r) => setTimeout(r, 500));
   assert.equal(await count(), 4);
+  let holding = true, release, taken;
+  const held = new Promise((r) => { release = r; }), oldRead = new Promise((r) => { taken = r; });
+  const route = (url) => url.pathname === '/usage/turns' && url.searchParams.get('days') === days;
+  await page.route(route, async (r) => { if (!holding) return r.continue(); holding = false; taken(); await held; await r.fulfill({ json: older }); });
+  await screen.locator(`[data-uh-days="${days === '7' ? '30' : '7'}"]`).click();
+  await screen.locator(`[data-uh-days="${days}"]`).click();
+  await oldRead;
   await refresh();
   assert.equal(await inRange(), before + 1);
   await shows(before + 1);

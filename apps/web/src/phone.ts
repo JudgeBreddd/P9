@@ -2285,6 +2285,8 @@ async function loadUsage() {
   try {
     const data = await request('/usage', deadline(20000)) as Usage;
     if (seq !== usageRead) return;
+    // The daemon always sends the switch: an answer without it was cut short (the body stalled), and is a failed read.
+    if (typeof data?.telemetryTab !== 'boolean') throw new Error('cut short');
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
     // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
@@ -2306,7 +2308,8 @@ async function loadUsage() {
 // Refresh reads what is shown: on Tokens or Cost their history too (superseding a read still out), and spins until it
 // answers; on Limits the history is marked old, so opening Tokens or Cost reads it again.
 one<HTMLButtonElement>('#refreshUsage').onclick = (event) => {
-  if (UH.tab === 'limits') UH.at = 0;
+  // On Limits a history read still out is dropped too, or its older answer would count as fresh.
+  if (UH.tab === 'limits') { turnsRead++; UH.reading = null; UH.at = 0; }
   void refreshing(event.currentTarget as HTMLButtonElement, () => Promise.all([loadUsage(), UH.tab !== 'limits' && readTurns()]));
 };
 // P7: the Usage screen reads again every 20 s while it is shown (the plan limits move with every turn anywhere).
