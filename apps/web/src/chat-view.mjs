@@ -819,7 +819,7 @@ function paint(root, ss, only) {
     // window-4: the folded report's title and its fit (tuck.mjs); the first open report loads it (pinned.mjs TUCK.want), then draws it.
     TUCK.wire?.(p, s, renderChats); if (TUCK.want) import('./tuck.mjs').then(() => renderChats());
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold, now: 'now' in b.dataset || undefined }));
-    p.querySelectorAll('[data-hedit]').forEach(b => b.onclick = () => { const h = s.held.find(x => x.id === b.dataset.hedit); s.hedit = { id: h.id, text: h.text, was: h.text, base: h.text, at: outer.liveChat.cursor }; renderChats(); const ta = p.querySelector('[name=heldEdit]'); ta?.focus(); ta?.setSelectionRange(1e6, 1e6); });
+    p.querySelectorAll('[data-hedit]').forEach(b => b.onclick = () => { const h = s.held.find(x => x.id === b.dataset.hedit); s.hedit = { id: h.id, text: h.text, was: h.text, base: h.text }; renderChats(); const ta = p.querySelector('[name=heldEdit]'); ta?.focus(); ta?.setSelectionRange(1e6, 1e6); });
     // ed.saving: the words sent, the field read-only (Esc too) until their held-text event (editSeen) or the answer settles it.
     p.querySelectorAll('[name=heldEdit]').forEach(ta => { ta.oninput = () => { s.hedit.text = ta.value; };
       ta.onkeydown = e => { if (e.isComposing) return; const ed = s.hedit;
@@ -1028,8 +1028,6 @@ function history(s, until = outer.liveChat.cursor) {
       if (r.status !== 200) { await new Promise(res => outer.setTimeout(res, 2000)); continue; }
       const was = s.state; // review round 9: a Stop clicked while this loads stays; history is older than it
       for (const ev of r.body.events) try { applyChat(ev); } catch {}
-      // A2 step 3: an edit kept over a catch-up meets the events after it opened (at) that the catch-up's page did not carry.
-      for (const ev of r.body.events) if (s.hedit && ev.cursor > s.hedit.at) { const w = editSeen(s, ev); if (w !== undefined) { s.draft = w + (s.draft ? '\n' + s.draft : ''); s.recall = null; } }
       if (was === 'stopping') s.state = was;
       // An ask loaded from history was there before: it goes to the bell without its notice (bell-notice.mjs). Review round
       // 8: by its request, so a new ask of the same kind after it was answered is new.
@@ -1038,7 +1036,7 @@ function history(s, until = outer.liveChat.cursor) {
       after = r.body.cursor;
       if (r.body.events.length < 500) break;
     }
-    // A2 step 3: an open edit (kept over a catch-up) whose message left in events no carry saw.
+    // A2 step 3: an open edit whose message left in events no carry saw (the catch-up's read of them failed).
     if (s.hedit && !s.held?.some(h => h.id === s.hedit.id)) editGone(s, false);
     s.stub = false; outer.renderTabs(); renderChats();
   })();
@@ -1070,14 +1068,13 @@ function editSeen(s, ev) {
   const ed = s.hedit, d = ev.data; if (!ed || !d) return;
   if (ev.type === 'held-text' && d.id === ed.id) { if (ed.saving === d.text) s.hedit = null; else { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; } return; }
   if (!(ev.type === 'unheld' ? [d.id] : ev.type === 'user' ? d.held || [] : []).includes(ed.id)) return;
-  return editGone(s, ev.type === 'unheld' && ['removed', 'cancelled'].includes(d.why), d.text);
+  return editGone(s, ev.type === 'unheld' && ['removed', 'cancelled'].includes(d.why));
 }
-// went: the words it left with; when they hold the edit (a save whose event a catch-up did not see), nothing is lost.
 // A take-back keeps any change, an emptied caption too.
-function editGone(s, back, went) {
+function editGone(s, back) {
   const ed = s.hedit, changed = ed.text !== ed.base; s.hedit = null;
   if (back) return changed ? ed.text : undefined;
-  if (changed && ed.text.trim() && !(typeof went === 'string' && went.includes(ed.text.trim()))) { s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; s.events.push({ t: 'notice', text: 'The queued message went before your edit was saved. Your edit is in the box.' }); }
+  if (changed && ed.text.trim()) { s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; s.events.push({ t: 'notice', text: 'The queued message went before your edit was saved. Your edit is in the box.' }); }
 }
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
@@ -1242,6 +1239,17 @@ async function loadChat() {
     // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
     caughtUp(listed);
     for (const ev of skipped) carry(ev); // after caughtUp, so a chat made in the gap gets its own too
+    // A2 step 3: a chat with an edit open gets the rest of the gap carried too, every event of it in order, so its save,
+    // its message leaving or a take-back (text and files) settle the edit as they would live. A read that fails leaves it
+    // to history(), which puts unsaved-looking words in the box rather than lose them.
+    // ponytail: one chat's whole gap, read only when an edit was open over it.
+    for (const s of outer.S.sessions) for (let after = page.at(-1)?.cursor ?? head.body.cursor; s.hedit && after < head.body.cursor;) {
+      const r = await window.p9.chat('events', { after, only: [s.id], until: head.body.cursor }).catch(() => ({}));
+      if (r.status !== 200) break;
+      for (const ev of r.body.events) carry(ev);
+      if (r.body.events.length < 500) break;
+      after = r.body.cursor;
+    }
     outer.S.open = outer.S.open.filter(id => outer.S.sessions.some(s => s.id === id && !s.hidden));
     lastTwo();
     try { outer.renderTabs(); renderChats(); } catch (e) { console.error('chat paint', e); }

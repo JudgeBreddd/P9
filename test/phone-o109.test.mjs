@@ -63,9 +63,11 @@ test('O109 phone: a busy chat keeps its composer on screen; queued messages are 
   assert.equal(await page.locator('#queued article:visible').count(), QUEUED);
   assert.equal(await page.locator('#queued article [data-unhold]').count(), QUEUED, 'each queued message has its own remove');
   // A2 step 3: editing a queued message is desktop only; the phone has no editor, and a phone revoked later must not have worded it.
-  const edit = await page.evaluate(async (id) => (await fetch('/chat/' + id + '/held-text', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf'), 'x-p9-op': crypto.randomUUID() },
-    body: JSON.stringify({ held: 'any', text: 'from the phone', was: 'x' }) })).status, BUSY);
-  assert.equal(edit, 403, 'the phone cannot edit a queued message');
+  const held = await page.getAttribute('#queued article [data-unhold]', 'data-unhold'), first = await page.textContent('#queued article');
+  const edit = await page.evaluate(async ([id, held]) => { const r = await fetch('/chat/' + id + '/held-text', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf'), 'x-p9-op': crypto.randomUUID() },
+    body: JSON.stringify({ held, text: 'from the phone', was: 'x' }) }); return { status: r.status, body: await r.json().catch(() => ({})) }; }, [BUSY, held]);
+  assert.deepEqual(edit, { status: 403, body: { error: 'desktop-only' } }, 'the phone cannot edit a queued message');
+  assert.equal(await page.textContent('#queued article'), first, 'its words stay');
   const take = await page.evaluate(() => { const r = document.querySelector('#queued article [data-unhold]').getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), width: innerWidth }; });
   assert.ok(take.right <= take.width && take.left >= 0, 'Take back is on screen, not past the right edge: ' + JSON.stringify(take));
   const open = await composerOnScreen(page);
