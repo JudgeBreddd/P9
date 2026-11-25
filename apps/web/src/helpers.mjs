@@ -118,7 +118,7 @@ export function paceOf(w, mins, now = Date.now()) {
   const elapsed = Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)), gap = w.usedPercent - elapsed * 100;
   return { elapsed, gap, state: gap > 5 ? 'ahead' : gap < -5 ? 'headroom' : 'on' };
 }
-export const PACE = { ahead: ['Over pace', 'Using it faster than the window passes'], on: ['On pace', 'Using it about as fast as the window passes'], headroom: ['Room to spare', 'Using it slower than the window passes'] };
+export const PACE = { ahead: ['Over pace', 'Using it faster than the window passes'], on: ['On pace', 'Using it about as fast as the window passes'], headroom: ['Under pace', 'Using it slower than the window passes'] };
 // "1h 42m", "3d 4h", "12m": the time left to a reset.
 export const countdown = (ms) => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m % 60 + 'm' : m + 'm'; };
 // One agent's windows as [label, window, minutes]: Session, Weekly, then a week window per model family when the plan has them.

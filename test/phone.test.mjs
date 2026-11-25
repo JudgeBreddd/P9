@@ -313,20 +313,21 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.match(await page.locator('#usage').innerText(), /Claude · [\s\S]*%[\s\S]*of [\d,]+ tokens/);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
   // A3: each window is a row: what is left, the pace word, the time to the reset, and a bar with the pace tick.
-  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+Session\s*58% left\s*Room to spare · 70% at reset\s*resets in (2h 0m|1h 59m)\s+Weekly\s*83% left\s*Room to spare · 36\.6% at reset\s*resets in 3d 1[78]h/);
+  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+Session\s*58% left\s*Under pace · 70% at reset\s*resets in (2h 0m|1h 59m)\s+Weekly\s*83% left\s*Under pace · 36\.6% at reset\s*resets in 3d 1[78]h/);
   assert.match(phoneLimits, /Codex plan\s+Last read 3 h ago\s+Session\s*100% left\s*new window\s+Weekly\s*67% left/);
   assert.doesNotMatch(phoneLimits.slice(phoneLimits.indexOf('Codex plan')), /at reset/, 'a reading 3 h old (stale) gives no forecast');
   const tick = await page.evaluate(() => { const bar = document.querySelector('#usage [data-limits] .pbar'), b = bar.getBoundingClientRect(), t = bar.querySelector('u').getBoundingClientRect();
     return { at: Math.round((t.left + t.width / 2 - b.left) / b.width * 100), taller: t.height > b.height, fill: Math.round(bar.querySelector('i').getBoundingClientRect().width / b.width * 100) }; });
   assert.deepEqual(tick, { at: 60, taller: true, fill: 42 });
-  // O244 (a): at a narrow width the word and the forecast each stay on one line, inside the row (the forecast wraps
-  // under the word). Measured on the text itself with a Range, the plans narrowed to 200 px.
-  const fit = () => { document.querySelector('#usage [data-limits]').style.width = '200px';
+  // O244 (a): on a row too narrow for the whole phrase, the forecast wraps under the word and each stays one line inside
+  // the row. Measured on the text itself with a Range, the plans narrowed to 140 px.
+  const fit = () => { document.querySelector('#usage [data-limits]').style.width = '140px';
     return [...document.querySelectorAll('#usage [data-limits] .prow-h')].map((h) => { const row = h.getBoundingClientRect();
       return [...h.querySelectorAll('.prow-p span')].map((piece) => { const r = document.createRange(); r.selectNodeContents(piece); const box = r.getBoundingClientRect();
-        return { text: piece.textContent, lines: r.getClientRects().length, inside: box.width > 0 && box.left >= row.left - 0.5 && box.right <= row.right + 0.5 }; }); }).flat(); };
-  const fitted = await page.waitForFunction((f) => { const r = eval(f)(); return r.length && r.every((x) => x.lines === 1 && x.inside) && r; }, fit.toString(), { timeout: 5000 }).then((h) => h.jsonValue()).catch(async () => page.evaluate((f) => eval(f)(), fit.toString()));
-  assert.ok(fitted.length === 4 && fitted.every((x) => x.lines === 1 && x.inside), 'each pace word and forecast is one line inside its row at 200 px: ' + JSON.stringify(fitted));
+        return { text: piece.textContent, lines: r.getClientRects().length, inside: box.width > 0 && box.left >= row.left - 0.5 && box.right <= row.right + 0.5, top: box.top, bottom: box.bottom }; });
+    }).filter((pieces) => pieces.length === 2).map(([word, forecast]) => [word, { ...forecast, under: forecast.top >= word.bottom - 1 }]).flat(); };
+  const fitted = await page.waitForFunction((f) => { const r = eval(f)(); return r.length && r.every((x) => x.lines === 1 && x.inside && x.under !== false) && r; }, fit.toString(), { timeout: 5000 }).then((h) => h.jsonValue()).catch(async () => page.evaluate((f) => eval(f)(), fit.toString()));
+  assert.ok(fitted.length === 4 && fitted.every((x) => x.lines === 1 && x.inside && x.under !== false), 'at 140 px each forecast is under its word, each piece one line inside the row: ' + JSON.stringify(fitted));
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-usage-narrow ' + (await page.screenshot()).toString('base64'));
   await page.evaluate(() => { document.querySelector('#usage [data-limits]').style.width = ''; });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-usage-rows ' + (await page.screenshot()).toString('base64'));

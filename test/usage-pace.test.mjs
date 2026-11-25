@@ -115,12 +115,12 @@ test('window: the panel\'s Usage button opens each plan\'s rows from Chat Focus,
     return { label: r.querySelector('.prow-l').textContent, left: r.querySelector('.prow-h b').textContent, word: r.querySelector('.prow-p').textContent, reset: r.querySelector('.prow-r')?.textContent ?? '', pace: r.dataset.pace ?? '',
       fill: Math.round(fill.width / bar.width * 100), tick: tick ? Math.round((tick.left + tick.width / 2 - bar.left) / bar.width * 100) : null, shown: !!tick && tick.height > bar.height }; }));
   const [session, weekly] = await read('claude');
-  assert.deepEqual({ ...session, reset: '' }, { label: 'Session', left: '58% left', word: 'Room to spare · 52.5% at reset', reset: '', pace: 'headroom', fill: 42, tick: 80, shown: true });
+  assert.deepEqual({ ...session, reset: '' }, { label: 'Session', left: '58% left', word: 'Under pace · 52.5% at reset', reset: '', pace: 'headroom', fill: 42, tick: 80, shown: true });
   assert.match(session.reset, /^resets in (1h 0m|59m|58m)$/);
   assert.deepEqual({ ...weekly, reset: '' }, { label: 'Weekly', left: '10% left', word: 'Over pace · 120% at reset', reset: '', pace: 'ahead', fill: 90, tick: 75, shown: true });
   assert.match(weekly.reset, /^resets in 1d 1[78]h$/);
   const [codexSession, codexWeekly] = await read('codex');
-  assert.deepEqual([codexSession.left, codexSession.word, codexSession.tick, codexWeekly.left, codexWeekly.word, codexWeekly.tick], ['100% left', 'new window', null, '67% left', 'Room to spare · 66% at reset', 50]);
+  assert.deepEqual([codexSession.left, codexSession.word, codexSession.tick, codexWeekly.left, codexWeekly.word, codexWeekly.tick], ['100% left', 'new window', null, '67% left', 'Under pace · 66% at reset', 50]);
   await shot('usage-window');
   await page.keyboard.press('Escape');
   // Also from Ctrl K, and with the panel collapsed to its strip.
@@ -131,7 +131,7 @@ test('window: the panel\'s Usage button opens each plan\'s rows from Chat Focus,
   await claude.locator('.prow').first().waitFor({ timeout: 10000 });
   await shot('usage-window-strip');
   assert.deepEqual(errors, []);
-  console.log('PASS usage window: Claude Session 58% left, Room to spare · 52.5% at reset, tick at 80%; Weekly 10% left, Over pace · 120% at reset, tick at 75%; Codex new window with no tick');
+  console.log('PASS usage window: Claude Session 58% left, Under pace · 52.5% at reset, tick at 80%; Weekly 10% left, Over pace · 120% at reset, tick at 75%; Codex new window with no tick');
 });
 
 // The live Codex read: one Codex account used on several computers moves the windows where this computer's session
