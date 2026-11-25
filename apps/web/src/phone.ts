@@ -373,7 +373,7 @@ function history(id: string) {
 type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; files?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
-type Attached = { mimeType?: string; data: string; name: string; file?: true; paste?: true }; // A2 step 1: file marks one that is not a photo, paste a big paste P9 made into pasted.txt (never sent)
+type Attached = { mimeType?: string; data: string; name: string; file?: true; paste?: true; sent?: true }; // A2 step 1: file marks one that is not a photo, paste a big paste P9 made into pasted.txt, sent one that went with a send still unanswered (neither is sent)
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
@@ -1252,10 +1252,11 @@ async function submitFromBox(event: Event) {
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
   const sent = { ...first, ...attachBody(images) };
   inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
+  for (const image of images) image.sent = true; keepAttached(); // round 11 review: kept on the file itself, so a changed draft does not free it
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
-  inFlight.delete(id); keepInFlight();
+  inFlight.delete(id); keepInFlight(); for (const image of images) delete image.sent; keepAttached();
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
@@ -1358,7 +1359,12 @@ function attachedStore(mode: IDBTransactionMode, use: (store: IDBObjectStore) =>
 }
 let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
 function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
-try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
+try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), dropUsed(String(at.key), at.value as Attached[])); at.continue(); }; }); } catch {}
+// Round 11 review: a paste turned into text whose removal was not stored yet (the page closed first) comes back once: its text is
+// already in that chat's draft, so the file is dropped, not sent as well. ponytail: matched by its text, so a second paste of that
+// same text, still a file, also goes at that reload (the text stays in the box once); a stored record of the removal would not.
+function dropUsed(id: string, list: Attached[]) { return list.filter((image) => !(image.paste && !image.sent && drafts.get(id)?.includes(pasteText(image)))); }
+function pasteText(image: Attached) { return new TextDecoder('utf-8', { ignoreBOM: true }).decode(Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0))); } // a leading U+FEFF is part of the paste
 function renderAttached() {
   const list = attached.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length; keepAttached();
@@ -1392,11 +1398,11 @@ one<HTMLElement>('#attached').onclick = (event) => {
   if (astext) {
     const list = attached.get(id) ?? [], image = list[Number(astext.dataset.astext)]; if (!image) return;
     // Round 10 review: not while a send that carries it has no answer yet (it may have arrived: the text would go twice).
-    if (submitting || inFlight.has(id)) { note('pasted.txt is on its way with your message; it stays a file until P9 answers. Tap send again to retry.'); return; }
+    if (submitting || image.sent) { note('pasted.txt is on its way with your message; it stays a file until P9 answers. Tap send again to retry.'); return; }
     // The text is stored before the file is removed, so a closed page or a full storage never loses the paste.
-    const text = new TextDecoder().decode(Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0)));
-    let before = ''; editDraft(id, (now) => (before = now) + (now ? '\n' : '') + text); keepDraft();
-    let saved = false; try { saved = JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')[id] === drafts.get(id); } catch {}
+    const text = pasteText(image);
+    let before = '', want = ''; editDraft(id, (now) => (want = (before = now) + (now ? '\n' : '') + text)); keepDraft();
+    let saved = !want.trim(); try { saved ||= JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')[id] === want; } catch {} // only blanks: nothing to keep
     if (!saved) { editDraft(id, () => before); keepDraft(); note('Not changed: this phone\'s storage is full, so pasted.txt stays attached.'); return; }
     list.splice(list.indexOf(image), 1); renderAttached(); note(); return;
   }

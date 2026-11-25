@@ -335,6 +335,15 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await page.click('#composer button[type="submit"]');
   await page.waitForFunction(() => /Use as text/.test(document.querySelector('#composerNote').textContent), null, { timeout: 10000 });
   await shot(page, 'phone-paste-use-as-text');
+  // The file went with that unanswered send, which may have arrived: a new message does not free it, a definitive answer does
+  // (here a refusal: the agent is busy).
+  await page.click('#attached [data-astext]');
+  await noted('stays a file until P9 answers');
+  await online(true);
+  await page.route('**/prompt', (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }), { times: 1 });
+  await page.click('#composer button[type="submit"]');
+  await noted('attachments go only when the agent is free');
+  await online(false);
   await page.fill('#prompt', 'see');
   // Storage full: the text cannot be kept, so the file stays and the box is as it was.
   await page.evaluate(() => { const set = Storage.prototype.setItem; window.__set = set; Storage.prototype.setItem = function (key, value) { if (key === 'p9-drafts') throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
@@ -342,8 +351,13 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await noted("storage is full, so pasted.txt stays attached");
   assert.equal(await page.inputValue('#prompt'), 'see');
   await page.evaluate(() => { Storage.prototype.setItem = window.__set; });
+  // The page closes before the file's removal is stored: after a reload the paste is text only, not the file as well.
+  await page.evaluate(() => { const tx = IDBDatabase.prototype.transaction; IDBDatabase.prototype.transaction = function (names, mode) { if (mode === 'readwrite') throw new Error('closed'); return tx.call(this, names, mode); }; });
   await page.click('#attached [data-astext]');
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && !document.querySelector('#attached [data-astext]'), null, { timeout: 10000 });
+  await page.reload();
+  await online(false);
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'see\n' + 'x'.repeat(5001) && document.querySelectorAll('#attached .chip-img').length === 1 && !document.querySelector('#attached .chip-file'), null, { timeout: 15000 });
   // The photo still attached does not queue either; without it the text queues whole, and Take back returns it.
   await page.click('#attached [aria-label="Remove shot.png"]');
   await page.click('#composer button[type="submit"]');
