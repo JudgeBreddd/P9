@@ -16,9 +16,10 @@ test('O251: the tail read keeps a message still held from early in a long turn',
   const ledger = openLedger(':memory:'), add = (type, data) => ledger.append(BIG, type, data);
   add('user', { text: 'go' });
   add('held', { id: 'h1', text: 'still waiting', when: 'auto' }); add('held', { id: 'h2', text: 'taken', when: 'auto' }); add('held', { id: 'h3', text: 'refused', when: 'auto' });
-  add('held-text', { id: 'h1', text: 'still waiting, first edit' }); add('held-text', { id: 'h1', text: 'still waiting, edited' }); add('held-text', { id: 'h2', text: 'taken, edited' });
+  add('held-text', { id: 'h1', text: 'still waiting, first edit' }); add('held-text', { id: 'h1', text: 'still waiting, second edit' }); add('held-text', { id: 'h2', text: 'taken, edited' });
   add('unheld', { id: 'h3', text: 'refused', why: 'refused' }); add('user', { text: 'taken', held: ['h2'] });
   for (let i = 0; i < 40; i++) add('update', { sessionUpdate: 'tool_call', toolCallId: 't' + i, title: 'step' });
+  add('held-text', { id: 'h1', text: 'still waiting, edited' }); add('update', { sessionUpdate: 'tool_call', toolCallId: 'tz', title: 'step' }); // edits on both sides of the cut
   const result = ledger.tail([BIG], undefined, 5);
   assert.deepEqual(result.events.filter((event) => event.type === 'held-text').map((event) => event.data.text), ['still waiting, edited'], 'A2 step 3: a waiting one keeps its newest edit only');
   assert.ok(result.more[BIG] > 0, 'the held events are older than the kept blocks');

@@ -335,7 +335,7 @@ test('A message queued behind a turn that fails goes when the failure comes', { 
 // A2 step 3: the pencil on a queued message edits it where it waits: it keeps its place, and goes with the new words.
 // An edit still open when its message goes is not lost: it lands in the box, with a notice that the message went as it was.
 test('A2 step 3: a queued message edited in place keeps its place and goes edited; an edit open when it goes lands in the box; the main box sends its own words meanwhile', { timeout: 150000 }, async (t) => {
-  const { id, launch, open, users, ends } = await setup(t, 'a2-edit', ['no-steering']);
+  const { instance, id, launch, open, users, ends } = await setup(t, 'a2-edit', ['no-steering']);
   await until(async () => await ends() === 1, 'hello answered');
   const { page } = await launch(); let chat = await open(page);
   await chat.send('tools 8');
@@ -355,18 +355,21 @@ test('A2 step 3: a queued message edited in place keeps its place and goes edite
   await until(async () => JSON.stringify(await chat.queued()) === JSON.stringify(['Queued: first, edited', 'Queued: second']), 'the edit shows in its place');
   await page.reload(); await page.locator('#rChat').waitFor(); chat = await open(page); editor = chat.pane.locator('.queue textarea[name="heldEdit"]');
   await until(async () => JSON.stringify(await chat.queued()) === JSON.stringify(['Queued: first, edited', 'Queued: second']), 'a reload keeps the edit');
-  if (!process.env.GITHUB_ACTIONS) {
-    await row('second').locator('[data-hedit]').click(); await editor.fill('second, still typing');
-    console.log('P9_SHOT a2-queue-edit ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
-  } else { await row('second').locator('[data-hedit]').click(); await editor.fill('second, still typing'); }
+  // Another window saves the second one while this editor is open and untouched: the editor follows; typing then is kept.
+  const second = await row('second').getAttribute('data-held');
+  await row('second').locator('[data-hedit]').click();
+  await call(instance, '/chat/' + id + '/held-text', 'POST', { held: second, text: 'second, from elsewhere', was: 'second' });
+  await until(async () => await editor.inputValue() === 'second, from elsewhere', 'an untouched editor follows another window\'s save');
+  await editor.fill('second, still typing');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-queue-edit ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
   // The main box with an edit open: its Enter sends the box's own words, and leaves the open edit as typed.
   await chat.send('third');
   await until(async () => (await chat.queued()).includes('Queued: third'), 'the box\'s words queued');
   assert.equal(await editor.inputValue(), 'second, still typing', 'the main box leaves the open edit alone');
   assert.equal(await chat.pane.locator('.composer textarea').inputValue(), '', 'the box sent its own words');
-  // The turn ends with the second one's edit still open: it goes as it was, and the open edit comes into the box.
+  // The turn ends with the second one's edit still open: it goes as saved, and the unsaved words come into the box.
   await until(async () => (await users()).slice(2).join('\n').includes('third'), 'the queue went out', 40000);
-  assert.deepEqual((await users()).slice(2).join('\n').split('\n').filter((l) => /first|second|third/.test(l)), ['first, edited', 'second', 'third']);
+  assert.deepEqual((await users()).slice(2).join('\n').split('\n').filter((l) => /first|second|third/.test(l)), ['first, edited', 'second, from elsewhere', 'third']);
   await until(async () => await chat.pane.locator('.composer textarea').inputValue() === 'second, still typing', 'the open edit lands in the box');
   assert.equal(await chat.pane.locator('.queue').count(), 0);
   console.log('PASS A2 step 3: an edit keeps its place and goes edited; an edit open when its message went came into the box');

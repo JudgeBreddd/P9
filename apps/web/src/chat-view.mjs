@@ -819,18 +819,18 @@ function paint(root, ss, only) {
     // window-4: the folded report's title and its fit (tuck.mjs); the first open report loads it (pinned.mjs TUCK.want), then draws it.
     TUCK.wire?.(p, s, renderChats); if (TUCK.want) import('./tuck.mjs').then(() => renderChats());
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold, now: 'now' in b.dataset || undefined }));
-    p.querySelectorAll('[data-hedit]').forEach(b => b.onclick = () => { const h = s.held.find(x => x.id === b.dataset.hedit); s.hedit = { id: h.id, text: h.text, was: h.text }; renderChats(); const ta = p.querySelector('[name=heldEdit]'); ta?.focus(); ta?.setSelectionRange(1e6, 1e6); });
-    // ed.saving: the words sent, the field read-only until the answer; ed.saved: their held-text event came (carry, below).
+    p.querySelectorAll('[data-hedit]').forEach(b => b.onclick = () => { const h = s.held.find(x => x.id === b.dataset.hedit); s.hedit = { id: h.id, text: h.text, was: h.text, base: h.text }; renderChats(); const ta = p.querySelector('[name=heldEdit]'); ta?.focus(); ta?.setSelectionRange(1e6, 1e6); });
+    // ed.saving: the words sent, the field read-only (Esc too) until their held-text event (editSeen) or the answer settles it.
     p.querySelectorAll('[name=heldEdit]').forEach(ta => { ta.oninput = () => { s.hedit.text = ta.value; };
       ta.onkeydown = e => { if (e.isComposing) return; const ed = s.hedit;
-        if (e.key === 'Escape') { e.stopPropagation(); s.hedit = null; return renderChats(); }
+        if (e.key === 'Escape') { e.stopPropagation(); if (ed.saving == null) { s.hedit = null; renderChats(); } return; }
         if (e.key !== 'Enter' || e.shiftKey) return;
         e.preventDefault(); e.stopPropagation(); if (ed.saving != null) return;
         if (ed.text === ed.was) { s.hedit = null; return renderChats(); }
         ed.saving = ed.text; renderChats();
         outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).then(r => { if (s.hedit !== ed) return; ed.saving = null;
           if (r.status === 200) s.hedit = null;
-          else if (r.body?.error === 'changed') { ed.was = r.body.text; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + r.body.text + ' Enter saves yours over it; Esc keeps that one.' }); }
+          else if (r.body?.error === 'changed') { ed.was = ed.base = r.body.text; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + r.body.text + ' Enter saves yours over it; Esc keeps that one.' }); }
           else if (r.body?.error !== 'not-held') s.events.push({ t: 'notice', text: 'Your edit was not saved (' + (r.body?.error || r.status) + '). It is still open.' }); // not-held: it left; its event settles the edit (carry)
           renderChats(); }); }; });
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
@@ -1036,6 +1036,8 @@ function history(s, until = outer.liveChat.cursor) {
       after = r.body.cursor;
       if (r.body.events.length < 500) break;
     }
+    // A2 step 3: an open edit (kept over a catch-up) whose message left in events no carry saw.
+    if (s.hedit && !s.held?.some(h => h.id === s.hedit.id)) editGone(s, false);
     s.stub = false; outer.renderTabs(); renderChats();
   })();
 }
@@ -1058,10 +1060,20 @@ async function earlier(s) {
   s.events = [...old.events, ...s.events];
   tailed(s, r.body);
 }
-// A2 step 3: an edit of a queued message that was not saved goes into the box, so no typing is lost; true when it did.
-function heldEditBack(s, ed) {
-  if (ed.saved || ed.text === ed.was || !ed.text.trim()) return false;
-  s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; return true;
+// A2 step 3: the open edit (s.hedit) against one live event, in stream order. Its own save's held-text closes it (saved);
+// another window's moves an untouched editor along and leaves typing alone. Its message leaving closes it: words the daemon
+// does not have (text != base) go into the box, so none are lost, and a take-back brings those instead of the old words.
+// Returns the take-back's words for the box, or undefined.
+function editSeen(s, ev) {
+  const ed = s.hedit, d = ev.data; if (!ed || !d) return;
+  if (ev.type === 'held-text' && d.id === ed.id) { if (ed.saving === d.text) s.hedit = null; else { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; } return; }
+  if (!(ev.type === 'unheld' ? [d.id] : ev.type === 'user' ? d.held || [] : []).includes(ed.id)) return;
+  return editGone(s, ev.type === 'unheld' && ['removed', 'cancelled'].includes(d.why));
+}
+function editGone(s, back) {
+  const ed = s.hedit, mine = ed.text !== ed.base && ed.text.trim(); s.hedit = null;
+  if (back) return mine ? ed.text : undefined;
+  if (mine) { s.draft = ed.text + (s.draft ? '\n' + s.draft : ''); s.recall = null; s.events.push({ t: 'notice', text: 'The queued message went before your edit was saved. Your edit is in the box.' }); }
 }
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
@@ -1218,11 +1230,9 @@ async function loadChat() {
     // Gone from the list (deleted in the gap): dropped, as a launch would. The others go back to stubs with the list's state.
     outer.S.sessions = outer.S.sessions.filter(s => by.has(s.id));
     for (const s of outer.S.sessions) {
-      const ed = s.hedit, boxed = ed && heldEditBack(s, ed); // A2 step 3: the rebuild has no editor; its words go in the box
-      const c = by.get(s.id), keep = { queue: s.queue, draft: s.draft, images: s.images, stops: s.stops, sending: s.sending, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
+      const c = by.get(s.id), keep = { hedit: s.hedit, queue: s.queue, draft: s.draft, images: s.images, stops: s.stops, sending: s.sending, failed: s.failed, done: s.done || (!shown.has(s.id) && c.used > (s.used || 0)) };
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, stubOf(c), keep);
-      if (boxed) s.events.push({ t: 'notice', text: 'P9 caught up this chat while you edited a queued message, so the edit was not saved. Your edit is in the box; the queue shows what will go.' });
     }
     outer.liveChat.cursor = head.body.cursor; outer.keepUnseen();
     // New chats, fields, closed tabs (a stopped chat is hidden) and kept messages for a chat whose turn ended in the gap.
@@ -1260,13 +1270,9 @@ async function loadChat() {
   const carry = (ev) => {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
-    // A2 step 3: an edit open when its message leaves is kept: taken back, the box gets the edit; gone, heldEditBack.
-    // Saved (its held-text came first), the message went or came back with those words; not saved, the open words win.
-    const back = ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why), ed = s.hedit;
-    if (ev.type === 'held-text' && ed?.id === ev.data?.id && ed.saving === ev.data.text) ed.saved = true;
-    const left = ed && (ev.type === 'unheld' ? [ev.data?.id] : ev.type === 'user' ? ev.data?.held || [] : []).includes(ed.id);
-    if (left) { s.hedit = null; if (!back && heldEditBack(s, ed)) s.events.push({ t: 'notice', text: 'The queued message went before your edit was saved. Your edit is in the box.' }); }
-    if (back) { s.draft = (left && !ed.saved ? ed.text : ev.data.text) + (s.draft ? '\n' + s.draft : ''); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
+    // A2 step 3: an edit open when its message leaves is kept (editSeen): taken back, the box gets the unsaved words.
+    const back = ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why), edited = editSeen(s, ev);
+    if (back) { s.draft = (edited ?? ev.data.text) + (s.draft ? '\n' + s.draft : ''); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
   // One daemon event applied, with what follows it in this window; ended and answered_ collect what settle() does after a batch.

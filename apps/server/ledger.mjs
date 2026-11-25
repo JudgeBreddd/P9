@@ -166,10 +166,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     span: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor >= ? AND cursor <= ? ORDER BY cursor'),
     kept: db.prepare("SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type IN ('card', 'unpin', 'config')"),
     // O251: a message still held at the read's cursor (no user event up to it took it, no unheld named it); the queue is drawn from these,
-    // with its newest edit (held-text, A2 step 3), so a reload shows the words it will go with.
-    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type IN ('held', 'held-text') AND NOT (type = 'held-text' AND EXISTS (SELECT 1 FROM events y WHERE y.conversation = h.conversation"
-      + " AND y.type = 'held-text' AND y.cursor > h.cursor AND y.cursor < ? AND json_extract(CASE WHEN json_valid(y.data) THEN y.data END, '$.id') = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id')))"
-      + " AND NOT EXISTS ("
+    // with its edits (held-text, A2 step 3; tail keeps the newest), so a reload shows the words it will go with.
+    held: db.prepare("SELECT cursor, conversation, type, data, at FROM events h WHERE conversation = ? AND cursor < ? AND type IN ('held', 'held-text') AND NOT EXISTS ("
       + "SELECT 1 FROM events x WHERE x.conversation = h.conversation AND x.cursor > h.cursor AND x.cursor <= ? AND x.type IN ('user', 'unheld') AND ("
       + "x.type = 'unheld' AND json_extract(CASE WHEN json_valid(x.data) THEN x.data END, '$.id') = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id') OR "
       + "x.type = 'user' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(x.data) THEN x.data ELSE '{}' END, '$.held') AS j WHERE j.value = json_extract(CASE WHEN json_valid(h.data) THEN h.data END, '$.id'))))"),
@@ -290,11 +288,13 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         events.push(...span.filter((e, i) => i === last || !commands(e)));
         if (cut) {
           more[id] = from;
-          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ...(user ? [] : [['user', '']])]
+          events.push(...statements.kept.all(id, from), ...statements.held.all(id, from, top), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ...(user ? [] : [['user', '']])]
             .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean), ...(last < 0 ? [statements.commands.get(id, from)].filter(Boolean) : []));
         }
       }
-      return { events: events.map(parsed).sort((a, b) => a.cursor - b.cursor), cursor: top, more };
+      // A2 step 3: a held message's newest edit only (each save is one event; a long message saved often would fill a slow read).
+      const sorted = events.map(parsed).sort((a, b) => a.cursor - b.cursor), edits = new Map(sorted.filter((e) => e.type === 'held-text').map((e) => [e.data?.id, e]));
+      return { events: sorted.filter((e) => e.type !== 'held-text' || edits.get(e.data?.id) === e), cursor: top, more };
     },
     // Events are append-only, so the fold so far is kept and each call reads only the rows after it (E5). A delete
     // starts it again (remove).

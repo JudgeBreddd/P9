@@ -2097,11 +2097,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!editable(item.body)) return refused(409, 'not-editable');
       if (item.body.text !== body.was) return { status: 409, error: 'changed', text: item.body.text };
       if (!body.text.trim() && !item.images.length) return refused(400, 'request-refused');
-      // O109: the restart copy first, so a failed write changes nothing; then the live body (deliver() reads it at send time,
-      // and the object stays, so what is keyed on it stays), then the event.
-      setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i)));
+      // O109: the restart copy and the event (windows settle a save and rebuild the queue from it) are written first, and
+      // either failing changes nothing; only then the live body (deliver() reads it at send time; the object stays, so what is keyed on it stays).
+      const before = resumingOf(id);
+      setResuming(id, before.map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i)));
+      try { ledger.append(id, 'held-text', { id: item.id, text: body.text }); }
+      catch (error) { setResuming(id, before); console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation: id, type: 'held-text', error: String(error.code ?? error.message).slice(0, 200) })); return refused(500, 'not-saved'); }
       item.body.text = body.text;
-      emit(id, 'held-text', { id: item.id, text: body.text });
+      wakeAll('held-text', id);
       return { status: 200, ok: true };
     },
     // close: the tab's x (closing a chat stops it, running or idle); 'closed' takes its tab out of
