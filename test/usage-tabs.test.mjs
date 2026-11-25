@@ -133,6 +133,7 @@ test('A3 (2): a missing count is a dash, never 0; a partial one is marked everyw
   assert.match(text, /p 1 chat 100% 800 1\/4 /, 'the provider line marks its total');
   assert.match(text, /1 m no price 100% 800 1\/4 /, 'the breakdown row marks its tokens');
   assert.match(text, /Share of reported tokens/);
+  assert.match(text, /Shares are of the reported tokens\./, 'the provider lines\' shares say so too');
   assert.match(text, /Input 1M 3\/4 /, 'the legend marks a partial type');
   assert.ok(html.includes(`title="${day(1)}: 800 (1 of 2 turns)"`), 'the hover says how many turns the day counts');
   assert.match(html, /aria-label="Input 100%, Cache read not reported, Cache write not reported, Output not reported"/);

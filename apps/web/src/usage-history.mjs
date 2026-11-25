@@ -92,7 +92,7 @@ export function historyHtml(U, esc, names) {
   const counted = sum(rows, (row) => row.known?.total), priced = sum(rows, (row) => row.priced), estimated = sum(rows, (row) => row.estimated);
   const notes = [counted < turns && `${counted.toLocaleString()} of ${plural(turns, 'turn')} reported a token total.`,
     isCost && `${priced.toLocaleString()} of ${plural(turns, 'turn')} have a price. Turns on a model with no price, in a profile chat, or missing a count are left out.`,
-    (partOf(rows, 'total') || partOf(rows, 'usd') || TYPES.some(([type]) => partOf(rows, type))) && 'A figure with "k/N" or "k of N turns" beside it counts only k of its N turns; — means none reported it.',
+    (partOf(rows, 'total') || partOf(rows, 'usd') || TYPES.some(([type]) => partOf(rows, type))) && `A figure with "k/N" or "k of N turns" beside it counts only k of its N turns; — means none reported it. Shares are of the ${isCost ? 'priced cost' : 'reported tokens'}.`,
     isCost && estimated && `${plural(estimated, 'priced turn')} include work outside the main reply (compactions, subagents), priced at the chat's model.`]
     .filter(Boolean).map((line) => `<p class="sm muted">${line}</p>`).join('');
   return range + head + chart + totals + bar + by + notes;
