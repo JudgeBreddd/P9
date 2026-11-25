@@ -588,7 +588,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/unhold', async (c) => reply(c, await chat.unhold(c.req.param('id'), await json(c))));
   // A2 step 3: desktop only. The phone has no editor, and an edit keeps the sender's authority, so a phone revoked later must not have worded it.
-  api.post('/chat/:id/held-text', async (c) => (c.get('device') ? c.json({ error: 'desktop-only' }, 403) : reply(c, chat.editHeld(c.req.param('id'), await json(c)))));
+  api.post('/chat/:id/held-text', async (c) => (c.get('device') ? c.json({ error: 'desktop-only' }, 403) : reply(c, chat.editHeld(c.req.param('id'), await json(c), c.req.header('x-p9-op')))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'), c.req.header('content-type') ? await json(c) : {})));
   // Hand off (PH5): the chat stops; a new P9 terminal opens in its folder with the claude command typed in. The user
   // presses Enter, so nothing reaches claude.ai before they do.

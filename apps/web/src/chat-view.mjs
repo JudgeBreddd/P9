@@ -827,8 +827,8 @@ function paint(root, ss, only) {
         if (e.key !== 'Enter' || e.shiftKey) return;
         e.preventDefault(); e.stopPropagation(); if (ed.saving != null) return;
         if (ed.text === ed.was) { s.hedit = null; return renderChats(); }
-        ed.saving = ed.text; renderChats(); const base = ed.base;
-        outer.liveChat.call('heldText', { id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).catch(() => ({})).then(r => { if (s.hedit !== ed) return; const sent = ed.saving; ed.saving = null;
+        ed.saving = ed.text; ed.op = crypto.randomUUID(); renderChats(); const base = ed.base;
+        outer.liveChat.call('heldText', { op: ed.op, id: s.id, held: ed.id, text: ed.saving, was: ed.was }, { quiet: true }).catch(() => ({})).then(r => { if (s.hedit !== ed) return; const sent = ed.saving; ed.saving = null;
           if (r.status === 200) { s.hedit = null; return renderChats(); }
           // Unsure: no answer, or the retry's 503 or outcome-unknown (liveChat.call): the save may have landed.
           const unsure = !r.status || r.status === 503 || r.body?.error === 'outcome-unknown'; if (unsure) ed.lost = sent;
@@ -837,7 +837,7 @@ function paint(root, ss, only) {
           // A newer held-text event that came first already moved base on; the answer's older words do not set it back.
           else if (r.body?.error === 'changed') { if (ed.base === base) ed.base = r.body.text; ed.was = ed.base; s.events.push({ t: 'notice', text: 'Another window changed this queued message to: ' + ed.base + ' Enter saves yours over it; Esc keeps that one.' }); }
           // not-held: it left before the save; its event settles the edit (carry).
-          else if (r.body?.error !== 'not-held') s.events.push({ t: 'notice', text: 'Your edit ' + (unsure ? 'got no sure answer (' + (r.body?.error || r.status || 'none') + '), so it may or may not be saved' : 'was not saved (' + (r.body?.error || r.status) + ')') + '. It is still open.' });
+          else if (r.body?.error !== 'not-held') s.events.push({ t: 'notice', text: 'Your edit ' + (unsure ? 'got no sure answer (' + (r.body?.error || r.status || 'none') + '), so it may or may not be saved' : r.body?.error === 'daemon-outdated' ? 'was not saved: the P9 service is older than this app and cannot edit a queued message (update it, or take this one back with its x)' : 'was not saved (' + (r.body?.error || r.status) + ')') + '. It is still open.' });
           renderChats(); }); }; });
     // Only the user's click is kept: a <details> drawn open fires toggle too, which would pin a short strip open for good.
     p.querySelectorAll('[data-queue]>summary').forEach(m => m.onclick = () => { s.queueOpen = !m.parentElement.open; });
@@ -1070,13 +1070,13 @@ async function earlier(s) {
   s.events = [...old.events, ...s.events];
   tailed(s, r.body);
 }
-// A2 step 3: the open edit (s.hedit) against one live event, in stream order. Its own save's held-text closes it (saved);
+// A2 step 3: the open edit (s.hedit) against one live event, in stream order. Its own save's held-text (its op) closes it (saved);
 // another window's moves an untouched editor along and leaves typing alone. Its message leaving closes it: words the daemon
 // does not have (text != base) go into the box, so none are lost, and a take-back brings those instead of the old words.
 // Returns the take-back's words for the box, or undefined.
 function editSeen(s, ev) {
   const ed = s.hedit, d = ev.data; if (!ed || !d) return;
-  if (ev.type === 'held-text' && d.id === ed.id) { if (ed.saving === d.text) s.hedit = null; else { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; } return; }
+  if (ev.type === 'held-text' && d.id === ed.id) { if (ed.saving != null && d.op === ed.op) s.hedit = null; else { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; } return; }
   if (!(ev.type === 'unheld' ? [d.id] : ev.type === 'user' ? d.held || [] : []).includes(ed.id)) return;
   return editGone(s, ev.type === 'unheld' && ['removed', 'cancelled'].includes(d.why));
 }

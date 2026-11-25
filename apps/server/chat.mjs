@@ -2088,7 +2088,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // A2 step 3: the pencil on a message still waiting in this turn changes its text in place: its place in the queue, its
     // files and its picks stay. Gone already (sent, or handed back): 409, and the page puts the edit in the box.
     // Only the window's own messages: another chat's, a note or a command keeps the words its sender chose.
-    editHeld(id, body) {
+    // op: the request's operation ID, in the event, so the window that saved knows its own save from an equal one (round 7).
+    editHeld(id, body, op) {
       const session = ID.test(id) && live.get(id);
       // was: the words the editor opened with; another window's save meanwhile is a 409 changed with the words now, never overwritten.
       if (typeof body?.held !== 'string' || typeof body.text !== 'string' || typeof body.was !== 'string' || body.text.length > MAX_TEXT) return refused(400, 'request-refused');
@@ -2100,7 +2101,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // O109: the restart copy and the event (windows settle a save and rebuild the queue from it) are written first, in one
       // transaction, so a failure or a crash between them changes nothing; only then the live body (deliver() reads it at send time; the object stays, so what is keyed on it stays).
       db.exec('BEGIN');
-      try { setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i))); ledger.append(id, 'held-text', { id: item.id, text: body.text }); db.exec('COMMIT'); }
+      try { setResuming(id, resumingOf(id).map((i) => (i.queued === item.id ? { ...i, body: { ...i.body, text: body.text } } : i))); ledger.append(id, 'held-text', { id: item.id, text: body.text, ...(ID.test(op ?? '') && { op }) }); db.exec('COMMIT'); }
       catch (error) { db.exec('ROLLBACK'); console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation: id, type: 'held-text', error: String(error.code ?? error.message).slice(0, 200) })); return refused(500, 'not-saved'); }
       item.body.text = body.text;
       wakeAll('held-text', id);

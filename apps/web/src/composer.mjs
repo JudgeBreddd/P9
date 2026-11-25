@@ -16,16 +16,16 @@ export const chip = () => `<span class="hint" role="group" aria-label="Send whil
 // The messages the daemon holds for this turn, above a demo chat's local queue. No send-now on a note (it starts no turn)
 // or on one a sprint pause holds (it waits for the resume, outside this turn).
 // A2 step 3: the pencil (the window's own messages only) edits one where it waits (the newline after <textarea> is the one the
-// HTML parser drops, so a leading one the user typed stays); s.hedit is the open edit { id, text, was, base, saving } (chat-view.mjs editSeen).
+// HTML parser drops, so a leading one the user typed stays); s.hedit is the open edit { id, text, was, base, saving, op } (chat-view.mjs editSeen).
 export const waiting = s => (s.held || []).map(h => `<div class="q" data-key="${esc(h.id)}" data-held="${esc(h.id)}">${s.hedit?.id === h.id ? `<textarea name="heldEdit" rows="2"${s.hedit.saving != null ? ' readonly title="Saving…"' : ''} aria-label="${s.hedit.saving != null ? 'Saving this edit' : 'Edit this queued message (Enter saves, Esc cancels)'}">\n${esc(s.hedit.text)}</textarea>` : `<span>${h.when === 'queue' ? 'Queued' : 'After this step'}: ${esc(h.text)}</span>${h.info || h.fixed || h.when === 'pause' || s.held.some(x => x.id === s.hedit?.id) ? '' : `<button data-key="e" title="Edit it where it waits" data-hedit="${esc(h.id)}">${svg.edit}</button>`}`}${h.info || h.when === 'pause' ? '' : `<button data-key="n" title="Send this now (stops this turn)" data-unhold="${esc(h.id)}" data-now>${svg.bolt}</button>`}<button data-key="x" title="Take it back into the box" data-unhold="${esc(h.id)}">${svg.x}</button></div>`).join('');
 
-// O109: everything waiting (held, then the local queue) is one strip, "N queued", so 30 waiting messages cannot push the box
+// O109: everything waiting (held, then the local queue) is one strip (kept open while an edit is open in it), "N queued", so 30 waiting messages cannot push the box
 // off the screen. Open while it is short (up to 3), shut past that; the user's own open or shut (s.queueOpen) wins.
 // ponytail: an open strip's list scrolls inside 30vh (shell.css).
 // O125 (4): with how long the oldest one has waited (since: chat-view's ticking age), so a stuck queue shows: held ones and
 // the local queue (an agent without steering, { t, at }) alike. One kept by an older build has no time and adds to the count only.
 export const strip = (s, since, local) => { const n = (s.held?.length ?? 0) + s.queue.length, at = Math.min(...[...(s.held ?? []), ...s.queue].map(h => h.at || Infinity));
-  return `<details class="queue" data-queue${s.queueOpen ?? n <= 3 ? ' open' : ''}><summary>${n} queued${at < Infinity ? ', oldest waiting ' + since(at) : ''}</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
+  return `<details class="queue" data-queue${s.queueOpen ?? (n <= 3 || s.hedit) ? ' open' : ''}><summary>${n} queued${at < Infinity ? ', oldest waiting ' + since(at) : ''}</summary><div class="qs">${waiting(s)}${local}</div></details>`; };
 
 // What a key in the box does while a turn runs: 'steer', 'queue', 'cancel', or null (the box keeps the key).
 export const turnKey = e => e.shiftKey || e.altKey || e.ctrlKey || e.metaKey ? null : { Enter: 'steer', Tab: 'queue', Escape: 'cancel' }[e.key] ?? null;

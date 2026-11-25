@@ -8,8 +8,8 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const start = (t) => daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
-const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
-  headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+const call = (instance, route, method = 'GET', body, op) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+  headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(op && { 'x-p9-op': op }) },
   body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => ({ status: result.status, body: JSON.parse(result.text) }));
 const events = async (instance, id, after = 0) => {
   const seen = [];
@@ -60,7 +60,7 @@ test('A2 step 3: a waiting message edited by its ID keeps its place and goes wit
   for (const bad of [{ held: first.body.held, text: '  ', was }, { held: first.body.held, was }, { held: first.body.held, text: 'x'.repeat(100_001), was }, { held: first.body.held, text: 'no was' }])
     assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', bad)).status, 400, JSON.stringify(bad).slice(0, 80));
   assert.equal((await call(instance, '/chat/' + id + '/held-text', 'POST', { held: '00000000-0000-4000-8000-000000000000', text: 'x', was: 'x' })).status, 409);
-  const edit = await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'alpha edited', was });
+  const op = crypto.randomUUID(), edit = await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'alpha edited', was }, op);
   assert.equal(edit.status, 200, JSON.stringify(edit.body));
   // Another window's editor opened on the old words: refused with the words now, never written over them.
   const stale = await call(instance, '/chat/' + id + '/held-text', 'POST', { held: first.body.held, text: 'alpha stale', was });
@@ -70,7 +70,9 @@ test('A2 step 3: a waiting message edited by its ID keeps its place and goes wit
   const back = await call(instance, '/chat/' + id + '/unhold', 'POST', { held: third.body.held });
   assert.deepEqual([back.status, back.body.text], [200, 'charlie edited'], JSON.stringify(back.body));
   const seen = await events(instance, id);
-  assert.deepEqual(seen.filter((e) => e.type === 'held-text').map((e) => e.data), [{ id: first.body.held, text: 'alpha edited' }, { id: third.body.held, text: 'charlie edited' }]);
+  const saves = seen.filter((e) => e.type === 'held-text');
+  assert.deepEqual(saves.map((e) => ({ id: e.data.id, text: e.data.text })), [{ id: first.body.held, text: 'alpha edited' }, { id: third.body.held, text: 'charlie edited' }]);
+  assert.equal(saves[0].data.op, op, 'a save names its operation, so its window knows it from an equal save');
   assert.deepEqual(seen.filter((e) => e.type === 'unheld').map((e) => e.data.id), [third.body.held], 'an edit takes nothing out of the queue');
   await writeFile(path.join(instance.workspace, 'go'), '');
   await until(async () => (await events(instance, id)).some((e) => e.type === 'user' && /bravo wording/.test(e.data?.text)), 'the queue went out');
