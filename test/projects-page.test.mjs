@@ -1720,9 +1720,9 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   assert.equal(chunk.length, 1, 'one chunk holds the project page: ' + chunk.join(', '));
   const { page, errors } = await launch(t, instance);
   await page.context().addInitScript(() => { if (sessionStorage.getItem('o261-no-idle')) window.requestIdleCallback = () => 0; });
-  let mode = 'hold', hits = 0, release = () => {};
+  let mode = 'hold', hits = 0, release = () => {}, chunkUrl = '';
   await page.route((u) => u.pathname.endsWith('/' + chunk[0]), async (route) => {
-    hits++;
+    hits++; chunkUrl = route.request().url();
     if (mode === 'fail') return route.abort();
     await new Promise((go) => { release = go; });
     return route.continue();
@@ -1754,7 +1754,8 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   await more();
   await page.locator('.lp-menu button').first().hover(); await page.mouse.down();
   release();
-  await new Promise((go) => setTimeout(go, 1500));
+  await page.evaluate((u) => import(u).then(() => 0), chunkUrl); // resolves once the held chunk has run: the code is in
+  await new Promise((go) => setTimeout(go, 500));
   assert.equal(await page.locator('.lp-menu [data-pjchat=rename]').count(), 0, 'nothing went into the menu under the press');
   await page.locator('.lp-menu .note').last().hover(); await page.mouse.up(); // released on the menu's note: no item clicked, the menu stays
   await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 });
@@ -1777,6 +1778,15 @@ test('O261: the project page loads late: first use loads it, the menu fills in, 
   release();
   await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
   assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count(), 0, 'the project click made before the mode switch was dropped');
+  // New chat after a project click drops it too, even when the daemon's new chat is shown before the code arrives.
+  await fresh('hold');
+  await page.locator(`#navList [data-proj="${site}"]`).click();
+  const rows = await page.locator('#navList .row[data-chat]').count();
+  await page.click('#newBtn');
+  await until(async () => await page.locator('#navList .row[data-chat]').count() > rows, 'the new chat is listed');
+  release();
+  await more(); await page.locator('.lp-menu [data-pjchat=rename]').waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  assert.equal(await page.locator(`#navList [data-proj="${site}"][aria-current=true]`).count(), 0, 'the project click made before New chat was dropped');
   // A key or a click on empty space after the project click does not drop it.
   await fresh('hold');
   await page.locator(`#navList [data-proj="${site}"]`).click();

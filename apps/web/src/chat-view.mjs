@@ -152,6 +152,7 @@ function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, 
 const untab = id => { outer.S.open = outer.S.open.map(o => o === id ? (outer.S.sessions.find(x => !x.hidden && !outer.S.open.includes(x.id)) || {}).id : o).filter(Boolean); outer.renderTabs(); renderChats(); };
 let waitingNew = null;
 function newSession(agent, model, project = null, profile = '') {
+  outer.S.nav++; // O261: a project click still waiting for its code is dropped (the daemon's chat is shown later, as auto)
   outer.usedAgent(agent);
   // Dev Focus had no way to start a new chat: one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
