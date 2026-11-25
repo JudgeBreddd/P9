@@ -129,16 +129,23 @@ test('A3 (2): a missing count is a dash, never 0; a partial one is marked everyw
   assert.match(text, /1 of 4 turns reported a token total/);
   assert.ok(html.includes(`<div class="uh-axis"><span>${day(-6)}</span>`), "the axis starts at the daemon's first day");
   // A partial figure is marked wherever it shows, not only in the totals.
-  assert.match(text, /p 1 chat 100% \* 800 \* /, 'the provider line: share and total marked');
-  assert.match(text, /1 m no price 100% \* 800 \* /, 'the breakdown row: share and tokens marked');
-  assert.match(text, /Input 1M \* /, 'the legend marks a partial type');
+  // In text, so a keyboard and a screen reader reach it; a share is of the reported tokens, so it has none.
+  assert.match(text, /p 1 chat 100% 800 1\/4 /, 'the provider line marks its total');
+  assert.match(text, /1 m no price 100% 800 1\/4 /, 'the breakdown row marks its tokens');
+  assert.match(text, /Share of reported tokens/);
+  assert.match(text, /Input 1M 3\/4 /, 'the legend marks a partial type');
   assert.ok(html.includes(`title="${day(1)}: 800 (1 of 2 turns)"`), 'the hover says how many turns the day counts');
   assert.match(html, /aria-label="Input 100%, Cache read not reported, Cache write not reported, Output not reported"/);
   // A turn with no provider: its chats are under 'unknown', as the daemon counts them. A sub-cent cost reads <$0.01.
   const priced = { ...row(day(0), 10, 10, 1, 1), provider: null, model: 'opus', priced: 1, usd: 0.006, cost: { input: 0.006, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const cost = historyHtml({ tab: 'cost', days: 7, by: 'model', page: { ...page, chats: { unknown: 1 }, rows: [priced] } }, esc, {})
     .replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/\s+/g, ' ');
-  assert.match(cost, /unknown 1 chat 100% \* <\$0\.01 \* /, 'the unknown provider has its chat; the sub-cent cost is <$0.01, marked 1 of 2 priced');
-  assert.match(cost, /Estimated cost <\$0\.01 1 of 2 turns/);
+  assert.match(cost, /unknown 1 chat 100% <\$0\.01 1\/2 /, 'the unknown provider has its chat; the sub-cent cost is <$0.01, marked 1 of 2 priced');
+  assert.match(cost, /Estimated cost <\$0\.01 1 of 2 turns Input <\$0\.01 1 of 2 turns/, 'each dollar total says its priced turns');
+  assert.match(cost, /Input <\$0\.01 1\/2 Cache read/, 'and so does the legend');
+  // A daemon from before from/to (the route as first merged): the chart runs from this desktop's start to the last row.
+  const { from, to, ...older } = page;
+  const old = historyHtml({ tab: 'tokens', days: 7, by: 'model', page: older }, esc, {});
+  assert.ok(old.includes(`<div class="uh-axis"><span>${day(-7)}</span>`) && old.includes(`title="${day(1)}: `) && !old.includes('Invalid'), 'an older answer still draws its days');
   assert.match(historyHtml({ tab: 'cost', days: 30, page: { state: 'unsupported', days: 7 } }, esc, {}), /older than this app/, 'for any range');
 });

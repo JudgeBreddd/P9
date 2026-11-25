@@ -802,7 +802,7 @@ div.onboard-tpl{cursor:default}div.onboard-tpl:hover{border-color:var(--border)}
 .uh-col i,.uh-provs .dot{--agent:var(--muted-foreground)}
 .uh-col i{display:block;background:var(--agent);border-radius:2px 2px 0 0;opacity:.85}
 .uh-col [data-agent="claude"]{--agent:#d97757}.uh-col [data-agent="codex"]{--agent:#3b82f6}
-.uh-part{color:var(--muted-foreground);cursor:help;margin-left:1px}
+.uh-part{color:var(--muted-foreground);font-size:.85em;font-weight:400}
 .uh-h{margin:12px 0 6px;font-size:12px;font-weight:600;color:var(--muted-foreground)}
 .uh-type{display:flex;height:10px;border-radius:999px;overflow:hidden;background:var(--border)}
 .uh-type i,.uh-legend i{display:block;background:var(--c)}

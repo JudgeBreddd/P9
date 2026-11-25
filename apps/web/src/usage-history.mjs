@@ -14,7 +14,10 @@ const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`
 const groupBy = (rows, key) => { const out = new Map(); for (const row of rows) { const k = key(row); out.set(k, [...(out.get(k) ?? []), row]); } return out; };
 // Every date from the range's first day to its last, so a day with no turns still has its place on the chart. The ends
 // are the daemon's (from, to), in the time zone it dates the rows in, which a remote's may not share with this desktop.
-function daysOf({ from, to }) {
+// A daemon from before from/to: this desktop's dates, stretched to the first and last row's day.
+function daysOf({ from, to, since }, rows) {
+  from ??= [new Date(since).toLocaleDateString('sv'), rows[0].day].sort()[0];
+  to ??= [new Date().toLocaleDateString('sv'), rows.at(-1).day].sort()[1];
   const out = [];
   for (const d = new Date(from + 'T12:00:00'); out.at(-1) !== to && out.length < 100; d.setDate(d.getDate() + 1)) out.push(d.toLocaleDateString('sv'));
   return out;
@@ -37,14 +40,15 @@ export function historyHtml(U, esc, names) {
   const isCost = U.tab === 'cost', value = isCost ? (r) => cost(r) : (r) => count(r, 'total');
   const shown = (v) => (isCost ? dollars(v) : v == null ? '—' : tokens(v));
   const turns = sum(rows, (row) => row.turns), grand = value(rows);
-  // A sum over only some of a group's turns is marked wherever it shows: "k of N turns" in the totals, * (hovered: the
-  // same words) elsewhere. A cost covers the priced turns; a token figure, the turns that reported that count.
+  // A sum over only some of a group's turns is marked wherever it shows, in text a keyboard and a screen reader reach:
+  // "k of N turns" in the totals, "k/N" elsewhere. A cost covers the priced turns; a token figure, the turns that reported
+  // that count. A share is of what was counted (priced cost, reported tokens), so it needs no mark.
   const covered = (list, type) => (type === 'usd' ? sum(list, (row) => row.priced) : known(list, type));
   const partOf = (list, type) => { const k = covered(list, type), n = sum(list, (row) => row.turns); return k && k < n ? `${k.toLocaleString()} of ${plural(n, 'turn')}` : ''; };
-  const mark = (list, type) => { const p = partOf(list, type); return p ? `<sup class="uh-part" title="${p}">*</sup>` : ''; };
+  const mark = (list, type) => { const k = covered(list, type), n = sum(list, (row) => row.turns); return k && k < n ? ` <small class="uh-part" title="${k} of ${n} turns">${k}/${n}</small>` : ''; };
   const main = isCost ? 'usd' : 'total', fig = (list, type = main) => shown(type === main ? value(list) : count(list, type)) + mark(list, type);
   const part = (type) => { const p = partOf(rows, type); return p ? ` <small class="muted">${p}</small>` : ''; };
-  const tokenStat = (type) => shown(count(rows, type)) + part(type);
+  const tokenStat = (type) => shown(count(rows, type)) + part(type), costStat = (pick) => dollars(cost(rows, pick)) + part('usd');
   const chats = Object.values(page.chats ?? {}).reduce((a, b) => a + b, 0);
   const name = (provider) => esc(names?.[provider] ?? provider);
   const share = (v) => (grand && v != null ? Math.round((v / grand) * 100) + '%' : '–');
@@ -52,10 +56,10 @@ export function historyHtml(U, esc, names) {
   // Top: the total, and one line per provider (its chats, its share, its dollars).
   const providers = [...groupBy(rows, (row) => row.provider)].sort(([, a], [, b]) => (value(b) ?? -1) - (value(a) ?? -1));
   const head = `<div class="uh-head"><div class="uh-total"><b data-uh-total>${shown(grand)}</b><span>${isCost ? `API estimate · prices as of ${esc(page.pricesAsOf)}` : `${plural(turns, 'turn')} · ${plural(chats, 'chat')}`}</span></div>`
-    + `<ul class="uh-provs">${providers.map(([provider, list]) => `<li><span class="dot" data-agent="${esc(provider)}"></span><b>${name(provider)}</b><span>${plural(page.chats?.[provider] ?? 0, 'chat')}</span><span>${share(value(list))}${mark(list, main)}</span><span>${fig(list)}</span></li>`).join('')}</ul></div>`;
+    + `<ul class="uh-provs">${providers.map(([provider, list]) => `<li><span class="dot" data-agent="${esc(provider)}"></span><b>${name(provider)}</b><span>${plural(page.chats?.[provider] ?? 0, 'chat')}</span><span>${share(value(list))}</span><span>${fig(list)}</span></li>`).join('')}</ul></div>`;
 
   // The daily chart: a column a day, stacked by provider.
-  const byDay = groupBy(rows, (row) => row.day), days = daysOf(page);
+  const byDay = groupBy(rows, (row) => row.day), days = daysOf(page, rows);
   const dayValue = (list, provider) => value(list.filter((row) => row.provider === provider)) ?? 0;
   const top = Math.max(...days.map((day) => value(byDay.get(day) ?? []) ?? 0), 0);
   const chart = `<div class="uh-chart" role="img" aria-label="${isCost ? 'Estimated cost' : 'Tokens'} per day, by agent">${days.map((day) => {
@@ -67,13 +71,13 @@ export function historyHtml(U, esc, names) {
   // Totals, and the same split by token type as one bar.
   const stats = (pairs) => `<div class="stats">${pairs.map(([label, v]) => `<div><span>${label}</span><b>${v}</b></div>`).join('')}</div>`;
   const totals = isCost
-    ? stats([['Estimated cost', dollars(grand) + part('usd')], ...TYPES.map(([type, label]) => [label, dollars(cost(rows, (row) => row.cost?.[type]))])])
+    ? stats([['Estimated cost', costStat((row) => row.usd)], ...TYPES.map(([type, label]) => [label, costStat((row) => row.cost?.[type])])])
     : stats([['Processed tokens', tokenStat('total')], ['Cached input', tokenStat('cacheRead')], ['Uncached input', tokenStat('input')],
-      ['Output', tokenStat('output')], ['Cache savings', dollars(cost(rows, (row) => row.saved))]]);
+      ['Output', tokenStat('output')], ['Cache savings', costStat((row) => row.saved)]]);
   const parts = TYPES.map(([type, label]) => [type, label, isCost ? cost(rows, (row) => row.cost?.[type]) : count(rows, type)]);
   const whole = parts.reduce((a, p) => a + (p[2] ?? 0), 0);
   const bar = whole ? `<h4 class="uh-h">${isCost ? 'Cost' : 'Tokens'} by type</h4><div class="uh-type" role="img" aria-label="${parts.map(([, label, v]) => `${label} ${v == null ? 'not reported' : Math.round((v / whole) * 100) + '%'}`).join(', ')}">${parts.map(([type, , v]) => (v ? `<i data-type="${type}" style="width:${((v / whole) * 100).toFixed(1)}%"></i>` : '')).join('')}</div>`
-    + `<ul class="uh-legend">${parts.map(([type, label, v]) => `<li><i data-type="${type}"></i>${label} <b>${shown(v)}${isCost ? '' : mark(rows, type)}</b></li>`).join('')}</ul>` : '';
+    + `<ul class="uh-legend">${parts.map(([type, label, v]) => `<li><i data-type="${type}"></i>${label} <b>${shown(v)}${mark(rows, isCost ? 'usd' : type)}</b></li>`).join('')}</ul>` : '';
 
   // Breakdown by model or day, largest first; a group with no price sorts last on the Cost tab.
   const groups = [...groupBy(rows, U.by === 'day' ? (row) => row.day : (row) => `${row.provider}\u0000${row.model}\u0000${row.profile}`)]
@@ -82,13 +86,13 @@ export function historyHtml(U, esc, names) {
   const label = ({ list: [row] }) => (U.by === 'day' ? esc(row.day)
     : `<span class="dot" data-agent="${esc(row.provider)}"></span>${esc(row.model ?? 'unknown model')}${row.profile ? ' <span class="muted">(profile)</span>' : ''}`);
   const by = `<div class="uh-by"><h4 class="uh-h">Breakdown</h4><div role="group" aria-label="Breakdown by">${[['model', 'Model'], ['day', 'Day']].map(([id, text]) => `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-uh-by="${id}" aria-pressed="${U.by === id}">${text}</button>`).join('')}</div></div>`
-    + `<table class="uh-table"><thead><tr><th>#</th><th>${U.by === 'day' ? 'Day' : 'Model'}</th><th>Cost</th><th>Share of ${isCost ? 'cost' : 'tokens'}</th><th>Tokens</th></tr></thead><tbody>${groups.map((g, i) => `<tr><td>${i + 1}</td><td>${label(g)}</td><td>${dollars(cost(g.list))}${mark(g.list, 'usd')}</td><td>${share(g.v)}${mark(g.list, main)}</td><td>${g.t == null ? '—' : tokens(g.t)}${mark(g.list, 'total')}</td></tr>`).join('')}</tbody></table>`;
+    + `<table class="uh-table"><thead><tr><th>#</th><th>${U.by === 'day' ? 'Day' : 'Model'}</th><th>Cost</th><th>Share of ${isCost ? 'priced cost' : 'reported tokens'}</th><th>Tokens</th></tr></thead><tbody>${groups.map((g, i) => `<tr><td>${i + 1}</td><td>${label(g)}</td><td>${dollars(cost(g.list))}${mark(g.list, 'usd')}</td><td>${share(g.v)}</td><td>${g.t == null ? '—' : tokens(g.t)}${mark(g.list, 'total')}</td></tr>`).join('')}</tbody></table>`;
 
   // What the figures cover.
   const counted = sum(rows, (row) => row.known?.total), priced = sum(rows, (row) => row.priced), estimated = sum(rows, (row) => row.estimated);
   const notes = [counted < turns && `${counted.toLocaleString()} of ${plural(turns, 'turn')} reported a token total.`,
     isCost && `${priced.toLocaleString()} of ${plural(turns, 'turn')} have a price. Turns on a model with no price, in a profile chat, or missing a count are left out.`,
-    (partOf(rows, 'total') || partOf(rows, 'usd') || TYPES.some(([type]) => partOf(rows, type))) && 'A figure marked * or "of N turns" counts only some of the turns (hover * for how many); — means none reported it.',
+    (partOf(rows, 'total') || partOf(rows, 'usd') || TYPES.some(([type]) => partOf(rows, type))) && 'A figure with "k/N" or "k of N turns" beside it counts only k of its N turns; — means none reported it.',
     isCost && estimated && `${plural(estimated, 'priced turn')} include work outside the main reply (compactions, subagents), priced at the chat's model.`]
     .filter(Boolean).map((line) => `<p class="sm muted">${line}</p>`).join('');
   return range + head + chart + totals + bar + by + notes;
