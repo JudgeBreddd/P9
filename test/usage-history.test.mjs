@@ -114,8 +114,16 @@ test('O244: the base is the same window and was fresh; a reading is written once
   assert.equal(await history.tick(), 0);
   assert.ok(Date.now() - started < 1000, 'the tick did not wait on the lock');
   assert.equal(other.prepare("SELECT count(*) AS n FROM limits WHERE provider IN ('a', 'b')").get().n, 0, 'nothing partial');
-  other.exec('ROLLBACK'); other.close();
+  other.exec('ROLLBACK');
   assert.equal(await history.tick(), 2);
+  // A tick whose second row fails writes neither (one transaction); with that fixed, a long provider name is kept.
+  const long = 'd'.repeat(70);
+  reading = { c: { fiveHour: { usedPercent: 1, resetsAt: T0 + 3 * HOUR, windowMins: 300 }, asOf: at.now }, [long]: { fiveHour: { usedPercent: 1, resetsAt: T0 + 3 * HOUR, windowMins: 300 }, asOf: at.now } };
+  other.exec(`CREATE TRIGGER refuse BEFORE INSERT ON limits WHEN NEW.provider = '${long}' BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+  assert.equal(await history.tick(), 0);
+  assert.equal(other.prepare("SELECT count(*) AS n FROM limits WHERE provider = 'c'").get().n, 0, 'the first row of the failed tick was rolled back');
+  other.exec('DROP TRIGGER refuse'); other.close();
+  assert.equal(await history.tick(), 2, 'both rows, the 70-character provider name too');
   // A reading taken before its window reset, looked at after: no live projection.
   at.now = T0 + 4 * HOUR;
   assert.equal(history.annotate(atT0).third.fiveHour.projected, null);

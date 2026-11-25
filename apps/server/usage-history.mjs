@@ -40,14 +40,14 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
     const opened = new DatabaseSync(file);
     try {
       opened.exec(`PRAGMA busy_timeout = 0; PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS limits (at INTEGER NOT NULL,
-        provider TEXT NOT NULL CHECK (length(provider) <= 64), win TEXT NOT NULL CHECK (length(win) <= 32), used_pct REAL NOT NULL,
+        provider TEXT NOT NULL, win TEXT NOT NULL, used_pct REAL NOT NULL,
         resets_at INTEGER, window_mins INTEGER NOT NULL, projected_pct REAL, pace TEXT CHECK (pace IN ('ahead', 'on', 'headroom')),
         as_of INTEGER NOT NULL, age_ms INTEGER NOT NULL, PRIMARY KEY (provider, win, as_of)) STRICT`);
       // The base reading: the newest of the same window (the same reset, as the usage pace script matches it) that is
       // 35-90 min older and was fresh (at most 10 min old) when written.
       base = opened.prepare(`SELECT as_of AS at, used_pct AS used FROM limits WHERE provider = ? AND win = ? AND resets_at = ?
         AND as_of BETWEEN ? AND ? AND age_ms <= 600000 ORDER BY as_of DESC LIMIT 1`);
-      add = opened.prepare('INSERT OR IGNORE INTO limits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      add = opened.prepare('INSERT INTO limits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING');
     } catch (error) { opened.close(); throw error; }
     db = opened;
   };
