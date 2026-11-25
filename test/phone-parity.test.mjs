@@ -299,6 +299,59 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]);
   await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
   await page.click('#attached [aria-label="Remove notes.txt"]');
+  // A2 step 1: a big paste of text attaches as pasted.txt; a short one stays text (not taken from the box).
+  const pasteText = (text) => page.evaluate((text) => { const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }); document.querySelector('#prompt').dispatchEvent(ev); return ev.defaultPrevented; }, text);
+  assert.equal(await pasteText('short'), false, 'a short paste stays text');
+  await page.fill('#prompt', 'an old prompt'); await page.evaluate(() => document.querySelector('#prompt').select());
+  assert.equal(await pasteText('x'.repeat(5001)), false, 'a big paste over a selection replaces it as text');
+  // A send tapped while the paste is still being read waits for it instead of going without the file.
+  await page.fill('#prompt', 'hi');
+  assert.deepEqual(await page.evaluate((text) => {
+    const ta = document.querySelector('#prompt'); ta.selectionStart = ta.selectionEnd = ta.value.length;
+    const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev); document.querySelector('#composer').requestSubmit(); return [ev.defaultPrevented, document.querySelector('#composerNote').textContent];
+  }, 'x'.repeat(5001)), [true, 'Still attaching a file. Send again in a moment.'], 'a big paste is taken from the box; the send waits');
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  assert.equal(await page.inputValue('#prompt'), 'hi', 'nothing was sent while attaching');
+  await page.fill('#prompt', '');
+  assert.match(await page.textContent('#composerNote'), /A big paste went in as pasted\.txt/);
+  // Four files a message: a fifth big paste is refused, and goes into the box as text instead of being lost.
+  for (let i = 0; i < 3; i += 1) assert.equal(await pasteText('x'.repeat(5001)), true);
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-file').length === 4);
+  assert.equal(await pasteText('y'.repeat(5001)), true);
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'y'.repeat(5001));
+  assert.match(await page.textContent('#composerNote'), /four files a message at most/);
+  for (let i = 0; i < 4; i += 1) await page.click('#attached [aria-label="Remove pasted.txt"] >> nth=0');
+  await page.fill('#prompt', '');
+  // Round 9 review: a file does not queue. A message with pasted.txt that cannot go now (here the phone is offline) is refused, and
+  // a big paste made while it would queue stays text in the box, so with the file removed it queues whole (round 14: all 5001).
+  // Rounds 13 to 16: advice to swap pasted.txt for its text could delete the only copy of a paste, so the note gives none.
+  const online = (on) => page.evaluate((on) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true }), on);
+  const submit = () => page.evaluate(() => document.querySelector('#composer').requestSubmit());
+  assert.equal(await pasteText('w'.repeat(5001)), true);
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  await online(false); await page.fill('#prompt', 'wait'); await submit();
+  await noted('attachments go only with a message sent now');
+  assert.doesNotMatch(await page.textContent('#composerNote'), /✕/, 'no advice to remove the paste');
+  await page.locator('#composer').scrollIntoViewIfNeeded(); await shot(page, 'phone-paste-offline-note');
+  // The paste again, with what the phone does when the handler leaves it alone: the text goes in at the caret.
+  assert.equal(await page.evaluate((text) => {
+    const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length;
+    const dt = new DataTransfer(); dt.setData('text/plain', text); const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev); if (!ev.defaultPrevented) document.execCommand('insertText', false, text); return ev.defaultPrevented;
+  }, 'w'.repeat(5001)), false, 'offline, a big paste stays text');
+  await noted('A big paste stays as text');
+  assert.equal(await page.locator('#attached .chip-file').count(), 1, 'no second pasted.txt');
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
+  await page.click('#attached [aria-label="Remove shot.png"]'); // the photo does not queue either
+  await submit();
+  await page.waitForFunction(() => document.querySelector('[data-unqueue]')?.closest('article').querySelector('p').textContent === 'wait' + 'w'.repeat(5001), null, { timeout: 10000 });
+  await page.click('#queued summary'); // the queue opens from its strip
+  await page.click('[data-unqueue]');
+  await online(true);
+  await choose([{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]);
+  await chips(1);
+  await page.fill('#prompt', '');
   await choose([{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]);
   await chips(2);
   await paste(1);
@@ -315,11 +368,30 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await chips(2);
   await page.click('#attached [aria-label="Remove dropped0.png"]');
   await chips(1);
-  await send(page, 'look');
+  // A paste made while a send is on its way stays when that send is answered: only the sent photo leaves.
+  let release, reached; const gate = new Promise((r) => { release = r; }), hit = new Promise((r) => { reached = r; });
+  const onPrompt = (url) => url.pathname.endsWith('/prompt');
+  await page.route(onPrompt, async (route) => { reached(); await gate; await route.continue(); }, { times: 1 });
+  await send(page, 'look'); await hit;
+  assert.equal(await pasteText('z'.repeat(5001)), true, 'a big paste while the send is on its way');
+  await page.waitForSelector('#attached .chip-file >> text=pasted.txt', { timeout: 10000 });
+  release();
   await replied('echo:look' + seen);
   await chips(0);
+  assert.equal(await page.locator('#attached .chip-file', { hasText: 'pasted.txt' }).count(), 1, 'the paste made meanwhile is still attached');
+  await page.click('#attached [aria-label="Remove pasted.txt"]');
   assert.equal(await page.isHidden('#attached'), true);
   assert.equal(await page.isHidden('#composerNote'), true);
+  // A send of only a photo leaves the box alone: what is typed while it is on its way stays, spaces and all.
+  await paste(1); await chips(1);
+  let release2, reached2; const gate2 = new Promise((r) => { release2 = r; }), hit2 = new Promise((r) => { reached2 = r; });
+  await page.route(onPrompt, async (route) => { reached2(); await gate2; await route.continue(); }, { times: 1 });
+  await send(page, ''); await hit2;
+  await page.fill('#prompt', '  next ');
+  release2();
+  await chips(0);
+  assert.equal(await page.inputValue('#prompt'), '  next ', 'a photo-only send leaves what was typed meanwhile byte for byte');
+  await page.fill('#prompt', '');
   // The sent photo shows in its message, fetched from the daemon by hash.
   await page.waitForSelector('#events .user-imgs img[src^="data:image/png;base64,"]', { timeout: 10000 });
   await page.locator('#events .user-imgs img').last().scrollIntoViewIfNeeded(); await shot(page, 'phone-sent-photo');
@@ -339,7 +411,7 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await replied('echo:look' + seen.repeat(4));
   // After a reload the sent photos still show, fetched again by hash.
   await page.reload();
-  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 5, null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 6, null, { timeout: 15000 });
   // A2 step 1: any file goes as a file. The agent gets its real path in the chat's own folder and its edit is on disk; the sent
   // message names the file. One over 6 MiB is refused before sending, with the reason.
   await choose([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('from the phone') }]);

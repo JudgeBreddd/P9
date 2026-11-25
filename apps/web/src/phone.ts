@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
@@ -849,6 +849,7 @@ one('#sheetBody').addEventListener('click', async event => {
     await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true });
     note('The chat already has a message or could not be replaced.'); return;
   }
+  while (adding.has(id)) await adding.get(id)!.catch(() => true); // a paste still being read (and its fallback to text) lands before the chat changes id
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
   // O61: the text typed goes with the chat to its new id. The box itself changes owner here, before the list is read again:
@@ -1211,6 +1212,7 @@ async function submitFromBox(event: Event) {
     else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
+  if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
   const text = (art ?? input.value).trim();
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
@@ -1255,9 +1257,10 @@ async function submitFromBox(event: Event) {
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
   inFlight.delete(id); keepInFlight();
   // A refused send says so; it used to leave the box filled with no sign anything happened.
+  // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { if (text) editDraft(id, (now) => now.replace(text, '').trim()); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -1362,15 +1365,23 @@ function renderAttached() {
   box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
-async function addImages(files: Iterable<File>) {
-  const id = openId; if (!id) return;
-  const list = attached.get(id) ?? []; attached.set(id, list);
-  note();
+// One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file
+// check, and a send went without a file still being read. Notes only for the chat on screen.
+const adding = new Map<string, Promise<boolean>>(); // chat id -> its attach now
+function addImages(files: Iterable<File>): Promise<boolean> {
+  const id = openId; if (!id) return Promise.resolve(false);
+  const run = (adding.get(id) ?? Promise.resolve(true)).catch(() => true).then(() => attachNow(id, files)); adding.set(id, run);
+  void run.finally(() => { if (adding.get(id) === run) adding.delete(id); }).catch(() => {}); return run;
+}
+async function attachNow(id: string, files: Iterable<File>) {
+  const say = (text = '') => { if (openId === id) note(text); };
+  say(); let ok = true; // true: every file attached
   for (const file of files) {
-    const full = attachFull(file, list); if (full) { note('Not attached: ' + full.toLowerCase() + '.'); continue; }
-    try { list.push(await readAttachment(file, list)); } catch (error) { note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
+    // the list as it is now: a send answered meanwhile took its own files from it
+    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
-  renderAttached();
+  renderAttached(); return ok;
 }
 one<HTMLElement>('#attached').onclick = (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
@@ -1403,8 +1414,17 @@ one('#sheetBody').addEventListener('click', (event) => {
 });
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
-  const files = [...event.clipboardData?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
-});
+  const box = event.currentTarget as HTMLTextAreaElement, files = event.clipboardData ? pastedFiles(event.clipboardData, box.selectionStart !== box.selectionEnd) : [];
+  if (!files.length) return; // over a selection it stays text, so it replaces what was selected as any paste does
+  const id = openId, was = box.value, at = box.selectionStart, text = event.clipboardData?.files.length ? '' : event.clipboardData?.getData('text/plain') ?? '';
+  // Round 9 review: a file does not queue, so while this message would queue (agent busy or asking, a queue, offline) a big paste stays text.
+  if (text && (!navigator.onLine || running(id) || asking(id) || queued(id).length)) { note('A big paste stays as text while the agent is busy or the phone is offline, so it can wait in the queue.'); return; }
+  event.preventDefault();
+  void addImages(files).then((ok) => { // a refused big paste (four files already, or over 6 MiB) goes back into its own chat's box as text, not lost:
+    if (!text || !id) return; if (ok) { if (openId === id) note('A big paste went in as pasted.txt. Remove it with ✕.'); return; }
+    editDraft(id, (now) => now === was ? now.slice(0, at) + text + now.slice(at) : now + (now ? '\n' : '') + text); // where it was pasted, or after what was typed since
+  });
+}); // A2 step 1: a big paste of text attaches as a file
 // A dropped file attaches the same way (spec §4); dropped text still goes into the box.
 one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
   const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }

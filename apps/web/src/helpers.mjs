@@ -185,6 +185,11 @@ export const LOOSE = { 'Bypass permissions': 'Claude runs every command and edit
 // built here; a block's uri is never used. Desktop and phone (P9). ponytail: data: strings are re-diffed each render;
 // blob: needs a CSP change.
 export const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+// A2 step 1: what a paste attaches, desktop and phone: its files, or a big paste of text as a file (pasted.txt; the daemon
+// tags a taken name), so a long log or file does not fill the box. plain (desktop Ctrl Shift V) keeps it as text.
+// ponytail: one fixed size, 5000 characters (about 100 lines of code); a setting if it proves wrong.
+export const BIG_PASTE = 5000;
+export const pastedFiles = (data, plain) => { const files = [...data.files], text = data.getData('text/plain'); return files.length || plain || text.length <= BIG_PASTE ? files : [new File([text], 'pasted.txt', { type: 'text/plain' })]; };
 export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && (typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}`
   : typeof b.shot === 'string' && /^\d{1,15}\/\d{1,2}$/.test(b.shot) ? 'shot:' + b.shot : null) || null; // O249: shot: a place, fetched when seen (agentImgs)
 export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);

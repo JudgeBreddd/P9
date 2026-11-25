@@ -25,11 +25,12 @@ export const attachFull = (file, list) => { const photo = IMG_OK.includes(file.t
 // The daemon's file-name rule (apps/server/chat.mjs fileName and DEVICE; keep the two alike), so a name it would refuse is refused when
 // attached, with the reason, not after the send.
 const NAME_BAD = /[\x00-\x1f/\\:*?"<>|]|[. ]$|^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$) *(\.|$)/i;
+export const tooBig = (got, list) => list.reduce((n, a) => n + a.data.length, got.data.length) > MAX_SENT ? 'with the others it would be over 12 MiB, the most one message can carry' : '';
 export async function readAttachment(file, list) {
   if (!IMG_OK.includes(file.type) && (NAME_BAD.test(file.name) || new TextEncoder().encode(file.name).length > 200)) throw new Error('its name cannot have / \\ : * ? " < > |, end in a dot or space, be over 200 bytes or be a Windows device name such as CON; rename it and attach it again');
   if (!IMG_OK.includes(file.type) && file.size > MAX_FILE * 3 / 4) throw new Error('over 6 MiB, the most a file can be');
   const got = IMG_OK.includes(file.type) ? await readImage(file) : { file: true, name: file.name, data: await base64(file), ...(file.type && { mimeType: file.type }) };
-  if (list.reduce((n, a) => n + a.data.length, got.data.length) > MAX_SENT) throw new Error('with the others it would be over 12 MiB, the most one message can carry');
+  const big = tooBig(got, list); if (big) throw new Error(big);
   return got;
 }
 // What POST /chat/:id/prompt takes: photos as images, the rest as files.
