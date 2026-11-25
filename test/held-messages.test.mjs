@@ -339,3 +339,69 @@ test('O73 FIX1: a waiting message keeps the title its sender had when it sent it
   fs.writeFileSync(go(), '');
   assert.equal((await sentAs('queued three')).fromTitle, 'Fourth');
 });
+
+// O255 round 4: an explicit steer that picks another mode goes into the turn when the agent can steer (the turn keeps
+// its mode), and when it cannot, it waits and the next turn runs in the mode it picked, not the old, wider one.
+test('O255: a steer with a new mode goes in when the agent steers, and otherwise waits and runs in that mode', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const go = path.join(instance.workspace, 'go'), held = async (chat, text) => (await events(instance, chat)).filter((e) => e.type === 'held' && String(e.data?.text).includes(text));
+  const gated = async (chat) => { const { cursor } = (await call(instance, '/chat/events?after=0')).body; assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202); await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating', cursor); };
+  const steers = await agent(t, instance);
+  await gated(steers.conversation);
+  // The window's mid-turn pick (next): the steer goes into this turn.
+  const nudge = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'nudge in plan', when: 'steer', mode: 'Plan', next: true });
+  assert.ok(nudge.status < 300, JSON.stringify(nudge));
+  assert.deepEqual((await held(steers.conversation, 'nudge in plan')).filter((e) => e.data.when === 'queue'), [], 'a steer that picks a mode was queued for a new turn instead of steered in');
+  const now = async () => (await call(instance, '/chat/events?after=0')).body.cursor;
+  let c = await now(); fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'turn-end', c); fs.rmSync(go);
+  const first = await events(instance, steers.conversation), gate = first.findIndex((e) => e.type === 'user' && e.data?.text === 'gate'), end = first.findIndex((e, i) => i > gate && e.type === 'turn-end');
+  assert.ok(first.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('nudge in plan')) > -1 && first.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('nudge in plan')) < end, 'the steer was not delivered in the running turn: ' + JSON.stringify(first.map((e) => e.type)));
+  // The phone's mode pick (mode, no next) still waits for the turn's end, which sets it.
+  await gated(steers.conversation);
+  const phone = await call(instance, `/chat/${steers.conversation}/prompt`, 'POST', { text: 'phone in plan', when: 'steer', mode: 'Plan' });
+  assert.equal(phone.status, 202, JSON.stringify(phone));
+  assert.equal((await held(steers.conversation, 'phone in plan')).at(-1)?.data?.when, 'queue', 'the phone picked Plan mid-turn and it went into the wider turn');
+  c = await now(); fs.writeFileSync(go, ''); await until(instance, (e) => e.conversation === steers.conversation && e.type === 'user' && String(e.data?.text).includes('phone in plan'), c);
+  // Its turn runs in Plan and the agent answers it.
+  let after = [], at = -1;
+  for (let i = 0; i < 100; i += 1) { after = await events(instance, steers.conversation); at = after.findIndex((e) => e.type === 'user' && String(e.data?.text).includes('phone in plan')); if (after.slice(at).some((e) => e.type === 'turn-end')) break; await pause(100); }
+  fs.rmSync(go);
+  assert.ok(at >= 0 && after.slice(at).some((e) => e.type === 'turn-end'), 'the phone message\'s turn did not end');
+  assert.equal(after.filter((e) => e.type === 'mode').at(-1)?.data?.name, 'Plan', 'the phone message did not run in Plan');
+  assert.ok(after.slice(at).some((e) => String(e.data?.content?.text).includes('echo:phone in plan')), 'the agent did not answer the phone message');
+  fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
+  const waits = await agent(t, instance);
+  await gated(waits.conversation);
+  const later = await call(instance, `/chat/${waits.conversation}/prompt`, 'POST', { text: 'later in plan', when: 'steer', mode: 'Plan', next: true });
+  assert.equal(later.status, 202, 'no steering: it waits for the turn end ' + JSON.stringify(later));
+  fs.writeFileSync(go, '');
+  await until(instance, (e) => e.conversation === waits.conversation && e.type === 'user' && String(e.data?.text).includes('later in plan'));
+  const lastMode = async () => (await events(instance, waits.conversation)).filter((e) => e.type === 'mode').at(-1)?.data?.name;
+  for (let i = 0; i < 100 && (await lastMode()) !== 'Plan'; i += 1) await pause(100);
+  const mine = await events(instance, waits.conversation);
+  assert.equal(await lastMode(), 'Plan', 'the waiting steer ran in the old mode: ' + JSON.stringify(mine.filter((e) => ['mode', 'user', 'held', 'turn-end'].includes(e.type)).map((e) => [e.type, e.data?.name ?? String(e.data?.text ?? '').slice(0, 30)])));
+  console.log('PASS O255 steer mode: a next pick steered in, a phone mode pick waited; without steering it waited and the next turn ran in Plan');
+});
+
+// O255 round 8: Plan picked mid-turn in a Codex chat and then taken back. The message sent with Plan picked and the one sent
+// after the pick was taken back (it leaves the plan switch out) are not joined, and the second does not run in Plan.
+test('O255: in a Codex chat, a message sent after a Plan pick was taken back does not join or run in Plan with the one sent before', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const go = path.join(instance.workspace, 'go');
+  const { conversation: chat } = await agent(t, instance, { provider: 'codex' });
+  let c = (await call(instance, '/chat/events?after=0')).body.cursor;
+  assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate' })).status, 202);
+  await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating', c);
+  const mode = (await events(instance, chat)).filter((e) => e.type === 'mode').at(-1)?.data?.name;
+  for (const body of [{ text: 'config', when: 'queue', mode, next: true, config: { collaboration_mode: 'plan' } }, { text: 'config', when: 'queue', mode, next: false }]) {
+    const r = await call(instance, `/chat/${chat}/prompt`, 'POST', body); assert.equal(r.status, 202, JSON.stringify(r));
+  }
+  fs.writeFileSync(go, '');
+  let said = [];
+  for (let i = 0; i < 150 && said.length < 2; i += 1) { said = (await events(instance, chat)).filter((e) => /collaboration_mode=/.test(String(e.data?.content?.text))).map((e) => e.data.content.text.match(/collaboration_mode=(\w+)/)[1]); await pause(100); }
+  fs.rmSync(go);
+  assert.deepEqual(said, ['plan', 'default'], 'the two were joined, or the second ran in Plan');
+  console.log('PASS O255 codex plan taken back: the message sent with Plan ran in Plan, the one sent after it was taken back ran with Plan off, as two turns');
+});

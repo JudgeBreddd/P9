@@ -3,7 +3,8 @@
 // daemon and the fake agent.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -29,8 +30,8 @@ async function setup(t, name, files = []) {
   for (const file of files) await writeFile(path.join(instance.workspace, file), '');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-' + name + '-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
-  const launch = async () => {
-    const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const launch = async (other = '', state = instance.state) => { // other: a second window, with its own profile; state: another way in (slowLink)
+    const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', state, '--user-data-dir=' + profile + other], env, chromiumSandbox: true, timeout: 20000 });
     const proc = app.process();
     t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
     const page = await app.firstWindow();
@@ -144,33 +145,116 @@ test('An agent slow to answer steering (6 s, past the 5 s wait): the message rea
   console.log('PASS slow steering: an answer after 6 s delivered the message once, not queued and sent again at the turn end; a refusal after 6 s showed a notice with the text');
 });
 
+// O255: they wait in the daemon's hold, so the turn's end sends them as one prompt (as it does every held message).
 test('An agent that cannot take a message mid-turn: it waits queued, is kept across a window restart, and goes when the turn ends', { timeout: 120000 }, async (t) => {
-  const { instance, id, launch, open, users, ends } = await setup(t, 'kept', ['no-steering']);
+  const { id, launch, open, users, ends } = await setup(t, 'kept', ['no-steering']);
   await until(async () => await ends() === 1, 'hello answered');
   let { app, page } = await launch(), chat = await open(page);
-  await chat.send('slow');
-  await chat.pane.getByText('working', { exact: true }).waitFor({ timeout: 15000 });
+  await chat.send('tools 8'); // 8 tool calls of 3 s: a turn that ends by itself
+  await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ timeout: 15000 });
   await chat.send('first');
   await until(async () => (await chat.queued()).length === 1, 'first queued');
   await chat.send('second');
+  // The strip is the daemon's hold now (O255), so it shows after the daemon's answer.
+  await until(async () => (await chat.queued()).length === 2, 'second queued');
   assert.deepEqual(await chat.queued(), ['Queued: first', 'Queued: second']);
   await app.close();
   ({ app, page } = await launch()); chat = await open(page);
-  await chat.pane.getByText('working', { exact: true }).waitFor({ timeout: 15000 });
-  await page.waitForTimeout(2000);
+  await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ state: 'attached', timeout: 15000 }); // the open chat's row hides it
+  await until(async () => (await chat.queued()).length === 2, 'both queued after the restart');
   assert.deepEqual(await chat.queued(), ['Queued: first', 'Queued: second'], 'queued messages kept across the restart');
-  assert.equal(await chat.pane.locator('.queue [data-qdel]').count(), 2);
-  // O125 (4): the local queue keeps when each was queued, also across the restart, so the strip names the oldest wait.
+  assert.equal(await chat.pane.locator('.queue [data-unhold]:not([data-now])').count(), 2);
+  // O125 (4): each keeps when it was queued, also across the restart, so the strip names the oldest wait.
   assert.equal(await chat.pane.locator('.queue > summary').innerText(), '2 queued, oldest waiting <1 min');
-  await call(instance, '/chat/' + id + '/cancel', 'POST');
-  await until(async () => await ends() === 4, 'first and second sent after the turn ended, one turn each');
-  assert.deepEqual(await users(), ['hello', 'slow', 'first', 'second']);
+  await until(async () => await ends() === 3, 'first and second sent after the turn ended', 45000);
+  assert.deepEqual(await users(), ['hello', 'tools 8', 'first\n\nsecond']);
   await until(async () => (await chat.queued()).length === 0, 'queue empty');
   await app.close();
   ({ app, page } = await launch()); chat = await open(page);
   await page.waitForTimeout(3000);
-  assert.deepEqual([await chat.queued(), (await users()).length], [[], 4]);
+  assert.deepEqual([await chat.queued(), (await users()).length], [[], 3]);
   console.log('PASS kept queue: without steering, 2 messages queued behind a turn were kept across a restart and sent when it ended; nothing resent after another restart');
+});
+
+// O255, O256: a message sent while a turn runs waits in the daemon, the one list every window draws. A second window sees it,
+// a reload keeps it, send now and order hold across windows, and each goes with the files attached when it was sent, not
+// with what the box holds at the turn's end. Fails on main: the window kept these in its own queue as text only, so the files
+// went back into the box (and out with whichever message was sent next), and a second window saw nothing queued.
+test('O255: queued messages wait in the daemon: a second window sees them, a reload keeps them, each goes with its own files', { timeout: 150000 }, async (t) => {
+  const { instance, id, launch, open, users, ends } = await setup(t, 'o255', ['no-steering']);
+  await until(async () => await ends() === 1, 'hello answered');
+  const attach = async (page, pane, name) => {
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
+    await chooser.setFiles([{ name, mimeType: 'text/plain', buffer: Buffer.from(name) }]);
+    await pane.locator('.attach .att-file', { hasText: name }).waitFor({ timeout: 10000 });
+  };
+  const a = await launch();
+  let chatA = await open(a.page);
+  await chatA.send('tools 8'); // 8 tool calls of 3 s: a turn that ends by itself
+  await a.page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ timeout: 15000 });
+  await attach(a.page, chatA.pane, 'one.txt'); await chatA.send('first');
+  await until(async () => (await chatA.queued()).length === 1, 'first queued');
+  await attach(a.page, chatA.pane, 'two.txt'); await chatA.send('second');
+  await until(async () => (await chatA.queued()).length === 2, 'second queued');
+  assert.equal(await chatA.pane.locator('.attach').count(), 0, 'each file went with its message: none is back in the box');
+  // Take back (the x): the message and its own file come back into the box; the box is then emptied for what follows.
+  await attach(a.page, chatA.pane, 'three.txt'); await chatA.send('third');
+  await until(async () => (await chatA.queued()).length === 3, 'third queued');
+  await chatA.pane.locator('.queue [data-held]', { hasText: 'third' }).locator('[data-unhold]:not([data-now])').click();
+  // Its file comes back from the held entry (carry) or, when the prompt's 202 comes after the take-back, from that answer.
+  const box = async () => JSON.stringify([await chatA.pane.locator('.composer textarea').inputValue(), (await chatA.pane.locator('.attach .att-file').allInnerTexts()).map((x) => x.split('\n')[0])]);
+  await until(async () => (await chatA.queued()).length === 2 && await box() === JSON.stringify(['third', ['three.txt']]), 'take-back gives the message its file back');
+  await chatA.pane.locator('.attach [data-unattach]').click(); await chatA.pane.locator('.composer textarea').fill('');
+  const b = await launch('-b'), chatB = await open(b.page);
+  await until(async () => (await chatB.queued()).length === 2, 'the second window shows both queued');
+  await a.page.reload(); await a.page.locator('#rChat').waitFor(); chatA = await open(a.page);
+  await until(async () => (await chatA.queued()).length === 2, 'both still queued after a reload');
+  assert.deepEqual(await chatA.queued(), ['Queued: first', 'Queued: second']);
+  await attach(a.page, chatA.pane, 'draft.txt'); // a later draft's file, not sent
+  // Send now from the other window: the turn stops, second goes alone, and first follows at that turn's end.
+  await chatB.pane.locator('.queue [data-held]', { hasText: 'second' }).locator('[data-now]').click();
+  await until(async () => (await users()).length === 4, 'second sent now, first after it', 30000);
+  const sent = (await said(instance, id, 'user')).slice(2).map((e) => [e.data.text, (e.data.files ?? []).map((f) => f.name)]);
+  assert.deepEqual(sent, [['second', ['two.txt']], ['first', ['one.txt']]]);
+  await until(async () => (await chatA.queued()).length === 0 && (await chatB.queued()).length === 0, 'both strips empty');
+  assert.deepEqual((await chatA.pane.locator('.attach .att-file').allInnerTexts()).map((x) => x.split('\n')[0]), ['draft.txt'], 'the unsent draft keeps its file');
+  console.log('PASS O255: 2 messages with a file each, queued in the daemon, seen by a second window and after a reload; send now from the other window sent second then first, each with its own file');
+});
+
+// O255, the row's slow link: the window reaches the daemon through a link that sends each request on at BPS bytes a second
+// (as a tunnel does), so a send with a 2 MB file takes about 3 s to arrive and a short one sent right after it arrives
+// at once. The window sends a chat's prompts one at a time, so the short one cannot pass it: they wait, and go, in the
+// order typed. (Over the local socket a 5 MB send arrives first anyway, so this needs the link.)
+const BPS = 1_000_000;
+async function slowLink(to, at, t) {
+  const server = net.createServer((client) => {
+    const up = net.connect(to); let tail = Promise.resolve();
+    client.on('data', (c) => { tail = tail.then(() => new Promise((r) => setTimeout(r, c.length * 1000 / BPS))).then(() => up.destroyed || up.write(c)); });
+    client.on('end', () => { tail = tail.then(() => up.end()); });
+    up.pipe(client);
+    const end = () => { client.destroy(); up.destroy(); }; client.on('error', end); up.on('error', end); up.on('close', end);
+  });
+  await new Promise((r) => server.listen(at, r)); t.after(() => server.close());
+}
+test('O255: two sends in a row keep their order over a slow link when the first carries a big file', { timeout: 150000 }, async (t) => {
+  const { instance, id, launch, open, users, ends } = await setup(t, 'o255-order', ['no-steering']);
+  await until(async () => await ends() === 1, 'hello answered');
+  const slow = await mkdtemp(path.join(os.tmpdir(), 'p9-slow-')), sock = path.join(slow, 'daemon.sock');
+  const creds = JSON.parse(await readFile(path.join(instance.state, 'desktop.json'), 'utf8'));
+  await writeFile(path.join(slow, 'desktop.json'), JSON.stringify({ ...creds, socketPath: sock }), { mode: 0o600 });
+  await slowLink(path.join(instance.state, 'daemon.sock'), sock, t);
+  const { page } = await launch('', slow), chat = await open(page);
+  await chat.send('tools 8'); // 8 tool calls of 3 s: a turn that ends by itself
+  await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ timeout: 15000 });
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), chat.pane.locator('[data-attach]').click()]);
+  await chooser.setFiles([{ name: 'big.txt', mimeType: 'text/plain', buffer: Buffer.alloc(2 * 1024 * 1024, 'x') }]);
+  await chat.pane.locator('.attach .att-file', { hasText: 'big.txt' }).waitFor({ timeout: 10000 });
+  await chat.send('big'); await chat.send('small'); // no wait between them
+  await until(async () => (await chat.queued()).length === 2, 'both queued', 30000);
+  assert.deepEqual(await chat.queued(), ['Queued: big', 'Queued: small']);
+  await until(async () => await ends() === 3, 'the turn ended and both went', 60000);
+  assert.deepEqual((await users()).slice(2), ['big\n\nsmall']);
+  console.log('PASS O255 order: over a slow link, a 2 MB send then a short one right after it waited and went in the order typed');
 });
 
 // Renderer main-thread time from Chromium's own counters (seconds), and a CPU profile's top self-time functions.

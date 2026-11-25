@@ -633,7 +633,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // narrow (delegate.mjs): the mode each kept message may run in now, from its senders' modes now, or { error }.
   // O109 FIX1: a message that may be a repeat says so in a block of its own before the user's text, never inside it, so the
   // text keeps its own MAX_TEXT budget and is never cut. repeats marks such a body in memory; the ledger keeps repeat: true.
-  const repeats = new WeakSet();
+  const repeats = new WeakSet(), nows = new WeakSet(); // nows (O255): sent now, ahead of the rest and alone
   const again = (body) => (repeats.has(body) ? [{ type: 'text', text: REPEAT + '\n\n' }] : []);
   // A kept entry by its queued ID: patch it in place (steerHeld's trying mark).
   const markKept = (chat, queued, patch) => setResuming(chat, resumingOf(chat).map((i) => (i.queued === queued ? { ...i, ...patch } : i)));
@@ -1436,6 +1436,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // question or approval open (a worker's "ended its turn" line declined its lead's start_sprint approval).
   const decline = (id, session, body) => {
     if (senders.has(body)) return;
+    // O255: the decline may end the turn cancelled; refused meanwhile and held, the message goes first at that end, not back.
+    if (session.pending.size) nows.add(body);
     for (const [request, pending] of session.pending) {
       // O183: a message that declines the plan approval arms planDeclined like the reject option does in answer(),
       // so the prompt that fails with the adapter's plan diagnostic reads as a cancelled turn, not a raw error.
@@ -1509,6 +1511,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   function hold(id, session, body, images, when, repicks = false, was = []) {
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
+    // O255: a held message that leaves Codex's plan switch out goes as it was when sent, never joined to (or run after, in) one
+    // sent with Plan picked: an empty pick means the session's, which that one may have changed by the time this goes.
+    for (const p of session.pickers ?? []) if (p.category === 'collaboration_mode' && body.config?.[p.id] === undefined) body.config = { ...body.config, [p.id]: p.current };
     const item = { id: randomUUID(), body, images, allowed: captureAuthority(), was };
     const old = waitingReplace(session, body);
     // FIX2: a replacement takes the replaced message's place and delivery: queued stays queued (never steered in now).
@@ -1536,7 +1541,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     if (old) unheld(id, [old], 'replaced');
-    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }) });
+    emit(id, 'held', { id: item.id, text: body.text, ...shown(images), when: mode, ...(old && { replaces: old.id }), ...(notes.has(body) && { info: true }) }); // info: a note, which has no send-now
     if (kept) crashAt('held-event');
     crashHook(body);
     if (kept) crashAt('hold-write');
@@ -1571,9 +1576,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.queued.unshift(item);
     if (!session.turn) drain(id, session);
   }
-  // At a turn's end: one prompt of as many waiting messages as fit its limits, held first; the rest wait for its end.
+  // O255: send now (a held one's bolt, or a prompt sent 'now'): first in line, and the turn stops; drain sends it at that end.
+  // Not after the user's Stop (it ends the turn and hands back what waits), nor a note (it starts no turn of its own).
+  // The cancel is awaited, so a failed one is told, and the message waits first in line for the turn's end instead.
+  async function sendNow(id, session, at) {
+    const list = [session.held, session.queued].find((l) => l.some((x) => x.id === at));
+    if (!list || (session.turn && session.halt === session.turn) || notes.has(list.find((x) => x.id === at).body)) return refused(409, 'not-held');
+    const [item] = list.splice(list.findIndex((x) => x.id === at), 1);
+    nows.add(item.body); session.queued.unshift(item); markKept(id, item.id, { now: true }); // a restart sends it first (resumeLeft)
+    if (!session.turn) { if (row(id)?.state !== 'turn') drain(id, session); return { status: 200, ok: true }; } // starting: first at its end
+    try { await api.cancel(id, undefined, true); } catch { nows.delete(item.body); markKept(id, item.id, { now: undefined }); return refused(502, 'cancel-failed'); }
+    return { status: 200, ok: true };
+  }
+  // At a turn's end: one prompt of as many waiting messages as fit its limits, sent-now first, then held; the rest wait for its end.
+  // A cancelled turn hands the rest back (unheld 'cancelled'), unless one was sent now: then they wait behind it.
   async function drain(id, session, cancelled) {
-    const all = [...session.held.splice(0), ...session.queued.splice(0)];
+    const all = [...session.held.splice(0), ...session.queued.splice(0)].sort((x, y) => nows.has(y.body) - nows.has(x.body));
     // A note that did not get into the turn waits for the chat's next prompt: it starts none, and a cancel does not lose it.
     const items = all.filter((item) => !notes.has(item.body));
     for (const item of all.filter((x) => notes.has(x.body))) {
@@ -1585,7 +1603,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // O109: P9 shutting down is not the user's Stop: what hold() kept in resuming:<chat> stays waiting, and the next
     // start sends it (resumeLeft). Only what was not kept is told as not sent.
     if (closing && !cancelled) { const kept = new Set(resumingOf(id).map((i) => i.queued)); return unheld(id, items.filter((item) => !kept.has(item.id)), 'stopped'); }
-    if (cancelled || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
+    if ((cancelled && !(nows.has(items[0].body) && items[0].allowed())) || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
     const gone = items.filter((item) => !item.allowed());
     unheld(id, gone, 'session-ended');
     // A question is checked again when its turn comes: one that waited while the user closed this chat to questions, or
@@ -1608,7 +1626,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // the joined prompt could not carry would be lost. Picks that agree (or are left out) join, and all of them are sent.
         || (send.length > 0 && !agrees(model, config, item.body))
         // O109 FIX1: a message that may be a repeat goes alone, so its label speaks for it only.
-        || (send.length > 0 && (repeats.has(item.body) || repeats.has(send[0].body)));
+        || (send.length > 0 && (repeats.has(item.body) || repeats.has(send[0].body) || nows.has(item.body) || nows.has(send[0].body)));
       // rest: once one message waits for the next turn, so does every later one, or they would run out of order.
       if (rest || (send.length && (other || joined.length > MAX_TEXT || photos(images).length + photos(item.images).length > MAX_IMAGES || images.length + item.images.length - photos(images).length - photos(item.images).length > MAX_FILES))) { rest = true; session.queued.push(item); continue; }
       send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode; model ??= item.body.model; config = { ...config, ...item.body.config };
@@ -1783,7 +1801,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof body?.text !== 'string' || !imagesOk(images) || !filesOk(files) || images.length - photos(images).length + files.length > MAX_FILES || (files.length && !attachDir) || (!body.text.trim() && !images.length && !files.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (files.some((file) => file.data.length > MAX_FILE)) { release(); return { status: 413, error: 'file-too-large', message: 'A file is over 6 MiB (8 MiB as sent); nothing was sent.' }; }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
-      if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }
+      // O255: next (the window): its mode and Codex's plan switch are a mode picked mid-turn, what it runs in if it waits. A steer
+      // of it still goes into the running turn (repicks), which keeps its mode; the phone's and agents' mode picks wait for the turn's end.
+      if (body.next !== undefined && typeof body.next !== 'boolean') { release(); return refused(400, 'request-refused'); }
+      if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue' && body.when !== 'now') { release(); return refused(400, 'request-refused'); }
       if (body.replaces !== undefined && (typeof body.replaces !== 'string' || body.replaces.length > 64)) { release(); return refused(400, 'request-refused'); }
       if (body.placed !== undefined && body.placed !== true) { release(); return refused(400, 'request-refused'); }
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
@@ -1832,7 +1853,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (conversation.state === 'turn') {
         const session = live.get(id);
         try {
-          // No steering: 409 as before, and the window keeps the message queued itself.
+          // O255: after the user's Stop nothing new joins this turn or waits behind it (its end hands back what waits); a note
+          // goes on to steer(), whose 409 parks it.
+          if (session?.turn && session.halt === session.turn && !notes.has(body)) return refused(409, 'turn-stopping'); // not turn-running: the phone would queue it
+          // O255: the daemon keeps every waiting message (the window keeps none): one with no way into the turn (no steering,
+          // or the turn ending meanwhile) waits for its end; one sent now waits first and stops the turn.
           // During a turn that answers another chat, everything waits for its end.
           // O133: a steer joins the running turn, which keeps its model and effort, so a message that picks another one waits
           // for the turn's end and goes as the next prompt, which sets them first (O133: an Opus pick sent
@@ -1840,11 +1865,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // O133 mode half: a mode is set by the next prompt too (want below), so one other than the session's waits the same
           // way. Under the agent lock every prompt runs narrow whatever it picks, so there a mode pick changes nothing.
           const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
-            || (Array.isArray(picks) && picks.some(([k, v]) => session.pickers?.find((x) => x.id === k)?.current !== v))
-            || (!locked && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
+            || (Array.isArray(picks) && picks.some(([k, v]) => { const p = session.pickers?.find((x) => x.id === k); return p?.current !== v && !(body.next && p?.category === 'collaboration_mode'); }))
+            || (!locked && !body.next && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
+          if (session?.turn && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks, held ?? []);
           if (solo) return refused(409, 'turn-running');
-          return await steer(id, body, images, held);
+          // A steer a Stop cut (session.cut) is refused still: holding it would send it as work after the Stop. A note
+          // (its 409 parks it, note()) and a command (refused during a turn) keep their 409 too. So does one with no prompted
+          // turn (an unprompted run): no turn end would send it, and the drain below would steer it again, round and round.
+          const turn = session?.turn, steered = await steer(id, body, images, held);
+          if (steered.status === 409 && turn && session?.halt === turn && !notes.has(body)) return refused(409, 'turn-stopping'); // a Stop came while it waited
+          if (steered.status !== 409 || !turn || live.get(id) !== session || session.stopping || session.cut === turn || notes.has(body) || commands.has(body)) return steered;
+          const r = hold(id, session, body, images, 'queue', repicks, held ?? []);
+          if (!session.turn) drain(id, session);
+          return r;
         } finally { release(); }
       }
       // No turn running: a note starts none. A chat that moved to another machine reads nothing here again, so its note is refused.
@@ -1854,6 +1888,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (closing) { release(); return refused(503, 'shutting-down'); }
       // The moved note goes in with the next message's user event; a command cannot carry it, so it waits for that one.
       if (bare && movedNote(db, id)) { release(); return refused(409, 'moved-note-waiting'); }
+      // O255: Interrupt during a run nobody prompted stops that run first, as it stops a prompted turn.
+      if (body.when === 'now' && unpromptedOn(id)) {
+        const stopped = await api.cancel(id).catch(() => refused(502, 'cancel-failed'));
+        if (stopped.status !== 200) { release(); return stopped; }
+        if (!['idle', 'running', 'stopped'].includes(row(id).state)) { release(); return refused(409, row(id).state); }
+      }
       setState(id, 'turn');
       // O10: and the failed Send to remote's note, which a command does not carry or use up (its user event says command).
       const note = [movedNote(db, id), bare ? null : failedMoveNote(db, id)].filter(Boolean).join('') || null; // read before this message's own user event
@@ -1980,7 +2020,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         // Nor after a turn that answered another chat: its asker has the reply, and it was not the parent's task.
         else if (!more && !session.stopping && ended?.stopReason !== 'cancelled') for (const hook of settledHooks) { try { hook(id, Boolean(ended)); } catch {} }
-        drain(id, session, ended?.stopReason === 'cancelled');
+        drain(id, session, ended?.stopReason === 'cancelled' || session.halt === turn); // a Stop as it ended: still stopped
       });
       return { status: 202, turn };
     },
@@ -2000,7 +2040,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return { status: 200, ok: true };
     },
     // by: what cut it when not the user (stop_chat names the chat), said with the chat's next prompt (O231).
-    async cancel(id, by) {
+    // now (sendNow only): the turn stops for a message sent now, which waits first; the user's Stop (no now) hands back
+    // everything waiting, a message sent now included.
+    async cancel(id, by, now) {
       const session = ID.test(id) && live.get(id);
       if (!session?.turn && !session?.quiet && !session?.ghost && !session?.unstop) return refused(409, 'no-turn');
       // A question or approval still open is declined, prompted turn or not, so the agent's wait on it ends.
@@ -2025,14 +2067,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         return { status: 200, ok: true };
       }
       if (typeof by === 'string') cutBy(id, by);
+      if (!now) { session.halt = session.turn; for (const item of [...session.held, ...session.queued]) if (nows.delete(item.body)) markKept(id, item.id, { now: undefined }); }
       session.cut = session.turn; // MC-15: a Stop while the turn's start snapshot runs sends no prompt
-      await session.agent.cancel({ sessionId: session.sessionId });
+      try { await session.agent.cancel({ sessionId: session.sessionId }); } catch (error) { if (!now && session.halt === session.turn) session.halt = null; throw error; } // the turn runs on: sends wait again
       return { status: 200, ok: true };
     },
     // CP1: the x on a message still waiting in this turn. Gone already (sent, or handed back at the turn's end): 409.
     unhold(id, body) {
       const session = ID.test(id) && live.get(id);
-      if (typeof body?.held !== 'string') return refused(400, 'request-refused');
+      if (typeof body?.held !== 'string' || (body.now !== undefined && body.now !== true)) return refused(400, 'request-refused');
+      if (body.now) return session ? sendNow(id, session, body.held) : refused(409, 'not-held'); // a promise: the route awaits it
       for (const list of session ? [session.held, session.queued] : []) {
         const at = list.findIndex((item) => item.id === body.held);
         if (at >= 0) { unheld(id, list.splice(at, 1), 'removed'); return { status: 200, ok: true }; }
@@ -2145,7 +2189,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           if (event && (event.type === 'unheld' || event.steered)) return [];
           const unsure = event || i.trying;
           return [{ ...i, queued: undefined, prior: undefined, trying: undefined, was: [i.queued, ...(i.prior ?? [])], ...(unsure && { body: { ...i.body, repeat: true } }) }];
-        }));
+        }).sort((x, y) => !!y.now - !!x.now)); // O255: one sent now goes first
         deliver(lead, narrow).catch(() => {});
       }
     },

@@ -1583,7 +1583,7 @@ test('Delegate O147: ready records the sent commit, refuses one git does not kno
 });
 
 // Dogfood 3.5, second attempt: each refusal a lead or worker met says what to do.
-test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready says not-ready, then passes from a sibling; a steer into a turn without steering names queue; too-many-chats names close: true', { timeout: 180000 }, async (t) => {
+test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready says not-ready, then passes from a sibling; a steer into a turn without steering waits for its end; too-many-chats names close: true', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Dogfood', work: { kind: 'new', parent: '', name: 'dogfood' } })).body.project.id;
@@ -1636,7 +1636,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   // 'slow' turn that step steers into (CI: the steer met an idle chat, reason mode-failed, at the assertion below).
   await until(instance, (e) => e.conversation === made.chat && e.type === 'user' && e.data?.text?.startsWith('[p9] D1 passed review'));
   await a.done(made.chat);
-  // Finding 4: an agent without steering (Claude's on ACP 2) cannot take a steer into its running turn; the refusal names queue.
+  // Finding 4: an agent without steering (the stand-in agent with its no-steering file) cannot take a steer into its running turn; O255: it waits for the turn's end.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), ''); // the stand-in agent reads it in its working folder, like the phone test
   await a.tool('stop_chat', { chat: made.chat, close: true });
   assert.equal((await a.tool('archive_chat', { chat: made.chat, archived: false })).action, 'unarchived'); // O132: closed is archived; back first
@@ -1645,8 +1645,7 @@ test('Delegate dogfood 3.5: ready names the field at fault; verdict before ready
   await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'working', before);
   for (const when of ['steer', 'auto']) {
     const got = await a.tool('send_chat', { chat: made.chat, text: 'hi', when });
-    assert.equal(got.reason, 'turn-running', JSON.stringify(got));
-    assert.match(got.detail ?? '', /when: queue/, when + ': ' + JSON.stringify(got));
+    assert.equal(got.sent, 'waiting for the turn to end', when + ': ' + JSON.stringify(got));
   }
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'mode', when: 'queue' })).sent, 'waiting for the turn to end');
   const send = DELEGATE_TOOLS((p) => p).find(([name]) => name === 'send_chat')[1];
@@ -1940,7 +1939,7 @@ test('O125 point 2: two notes from one worker while the steerable parent runs a 
 // tool call's end and goes into the turn there, before the turn ends. With an agent that cannot steer (Claude's on ACP 2;
 // both real adapters steer today), nothing can enter a running turn: the steer is refused, naming queue, and a queued
 // message goes when the turn ends.
-test('O125 point 3: send_chat steer reaches a working chat at its next tool step, before the turn ends; without steering it is refused, naming queue', { timeout: 120000 }, async (t) => {
+test('O125 point 3: send_chat steer reaches a working chat at its next tool step, before the turn ends; without steering it waits for the turn end (O255)', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const a = await agent(t, instance);
@@ -1959,19 +1958,18 @@ test('O125 point 3: send_chat steer reaches a working chat at its next tool step
   const end = at((e) => e.type === 'turn-end');
   assert.ok(done >= 0 && steered > done && answered > steered && answered < end, 'not steered in at the tool step, before the turn end: ' + JSON.stringify({ done, steered, answered, end }));
   await a.tool('stop_chat', { chat: made.chat });
-  // Without steering (read at the chat's start), a steer is refused and names queue; a queued message goes at the turn's end.
+  // Without steering (read at the chat's start), O255: a steer waits for the turn's end, as a queued message does.
   fs.writeFileSync(path.join(instance.workspace, 'no-steering'), '');
   const plain = await a.tool('open_chat', { text: 'tools 2', title: 'Plain' });
   await tools(plain.chat);
   const refused = await a.tool('send_chat', { chat: plain.chat, text: 'urgent', when: 'steer' });
-  assert.equal(refused.reason, 'turn-running', JSON.stringify(refused));
-  assert.match(refused.detail ?? '', /when: queue/);
+  assert.equal(refused.sent, 'waiting for the turn to end', JSON.stringify(refused));
   assert.equal((await a.tool('send_chat', { chat: plain.chat, text: 'later', when: 'queue' })).sent, 'waiting for the turn to end');
   await until(instance, (e) => e.conversation === plain.chat && e.type === 'user' && e.data.text?.endsWith('later'));
   const all = await events(instance, plain.chat);
   const later = all.findIndex((e) => e.type === 'user' && e.data.text?.endsWith('later'));
   assert.equal(all.slice(0, later).filter((e) => e.type === 'turn-end').length, 1, 'the queued message did not wait for the turn to end');
-  console.log('PASS O125 point 3: ' + JSON.stringify({ steer: sent.sent, order: { done, steered, answered, end }, plain: refused.reason }));
+  console.log('PASS O125 point 3: ' + JSON.stringify({ steer: sent.sent, order: { done, steered, answered, end }, plain: refused.sent }));
 });
 
 // O73: the window and phone draw a message another chat's agent sent under that chat's title, not "You". The event carries

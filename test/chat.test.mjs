@@ -116,12 +116,45 @@ test('declining the plan ends the turn as cancelled, not as an error', async (t)
   }
 });
 
+// O255 round 2: the user's Stop wins over a send-now. A bolt pressed after Stop (the turn still ending, or ended) is refused
+// and the message goes back to the box with the rest (unheld cancelled); it never starts a turn of its own after the Stop.
+test('O255: a send-now after Stop is refused, and the Stop hands the message back instead of sending it', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'slow' });
+  const { cursor } = await until(instance, said(id, 'working'));
+  const held = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'after the stop', when: 'queue' }));
+  assert.ok(held.body.held, held.text);
+  assert.equal((await call(instance, `/chat/${id}/cancel`, 'POST', {})).status, 200);
+  const now = await json(call(instance, `/chat/${id}/unhold`, 'POST', { held: held.body.held, now: true }));
+  assert.equal(now.status, 409, now.text);
+  const back = await until(instance, (e) => e.conversation === id && e.type === 'unheld' && e.data.id === held.body.held, cursor);
+  assert.equal(back.hit.data.why, 'cancelled');
+  const late = await json(call(instance, `/chat/events?after=${back.cursor}&wait=1500`));
+  assert.ok(![...back.seen, ...late.body.events].some((e) => e.conversation === id && e.type === 'user' && e.data.text === 'after the stop'), 'sent after the Stop');
+  console.log('PASS O255 stop beats now: bolt after Stop 409, the message handed back cancelled, never sent');
+});
+
+// O255 round 2: Interrupt during a run nobody prompted (bg-run's resumed tool call) stops that run first, as it stops a
+// prompted turn; before, the message went into the agent while that run went on.
+test('O255: Interrupt during an unprompted run stops the run, then sends', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'bg-run' });
+  const { cursor } = await until(instance, (e) => e.conversation === id && e.type === 'update' && e.data.toolCallId === 'resume-1' && e.data.status === 'in_progress');
+  const sent = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'right now', when: 'now' }));
+  assert.equal(sent.status, 202, sent.text);
+  const user = await until(instance, (e) => e.conversation === id && e.type === 'user' && e.data.text === 'right now', cursor);
+  assert.ok(user.seen.some((e) => e.conversation === id && e.type === 'turn-end' && e.data.unprompted && e.data.stopReason === 'cancelled'), 'the unprompted run was not stopped first: ' + JSON.stringify(user.seen.map((e) => e.type)));
+  console.log('PASS O255 interrupt unprompted: the run ended cancelled before the message went');
+});
+
 // O183: a plan can also be declined by message (a message sent while the approval is open cancels it, chat.mjs
 // decline()); it must end the same way as the reject option, not as the raw plan diagnostic.
 // O185: which receipt the decline message gets is the agent's timing, not a promise: the fake ends its turn the moment
 // the approval is resolved (as the real adapter's plan diagnostic does), so the steering is either taken into the
-// still-running turn (202 steered) or arrives past that turn's end and is answered 409 turn-running (seen twice on
-// CI). Both receipts are correct only if the approval was declined, the turn ended cancelled, and the message is not
+// still-running turn (202 steered) or arrives past that turn's end and is held for the next prompt (202 held; O255, it
+// was 409 turn-running, seen twice on CI). Both receipts are correct only if the approval was declined, the turn ended cancelled, and the message is not
 // lost. The fake's gate files force each interleaving, so both run on purpose; the first pass takes the natural race.
 test('declining the plan by message ends the turn as cancelled, not as an error', async (t) => {
   const instance = await start(t);
@@ -132,22 +165,19 @@ test('declining the plan by message ends the turn as cancelled, not as an error'
     const { hit: approval, cursor } = await until(instance, (event) => event.conversation === id && event.type === 'approval');
     assert.equal(approval.data.toolCall.kind, 'switch_mode');
     const sent = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'not this plan' }));
-    if (gate) assert.equal(sent.status, gate === 'plan-decline-waits-for-steer' ? 202 : 409, gate + ': ' + sent.text); // the gate forces its interleaving
+    if (gate) assert.deepEqual([sent.status, !!sent.body.steered], [202, gate === 'plan-decline-waits-for-steer'], gate + ': ' + sent.text); // the gate forces its interleaving
     const end = await until(instance, (event) => event.conversation === id && (event.type === 'turn-end' || event.type === 'error'), cursor);
     assert.ok(end.seen.some((event) => event.type === 'answered' && event.data.answer?.outcome?.outcome === 'cancelled'), 'declined, not answered: ' + JSON.stringify(end.seen.filter((event) => event.type === 'answered')));
     assert.deepEqual([end.hit.type, end.hit.data.stopReason], ['turn-end', 'cancelled'], JSON.stringify(end.hit));
-    if (sent.status === 202) {
+    if (sent.body.steered) {
       // Steered into the still-running turn, and the agent got it inside that turn.
-      assert.deepEqual([sent.status, sent.body.steered], [202, true], sent.text);
       assert.ok(end.seen.some(said(id, 'got:not this plan')), 'the decline message was delivered into the turn: ' + JSON.stringify(end.seen));
     } else {
-      // The turn had just ended (the decline's cancel ends it): 409 turn-running, the window's queue answer. The
-      // message is not lost: sent again as the next prompt it reaches the agent, which replies to it.
-      assert.deepEqual([sent.status, sent.body.error], [409, 'turn-running'], sent.text);
-      const again = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'not this plan' }));
-      assert.equal(again.status, 202, again.text);
+      // The turn had just ended (the decline's cancel ends it): O255, the daemon holds it (202 held) and sends it as the next
+      // prompt, ahead of anything else waiting, so it is not lost and is not handed back by the cancelled end.
+      assert.ok(sent.body.held, sent.text);
       const done = await until(instance, (event) => event.conversation === id && event.type === 'turn-end'
-        && event.data.stopReason === 'end_turn', end.cursor);
+        && event.data.stopReason === 'end_turn', cursor); // from the approval: on a slow runner the whole next turn can come in the cancelled end's batch
       assert.ok(done.seen.some(said(id, 'echo:not this plan')), 'the decline message reached the agent as the next prompt: '
         + JSON.stringify(done.seen.filter((event) => event.conversation === id)));
     }
