@@ -571,6 +571,7 @@ async function replaceEmpty(s, agent, folder, project = null, profile = null, mo
     outer.liveChat.call('deleteChat', { id, empty: true });
     return outer.toast({ kind: 'chat', txt: d.body?.error === 'not-empty' ? 'This chat has a message now, so it stays as it was.' : 'The chat could not be replaced.', level: 'warn' }, true);
   }
+  while (adding.has(s.id)) await adding.get(s.id).catch(() => {}); // a paste still being read (and its fallback to text) lands before what was typed and attached comes over
   outer.usedAgent(agent); w.done = true; swapIn(id);
 }
 async function pickChatFolder(s) {
@@ -882,7 +883,7 @@ async function attachNow(s, files) {
   const { attachFull, readAttachment } = m; let ok = true; // true: every file attached
   for (const file of files) {
     const full = attachFull(file, s.images ||= []); if (full) { ok = false; outer.toast({ kind: 'not attached', txt: full + '.', level: 'warn' }, true); continue; }
-    try { s.images.push(await readAttachment(file, s.images)); }
+    try { const got = await readAttachment(file, s.images); (s.images ||= []).push(got); } // the list as it is now: a send refused or a message taken back meanwhile replaced it
     catch (e) { ok = false; outer.toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
   }
   renderChats(); return ok;

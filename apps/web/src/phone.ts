@@ -849,6 +849,7 @@ one('#sheetBody').addEventListener('click', async event => {
     await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true });
     note('The chat already has a message or could not be replaced.'); return;
   }
+  while (adding.has(id)) await adding.get(id)!.catch(() => true); // a paste still being read (and its fallback to text) lands before the chat changes id
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
   // O61: the text typed goes with the chat to its new id. The box itself changes owner here, before the list is read again:
@@ -1258,7 +1259,7 @@ async function submitFromBox(event: Event) {
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { editDraft(id, (now) => now.replace(text, '').trim()); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -1372,11 +1373,12 @@ function addImages(files: Iterable<File>): Promise<boolean> {
   void run.finally(() => { if (adding.get(id) === run) adding.delete(id); }).catch(() => {}); return run;
 }
 async function attachNow(id: string, files: Iterable<File>) {
-  const list = attached.get(id) ?? []; attached.set(id, list); const say = (text = '') => { if (openId === id) note(text); };
+  const say = (text = '') => { if (openId === id) note(text); };
   say(); let ok = true; // true: every file attached
   for (const file of files) {
-    const full = attachFull(file, list); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
-    try { list.push(await readAttachment(file, list)); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
+    // the list as it is now: a send answered meanwhile took its own files from it
+    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
