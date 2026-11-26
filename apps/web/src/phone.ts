@@ -158,17 +158,18 @@ function keepPending(key: string, value?: Pending) {
   localStorage.setItem('p9-pending', JSON.stringify(all));
   return all;
 }
-async function mutate(path: string, body: Json, deadline = 0) {
+async function mutate(path: string, body: Json, deadline = 0, op = '') {
   if (!online()) throw new Error('offline');
   // O62: a long body (a message with photos, megabytes) is named by its digest. As the name itself it overflowed this
   // phone's storage, and the send failed before it left, with nothing said.
   const raw = JSON.stringify(body);
   const key = path + '\n' + (raw.length > 2000 ? 'sha256:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)))].map((byte) => byte.toString(16).padStart(2, '0')).join('') : raw);
-  const stored = keepPending('')[key];
-  const pending: Pending = stored && !stored.used ? stored : { id: crypto.randomUUID() };
-  keepPending(key, pending);
+  // op: the caller keeps the ID itself (a queued message's qid, stored with it), so a resend after a reload is the same operation.
+  const stored = op ? undefined : keepPending('')[key];
+  const pending: Pending = op ? { id: op } : stored && !stored.used ? stored : { id: crypto.randomUUID() };
+  if (!op) keepPending(key, pending);
   const relogin = () => {
-    keepPending(key, { ...pending, used: true });
+    if (!op) keepPending(key, { ...pending, used: true });
     toLogin();
     return new Error('login-required');
   };
@@ -188,7 +189,7 @@ async function mutate(path: string, body: Json, deadline = 0) {
   if (response.status === 401) throw relogin();
   // Any answer, 503 included, is final for this ID (the daemon replays it); only a lost request keeps it for the retry (R1-7).
   // 'outcome-unknown' is the daemon still running the first try of this ID: not an answer, so the ID stays for the next retry.
-  if (result.error !== 'outcome-unknown') keepPending(key);
+  if (!op && result.error !== 'outcome-unknown') keepPending(key);
   return { status: response.status, body: result };
 }
 let openId = ''; // the chat on the chat screen; '' is the Chats list
@@ -1057,9 +1058,10 @@ function queued(id: string): Queued[] {
 }
 // O267: an added message is kept only once storage has it (a full store refuses it, and it stays in the box); a sent or
 // taken-back one leaves the queue in memory even if the write fails, so it is never sent twice.
-function keepQueue(id: string, items: Queued[]): boolean {
+// must: Take back, whose text goes back in the box only once storage no longer holds it (a reopened app would send it).
+function keepQueue(id: string, items: Queued[], must = false): boolean {
   try { if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
-  catch { if (items.length > queued(id).length) return false; }
+  catch { if (must || items.length > queued(id).length) return false; }
   queues.set(id, items); return true;
 }
 // A question or approval still waiting for an answer in this chat.
@@ -1175,10 +1177,10 @@ async function drain() {
       if (Date.now() < (retryAt.get(id) ?? 0)) continue;
       for (let next = queued(id)[0]; next && !asking(id); next = queued(id)[0]) {
         const { qid, pick, spends, ...body } = next;
-        const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' });
+        const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' }, 0, qid); // O267: its qid is its operation, across reloads
         // O62: refused because the turn is still ending (a Stop just pressed: the daemon holds nothing for a turn that is
         // stopping). The message stays queued and goes a moment later; it used to come back into the box as "Not sent".
-        if (result.status === 409 && result.body.error === 'turn-running') { retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break; }
+        if (result.status === 409 && (result.body.error === 'turn-running' || result.body.error === 'outcome-unknown')) { retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break; }
         // Any other answer is final for this message: it went, or the daemon refused it and says why (the text goes back in its chat's box).
         keepQueue(id, queued(id).filter((item) => item.qid !== qid));
         // O209: taken from the queue, the picks it carried are in effect, so a newer pick of the same value is spent now (as a send taken at once).
@@ -1206,7 +1208,7 @@ one<HTMLElement>('#queued').onclick = async (event) => {
   }
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
   const id = openId, item = queued(id).find((entry) => entry.qid === button.dataset.unqueue); if (!item) return;
-  keepQueue(id, queued(id).filter((entry) => entry.qid !== item.qid));
+  if (!keepQueue(id, queued(id).filter((entry) => entry.qid !== item.qid), true)) { note('Not taken back: this phone\'s storage refused the change. It is still queued.'); return; }
   putBack(id, item.text); renderQueue();
 };
 // P4: one tap sends with the keyboard open. The send button never takes focus, so the box keeps it: no blur, no
@@ -1282,7 +1284,7 @@ async function submitFromBox(event: Event) {
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }])) { note('Not queued: this phone\'s storage is full. Your message is still in the box.'); return; }
+    else { if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }])) { if (typed) editDraft(id, (now) => now.includes(typed) ? now : typed + (now ? '\n' + now : '')); note('Not queued: this phone\'s storage is full. Your message is back in the box.'); return; } // O267: a box changed meanwhile gets it back above what is there
       spend(id, picked, sentPids); if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }

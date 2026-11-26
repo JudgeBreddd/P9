@@ -1475,5 +1475,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, loadChat, keepPlace, sentImgs, takenBack };
+  return { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, loadChat, keepPlace, sentImgs, takenBack, turnsOf };
 }
