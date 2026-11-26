@@ -10,8 +10,8 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 // Namespace import, so the asserts (not a missing export) are what fail on code without these.
 const ACP = agents.ACP ?? {}, TELL_START = agents.TELL_START ?? {};
 
-test('acp catalog: claude asks ACP 2 (A1) and starts quietly, codex asks ACP 2 and shows its start mode; acpAsk reads the catalog', () => {
-  assert.deepEqual(agents.CATALOG.map((a) => [a.id, ACP[a.id], TELL_START[a.id]]), [['claude', 2, false], ['codex', 2, true]]);
+test('acp catalog: claude asks ACP 1 and starts quietly, codex asks ACP 2 and shows its start mode; acpAsk reads the catalog', () => {
+  assert.deepEqual(agents.CATALOG.map((a) => [a.id, ACP[a.id], TELL_START[a.id]]), [['claude', 1, false], ['codex', 2, true]]);
   assert.ok(Object.isFrozen(ACP) && Object.isFrozen(TELL_START));
   for (const a of agents.CATALOG) {
     assert.equal(acpAsk(a.id, {}), ACP[a.id], a.id);

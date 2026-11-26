@@ -14,10 +14,6 @@
 //   diffs            a git patch                                    -> one diff per file: its hunks and whether it is new (O222: no text copy)
 //   permission       title + subject                                -> toolCall
 //   plan_update, notice                                             -> plan, the warning line's message chunk (O221)
-//   steering         claude-agent-acp 0.112.0 has no _session/        -> A1: its init says steering is supported, and P9's
-//                    steering on 2: a prompt sent while a turn runs      _session/steering goes as a session/prompt; its
-//                    is steered into it (priority now), answered         answer is v1's outcome: injected while P9's turn
-//                    once Claude Code takes it in                        is live, else startedNewTurn (chat.mjs CP8 ends that turn)
 //   command output   terminal_update, base64, id = the tool call's;  -> the tool call's text content (its last 20,000 chars)
 //                    streamed as terminal_output_chunk pieces          (O219: each new piece once, marked _meta['p9/append'])
 //   its exit         exitStatus {exitCode, signal}                  -> O220: if not 0 or a signal, a tool_call_update with _meta['p9/exit']
@@ -107,9 +103,9 @@ const content = (list) => Array.isArray(list) ? list.flatMap((item) => (item?.ty
 const tool = (call) => (call && Array.isArray(call.content) ? { ...call, content: content(call.content) } : call);
 
 export function v1Stream(stream) {
-  let v2 = false, steerByPrompt = false;
+  let v2 = false;
   let initId;
-  const sent = new Map(); // request id -> what its reply needs: { prompt: sessionId }, { steer: sessionId } or { config: true }
+  const sent = new Map(); // request id -> what its reply needs: { prompt: sessionId } or { config: true }
   const turns = new Map(); // sessionId -> { id, live }: the held v1 prompt request; live once the agent took it
   const tools = new Set(); // sessionId + toolCallId already announced as a tool_call
   // O121 part 3, O219: each running command's output not yet shown, by sessionId + terminalId (the tool call's id):
@@ -163,14 +159,6 @@ export function v1Stream(stream) {
     }
     if (!v2 || message.id === undefined || !message.method) return message;
     const params = message.params ?? {};
-    // A1: a steer as a busy prompt. Its turn is not touched: the turn P9 prompted still ends with the idle (the adapter
-    // holds it open for a prompt steered in; one sent after P9's prompt, even before it starts, steers into it). With no
-    // prompt of P9's open, promptRequired is answered as v1 does, sending nothing: a busy prompt to an idle agent would
-    // start a turn P9 never prompted.
-    if (message.method === '_session/steering' && steerByPrompt && !turns.has(params.sessionId) && params._meta?.steering?.idleBehavior === 'promptRequired') {
-      emit({ jsonrpc: '2.0', id: message.id, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } }); return null;
-    }
-    if (message.method === '_session/steering' && steerByPrompt) { sent.set(message.id, { steer: params.sessionId }); return { jsonrpc: '2.0', id: message.id, method: 'session/prompt', params: { sessionId: params.sessionId, prompt: params.prompt } }; }
     if (message.method === 'session/prompt') { sent.set(message.id, { prompt: params.sessionId }); turns.set(params.sessionId, { id: message.id, live: false }); }
     else if (message.method === 'session/new' || message.method === 'session/resume') {
       sent.set(message.id, { config: true });
@@ -257,11 +245,8 @@ export function v1Stream(stream) {
       if (!(r?.protocolVersion >= 2)) return [message];
       v2 = true;
       const session = r.capabilities?.session ?? {};
-      // A1: no steering of its own: v2 steers a prompt sent while a turn runs, so P9 is told it can steer (toAgent).
-      steerByPrompt = r._meta?.steering === undefined;
-      const meta = steerByPrompt ? { ...r._meta, steering: { supported: true } } : r._meta;
       // close, resume and list are v2's baseline, so v2 does not list them; v1 code asks before closing.
-      return [{ ...message, result: { protocolVersion: r.protocolVersion, agentInfo: r.info, authMethods: r.authMethods ?? [], ...(meta && { _meta: meta }),
+      return [{ ...message, result: { protocolVersion: r.protocolVersion, agentInfo: r.info, authMethods: r.authMethods ?? [], ...(r._meta && { _meta: r._meta }),
         agentCapabilities: { promptCapabilities: { image: !!session.prompt?.image, embeddedContext: !!session.prompt?.embeddedContext, audio: !!session.prompt?.audio },
           mcpCapabilities: { http: !!session.mcp?.http, sse: !!session.mcp?.sse }, sessionCapabilities: { close: {}, resume: {}, list: {} },
           ...(r.capabilities?._meta && { _meta: r.capabilities._meta }) } } }];
@@ -270,7 +255,6 @@ export function v1Stream(stream) {
     if (message.id !== undefined && !message.method) {
       const was = sent.get(message.id);
       sent.delete(message.id);
-      if (was?.steer !== undefined) return [message.error ? message : { jsonrpc: '2.0', id: message.id, result: { outcome: turns.get(was.steer)?.live ? 'injected' : 'startedNewTurn' } }];
       if (was?.prompt !== undefined) {
         const turn = turns.get(was.prompt);
         if (message.error) { if (turn?.id === message.id) turns.delete(was.prompt); return [message]; }
@@ -294,7 +278,7 @@ export function v1Stream(stream) {
     return [message];
   }
 
-  const out = new TransformStream({ transform: (message, controller) => { const m = toAgent(message); if (m) controller.enqueue(m); } }); // null: answered here
+  const out = new TransformStream({ transform: (message, controller) => controller.enqueue(toAgent(message)) });
   const back = new TransformStream({
     start: (controller) => { emit = (m) => { try { controller.enqueue(m); } catch { /* the stream has closed */ } }; },
     transform: (message, controller) => { for (const m of toClient(message)) controller.enqueue(m); },

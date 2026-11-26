@@ -33,7 +33,7 @@ server `type`, and what is dropped). On version 1 it passes every line through u
 Seen live on v2 (2026-11-10):
 
 - Codex reports `_meta.steering.supported` in its `initialize` reply and takes `_session/steering` mid-turn
-  (`injected`). Claude (0.106.0) has no `_session/steering` on 2, so P9 holds a message sent mid-turn until the turn's end.
+  (`injected`). Claude (0.106.0 to 0.112.0) has no `_session/steering` on 2, so P9 holds a message sent mid-turn until the turn's end.
   (Seen once on a real recording: on 2 Claude takes a second `session/prompt` into the running turn, then sends the
   whole answer again under a new message id. P9 does not use that path.)
 - Both agents resume a session through `session/resume`, and send one `idle` state after it.
@@ -78,8 +78,8 @@ reach it.
 (Write tool, `allow-once`); Codex, in `read-only` mode, runs `curl -sI` (`allow_once`). Each records the
 adapter version it was captured against. Both are raw ACP 2 traffic, so the replay runs the translator.
 The replay sends the recorded `initialize` reply whatever P9 asks, so the contract test asks for the version
-the fixture was recorded on (`P9_ACP_VERSION`). Both agents are asked for ACP 2 (A1, `agents.mjs`), so each
-fixture is that agent's default path.
+the fixture was recorded on (`P9_ACP_VERSION`). Since 0.1.9 phase 4.5 P9 asks Claude for ACP 1 (`ACP_ASK` in
+`chat.mjs`), so Claude's default path has no recorded 0.112.0 turn until `claude.json` is re-recorded on 1.
 
 To re-record after an upgrade (real logins, a few cents of usage): run a scratch daemon with
 `--acp-override test/acp-record.mjs` (`daemon()` in `test/helpers.mjs` takes the argument), drive one turn
