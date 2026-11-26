@@ -221,6 +221,20 @@ for (const agent of ['claude', 'codex']) {
   });
 }
 
+test('O267: a message the phone\'s full storage refuses is not queued and stays in the box', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.evaluate(() => { const set = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.fill('#prompt', 'no room'); await page.click('#composer button');
+  await page.waitForSelector('#composerNote:not([hidden])');
+  assert.match(await page.textContent('#composerNote'), /storage is full/);
+  assert.equal(await page.inputValue('#prompt'), 'no room', 'still in the box');
+  assert.equal(await page.locator('#queued').isHidden(), true, 'not queued');
+  assert.equal(await page.evaluate((key) => localStorage.getItem(key), 'p9-queue:' + id), null);
+});
+
 for (const agent of ['claude', 'codex']) {
   test(`PH3 (${agent}): the first read asks only for chats that are not stopped; a stopped chat loads when picked`, { timeout: 120000 }, async (t) => {
     const { page, server } = await phoneOn(t);

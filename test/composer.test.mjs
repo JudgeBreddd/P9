@@ -652,6 +652,7 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => (await users(instance, id)).filter((u) => u.startsWith('> ') && u.endsWith('my words')).length === 1, 'the first send was taken', 15000);
   const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
   await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the identical second send was refused', 15000);
+  assert.equal(await refused(), (await users(instance, id)).find((u) => u.startsWith('> ') && u.endsWith('my words')), 'the refused text is the taken one exactly'); // O267
   await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: its words in the box, its chip a chip', 10000);
   assert.equal(await chips.first().textContent(), chipText, 'the same chip came back');
   await until(async () => (await said(instance, id, 'turn-end')).length > ends, 'the taken send\'s turn ended', 15000);
@@ -741,6 +742,30 @@ test('A2 step 6: a refused send made with the pencil open gives back the edited 
   assert.equal(await chips.count(), 0, 'and not the chip the draft took');
   assert.deepEqual(errors.filter((e) => !/not-ready|409/.test(e)), [], 'no page errors');
   console.log('PASS A2 step 6 round 3: a refusal gives back the edit once, in the order sent; a removed edit, or one a later send or a draft took, stays gone');
+});
+
+// O267: a send whose retry gets outcome-unknown (a remote's first try still in flight) stays out of the box while it may
+// arrive: one that shows in the chat stays sent; one that does not comes back after 30 seconds.
+test('O267: a send with an unknown outcome waits for the chat before going back in the box', { timeout: 120000 }, async (t) => {
+  const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown');
+  const composer = pane.locator('.composer textarea');
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt') return h(e, ...args);
+      if (args[1]?.text === 'landed') await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
+  await send('landed');
+  await page.locator('#toasts .toast', { hasText: 'Not sure your message arrived' }).first().waitFor({ timeout: 10000 });
+  await until(async () => (await users(instance, id)).includes('landed'), 'it reached the daemon', 15000);
+  await page.waitForTimeout(3000);
+  assert.equal(await composer.inputValue(), '', 'a message that arrived does not come back');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
+  await send('lost');
+  await page.waitForTimeout(5000);
+  assert.equal(await composer.inputValue(), '', 'not back in the box while it may still arrive');
+  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once it did not arrive', 40000);
+  await page.locator('#toasts .toast', { hasText: 'did not arrive' }).waitFor({ timeout: 5000 });
+  assert.equal((await users(instance, id)).filter((u) => u === 'lost').length, 0);
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS O267: an unknown outcome waits for the chat');
 });
 
 // A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,
@@ -838,8 +863,19 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await chip.first().locator('[data-quote-go]').click();
   await page.locator('#toasts .toast', { hasText: 'is not available in this window' }).waitFor({ timeout: 5000 });
   assert.equal(await pane.locator('.msg.quote-src').count(), 0, 'no reply here marked as its source');
+  // O267 (#535 round 2): another window's draft redraws the open menu; the focus stays on the draft chosen, and the taller
+  // menu stays above Drafts.
+  await seed([{ id: 'f1', text: 'first', at: 6 }, { id: 'f2', text: 'second', at: 7 }]);
+  await btn.click(); await menu.waitFor({ timeout: 5000 }); await page.keyboard.press('ArrowDown');
+  const focused = () => page.evaluate(() => document.activeElement?.closest('.draft')?.querySelector('.truncate')?.textContent);
+  assert.equal(await focused(), 'second');
+  await seed([{ id: 'f0', text: 'newest', at: 8 }, { id: 'f1', text: 'first', at: 6 }, { id: 'f2', text: 'second', at: 7 }]);
+  await until(async () => await menu.locator('.draft-take').count() === 3, 'redrawn with the new draft', 5000);
+  assert.equal(await focused(), 'second', 'the focus stayed on the same draft');
+  assert.ok((await menu.boundingBox()).y + (await menu.boundingBox()).height <= (await btn.boundingBox()).y, 'the menu still sits above Drafts');
+  await page.keyboard.press('Escape');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
+  console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline, focus kept on a redraw');
 });
 
 // Review #536 round 2: a quote whose reply is above the drawn window (more than TAIL steps later) jumps there: the window

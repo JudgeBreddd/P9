@@ -1055,7 +1055,13 @@ function queued(id: string): Queued[] {
   }
   return items!;
 }
-function keepQueue(id: string, items: Queued[]) { queues.set(id, items); if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
+// O267: an added message is kept only once storage has it (a full store refuses it, and it stays in the box); a sent or
+// taken-back one leaves the queue in memory even if the write fails, so it is never sent twice.
+function keepQueue(id: string, items: Queued[]): boolean {
+  try { if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
+  catch { if (items.length > queued(id).length) return false; }
+  queues.set(id, items); return true;
+}
 // A question or approval still waiting for an answer in this chat.
 const asking = perChat((events) => {
   const open = new Set<string>();
@@ -1245,7 +1251,8 @@ async function submitFromBox(event: Event) {
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
-    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; dropQuotes(id, qs); renderQueue(); label(); void drain(); return true;
+    if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }])) { note('Not queued: this phone\'s storage is full. Your message is still in the box.'); return; }
+    spend(id, picked); if (art === null) input.value = ''; dropQuotes(id, qs); renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
