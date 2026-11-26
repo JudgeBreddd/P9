@@ -14,28 +14,34 @@
 // the box again with its comment (comment: the text it starts with).
 const MAX = 8000;
 let shut = null, n = 0, pop = null;
-// at(): where the selection is now (the chat may scroll under it while a reply streams); the button follows it.
-export function commentButton({ at, host = document.body, pick, alive = () => true }) {
+// at(): where the selection is now (the chat may scroll under it while a reply streams); the button follows it. raw: the
+// selected text it is for (review: a selection changed or cleared since, say with Shift+arrow or while this file loaded, gets
+// no button, and closes it). view: the scrolling history; the button goes once the text scrolls out of it.
+export function commentButton({ at, raw, view, host = document.body, pick, alive = () => true }) {
   pop?.();
+  const same = () => getSelection().toString() === raw;
+  if (!same()) return;
   const b = Object.assign(document.createElement('button'), { type: 'button', className: 'comment-pop', textContent: 'Comment' });
   b.title = 'Comment on the selected text';
   const ac = new AbortController(), close = pop = () => { ac.abort(); b.remove(); if (pop === close) pop = null; };
   host.append(b);
-  const place = () => { const rect = at(); if (!rect.width && !rect.height) return close(); // the selected text was redrawn away
+  const place = () => { const rect = at(), v = view?.getBoundingClientRect();
+    if ((!rect.width && !rect.height) || (v && (rect.bottom < v.top || rect.top > v.bottom))) return close(); // redrawn away, or scrolled out
     b.style.left = Math.max(8, Math.min(rect.right - b.offsetWidth, innerWidth - b.offsetWidth - 8)) + 'px';
     b.style.top = (rect.bottom + 4 + b.offsetHeight <= innerHeight - 8 ? rect.bottom + 4 : Math.max(8, rect.top - 4 - b.offsetHeight)) + 'px'; };
-  place();
   b.onpointerdown = e => e.preventDefault(); // the selection stays while the button is pressed
-  b.onclick = () => { close(); if (alive()) pick(at()); };
-  // Gone when the selection is, on Esc, or a press elsewhere; moved with the text when the chat scrolls.
-  document.addEventListener('selectionchange', () => getSelection().isCollapsed && close(), { signal: ac.signal });
+  b.onclick = () => { close(); if (alive() && same()) pick(at()); };
+  // Gone when the selection is or changes, on Esc, or a press elsewhere; moved with the text when the chat scrolls.
+  document.addEventListener('selectionchange', () => same() || close(), { signal: ac.signal });
   document.addEventListener('scroll', place, { capture: true, passive: true, signal: ac.signal });
   document.addEventListener('keydown', e => e.key === 'Escape' && close(), { capture: true, signal: ac.signal });
   document.addEventListener('pointerdown', e => e.target !== b && close(), { capture: true, signal: ac.signal });
   const watch = setInterval(() => alive() || close(), 200); ac.signal.addEventListener('abort', () => clearInterval(watch));
+  place(); // after the cleanup is in place: a first place() that closes stops the timer too
   return b;
 }
-export function quoteBox({ rect, text: whole, raw = whole, comment = '', add, host = document.body, back, alive = () => true }) {
+// edit: the box is a chip's pencil; leaving it saves any change to the comment, a cleared one too.
+export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = false, add, host = document.body, back, alive = () => true }) {
   pop?.();
   shut?.();
   const text = whole.length > MAX ? whole.slice(0, MAX) + '…' : whole, id = 'quote-' + ++n;
@@ -52,7 +58,7 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', add, ho
   const close = (refocus) => { ac.abort(); box.remove(); if (shut === leave) shut = null; if (refocus) back?.(); };
   // Leaving without Comment (another focus mode or chat, a click outside, another box): a comment typed is kept, as the chip
   // (the owner, 2026-11-25: keep it as the chip, to finish with the pencil). away: the reader went elsewhere, so the message box does not take the focus. Cancel and Esc drop it.
-  const leave = shut = () => { const c = ta.value.trim(); close(); if (c && c !== comment.trim()) add({ text, comment: c }, true); };
+  const leave = shut = () => { const c = ta.value.trim(); close(); if (edit ? c !== comment.trim() : c) add({ text, comment: c }, true); };
   box.onsubmit = e => { e.preventDefault(); close(); if (alive()) add({ text, comment: ta.value.trim() }); };
   box.querySelector('[type=button]').onclick = () => close(true);
   box.onkeydown = e => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(true); } };

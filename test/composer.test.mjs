@@ -505,6 +505,8 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   const { page, pane, send, errors, instance, id } = await setup(t, 'a2-quote');
   const said_ = 'The first sentence. The second sentence.', reply = pane.locator('.msg.agent').last();
   await send(said_); await until(async () => (await reply.textContent()).includes('The second sentence.'), 'the reply is drawn');
+  // The turn's end redraws the reply (CI run 45732957543: a selection made before it was gone); select after it.
+  await until(async () => (await pane.locator('.working').count()) === 0, 'the turn ended', 15000);
   const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea');
   // As a drag over "The second sentence." leaves it: the words selected, then the pointer let go over the history.
   const select = () => reply.evaluate((m) => { const w = document.createTreeWalker(m, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode()) && !n.data.includes('The second'));
@@ -543,6 +545,9 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   assert.equal(await chips.count(), 1, 'editing adds no chip');
   await select(); await pop.waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
   await until(async () => await pop.count() === 0, 'Esc takes the Comment button away', 5000);
+  // Review #536: a selection changed after the button showed (Shift+arrow) takes it away, so it never quotes the old words.
+  await select(); await pop.waitFor({ timeout: 5000 }); await page.evaluate(() => getSelection().modify('extend', 'backward', 'character'));
+  await until(async () => await pop.count() === 0, 'a changed selection takes the Comment button away', 5000);
   await select(); await pop.waitFor({ timeout: 5000 });
   await pop.click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
   await until(async () => await box.count() === 0, 'Esc closes the box', 5000);
@@ -607,6 +612,13 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await page.keyboard.press('Control+1'); await composer.waitFor({ state: 'visible', timeout: 5000 });
   await until(async () => await chips.count() === 2, 'the typed comment came back as a chip', 5000);
   assert.ok((await chips.nth(1).getAttribute('title')).endsWith('\n\nkeep me'), 'with its comment');
+  // Review #536: the pencil, the comment deleted, then away: the chip keeps the cleared comment, not the old one.
+  await chips.nth(1).locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 });
+  await page.keyboard.press('Control+a'); await page.keyboard.press('Backspace'); await page.keyboard.press('Control+2');
+  await until(async () => await box.count() === 0, 'Ctrl+2 closes the pencil box', 5000);
+  await page.keyboard.press('Control+1'); await composer.waitFor({ state: 'visible', timeout: 5000 });
+  await until(async () => !(await chips.nth(1).getAttribute('title')).includes('keep me'), 'the cleared comment was saved', 5000);
+  assert.equal(await chips.count(), 2, 'on the same chip');
   await quote(); await page.keyboard.type('dropped'); await page.keyboard.press('Escape');
   await until(async () => await box.count() === 0, 'Esc closes it', 5000);
   assert.equal(await chips.count(), 2, 'Esc drops what was typed');
@@ -698,7 +710,7 @@ test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked come
   await until(async () => (await composer.inputValue()) === 'first idea' && await chips.count() === 1, 'taken back: the text and the chip', 5000);
   assert.equal(await chips.first().getAttribute('title'), (await reply.locator('.md, p').first().textContent()).trim() + '\n\nkeep this', 'the chip has its quote and comment');
   await chips.first().locator('[data-quote-go]').click();
-  await until(async () => await reply.evaluate((m) => m.classList.contains('quote-src')), 'a quote back from a draft still finds its reply (by its text)', 5000);
+  await until(async () => await reply.evaluate((m) => m.classList.contains('quote-src')), 'a quote back from a draft still finds its reply (by its chat and cursor)', 5000);
   await btn.click(); await menu.locator('.draft-del').first().click();
   await until(async () => await menu.count() === 0 && await btn.count() === 0, 'x deleted the last draft; no list, no Drafts', 5000);
   assert.equal(await composer.inputValue(), 'first idea', 'the box kept its text');
@@ -745,6 +757,18 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await page.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' }))); // a repaint
   await until(async () => (await btn.textContent())?.trim() === 'Drafts 1', 'repainted', 5000);
   assert.equal(await composer.inputValue(), '\nblank first', 'the leading blank line survived the repaint');
+  // Review #536: two quote-only drafts saved in the same millisecond are two drafts, each labelled by its comment or words;
+  // a quote saved from another chat finds no reply here, even one with the same words.
+  await seed([{ id: 'a', text: '', at: 5, quotes: [{ text: 'echo:hello', comment: 'other chat', chat: 'not-this-chat', cur: 1 }] }, { id: 'b', text: '', at: 5, quotes: [{ text: 'more words', comment: '' }] }]);
+  await btn.click(); await menu.waitFor({ timeout: 5000 });
+  assert.deepEqual(await menu.locator('.draft-take .truncate').allTextContents(), ['1 quote · other chat', '1 quote · “more words”'], 'quote-only drafts say which');
+  await menu.locator('.draft-del').nth(1).click();
+  await until(async () => await menu.locator('.draft-take').count() === 1, 'x deleted only that one', 5000);
+  await menu.locator('.draft-take').first().click();
+  const chip = pane.locator('.attach .att-quote'); await until(async () => await chip.count() === 1, 'its chip', 5000);
+  await chip.first().locator('[data-quote-go]').click();
+  await page.locator('#toasts .toast', { hasText: 'is in another chat' }).waitFor({ timeout: 5000 });
+  assert.equal(await pane.locator('.msg.quote-src').count(), 0, 'no reply here marked as its source');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
 });
