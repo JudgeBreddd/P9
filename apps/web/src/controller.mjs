@@ -1275,8 +1275,13 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
   // O267: outcome-unknown is the daemon still running the first try of this ID. The same ID again gets that try's own
-  // answer once it ends (a prompt answers when its turn starts), never a second copy. ponytail: 30 s; then it is unsure.
-  for (let i = 0; i < 30 && body.op && r.status === 409 && r.body?.error === 'outcome-unknown'; i++) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
+  // answer once it ends (a prompt answers when its turn starts), never a second copy. Once unsure, a dropped link (503)
+  // keeps it unsure and asks again too: the first try may still land. ponytail: one 60 s deadline from the send; then unsure.
+  for (let unsure = false; body.op;) {
+    if (r.status === 409 && r.body?.error === 'outcome-unknown') unsure = true; else if (!(unsure && r.status === 503)) break;
+    if (Date.now() - start > 60000) { r = { status: 409, body: { error: 'outcome-unknown', operation: body.op } }; break; }
+    await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body);
+  }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
   // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.
   if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);

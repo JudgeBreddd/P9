@@ -1231,6 +1231,10 @@ async function submitFromBox(event: Event) {
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
+  // O267: the sent words are still in the box only as its start, as whole words ("look" is not in "lookup failed", typed while
+  // it was on its way): a substring took them out of the middle of a new edit, or counted them as there when they were not.
+  const sentIn = (now: string) => { const t = now.trimStart(); return !!typed && t.startsWith(typed) && (t.length === typed.length || /\s/.test(t[typed.length])); };
+  const withoutSent = (now: string) => sentIn(now) ? now.trimStart().slice(typed.length).trim() : now;
   const text = quoted(qs, typed);
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
@@ -1279,13 +1283,13 @@ async function submitFromBox(event: Event) {
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }])) { if (typed) editDraft(id, (now) => now.includes(typed) ? now : typed + (now ? '\n' + now : '')); note('Not queued: this phone\'s storage is full. Your message is back in the box.'); return; } // O267: a box changed meanwhile gets it back above what is there
-      spend(id, picked, sentPids); if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
+    else { if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }])) { if (typed) editDraft(id, (now) => sentIn(now) ? now : typed + (now.trim() ? '\n' + now : '')); note('Not queued: this phone\'s storage is full. Your message is back in the box.'); return; } // O267: a box changed meanwhile gets it back above what is there
+      spend(id, picked, sentPids); if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
