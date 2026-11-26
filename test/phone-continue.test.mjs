@@ -357,16 +357,47 @@ test('O267: a queued message refused with turn-running tries again under a new o
   await page.waitForSelector('#stale:not([hidden])');
   await page.fill('#prompt', 'after the turn'); await page.click('#composer button');
   await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
-  const ops = [];
+  const ops = [], at = [];
   await page.route('**/chat/*/prompt', async (route) => {
-    ops.push(route.request().headers()['x-p9-op']);
-    if (ops.length === 1) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    ops.push(route.request().headers()['x-p9-op']); at.push(Date.now());
+    if (ops.length <= 2) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
     else await route.continue();
   });
   await setOnline(page, true);
-  await page.waitForFunction((key) => !localStorage.getItem(key) || localStorage.getItem(key) === '[]', 'p9-queue:' + id, { timeout: 15000 });
-  assert.equal(ops.length, 2, 'one refused try, then one that went: ' + JSON.stringify(ops));
-  assert.ok(ops[0] && ops[1] && ops[0] !== ops[1], 'the second try has its own operation ID: ' + JSON.stringify(ops));
+  await page.waitForFunction((key) => !localStorage.getItem(key) || localStorage.getItem(key) === '[]', 'p9-queue:' + id, { timeout: 20000 });
+  assert.equal(ops.length, 3, 'two refused tries, then one that went: ' + JSON.stringify(ops));
+  assert.equal(new Set(ops).size, 3, 'each try after a refusal has its own operation ID: ' + JSON.stringify(ops));
+  // Round 4: each fresh ID spends one of the phone's operations, so the waits grow (2 s, then 4 s).
+  assert.ok(at[1] - at[0] >= 1900 && at[2] - at[1] >= 3900, `the waits grow: ${at[1] - at[0]} ms, ${at[2] - at[1]} ms`);
+  // Round 4: the daemon has the message once.
+  await page.waitForSelector('#events article:has-text("echo:after the turn")', { timeout: 10000 });
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('#events article', { hasText: 'echo:after the turn' }).count(), 1, 'one copy in the chat');
+  await page.unroute('**/chat/*/prompt');
+});
+
+// O267 round 4: storage that refuses the new ID keeps the stored one: the next try uses the ID a reload would use.
+test('O267: a new operation ID storage refuses is not used; the next try keeps the stored one', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.fill('#prompt', 'keep my id'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key))[0].qid, 'p9-queue:' + id);
+  const ops = [];
+  await page.route('**/chat/*/prompt', async (route) => {
+    ops.push(route.request().headers()['x-p9-op']);
+    if (ops.length === 1) {
+      await page.evaluate(() => { const set = window.o267set = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    } else await route.continue();
+  });
+  await setOnline(page, true);
+  await page.waitForSelector('#events article:has-text("echo:keep my id")', { timeout: 15000 });
+  assert.deepEqual(ops, [stored, stored], 'both tries under the stored ID');
+  assert.match(await page.textContent('#composerNote'), /storage is full/);
+  await page.evaluate(() => { Storage.prototype.setItem = window.o267set; });
   await page.unroute('**/chat/*/prompt');
 });
 
