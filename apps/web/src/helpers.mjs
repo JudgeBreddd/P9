@@ -1,6 +1,7 @@
 import { Marked } from 'marked';
 import { artifactInfo, artifactChip } from './artifact.mjs';
 import { codePieces } from './code-colours.mjs';
+import { paceOf } from '../../../packages/protocol/index.mjs';
 /* Popover helper: toggles [hidden] on a panel anchored under a button; closes on outside click / Esc. */
 export const popover = (btn, panel, onOpen, signal) => {
   const open = () => { document.querySelectorAll('.pop').forEach(p => { if (p !== panel) p.hidden = true; }); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); onOpen && onOpen(); };
@@ -106,18 +107,9 @@ export const warnHtml = (raw, attrs = '') => {
   const [, line, say] = WARNINGS.find(([re]) => re.test(raw)) ?? [null, 'Warning: ' + raw, "The agent's program printed this warning. Your reply is not affected unless the reply itself says so."];
   return `<details class="agent-warn"${attrs}><summary><span>${esc(line)}</span><span class="i" title="What this means">i</span></summary><p>${esc(say)}</p>${line.startsWith('Warning: ') ? `<code>${esc(raw)}</code>` : ''}</details>`;
 };
-// The pace mark (A3). A plan window that is used evenly reaches 100% exactly when it resets, so "how far through the window
-// is the clock" is also "how much should be used by now". elapsed: that share, 0 to 1. gap: used % minus that, in points.
-// More than 5 points over is 'ahead', more than 5 under is 'headroom' (the share used against the share of time gone;
-// whether it runs out is the daemon's projection).
-// null with no reset time or one already passed: there is no window to measure against.
+// The pace mark (A3): paceOf is packages/protocol's, the same function the plan_usage tool and the usage history use (CAT-2).
+export { paceOf };
 export const WINDOWS = [['fiveHour', 'Session', 300], ['sevenDay', 'Weekly', 10080]];
-export function paceOf(w, mins, now = Date.now()) {
-  const len = (w?.windowMins || mins) * 60000;
-  if (!w || !Number.isFinite(w.usedPercent) || !w.resetsAt || w.resetsAt <= now || !(len > 0)) return null;
-  const elapsed = Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)), gap = w.usedPercent - elapsed * 100;
-  return { elapsed, gap, state: gap > 5 ? 'ahead' : gap < -5 ? 'headroom' : 'on' };
-}
 export const PACE = { ahead: ['Over pace', 'Using it faster than the window passes'], on: ['On pace', 'Using it about as fast as the window passes'], headroom: ['Under pace', 'Using it slower than the window passes'] };
 // "1h 42m", "3d 4h", "12m": the time left to a reset.
 export const countdown = (ms) => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m % 60 + 'm' : m + 'm'; };
