@@ -381,9 +381,13 @@ function history(id: string) {
     state.stubs.delete(id);
   })().then(() => { failed.delete(id); }, (error) => { // O269: one failure state and one retry per chat, however often it redraws
     failed.set(id, { why: (error as Error)?.message || 'no answer', at: Date.now() });
-    if ((error as { status?: number })?.status === 401) return; // signed out: the login page takes over
-    clearTimeout(retryHistory);
-    retryHistory = window.setTimeout(function again() { if (openId === id && state.stubs.has(id)) { if (awake('chat')) render(); else retryHistory = window.setTimeout(again, 2000); } }, HISTORY_RETRY);
+    // The timer is the shown chat's: a late failure of a chat left meanwhile keeps it, and reads again when reopened (render).
+    // Signed out (401): the login page takes over.
+    if (openId === id && (error as { status?: number })?.status !== 401) {
+      clearTimeout(retryHistory);
+      retryHistory = window.setTimeout(function again() { if (openId === id && state.stubs.has(id)) { if (awake('chat')) render(); else retryHistory = window.setTimeout(again, 2000); } }, HISTORY_RETRY);
+    }
+    throw error; // still a failure to its callers: catch-up (jump) keeps a chat whose read failed a stub
   }).finally(() => loading.delete(id)));
   return loading.get(id)!;
 }
@@ -757,7 +761,8 @@ function render() {
     // O269: a redraw shows the failure until its retry is due (history() keeps the one timer); only then does it read again.
     const fail = failed.get(picked), due = !fail || (Date.now() - fail.at >= HISTORY_RETRY && awake('chat'));
     one('#events').innerHTML = due ? '<div class="empty">Loading…</div>' : `<div class="empty">Chat is unavailable (${escape(fail!.why)}). Trying again…</div>`;
-    if (due) void history(picked).then(() => { if (openId === picked) render(); }); // history() settles either way
+    const redraw = () => { if (openId === picked) render(); };
+    if (due) history(picked).then(redraw, redraw);
     return;
   }
   const { blocks, strip } = build(picked), events = one<HTMLElement>('#events');
