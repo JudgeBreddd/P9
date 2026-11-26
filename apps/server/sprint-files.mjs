@@ -93,21 +93,23 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // still waiting when use recovers is replaced by a carry-on, so it never lands after the resume.
 // Review 9: a worker is held for a window only when list_chats shows it spends that plan (plan, null for a profile chat) and,
 // for a model's own window, runs that model; each hold keeps its window, and only a fresh reading of that window resumes it;
+// Review 10: a reset is a later resetsAt (a usedPercent can be corrected down inside one window), and a worker with a hold
+// still unanswered gets no second one (the lead keeps one held ID a worker).
 // a hold that went straight into the turn has no held ID, so its carry-on goes without replaces.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
   + '"Usage watch: call plan_usage. If a window has pace ahead and projected over 100 (its reading not stale), hold the '
-  + 'least-advanced running worker not held yet whose provider draws on that window: list_chats gives each worker\'s plan, which must be '
+  + 'least-advanced running worker not held yet and with no hold of yours still waiting for its reply whose provider draws on that window: list_chats gives each worker\'s plan, which must be '
   + 'that reading\'s pool, and for a window under models the worker\'s model must also name that family. A worker whose plan is null, or whose '
   + 'model does not name the family (default included), is not held for it: if you cannot tell, do not hold. Send it, as steer, Finish the '
   + 'step you are on, write a Next line in your notes, reply Holding for usage, end your turn, and wait until I resume you. A steer can wait '
   + 'in its queue until that turn ends, or be dropped with it, so it is held only once the worker replies Holding for usage after it: just '
   + 'before you send it, read_chat on the worker and keep that answer\'s next cursor with the held chat id, the window (provider and fiveHour, '
-  + 'sevenDay or the model name) and its usedPercent, and keep the held ID send_chat returns if the steer waits. On each watch, read_chat '
+  + 'sevenDay or the model name) and its usedPercent and resetsAt, and keep the held ID send_chat returns if the steer waits. On each watch, read_chat '
   + 'from that cursor (after), following next while more is true, for the reply; keep that cursor until you have read the whole reply. Idle, '
   + 'working or a timeout is not yet: send the hold again to one idle without that reply, the same way (read_chat first, keep its next). A '
-  + 'held worker\'s window is back when a reading of it taken after the hold (asOf later, not stale) has pace on or headroom, or a usedPercent '
-  + 'below the one you kept (it reset); other windows do not matter to it, and a pace of null alone is not back. Then, if its hold has no reply '
+  + 'held worker\'s window is back when a reading of it taken after the hold (asOf later, not stale) has pace on or headroom, or a resetsAt later than the one you kept (the window reset; a lower usedPercent '
+  + 'alone is a corrected reading, not a reset); other windows do not matter to it, and a pace of null alone is not back. Then, if its hold has no reply '
   + 'yet, send it, as steer, Usage is back: carry on, with replaces set to its held ID (without replaces when send_chat gave no held ID: the '
   + 'steer went into its turn; a hold already delivered gets it as a new message, which resumes it); then resume every worker you held whose '
   + 'window is back, not only the last. Keep each held chat id, with its window and the numbers, under ## Usage watch in sprint.md: a line '

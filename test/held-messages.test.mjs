@@ -450,7 +450,9 @@ test('O141 review 9: a worker\'s plan in list_chats; a hold still waiting is rep
   for (let n = 0; (await events(instance, made.chat)).filter((e) => e.type === 'turn-end').length < 2 && n < 600; n += 1) await pause(100);
   const late = await read();
   assert.match(late, /gated/, 'the later watch from the kept cursor lost the end of the turn: ' + late);
-  assert.match(late, /Usage is back: carry on/, 'the carry-on or its echo is missing: ' + late);
+  // Review 10: the worker's own reply to the carry-on, not the message sent to it.
+  const replies = (await lead.tool('read_chat', { chat: made.chat, after: kept })).messages.filter((m) => m.role === 'assistant').map((m) => m.text).join('\n');
+  assert.match(replies, /echo:Usage is back: carry on/, 'the worker never answered the carry-on: ' + replies);
   assert.doesNotMatch(late, /Holding for usage/, 'the replaced hold still reached the worker: ' + late);
   console.log('PASS O141 review 9: list_chats named the plan; the waiting hold was replaced by the carry-on; the later watch read the whole reply from the kept cursor');
 });
