@@ -1,4 +1,4 @@
-import { LOOSE } from './helpers.mjs';
+import { modes, LOOSE, LOOSE_SAID, AUTO } from './helpers.mjs';
 
 // Settings > Security settings (c18, threat model row 66), on the desktop (controller.mjs) and the phone (phone.ts).
 // One toggle per restriction, and an Unrestricted mode toggle that turns them all off, so nobody hunts for them.
@@ -20,12 +20,21 @@ export const SECURITY = {
     'On: a link in an agent reply asks first, showing its whole address. Off: it opens on a click. Turning Unrestricted mode off turns this back on.'],
   unknown: 'Unknown: the daemon did not answer.',
 };
-// The mode Unrestricted mode starts new chats in, per agent.
-export const LOOSEST = { claude: 'Bypass permissions', codex: 'Full access' };
-// CAT-1h: from GET /agents (the chat list's read), each agent's mode that acts unasked (tier 4) warns and is its LOOSEST;
-// a built-in warning keeps its words. ponytail: LOOSE is keyed by mode name, so a name two agents share warns for both.
-export const fillLoose = (agents) => agents.forEach((a) => a.modes?.forEach((m) => { if (m.tier === 4) { LOOSEST[a.id] = m.name;
-  LOOSE[m.name] ??= (a.short || a.name) + ' acts without asking first: it can run any command and change any file it can reach.'; } }));
+// The mode Unrestricted mode starts new chats in, per agent: its tier-4 mode (fillAgents).
+export const LOOSEST = {};
+// CAT-2: GET /agents (the catalog, apps/server/agents.mjs publicAgents) is the only list of each agent's modes: its answer
+// replaces helpers' modes, AUTO and LOOSE and this LOOSEST, so a renamed or new mode is offered, warns and starts as the
+// catalog says. Desktop (chat-view.mjs) and phone (phone.ts). ponytail: LOOSE is keyed by mode name, so a name two agents
+// share warns for both.
+export const fillAgents = (agents) => {
+  for (const t of [modes, AUTO, LOOSE, LOOSEST]) for (const k in t) delete t[k];
+  for (const a of agents) {
+    modes[a.id] = a.modes.map((m) => m.name);
+    if (a.auto) AUTO[a.id] = a.auto;
+    for (const m of a.modes) if (m.tier === 4) { LOOSEST[a.id] = m.name;
+      LOOSE[m.name] ??= LOOSE_SAID[m.name] ?? (a.short || a.name) + ' acts without asking first: it can run any command and change any file it can reach.'; }
+  }
+};
 // The warnings are on while any loosened mode still asks ("Don't show again" not set for it).
 export const warnsLoose = () => Object.keys(LOOSE).some((m) => !localStorage.getItem('p9-mode-ok:' + m));
 export const setWarnsLoose = (on) => Object.keys(LOOSE).forEach((m) => on ? localStorage.removeItem('p9-mode-ok:' + m) : localStorage.setItem('p9-mode-ok:' + m, '1'));
@@ -33,5 +42,6 @@ export const setWarnsLoose = (on) => Object.keys(LOOSE).forEach((m) => on ? loca
 // Off removes only the loosest mode, so a mode picked by hand stays.
 export const setStarts = (on, startKey) => Object.entries(LOOSEST).forEach(([a, m]) => on ? localStorage.setItem(startKey + a, m)
   : localStorage.getItem(startKey + a) === m && localStorage.removeItem(startKey + a));
-export const unrestricted = (lock, protect, startKey) => lock === false && protect === false && !warnsLoose()
+// Before GET /agents answers there are no loosened modes to check, so it reads off.
+export const unrestricted = (lock, protect, startKey) => lock === false && protect === false && Object.keys(LOOSEST).length > 0 && !warnsLoose()
   && Object.entries(LOOSEST).every(([a, m]) => localStorage.getItem(startKey + a) === m);

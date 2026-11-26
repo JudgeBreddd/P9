@@ -1,4 +1,4 @@
-import { quoteNow, quoteSent, chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { quoteNow, quoteSent, chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, modes, AUTO, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -7,7 +7,7 @@ import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { PATH_KEYS, missionKeys, missionShown, missionValue, editItems } from './mission-files.mjs';
-import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents } from './security.mjs';
 import { tileHtml, tileLevel, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
@@ -104,6 +104,7 @@ export function mountShell({ askAdmin } = {}) {
 const sampleView = !!window.p9?.sample;
 const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], history: [], files: [], fileBody: {}, queue: [], notifications: [],
   apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
+if (sampleView) fillAgents(M.agents); // the sample's GET /agents answer (from the catalog)
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 // The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
 const SP = { on: false, data: null, error: '', waiting: 0, timer: 0 };
@@ -245,12 +246,13 @@ function startDefaults(s, model) {
   const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
-// picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
+// picked for its agent on this computer (at first the catalog's auto, helpers AUTO); the loosened modes ask first, in red.
+// Before GET /agents answers no mode is known: '' (the send then names none, and the daemon keeps the chat's own).
 // D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
-const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent].includes(m) ? m : ''; };
+const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent]?.includes(m) ? m : ''; };
 // A loosened last pick carries to a new chat only after "don't show again" (review #2): a plain "Turn on" was for that chat.
 // The D2 default was confirmed in Settings for new chats, so it holds as set.
-const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
+const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent]?.includes(m) ? m : AUTO[agent] ?? ''; };
 const looseOk = (agent, m) => new Promise(done => {
   const d = $('#looseDlg'); $('#looseT').textContent = `Turn on ${m} for ${names[agent]}?`; $('#looseP').textContent = LOOSE[m]; d.returnValue = '';
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
@@ -1304,7 +1306,7 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
-  const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
+  const stops = s.stops, body = { id: s.id, text, mode: n.mode || undefined, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
   const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
   if (r.status === 202) {

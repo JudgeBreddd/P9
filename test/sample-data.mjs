@@ -1,6 +1,7 @@
 /* Test-only sample data for the UI tests; it never ships (sample data stays out of the app).
    The desktop hands it to the page only unpackaged with P9_SAMPLE_DATA=1 (apps/desktop/main.mjs). Mirrors the real apps' shapes
    (ACP typed events, hub registry.json). */
+import { publicAgents } from '../apps/server/agents.mjs';
 export const M = (() => {
 const now = new Date('2026-10-11T19:52:00');
 const sessions = [
@@ -110,5 +111,5 @@ const outputs = {
 };
 const genericOutput = (name) => [name + ' — laptop','','checking…','[ok] ' + name + ' completed','','0 warnings, 0 failures'];
 const fmtClock = d => d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + ', ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-return { now, sessions, history, files, fileBody, terminal, commands, queue, notifications, inbox, audit, logs, stats, solo, apps, tools, pages, scripts, outputs, genericOutput, fmtClock };
+return { now, agents: publicAgents().agents, sessions, history, files, fileBody, terminal, commands, queue, notifications, inbox, audit, logs, stats, solo, apps, tools, pages, scripts, outputs, genericOutput, fmtClock };
 })();

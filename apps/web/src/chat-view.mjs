@@ -4,7 +4,7 @@ import { pastedFiles, quoted, quoteFate, quoteNow, quoteSent, esc, copy, limitLi
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
-import { LABEL, projectOf } from './panel.mjs'; import { fillLoose } from './security.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
+import { LABEL, projectOf } from './panel.mjs'; import { fillAgents } from './security.mjs'; import { NOT_USE, partOrder } from '../../../packages/protocol/index.mjs';
 // The two button looks repeated in the pane's markup, written once (they cost bytes in the startup JS each time).
 const GH = 'data-slot="button" data-variant="ghost" data-size="sm"', OL = 'data-slot="button" data-variant="outline" data-size="sm"';
 
@@ -435,8 +435,10 @@ const planOpt = p => p.options.find(o => /plan/i.test(o.value)) || p.options.fin
 const planOn = s => { const p = pickerOf(s, 'collab'); return !!p && pickVal(s, p) === planOpt(p)?.value; };
 // The Mode menu's order per agent. Codex's Plan is its plan collaboration mode on top of the sandbox mode picked before
 // (s.mode stays that mode; choosing any other mode turns plan off); Claude's is its own plan mode.
-// The menu's order for the two built in; another catalog agent lists its modes in the catalog's order (helpers modes).
-const MODE_ORDER = { claude: ['Manual', 'Auto', 'Accept edits', 'Plan', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access', 'Plan'] };
+// The modes are the catalog's (helpers modes, CAT-2); MENU_FIRST only puts the ones it names first, so a mode it does not
+// know is still offered, after them. Codex's Plan is not a catalog mode (MENU_LAST), so it is added last.
+const MENU_FIRST = { claude: ['Manual', 'Auto', 'Accept edits', 'Plan'] }, MENU_LAST = { codex: ['Plan'] };
+const modeMenu = a => [...partOrder(MENU_FIRST[a], modes[a] ?? []), ...(MENU_LAST[a] ?? [])];
 const modeNow = s => planOn(s) ? 'Plan' : s.mode;
 const modeShown = s => s.modeNext || modeNow(s);
 function setMode(s, m) {
@@ -472,7 +474,7 @@ const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes
   + (started(s) ? `<p class="pm-note muted">${STAYS}</p>` : '');
 function pillMenuHtml(s, kind) {
   if (kind === 'Agent') return agentMenu(s);
-  if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + (MODE_ORDER[s.agent] ?? modes[s.agent]).map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
+  if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + modeMenu(s.agent).map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
   if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`, p && s, p?.id); }
   const m = modelList(s);
   if (s.profile) return `<div class="hd eyebrow">${esc(s.profile.name)}</div>` + radio(m.options, m.current, 'data-model') + `<p class="pm-note muted" data-list-note>${s.profile.gone ? 'This profile was removed in Settings, so this chat can be read but not continued.' : started(s) ? 'This chat runs on this model only. Start a new chat for another one.' : 'Choose a model before the first message.'}</p>`;
@@ -532,7 +534,7 @@ function refreshPill() {
 // (looseOk, red); the last pick is kept per agent for new chats (startMode), Codex's Plan is not a sandbox mode so it is not.
 async function pickMode(s, m) {
   if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(s.agent, m)) return;
-  if (modes[s.agent].includes(m)) localStorage.setItem('p9-mode:' + s.agent, m);
+  if (modes[s.agent]?.includes(m)) localStorage.setItem('p9-mode:' + s.agent, m);
   applyMode(s, m); renderChats();
 }
 // A mode for one chat, from its pill or from Unrestricted (MC-4): mid-turn it is queued for the turn's end; Codex's Plan goes off.
@@ -1080,16 +1082,16 @@ function reply(s, text) {
 }
 const dataNote = () => { outer.$('#dataNote').textContent = [outer.live.on && !outer.serverInfo?.slim && 'Mission Control live', outer.liveChat.on && 'Chat live', !outer.liveChat.on && (outer.sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), outer.sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
-// CAT-1f: GET /agents fills the agents' names, modes and chat model (controller names, helpers modes, chatModel) once it
-// answers, so the pickers offer every catalog agent; until then, and in the sample view, they hold the two built in. Called
-// once, from list(); a failed read (the daemon still starting) asks again every 10 s and redraws. The window and its daemon
-// ship together, so the catalog only adds agents and the two built in are never taken out.
+// CAT-1f: GET /agents fills the agents' names and chat model (controller names, chatModel), and their modes (fillAgents,
+// CAT-2) once it answers, so the pickers offer every catalog agent; until then names and chatModel hold the two built in and
+// no mode is offered. Called once, from list(); a failed read (the daemon still starting) asks again every 10 s and redraws.
+// The window and its daemon ship together, so the catalog only adds agents and the two built-in names are never taken out.
 // An id goes into HTML attributes, so only a-z 0-9 - is taken (agents.mjs keeps its ids to that).
 const loadAgents = async () => { const r = await window.p9.chat('agents', {}).catch(() => 0);
   if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats())), 1e4);
   const agents = r.body.agents.filter(a => /^[a-z0-9-]+$/.test(a.id));
-  for (const a of agents) outer.names[a.id] = a.short || a.name, modes[a.id] = a.modes.map(m => m.name), chatModel[a.id] = a.name + ' · ACP';
-  fillLoose(agents); };
+  for (const a of agents) outer.names[a.id] = a.short || a.name, chatModel[a.id] = a.name + ' · ACP';
+  fillAgents(agents); };
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {

@@ -168,10 +168,12 @@ export const mdReply = new Marked({ gfm: true, breaks: true, async: false, rende
 // P19: a reply's code blocks get a Copy button (desktop and phone); copy() says Copied or why not on the button.
 export const copyCode = html => html.replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code');
 export const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copied', e => { btn.title = String(e?.message || e); return 'Copy failed'; }).then(said => { const was = btn.textContent; btn.textContent = said; btn.dataset.said = said; setTimeout(() => { btn.textContent = was; delete btn.dataset.said; }, 2000); });
-// Each agent's own mode names (the daemon's allowlist, chat.mjs MODES) and the two loosened ones, which ask first in red
-// (threat model row 25). Desktop and phone (P6).
-export const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
-export const LOOSE = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
+// CAT-2: each agent's mode names in the catalog's order (the daemon's allowlist, chat.mjs MODES), its loosened ones, which ask
+// first in red (threat model row 25, tier 4), and the mode a new chat starts in at first (auto). All three come from GET /agents
+// (security.mjs fillAgents) and are empty until it answers, so a check against them waits for the catalog. Desktop and phone (P6).
+export const modes = {}, LOOSE = {}, AUTO = {};
+// The red warning's words for the two built-in loosened modes, by name; any other tier-4 mode gets a line naming its agent.
+export const LOOSE_SAID = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
   'Full access': 'Codex runs without a sandbox: it can read and change any file on this computer and use the network, without asking first.' };
 // Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
 // built here; a block's uri is never used. Desktop and phone (P9). ponytail: data: strings are re-diffed each render;

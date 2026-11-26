@@ -7,7 +7,7 @@ import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs'; import { shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
-import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillLoose } from './security.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
@@ -135,10 +135,11 @@ function csrfToken() {
   } catch {}
   return null;
 }
-// CAT-1f: each agent's name and modes (helpers modes), from GET /agents once it answers; until then the two built in.
+// CAT-1f: each agent's name, from GET /agents once it answers; until then the two built in. Its modes are the answer's alone
+// (fillAgents, CAT-2).
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
-const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
-  for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); fillLoose(agents); }, () => {});
+const loadAgents = () => request('/agents').then(({ agents }) => { for (const k in names) delete names[k];
+  for (const a of agents) names[a.id] = a.short || a.name; fillAgents(agents); }, () => {});
 // A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
 const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
@@ -995,7 +996,8 @@ async function madeChat(agent: string, extra: Json) {
   if (result.status !== 201) return null;
   // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
   const last = localStorage.getItem('p9-mode:' + agent);
-  if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
+  // A mode the catalog does not list (or not read yet) is not carried: it cannot be checked for a warning (CAT-2).
+  if (last && (modes as Record<string, string[]>)[agent]?.includes(last) && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
   await loadChat();
   return String(result.body.conversation);
 }
