@@ -883,3 +883,23 @@ test('O266: a tool call sent again after a compaction keeps its one finished row
   assert.equal((await rows.locator('[data-slot=badge]').first().textContent()).trim(), 'completed');
   assert.deepEqual(errors, [], 'no page errors');
 });
+
+// O266 review: the first call outside the newest 200 blocks a reloaded window loads, its second inside them. Show earlier
+// brings the first's page: still one row, where the call first ran, finished.
+test('O266: Show earlier across a compaction still draws the call once, finished, where it first ran', { timeout: 120000 }, async (t) => {
+  const { page, pane, send, errors } = await setup(t, 'o266-earlier');
+  await send('toolrepeat far');
+  await pane.locator('.msg.agent', { hasText: 'after repeat' }).waitFor({ timeout: 30000 });
+  await page.reload();
+  const fresh = page.locator('.pane .hist').filter({ hasText: 'after repeat' }).first();
+  await fresh.waitFor({ timeout: 30000 });
+  const rows = fresh.locator('details.tool', { hasText: 'repeat me' });
+  assert.equal(await rows.count(), 1, 'the newest blocks hold the second call');
+  assert.equal(await fresh.locator('details.tool', { hasText: 'step 0' }).count(), 0, 'and not the first: it is on the earlier page');
+  await fresh.locator('[data-earlier]').click();
+  await fresh.locator('details.tool', { hasText: 'step 0' }).waitFor({ timeout: 15000 });
+  assert.equal(await rows.count(), 1, 'one row for the call after Show earlier');
+  assert.equal((await rows.locator('[data-slot=badge]').first().textContent()).trim(), 'completed');
+  assert.equal(await fresh.evaluate((h) => { const all = [...h.querySelectorAll('details.tool')], at = (w) => all.findIndex((d) => d.textContent.includes(w)); return at('repeat me') < at('step 0'); }), true, 'where it first ran, above the calls after it');
+  assert.deepEqual(errors, [], 'no page errors');
+});

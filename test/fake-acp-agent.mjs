@@ -377,9 +377,11 @@ const connection = acp.connectAgent(stream, {
     // usage_update with a cost says it stopped.
     // O266, as Claude's adapter does after an automatic compaction: the calls from before it come again with their own ids,
     // pending, each followed by its finish.
-    if (text === 'toolrepeat') {
+    // 'toolrepeat far': 210 calls between them, so a window's newest 200 blocks hold the second and not the first.
+    if (text === 'toolrepeat' || text === 'toolrepeat far') {
       const call = { sessionUpdate: 'tool_call', toolCallId: 'repeat-1', title: 'repeat me', kind: 'execute', status: 'pending' }, done = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-1', status: 'completed' };
-      for (const update of [call, done, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, call, done]) await connection.sessionUpdate({ sessionId, update });
+      const between = text === 'toolrepeat far' ? Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' })) : [];
+      for (const update of [call, done, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, call, done]) await connection.sessionUpdate({ sessionId, update });
       await say('after repeat');
       return { stopReason: 'end_turn' };
     }

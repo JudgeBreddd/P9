@@ -1384,4 +1384,6 @@ test('O266: a tool call sent again after a compaction keeps its one row on the p
   await newChat(page, 'claude');
   await send(page, 'toolrepeat'); await said(page, 'after repeat');
   assert.equal(await page.$eval('#events', (el) => el.textContent.split('repeat me').length - 1), 1, 'one row for the call');
+  // Finished by its own update, not marked ended at the turn's end.
+  assert.equal(await page.locator('#events article[data-kind="tool"][data-status="completed"]', { hasText: 'repeat me' }).count(), 1, 'its one row, completed');
 });
