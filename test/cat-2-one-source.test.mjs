@@ -216,8 +216,21 @@ test('CAT-2 review 14: Unrestricted changes both daemon settings or neither, and
   assert.equal(security.modesNote(), security.SECURITY.noModes, 'not the daemon\'s own yet: waiting');
   security.fillAgents(agents);
   const [controller, chat, settings] = await Promise.all(['apps/web/src/controller.mjs', 'apps/web/src/chat-view.mjs', 'apps/web/src/settings-view.mjs'].map((f) => readFile(path.join(root, f), 'utf8')));
-  assert.match(controller, /body = \{ id: s\.id, text, mode: modes\[s\.agent\]\?\.includes\(n\.mode\) \? n\.mode : undefined,/, 'a chat sends only a mode the catalog lists');
+  assert.match(controller, /body = \{ id: s\.id, text, mode: sentMode\(s\.agent, n\.mode\),/, 'a chat sends its mode through sentMode');
   assert.match(chat, /  fillAgents\(agents\); if \(outer\.\$\('#setDlg'\)\?\.open\) outer\.refreshDefaults\(\);/, 'the catalog landing redraws Settings open');
   assert.match(settings, /if \(outer\.\$\('#setSecurity'\) && !outer\.\$\('#setBody'\)\.contains\(document\.activeElement\)\) return renderSettings\(\);/, 'and the redraw covers the security rows');
   console.log('PASS CAT-2 review 14: both settings or neither, failed put-backs named; only catalog modes sent; Settings follows the catalog');
+});
+
+// Review 15: the outgoing mode is checked only against the catalog of the daemon in use. Before a remote's GET /agents
+// answers, the pick goes as is (as before CAT-2): this computer's catalog may lack a mode only the remote has.
+test('CAT-2 review 15: a retired mode is left out only once the daemon in use listed its modes; before that the pick goes as is', () => {
+  const agents = publicAgents().agents;
+  security.fillAgents(agents, false);
+  assert.equal(security.sentMode('claude', 'Remote only'), 'Remote only', 'provisional catalog: a mode it does not list still goes');
+  assert.equal(security.sentMode('claude', ''), undefined, 'no pick: none sent');
+  security.fillAgents(agents);
+  assert.equal(security.sentMode('claude', 'Remote only'), undefined, 'the daemon\'s own catalog: a mode it does not list is left out');
+  assert.equal(security.sentMode('claude', agents.find((a) => a.id === 'claude').modes[0].name), agents.find((a) => a.id === 'claude').modes[0].name, 'a listed mode goes');
+  console.log('PASS CAT-2 review 15: the outgoing mode is judged only by the daemon in use\'s catalog');
 });

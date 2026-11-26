@@ -58,6 +58,10 @@ export const modesKnown = () => CATALOG.ours && Object.keys(LOOSEST).length > 0;
 export const freeLocked = (lock, protect) => lock === null || protect === null || !modesKnown();
 // Why the warnings and Unrestricted are disabled with no loosened mode known: still loading, or (the daemon in use answered)
 // none listed. Review 14.
+// Review 14/15: the mode a prompt carries. Once the daemon in use has listed its modes, one it does not list (retired by an
+// update, kept by replay for display) is left out, so the chat stays in its current mode instead of the prompt being refused.
+// Before that (a remote's GET /agents not answered yet) the pick goes as is: this computer's catalog cannot judge it.
+export const sentMode = (agent, mode) => (!CATALOG.ours || modes[agent]?.includes(mode)) && mode || undefined;
 export const modesNote = () => CATALOG.ours ? SECURITY.noLoose : SECURITY.noModes;
 // Review 14: Unrestricted mode as one change of the daemon's two settings, File protection then the agent lock (desktop
 // settings-view.mjs, phone phone.ts). write(key, on) makes one change and answers the daemon's { on } (the setting as it
