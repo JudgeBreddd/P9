@@ -11,7 +11,7 @@ import { openLedger } from '../apps/server/ledger.mjs';
 import { authority } from '../apps/server/authority.mjs';
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function setup(t, name) {
+async function setup(t, name, warm = true) {
   const { createChat } = await import('../apps/server/chat.mjs');
   const { createLifecycle } = await import('../apps/server/lifecycle.mjs');
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-' + name + '-'));
@@ -31,8 +31,10 @@ async function setup(t, name) {
     assert.fail('timed out: ' + what + ' ' + JSON.stringify(seen.map((e) => e.type + (e.data?.text ? ':' + e.data.text : ''))));
   };
   const started = async () => { for (const end = Date.now() + 10000; !existsSync(path.join(dir, 'config-started'));) { assert.ok(Date.now() < end, 'the setting never started'); await pause(50); } };
-  assert.equal((await chat.prompt(id, { text: 'warm up', model: 'opus' })).status, 202);
-  await until((e) => e.type === 'turn-end', 'warm-up turn');
+  if (warm) {
+    assert.equal((await chat.prompt(id, { text: 'warm up', model: 'opus' })).status, 202);
+    await until((e) => e.type === 'turn-end', 'warm-up turn');
+  }
   return { chat, dir, id, seen, until, started };
 }
 const echoed = (text) => (e) => e.type === 'update' && typeof e.data?.content?.text === 'string' && e.data.content.text.startsWith('echo:') && e.data.content.text.includes(text);
@@ -73,4 +75,55 @@ test('O267 review 12: a model set that timed out cannot land after the held Inte
   const order = await sets();
   assert.ok(order.at(-1).endsWith('model=opus'), 'the chat is left on the Interrupt\'s model: ' + JSON.stringify(order));
   console.log('PASS O267 review 12 late set: ' + JSON.stringify(order) + ', the late set landed first and the Interrupt\'s model last');
+});
+
+// #540 review 13
+test('O267 review 13: an Interrupt while the adapter is still starting is refused, not held where a failed start strands it', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o267-init', false);
+  await writeFile(path.join(dir, 'slow-init'), ''); // initialize answers after 10 s
+  const first = chat.prompt(id, { text: 'first' });
+  await until((e) => e.type === 'user', 'the first prompt started the adapter'); // connect has registered the session
+  const now = await chat.prompt(id, { text: 'cut in', when: 'now' });
+  await writeFile(path.join(dir, 'signed-out'), ''); // and then the start fails
+  assert.equal(now.status, 409, 'refused while the adapter starts: ' + JSON.stringify(now));
+  assert.ok((await first).status >= 400, 'the start failed');
+  console.log('PASS O267 review 13 init: an Interrupt during the adapter\'s start was refused (' + now.status + '), so a failed start leaves nothing held');
+});
+
+test('O267 review 13: a message that names no setting waits for a timed-out one still on its way', async (t) => {
+  const { chat, dir, id, until, started } = await setup(t, 'o267-bare');
+  await writeFile(path.join(dir, 'sets.log'), '');
+  await writeFile(path.join(dir, 'slow-config'), '7000'); // past the 5 s wait
+  const doomed = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
+  await started();
+  await unlink(path.join(dir, 'slow-config'));
+  const now = await chat.prompt(id, { text: 'no setting named', when: 'now' });
+  assert.equal(now.status, 202, JSON.stringify(now));
+  assert.ok(now.held, JSON.stringify(now));
+  assert.equal((await doomed).status, 500, 'the haiku set timed out');
+  await until(echoed('no setting named'), 'the Interrupt reached the agent');
+  const log = await readFile(path.join(dir, 'sets.log'), 'utf8');
+  assert.ok(log.includes(' model=haiku'), 'the late set landed before the turn, not during it: ' + JSON.stringify(log));
+  console.log('PASS O267 review 13 bare: the Interrupt\'s turn began after the late set landed: ' + JSON.stringify(log));
+});
+
+test('O267 review 13: a setting whose caller gave up before its turn on the chain is never sent', async (t) => {
+  const { chat, dir, id, seen, until, started } = await setup(t, 'o267-skip');
+  await writeFile(path.join(dir, 'sets.log'), '');
+  await writeFile(path.join(dir, 'slow-config'), '12000'); // holds the chain past the Interrupt's own 5 s wait too
+  const doomed = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
+  await started();
+  await unlink(path.join(dir, 'slow-config'));
+  const now = await chat.prompt(id, { text: 'back on opus', when: 'now', model: 'opus' });
+  assert.equal(now.status, 202, JSON.stringify(now));
+  assert.equal((await doomed).status, 500, 'the haiku set timed out');
+  const failed = (e) => e.type === 'error' && /model could not be set/.test(e.data?.message ?? '');
+  await until(() => seen.filter(failed).length >= 2, 'the Interrupt\'s own model set timed out, still waiting behind the slow one');
+  const sets = async () => (await readFile(path.join(dir, 'sets.log'), 'utf8')).split('\n').filter((l) => l.includes(' model='));
+  for (const end = Date.now() + 10000; !(await sets()).some((l) => l.endsWith('=haiku'));) { assert.ok(Date.now() < end, 'the slow haiku set never landed'); await pause(200); }
+  await pause(1000);
+  const order = await sets();
+  assert.deepEqual(order.map((l) => l.split(' model=')[1]), ['haiku'], 'the given-up opus set was never sent: ' + JSON.stringify(order));
+  assert.ok(!seen.some(echoed('back on opus')), 'nor its prompt');
+  console.log('PASS O267 review 13 skip: ' + JSON.stringify(order) + ', the opus set whose caller gave up was skipped');
 });

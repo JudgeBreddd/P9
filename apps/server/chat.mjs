@@ -986,19 +986,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // One set at a time per session (mode, model, effort), sent in the order asked: a set that answers late can never land
   // after a later one. setWaits counts the sets not settled yet; while there is one, a prompt sets its own mode, model and
   // settings instead of trusting what P9 last heard (#540 review 12: a set that timed out may still land). then: what the
-  // set's answer changes, run when it comes, late or not.
+  // set's answer changes, run when it comes, late or not. ms: how long the caller waits; a set whose caller gave up before
+  // its turn on the chain came is never sent (#540 review 13), so it cannot change the chat after the caller said it failed.
   // MC-3: the mode event the window's and the phone's pills show. told: this run of the session has said its mode, so a
   // prompt that set none (its mode was already the session's) still tells it once (prompt, below).
   const tellMode = (session, provider) => { session.told = true; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); };
-  const setOption = (session, configId, value, then) => {
-    const send = () => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }).then(then);
+  const setOption = (session, configId, value, then, ms) => {
+    let gaveUp = false;
+    const send = () => gaveUp ? Promise.reject(new Error('timeout')) : session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }).then(then);
     session.setWaits = (session.setWaits ?? 0) + 1;
     const set = (session.setChain ?? Promise.resolve()).then(send);
     session.setChain = set.catch(() => {}).finally(() => { session.setWaits -= 1; });
-    return set;
+    return ms ? Promise.race([set, wait(ms).then(() => { gaveUp = true; throw new Error('timeout'); })]) : set;
   };
-  const setMode = (session, provider, value = modeFor(provider), tell = true) => setOption(session, 'mode', value,
-    (result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) tellMode(session, provider); return result; }); // P6: the phone's pill shows the mode set
+  const setMode = (session, provider, value = modeFor(provider), tell = true, ms) => setOption(session, 'mode', value,
+    (result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) tellMode(session, provider); return result; }, ms); // P6: the phone's pill shows the mode set
   // The chat's Mode picker, sent with each desktop prompt (Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   // MODES: from the catalog (agents.mjs).
@@ -1392,6 +1394,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         session.fresh = false;
       }
       if (!session.stopping) setState(conversation.id, 'running');
+      session.ready = true; // #540 review 13: started; until now an Interrupt is refused (prompt), as with no session yet
       return session;
     } catch (error) {
       // Stopped mid-start: Stop owns the cleanup and the row state.
@@ -1744,7 +1747,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A turn answering another chat is in the no-write mode already and stays there: unlocking only changes where it returns to.
         if (session.solo && !locked) { session.back = modeFor(row(id).provider); return; }
         if (!session.solo) session.back = undefined;
-        try { await Promise.race([setMode(session, row(id).provider), wait(5000).then(() => { throw new Error('timeout'); })]); }
+        try { await setMode(session, row(id).provider, undefined, true, 5000); }
         catch { if (locked) await stopConversation(id); }
       }));
       return { status: 200, on: locked };
@@ -1891,8 +1894,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           // #540 review 10: also while the previous prompt is still starting (its mode or model being set: the chat reads as in a turn,
           // but none runs yet), when steer() would refuse it: sendNow puts it first in line for that turn's end.
           // ponytail: no turn to stop yet, so it waits for that turn's end (or goes when that start fails: startFailed). While the
-          // adapter itself is still starting (no session yet) it is still refused.
-          if (session && (session.turn || !notes.has(body)) && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
+          // adapter itself is still starting (connect not done: no session.ready) it is still refused (#540 review 13): a start
+          // that fails there ends before startFailed's exit, so a held Interrupt would never go.
+          if (session?.ready && (session.turn || !notes.has(body)) && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks, held ?? []);
           if (solo) return refused(409, 'turn-running');
           // A steer a Stop cut (session.cut) is refused still: holding it would send it as work after the Stop. A note
@@ -1952,7 +1956,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         const want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
         if (want && (want !== session.mode || session.setWaits)) {
           // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
-          try { await Promise.race([setMode(session, conversation.provider, want, !solo), wait(5000).then(() => { throw new Error('timeout'); })]); }
+          try { await setMode(session, conversation.provider, want, !solo, 5000); }
           catch { emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
         }
         if (!solo) session.back = undefined;
@@ -1964,7 +1968,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           }
           try {
             const model = body.model;
-            await Promise.race([setOption(session, 'model', model, (result) => { if (!models(session, id, result?.configOptions)) { session.models.current = model; emit(id, 'config', configOf(session)); } }), wait(5000).then(() => { throw new Error('timeout'); })]);
+            await setOption(session, 'model', model, (result) => { if (!models(session, id, result?.configOptions)) { session.models.current = model; emit(id, 'config', configOf(session)); } }, 5000);
           } catch { emit(id, 'error', { message: 'The model could not be set; nothing was sent.', ends: true }); return refused(500, 'model-failed'); }
         }
         // After the model: a model switch can change the effort list. A refused or failed setting stops the turn, like Model.
@@ -1975,11 +1979,19 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
             emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.', ends: true }); return refused(400, 'config-unknown');
           }
           try {
-            await Promise.race([setOption(session, configId, value, (result) => { if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); } }), wait(5000).then(() => { throw new Error('timeout'); })]);
+            await setOption(session, configId, value, (result) => { if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); } }, 5000);
           } catch { emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
         }
         if (photos(images).length && !session.capabilities.promptCapabilities?.image) {
           emit(id, 'error', { message: 'This agent does not take images; nothing was sent.', ends: true }); return refused(400, 'images-unsupported');
+        }
+        // #540 review 13: a prompt that set nothing (or whose sets went in behind someone else's) still waits for every set
+        // on the chain, so a set that timed out earlier and answers late lands before this turn, never during it.
+        // ponytail: it waits for the chain as it stands; a lock switch that adds a set after this (or during the start snapshot
+        // below) is not waited for. That set is the lock's own, which the lock wants applied at once anyway.
+        if (session.setWaits) {
+          try { await Promise.race([session.setChain, wait(5000).then(() => { throw new Error('timeout'); })]); }
+          catch { emit(id, 'error', { message: 'An earlier setting has not answered; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
         }
         // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
         stillAuthorized();
