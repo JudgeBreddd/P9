@@ -221,6 +221,20 @@ for (const agent of ['claude', 'codex']) {
   });
 }
 
+// O269: the first read failing (a busy host) said "Chat is unavailable." until a reload. It says why and reads again.
+test('O269: a failed first read of the chats says why and tries again until the list draws', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await toList(page);
+  let refused = 0;
+  await page.route((url) => url.pathname === '/chat' && url.searchParams.get('lists') === 'fresh', (route) => refused < 2 ? (refused++, route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) })) : route.continue());
+  await page.reload();
+  await page.locator('#chatList .empty', { hasText: 'Chat is unavailable (daemon-unavailable). Trying again' }).waitFor({ timeout: 10000 });
+  await page.waitForFunction((id) => [...document.querySelectorAll('#conversation option')].some((o) => o.value === id), id, { timeout: 20000 });
+  assert.equal(refused, 2, 'refused twice, then read');
+  assert.equal(await page.locator('#chatList .empty', { hasText: 'unavailable' }).count(), 0, 'the list replaced the line');
+});
+
 for (const agent of ['claude', 'codex']) {
   test(`PH3 (${agent}): the first read asks only for chats that are not stopped; a stopped chat loads when picked`, { timeout: 120000 }, async (t) => {
     const { page, server } = await phoneOn(t);
