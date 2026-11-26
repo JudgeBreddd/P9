@@ -1,0 +1,105 @@
+// CAT-2: five lists that were written by hand in more than one place now come from one source each. Each test below
+// fails when a reader keeps its own copy again.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import vm from 'node:vm';
+import os from 'node:os';
+import path from 'node:path';
+import * as protocol from '../packages/protocol/index.mjs';
+import * as helpers from '../apps/web/src/helpers.mjs';
+import * as security from '../apps/web/src/security.mjs';
+import * as onboarding from '../apps/web/src/onboarding.mjs';
+import * as mcp from '../apps/server/mcp.mjs';
+import * as limits from '../apps/server/limits.mjs';
+import { publicAgents, AUTO } from '../apps/server/agents.mjs';
+import { WIDGETS, SETTINGS, SECTION, RECORD, PAGE, CARD } from '../apps/server/mission-fields.mjs';
+import { GUIDE, buildPrompt } from '../apps/server/templates/guide.mjs';
+import { startUsageHistory } from '../apps/server/usage-history.mjs';
+import { root } from './helpers.mjs';
+
+test('CAT-2 modes: the window takes each agent\'s modes, its loosest mode and its start mode from GET /agents, a renamed one too', () => {
+  const kept = new Map();
+  globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
+  try {
+    assert.equal(typeof security.fillAgents, 'function', 'security.mjs fills the modes from GET /agents');
+    // The catalog renames Claude's Auto and Bypass permissions: the window has no copy of the old names left to refuse them by.
+    const renamed = publicAgents().agents.map((a) => a.id !== 'claude' ? a : { ...a, auto: 'Auto pilot',
+      modes: a.modes.map((m) => ({ ...m, name: { Auto: 'Auto pilot', 'Bypass permissions': 'Skip asking' }[m.name] ?? m.name })) });
+    security.fillAgents(renamed);
+    assert.ok(helpers.modes.claude.includes('Skip asking') && helpers.modes.claude.includes('Auto pilot'), 'the renamed modes are offered and pass the mode check');
+    assert.ok(!helpers.modes.claude.includes('Bypass permissions'), 'the old name is gone');
+    assert.equal(helpers.AUTO.claude, 'Auto pilot', 'a new chat starts in the catalog\'s auto mode');
+    assert.equal(security.LOOSEST.claude, 'Skip asking', 'Unrestricted mode starts in the renamed tier-4 mode');
+    assert.ok(helpers.LOOSE['Skip asking'] && !('Bypass permissions' in helpers.LOOSE), 'the renamed mode warns; the old name does not linger');
+    // The real catalog: every table equals it, the built-in warnings keep their words.
+    security.fillAgents(publicAgents().agents);
+    for (const a of publicAgents().agents) {
+      assert.deepEqual(helpers.modes[a.id], a.modes.map((m) => m.name));
+      assert.equal(helpers.AUTO[a.id], AUTO[a.id]);
+      assert.equal(security.LOOSEST[a.id], a.modes.find((m) => m.tier === 4)?.name);
+    }
+    assert.equal(helpers.LOOSE['Bypass permissions'], helpers.LOOSE_SAID['Bypass permissions']);
+    // Before GET /agents answers, nothing is known: Unrestricted reads off rather than on.
+    security.fillAgents([]);
+    assert.deepEqual([helpers.modes, helpers.AUTO, helpers.LOOSE, security.LOOSEST], [{}, {}, {}, {}]);
+    assert.equal(security.unrestricted(false, false, 'p9-mode:'), false, 'no catalog yet: Unrestricted is not shown on');
+  } finally { delete globalThis.localStorage; }
+  console.log('PASS CAT-2 modes: modes, the loosest mode and the start mode come from GET /agents; a renamed mode is taken');
+});
+
+test('CAT-2 widgets: the space check, both pages and the guide read one widget list, and the guide names every widget', () => {
+  assert.ok(Array.isArray(protocol.WIDGETS), 'packages/protocol lists the widgets');
+  assert.deepEqual(WIDGETS, protocol.WIDGETS.map((w) => w.id), 'the space check takes exactly those ids');
+  for (const w of protocol.WIDGETS) {
+    assert.ok(GUIDE.includes(w.id + ' (' + w.label), `the guide names ${w.id} with its label`);
+    assert.equal(typeof w.label, 'string');
+  }
+  assert.deepEqual(protocol.WIDGETS.filter((w) => w.tile).map((w) => w.id), ['idea', 'sprint', 'edit'], 'the three built-in tiles');
+  console.log('PASS CAT-2 widgets: one list, and the guide names all ' + protocol.WIDGETS.length);
+});
+
+test('CAT-2 tools: every tool the guide names is a real MCP tool, and the onboarding card\'s line is the guide\'s', () => {
+  assert.ok(Array.isArray(mcp.TOOLS), 'mcp.mjs exports its tool list');
+  const tools = new Set(mcp.TOOLS.map((t) => t.name));
+  // Field names (settings.page_schemes, quick_note, ...) are snake_case too; anything else snake_case is a tool name.
+  const fields = new Set([SETTINGS, SECTION, RECORD, PAGE, CARD].flatMap((t) => Object.keys(t)));
+  const text = GUIDE + buildPrompt('draft', { title: 'T', about: 'a' });
+  const named = [...new Set(text.match(/\b[a-z]+(?:_[a-z]+)+\b/g))].filter((w) => !fields.has(w));
+  assert.ok(named.includes('describe_mission') && named.includes('allow_folder'), 'the scan finds the tool names');
+  assert.deepEqual(named.filter((w) => !tools.has(w)), [], 'every snake_case word in the guide is a real tool or a field');
+  assert.equal(onboarding.PROTECT_WORDS[1], protocol.PROTECT_AFTER, 'the onboarding card reads the shared line');
+  assert.ok(GUIDE.includes(protocol.PROTECT_AFTER), 'the guide says the same line');
+  console.log('PASS CAT-2 tools: the guide names ' + named.length + ' real tools; the File protection line is shared');
+});
+
+test('CAT-2 pace: the Usage page, plan_usage and the history table\'s CHECK use one paceOf and one word list', async () => {
+  assert.equal(typeof protocol.paceOf, 'function', 'packages/protocol has paceOf');
+  assert.equal(helpers.paceOf, protocol.paceOf, 'the Usage page uses it');
+  const now = Date.UTC(2026, 10, 24, 12), w = (used, minsLeft, windowMins = 300) => ({ usedPercent: used, resetsAt: now + minsLeft * 60000, windowMins });
+  for (const x of [w(80, 60), w(86, 60), w(74, 60), w(50, 0), { usedPercent: 3 }, null])
+    assert.equal(limits.paceState(x, now), protocol.paceOf(x, 0, now)?.state ?? null, 'plan_usage uses it: ' + JSON.stringify(x));
+  assert.deepEqual([w(86, 60), w(80, 60), w(74, 60)].map((x) => protocol.paceOf(x, 0, now).state), protocol.PACE_STATES, 'its words are PACE_STATES');
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-cat2-')), 'usage-limits.db');
+  const history = startUsageHistory({ file, read: async () => ({ third: { fiveHour: w(40, 180), asOf: now - 60000, stale: false } }), everyMs: 0, now: () => now });
+  await history.tick(); history.close();
+  const db = new DatabaseSync(file, { readOnly: true }), sql = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'limits'").get().sql; db.close();
+  assert.ok(sql.includes(`pace IN (${protocol.PACE_STATES.map((p) => `'${p}'`).join(', ')})`), 'the CHECK lists PACE_STATES: ' + sql);
+  console.log('PASS CAT-2 pace: one paceOf and one word list, in the page, the tool and the table');
+});
+
+test('CAT-2 settings: the window starts from the desktop\'s DEFAULT_SETTINGS, passed over the preload, and keeps no copy', async () => {
+  // The preload as Electron runs it, with main.mjs's argument: its defaults are that JSON.
+  const defaults = { zoom: 1, xfer: { fileMiB: 9, files: 8, sendGiB: 7 } };
+  let exposed = null;
+  const electron = { contextBridge: { exposeInMainWorld: (_name, api) => { exposed = api; } }, ipcRenderer: { sendSync: () => null, invoke() {}, on() {}, send() {} }, webUtils: {} };
+  const source = await readFile(path.join(root, 'apps/desktop/preload.cjs'), 'utf8');
+  vm.runInNewContext(source, { require: (m) => m === 'electron' ? electron : {}, process: { argv: ['electron', '--p9-defaults=' + JSON.stringify(defaults)], platform: 'linux', env: {} }, console });
+  assert.equal(JSON.stringify(exposed?.defaults), JSON.stringify(defaults), 'the preload hands the window main\'s defaults'); // its own realm's objects
+  const main = await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'), controller = await readFile(path.join(root, 'apps/web/src/controller.mjs'), 'utf8');
+  assert.match(main, /'--p9-defaults=' \+ JSON\.stringify\(DEFAULT_SETTINGS\)/, 'main.mjs passes DEFAULT_SETTINGS');
+  assert.match(controller, /let settings = structuredClone\(window\.p9\.defaults\)/, 'the window starts from them');
+  assert.doesNotMatch(controller, /fileMiB: \d/, 'and keeps no copy of the Send files limits');
+  console.log('PASS CAT-2 settings: the window\'s first settings are main.mjs DEFAULT_SETTINGS, over the preload');
+});
