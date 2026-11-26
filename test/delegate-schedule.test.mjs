@@ -113,6 +113,8 @@ test('O140 other chat: a once prompt scheduled to a busy chat waits for its turn
 
 // O141: the lead's usage watch is its own scheduled prompt (sprint-files.mjs LEAD). Closing the sprint pauses every schedule
 // its chats own, so a closed sprint's lead or worker is never woken by one; the schedules stay listed, paused.
+// Review 2: a schedule due while Close is under way (here a blocking before-close script holds it 7 s, under the test's 10 s request limit), the worker's own or
+// one a chat elsewhere in the project set for it, is not sent; nor can that chat set or turn one back on for it afterwards.
 test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed lead and worker are not woken', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
@@ -129,7 +131,8 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
   writeFileSync(path.join(sp.folder, 'sprint.md'), '# Plan\n\n- [ ] a1: the piece. Role: w1.\n');
   writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
   writeFileSync(path.join(sp.folder, 'roles/lead.work.md'), 'mcp');
-  writeFileSync(path.join(sp.folder, 'hooks.json'), JSON.stringify({ scripts: [] }));
+  const wait = path.join(instance.workspace, 'wait.mjs'); writeFileSync(wait, 'setTimeout(() => {}, 7000);');
+  writeFileSync(path.join(sp.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'wait', command: process.execPath + ' ' + wait, point: 'before-close', blocking: true }] }));
   const hooks = (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
   const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks }); assert.equal(started.status, 200, JSON.stringify(started));
   writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: ['lead', 'w1'].map(role) }));
@@ -138,18 +141,27 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
   await L.done(made.chat);
   const w = await connect(t, instance, made.chat);
   const soon = (s) => new Date(Date.now() + s * 1000).toISOString();
-  const watch = await L.tool('schedule_prompt', { text: 'watch', at: soon(10), every: 10 });
-  const wake = await w.tool('schedule_prompt', { text: 'wake', at: soon(10) });
-  assert.deepEqual([watch.action, wake.action], ['scheduled', 'scheduled'], JSON.stringify([watch, wake]));
+  const o = await agent(t, instance, { project }); // a chat elsewhere in the same project
+  const watch = await L.tool('schedule_prompt', { text: 'watch', at: soon(30), every: 10 });
+  const wake = await w.tool('schedule_prompt', { text: 'wake', at: soon(30) });
+  const later = await o.tool('schedule_prompt', { chat: made.chat, text: 'later', at: soon(300), paused: true });
+  const began = Date.now();
+  const early = await w.tool('schedule_prompt', { text: 'early', at: soon(3) }), nudge = await o.tool('schedule_prompt', { chat: made.chat, text: 'nudge', at: soon(3), every: 1 });
+  assert.deepEqual([watch, wake, later, early, nudge].map((x) => x.action), Array(5).fill('scheduled'), JSON.stringify([watch, wake, later, early, nudge]));
   const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
   assert.equal(closed.status, 200, JSON.stringify(closed));
-  assert.ok(Date.now() < Date.parse(watch.nextRun), 'the set-up ran past the schedules\' time, so they went before the close');
+  assert.ok(Date.now() - began > 6000 && Date.now() < Date.parse(watch.nextRun), 'Close did not span the early schedules\' time, or ran past the others\'');
   await pause(Math.max(0, Date.parse(watch.nextRun) + 8000 - Date.now()));
   const got = async (id, word) => (await events(instance, id)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\n' + word));
   assert.deepEqual(await got(sprint, 'watch'), [], 'a closed sprint\'s lead was woken by its schedule');
   assert.deepEqual(await got(made.chat, 'wake'), [], 'a closed sprint\'s worker was woken by its schedule');
+  assert.deepEqual(await got(made.chat, 'early'), [], 'a schedule due during Close woke the worker');
+  assert.deepEqual(await got(made.chat, 'nudge'), [], 'another chat\'s schedule woke a closed sprint\'s worker');
+  assert.equal((await o.tool('schedule_prompt', { chat: made.chat, text: 'again', at: soon(60) })).error, 'sprint-closed', 'a new schedule for a closed sprint\'s worker was taken');
+  assert.equal((await o.tool('schedule_prompt', { id: later.id, paused: false })).error, 'sprint-closed', 'a schedule for a closed sprint\'s worker was turned back on');
+  assert.match((await o.tool('list_schedules')).schedules.find((x) => x.id === nudge.id).last, /not sent: sprint-closed/);
   // Kept, paused (read from the store: a closed chat's own tools are refused).
   const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 }); t.after(() => db.close());
-  assert.deepEqual(db.prepare('SELECT owner, paused FROM schedules ORDER BY owner = ? DESC').all(sprint).map((r) => [r.owner, r.paused]), [[sprint, 1], [made.chat, 1]]);
+  assert.deepEqual(db.prepare("SELECT owner, paused FROM schedules WHERE text IN ('watch', 'wake') ORDER BY owner = ? DESC").all(sprint).map((r) => [r.owner, r.paused]), [[sprint, 1], [made.chat, 1]]);
   console.log('PASS O141: close paused the lead\'s and the worker\'s schedules; neither woke');
 });
