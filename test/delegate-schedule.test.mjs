@@ -173,16 +173,17 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
 });
 
 // O141 review 4: a once prompt due while Close is under way is not sent then; a Close that fails (its blocking before-close
-// script exits 1 after 7 s) keeps it, and it goes shortly after.
+// script exits 1 once the test has seen the prompt waiting, review 6: not after a fixed time) keeps it, and it goes shortly after.
 test('O141: a once prompt due during a Close that fails is kept and goes after', { timeout: 120000 }, async (t) => {
-  const { instance, sprint, made, w } = await watchSprint(t, 'setTimeout(() => process.exit(1), 7000);');
+  const { instance, sprint, made, w } = await watchSprint(t, "import { existsSync } from 'node:fs'; setInterval(() => existsSync(new URL('./go', import.meta.url)) && process.exit(1), 100); setTimeout(() => process.exit(1), 9000);");
   const early = await w.tool('schedule_prompt', { text: 'early', at: new Date(Date.now() + 3000).toISOString() });
   assert.equal(early.action, 'scheduled', JSON.stringify(early));
   const closing = call(instance, `/sprints/${sprint}/close`, 'POST', {});
   // Review 5: due while Close runs, it stays listed (waiting), so a crash or a Close that succeeds cannot lose it unpaused.
-  await pause(5000);
-  const listed = (await w.tool('list_schedules')).schedules.find((x) => x.id === early.id);
+  let listed;
+  for (let i = 0; i < 16 && !/waiting/.test(listed?.last ?? ''); i++) { await pause(500); listed = (await w.tool('list_schedules')).schedules.find((x) => x.id === early.id); }
   assert.match(listed?.last ?? '', /waiting/, 'still listed and waiting while Close runs: ' + JSON.stringify(listed));
+  writeFileSync(path.join(instance.workspace, 'go'), ''); // now the before-close script refuses Close
   const closed = await closing;
   assert.notEqual(closed.status, 200, 'the failing before-close script refused Close: ' + JSON.stringify(closed));
   const got = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\nearly'));
