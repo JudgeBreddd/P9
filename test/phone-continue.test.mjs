@@ -254,6 +254,36 @@ test('O269: a failed first read of the chats says why and tries again until the 
   assert.ok(reads[1] - reads[0] >= 4500, `the retry waited for its time, not the redraw (${reads[1] - reads[0]} ms)`);
 });
 
+// O269 review 3: a chat left while its read was on its way, and reopened inside the 5 s after it failed, still reads again.
+test('O269: a chat reopened while its failed read waits for its retry reads again without another redraw', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const send = async (text) => { await page.fill('#prompt', text); await page.click('#composer button'); };
+  const id = await newChat(page, 'claude');
+  await send('hello reopen'); await page.waitForSelector('#events article:has-text("echo:hello reopen")', { timeout: 10000 });
+  await newChat(page, 'claude');
+  await send('other'); await page.waitForSelector('#events article:has-text("echo:other")', { timeout: 10000 });
+  await toList(page);
+  await page.reload();
+  await page.waitForFunction((id) => [...document.querySelectorAll('#conversation option')].some((o) => o.value === id), id, { timeout: 20000 });
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  const reads = [];
+  await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, async (route) => {
+    reads.push(Date.now());
+    if (reads.length > 1) return route.continue();
+    await held; return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) });
+  });
+  await page.click(`[data-chat="${id}"]`);
+  while (!reads.length) await new Promise((resolve) => setTimeout(resolve, 50));
+  // Left while its read is on its way: the system Back (a chat still loading draws no Back button of its own).
+  await page.goBack(); await page.waitForSelector('#chatList', { state: 'visible' });
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await page.click(`[data-chat="${id}"]`); // reopened inside the retry's 5 s
+  await page.locator('#events .empty', { hasText: 'Chat is unavailable (daemon-unavailable). Trying again' }).waitFor({ timeout: 5000 });
+  await page.waitForSelector('#events article:has-text("echo:hello reopen")', { timeout: 15000 });
+  assert.equal(reads.length, 2, 'one refused read, then one retry');
+});
+
 for (const agent of ['claude', 'codex']) {
   test(`PH3 (${agent}): the first read asks only for chats that are not stopped; a stopped chat loads when picked`, { timeout: 120000 }, async (t) => {
     const { page, server } = await phoneOn(t);
