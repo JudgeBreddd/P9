@@ -1314,7 +1314,7 @@ const lines = {};
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
 // O267 review 5: a send that ended unsure (no answer by the deadline) keeps its operation ID with its words and files, so
 // sending them again from the box is the same operation: if the first try still lands, the daemon answers both as one.
-// ponytail: one per chat, the last unsure send; other words get a new ID.
+// ponytail: one per chat, the last unsure send, kept only until the chat's next send; other words get a new ID.
 const unsureOps = new Map();
 liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agent); const turns = turnsOf.get(s.id), was = s.working; s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
   // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
@@ -1322,6 +1322,7 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
   const u = unsureOps.get(s.id), op = u && u.text === text && u.images.length === images.length && u.images.every((x, n) => x === images[n]) ? u.op : crypto.randomUUID();
+  if (u && u.op !== op) unsureOps.delete(s.id); // only the very next send can be the same one: later, the same words are a new message
   const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
   const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { op, ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   if (r.status === 409 && r.body?.error === 'outcome-unknown') unsureOps.set(s.id, { op, text, images }); else if (unsureOps.get(s.id)?.op === op) unsureOps.delete(s.id);
