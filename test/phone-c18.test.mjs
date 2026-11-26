@@ -247,3 +247,25 @@ test('c18 row 66: the phone\'s Security settings: one toggle each, protection of
   assert.equal(await page.locator('#phoneSettings [data-mission="waiting"]').inputValue(), 'box', 'kept over a reload');
   console.log('PASS c18 row 66: phone toggles; protection off asks (Cancel keeps it); Unrestricted on/off with one confirm, kept over a reload; a Mission row saved, a bad one refused');
 });
+
+// Review 12 (CAT-2): Unrestricted mode switches new chats to each agent's loosest mode, which only GET /agents names. With
+// that read failed, the switch stays off and cannot be turned on (it would turn the lock and File protection off and then
+// set no mode); Settings reads the modes again when it opens, and then the switch can be used.
+test('CAT-2 review 12: with GET /agents failed the phone\'s Unrestricted switch is off and disabled; Settings opened again reads the modes and enables it', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: withSettings });
+  const { page } = await phone(t, server);
+  let refuse = true;
+  await page.route((url) => new URL(url).pathname === '/agents', (route) => refuse ? route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"starting"}' }) : route.continue());
+  await page.reload(); await page.waitForSelector('h1:text("Chats")');
+  const open = async () => { if (await page.locator('#sheet[open]').count()) await page.evaluate(() => document.querySelector('#sheet').close());
+    await page.click('[data-bar="chat"] #setBtn'); await page.waitForSelector('#phoneSettings #setFree'); };
+  const free = () => page.locator('#phoneSettings #setFree').evaluate((b) => [b.checked, b.disabled, b.closest('label').textContent]);
+  await open();
+  const [on, disabled, words] = await free();
+  assert.deepEqual([on, disabled], [false, true], 'no modes known: off and disabled');
+  assert.match(words, /Waiting for the agents' modes/, 'and it says why');
+  assert.deepEqual([(await server.desk('/agent-lock')).body.on, (await server.desk('/file-protection')).body.on], [false, true], 'nothing was turned off');
+  refuse = false; await open();
+  assert.deepEqual((await free()).slice(0, 2), [false, false], 'the modes read on opening Settings: the switch can be used');
+  console.log('PASS CAT-2 review 12: phone Unrestricted fails closed with no agent modes and recovers when Settings is opened again');
+});

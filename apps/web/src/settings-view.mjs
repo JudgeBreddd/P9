@@ -1,7 +1,7 @@
 // Settings and the setup wizard. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { esc, info, modes, LOOSE, runnerPicks, profileModel } from './helpers.mjs';
 import { missionKeys, missionShown, missionValue, PATH_KEYS } from './mission-files.mjs';
-import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts, LOOSEST } from './security.mjs';
+import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts, LOOSEST, freeLocked } from './security.mjs';
 import { maintenanceGroup, MAINTENANCE } from './maintenance.mjs';
 
 export function installSettings(outer) {
@@ -133,12 +133,13 @@ function securityGroup(box) {
     + (window.p9?.fileProtection ? box('setProtect', protect[0], outer.fileProtect !== false, outer.fileProtect === null ? SECURITY.unknown : outer.fileProtect ? protect[1] : SECURITY.protectOff, outer.fileProtect === null, protect[2], 'file-protection') : '')
     + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
     + (window.p9?.openLink ? box('setLinks', SECURITY.links[0], !localStorage.getItem('p9-link-ok'), SECURITY.links[1], false, SECURITY.links[2], 'security-settings') : '')
-    + (both ? box('setFree', free[0], unrestricted(outer.agentLock, outer.fileProtect, START), free[1] + OPEN_TOO, outer.agentLock === null || outer.fileProtect === null, free[2], 'security-settings') : '')
+    + (both ? box('setFree', free[0], unrestricted(outer.agentLock, outer.fileProtect, START), (Object.keys(LOOSEST).length ? free[1] : SECURITY.noModes) + OPEN_TOO, freeLocked(outer.agentLock, outer.fileProtect), free[2], 'security-settings') : '')
     + '</fieldset>';
 }
 // On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
 // protection already off that warning never shows, so Unrestricted asks once itself (row 25a: no silent loosened default).
 async function setUnrestricted(on) {
+  if (on && freeLocked(outer.agentLock, outer.fileProtect)) return renderSettings(); // review 12: no loosest mode known, nothing changes
   if (on && outer.fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + OPEN_TOO)) return renderSettings();
   const r = outer.fileProtect === !on ? null : await window.p9.fileProtection(!on).catch(() => null);
   outer.fileProtect = r?.status === 200 ? r.body.on : outer.fileProtect;
@@ -363,6 +364,10 @@ function bindDefaults() {
 // O47: the agents' lists arrived while Settings is open. Only the defaults rows are drawn again, never the page: a full
 // redraw would drop what is being typed in any other box. A row whose select is in use is left as it is.
 function refreshDefaults() {
+  // Review 12: an agent GET /agents added (a remote server's catalog) gets its row; one it no longer lists loses it.
+  const all = outer.$('#setStartsIn'), rows = all ? Object.keys(modes) : [];
+  all?.querySelectorAll('.set-defaults').forEach(row => { if (!rows.includes(row.querySelector('[data-default-mode]').dataset.defaultMode)) row.remove(); });
+  for (const a of rows) if (!all.querySelector(`[data-default-mode="${a}"]`)) all.insertAdjacentHTML('beforeend', defaultsRow(a));
   outer.$('#setBody').querySelectorAll('.set-defaults').forEach(row => { if (!row.contains(document.activeElement)) row.outerHTML = defaultsRow(row.querySelector('[data-default-mode]').dataset.defaultMode); });
   bindDefaults();
   if (!outer.$('#setDelegation')?.contains(document.activeElement)) drawDelegation();
@@ -382,7 +387,7 @@ function renderSettings() {
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     // A3 (3): the daemon keeps this one too (the ledger's telemetry-tab), so the phone follows it; /usage says how it is set.
     + (window.p9?.telemetryTab ? box('setUsageTabs', 'Show Tokens and Cost in Usage', tabSaving ?? outer.usage.telemetryTab !== false, tabNote(), tabSaving !== null, 'The Tokens and Cost tabs beside Limits in the Usage window and on the phone\'s Usage screen.') : '')
-    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
+    + `<fieldset class="set-group" id="setStartsIn"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + profilesGroup()
     + delegationGroup() + sprintGroup() + noticesGroup()
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`

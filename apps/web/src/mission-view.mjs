@@ -766,7 +766,7 @@ function sectionBody(m, body, g, o) {
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
     checklists: (sp?.checklists || []).map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join(''),
     // P9's own panels inside the section (W-I), filled by fillWidgets below.
-    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}" data-wkey="${esc(g)}"><h3>${esc(w === 'waiting' ? 'Waiting on you' : BUILTIN[w] ?? outer.wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
+    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}" data-wkey="${esc(g)}"><h3>${esc(w === 'waiting' ? WIDGETS.find(x => x.id === w).label : BUILTIN[w] ?? outer.wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
   };
   // An empty part draws nothing and does not split its neighbours; the list of rows is still drawn once, empty, when no part has a row (as before).
   const boxes = [], rows = Object.keys(part).some(k => SECTION_BOX[k] === 'mlist' && part[k]);

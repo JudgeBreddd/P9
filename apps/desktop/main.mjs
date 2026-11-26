@@ -14,7 +14,7 @@ import { connectServer, forwardPath, restartServer, startServer, stopServer, ssh
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
-import { AGENT_IDS, SIGN_IN_KIND } from '../server/agents.mjs';
+import { AGENT_IDS, SIGN_IN_KIND, publicAgents } from '../server/agents.mjs';
 import { trimLog, unitOf, windowsTaskName } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
@@ -861,6 +861,9 @@ export async function createDesktop({ state, open } = {}) {
   // Test-only: the UI tests' sample data (test/sample-data.mjs), never in a packaged build (GitHub issue #4). JSON drops its helpers.
   const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
     ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
+  // Review 12 (CAT-2): this computer's agent catalog (GET /agents' answer) for the preload, so the window has every agent's modes
+  // before the daemon answers. Over IPC, not an argument: the catalog grows, and an argument has a length limit.
+  ipcMain.on('p9:agents', event => { event.returnValue = event.sender === window.webContents ? publicAgents().agents : []; });
   ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
   const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}],
     // Settings > General: {} reads the welcome message setting, { show } changes it.

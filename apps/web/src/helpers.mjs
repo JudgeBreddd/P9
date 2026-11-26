@@ -170,7 +170,8 @@ export const copyCode = html => html.replaceAll('<pre><code', '<pre><button data
 export const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copied', e => { btn.title = String(e?.message || e); return 'Copy failed'; }).then(said => { const was = btn.textContent; btn.textContent = said; btn.dataset.said = said; setTimeout(() => { btn.textContent = was; delete btn.dataset.said; }, 2000); });
 // CAT-2: each agent's mode names in the catalog's order (the daemon's allowlist, chat.mjs MODES), its loosened ones, which ask
 // first in red (threat model row 25, tier 4), and the mode a new chat starts in at first (auto). All three come from GET /agents
-// (security.mjs fillAgents) and are empty until it answers, so a check against them waits for the catalog. Desktop and phone (P6).
+// (security.mjs fillAgents); the desktop starts from its own catalog over the preload, the phone's are empty until it answers.
+// Desktop and phone (P6).
 export const modes = {}, LOOSE = {}, AUTO = {};
 // The red warning's words for the two built-in loosened modes, by name; any other tier-4 mode gets a line naming its agent.
 export const LOOSE_SAID = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',

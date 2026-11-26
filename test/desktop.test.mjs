@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, shellReady } from './helpers.mjs';
+import { publicAgents } from '../apps/server/agents.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 test('Phase 4: real sandboxed Electron, bridge boundary and approved shell acceptance', { timeout: 90000 }, async () => {
@@ -25,7 +26,9 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'usageTurns', 'telemetryTab', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'devStill', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'serverOff', 'remotes', 'remoteKeep', 'remoteAgents', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferFolders', 'xferRun', 'onXfer', 'serverUpdate', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'firstRun', 'version', 'defaults', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'usageTurns', 'telemetryTab', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'devStill', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'serverOff', 'remotes', 'remoteKeep', 'remoteAgents', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferFolders', 'xferRun', 'onXfer', 'serverUpdate', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'firstRun', 'version', 'defaults', 'agents', 'source', 'sample'], 'undefined', 'undefined', true]);
+    // Review 12 (CAT-2): the window gets this computer's agent catalog over the preload, before any daemon answers.
+    assert.deepEqual(await page.evaluate(() => window.p9.agents), publicAgents().agents, 'the catalog over the preload');
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout', nightly: false };

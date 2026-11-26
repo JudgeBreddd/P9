@@ -1083,12 +1083,12 @@ function reply(s, text) {
 const dataNote = () => { outer.$('#dataNote').textContent = [outer.live.on && !outer.serverInfo?.slim && 'Mission Control live', outer.liveChat.on && 'Chat live', !outer.liveChat.on && (outer.sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), outer.sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 // CAT-1f: GET /agents fills the agents' names and chat model (controller names, chatModel), and their modes (fillAgents,
-// CAT-2) once it answers, so the pickers offer every catalog agent; until then names and chatModel hold the two built in and
-// no mode is offered. Called once, from list(); a failed read (the daemon still starting) asks again every 10 s and redraws.
+// CAT-2) once it answers, so the pickers offer every catalog agent; until then the modes are this computer's catalog (controller.mjs,
+// over the preload) and names and chatModel hold the two built in. Called once, from list(); a failed read (the daemon still starting) asks again every 10 s and redraws.
 // The window and its daemon ship together, so the catalog only adds agents and the two built-in names are never taken out.
 // An id goes into HTML attributes, so only a-z 0-9 - is taken (agents.mjs keeps its ids to that).
 const loadAgents = async () => { const r = await window.p9.chat('agents', {}).catch(() => 0);
-  if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats())), 1e4);
+  if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats(), outer.$('#setDlg')?.open && outer.refreshDefaults())), 1e4);
   const agents = r.body.agents.filter(a => /^[a-z0-9-]+$/.test(a.id));
   for (const a of agents) outer.names[a.id] = a.short || a.name, chatModel[a.id] = a.name + ' · ACP';
   fillAgents(agents); };

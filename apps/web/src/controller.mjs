@@ -104,7 +104,10 @@ export function mountShell({ askAdmin } = {}) {
 const sampleView = !!window.p9?.sample;
 const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], history: [], files: [], fileBody: {}, queue: [], notifications: [],
   apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
-if (sampleView) fillAgents(M.agents); // the sample's GET /agents answer (from the catalog)
+// The sample's GET /agents answer, or (review 12) this computer's own catalog over the preload (main.mjs p9:agents), so history
+// replays, a new chat and its first send, and Settings have every agent's modes before GET /agents answers (chat-view.mjs
+// loadAgents replaces them). ponytail: only the modes; a third local agent's name waits for GET /agents (two ship today).
+fillAgents(sampleView ? M.agents : window.p9?.agents ?? []);
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 // The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
 const SP = { on: false, data: null, error: '', waiting: 0, timer: 0 };
@@ -247,7 +250,8 @@ function startDefaults(s, model) {
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
 // picked for its agent on this computer (at first the catalog's auto, helpers AUTO); the loosened modes ask first, in red.
-// Before GET /agents answers no mode is known: '' (the send then names none, and the daemon keeps the chat's own).
+// With no catalog at all (none over the preload, GET /agents not read) no mode is known: '' (the send names none, and the
+// daemon keeps the chat's own).
 // D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
 const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent]?.includes(m) ? m : ''; };
 // A loosened last pick carries to a new chat only after "don't show again" (review #2): a plain "Turn on" was for that chat.

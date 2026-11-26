@@ -19,6 +19,7 @@ export const SECURITY = {
   links: ['Ask before opening agent links', 'A link in an agent reply opens in your browser only after a question showing its whole address, on this computer.',
     'On: a link in an agent reply asks first, showing its whole address. Off: it opens on a click. Turning Unrestricted mode off turns this back on.'],
   unknown: 'Unknown: the daemon did not answer.',
+  noModes: 'Waiting for the agents\' modes from P9; open Settings again in a moment.',
 };
 // The mode Unrestricted mode starts new chats in, per agent: its tier-4 mode (fillAgents).
 export const LOOSEST = {};
@@ -43,6 +44,10 @@ export const setWarnsLoose = (on) => Object.keys(LOOSE).forEach((m) => on ? loca
 // Off removes only the loosest mode, so a mode picked by hand stays.
 export const setStarts = (on, startKey) => Object.entries(LOOSEST).forEach(([a, m]) => on ? localStorage.setItem(startKey + a, m)
   : localStorage.getItem(startKey + a) === m && localStorage.removeItem(startKey + a));
+// Review 12: Unrestricted mode switches new chats to each agent's loosest mode, so with none known (GET /agents not read, or
+// it lists none) the switch is off and cannot be turned on: it never turns the lock and File protection off by itself.
+// Desktop (settings-view.mjs) and phone (phone.ts).
+export const freeLocked = (lock, protect) => lock === null || protect === null || !Object.keys(LOOSEST).length;
 // Before GET /agents answers there are no loosened modes to check, so it reads off.
 export const unrestricted = (lock, protect, startKey) => lock === false && protect === false && Object.keys(LOOSEST).length > 0 && !warnsLoose()
   && Object.entries(LOOSEST).every(([a, m]) => localStorage.getItem(startKey + a) === m);

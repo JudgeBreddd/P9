@@ -71,6 +71,9 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   firstRun: !process.argv.includes('--p9-first-run=off'), // the wizard and walkthrough on the first start (controller.mjs firstStart)
   version: (process.argv.find(arg => arg.startsWith('--p9-version=')) || '').slice('--p9-version='.length),
   defaults: JSON.parse((process.argv.find(arg => arg.startsWith('--p9-defaults=')) || '--p9-defaults=null').slice('--p9-defaults='.length)), // main.mjs DEFAULT_SETTINGS (CAT-2)
+  // Review 12: this computer's agent catalog (main.mjs p9:agents, publicAgents: GET /agents' answer), so the window has every agent's modes
+  // before the daemon answers; GET /agents still replaces it (a remote server's may differ). chat-view.mjs takeAgents.
+  agents: ipcRenderer.sendSync('p9:agents'),
   source: process.argv.includes('--p9-source'), // a source checkout: Settings shows Rebuild + reload
   sample: ipcRenderer.sendSync('p9:sample'), // null unless an unpackaged test run set P9_SAMPLE_DATA=1
 }));
