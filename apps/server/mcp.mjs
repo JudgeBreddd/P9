@@ -60,7 +60,7 @@ const setField = { type: 'object', description: 'The fields to write, by name, e
 const baseField = { type: 'object', description: 'Optional, with hash: each field of set as it was when you read the record (null or left out: it had none). If the file changed since hash, '
   + 'the write still goes ahead when every one of these fields is still as it was (another edit changed only other things); otherwise it is refused as hash-conflict, naming the fields that changed.' };
 const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons' && key !== 'widget');
-const TOOLS = [
+export const TOOLS = [
   ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
     input({ text: { type: 'string', description: 'The whole registry JSON. Default: the file on disk.' } })],

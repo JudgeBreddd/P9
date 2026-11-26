@@ -42,3 +42,25 @@ export const partOrder = (order, defaults = PARTS) => {
 // restart write, its created event, and the bookkeeping the user does to it (move to a project, rename, archive; Builder,
 // nightly 3: "moving a chat to a project changes the edited last timer").
 export const NOT_USE = Object.freeze(['created', 'stopped', 'closed', 'exited', 'interrupted', 'project', 'renamed', 'archived', 'askable']);
+// CAT-2: Mission's built-in widgets, the one list the space check (mission-fields.mjs), both pages and the shipped guide read.
+// tile: one of P9's own top-row tiles (W-D), not a panel; label: its name on the page and in the guide.
+export const WIDGETS = Object.freeze([
+  { id: 'waiting', label: 'Waiting on you' }, { id: 'usage', label: 'Usage' }, { id: 'apps', label: 'Apps and pages' },
+  { id: 'notifications', label: 'Notifications' }, { id: 'primary', label: 'Main project' },
+  { id: 'idea', tile: true, label: '+ New idea' }, { id: 'sprint', tile: true, label: 'Sprint status' }, { id: 'edit', tile: true, label: 'Edit names and icons' },
+].map(Object.freeze));
+// CAT-2: the guide's and the onboarding card's closing line about File protection.
+export const PROTECT_AFTER = 'Turn File protection back on once the build is done.';
+// CAT-2: the pace mark (A3), for the Usage page (helpers.mjs), the plan_usage tool (limits.mjs) and the history table's CHECK
+// (usage-history.mjs). A plan window that is used evenly reaches 100% exactly when it resets, so "how far through the window
+// is the clock" is also "how much should be used by now". elapsed: that share, 0 to 1. gap: used % minus that, in points.
+// More than PACE_GAP points over is 'ahead', more than PACE_GAP under is 'headroom', else 'on'. mins: the window's length when
+// it names none. null with no reset time or one already passed: there is no window to measure against.
+export const PACE_STATES = Object.freeze(['ahead', 'on', 'headroom']);
+export const PACE_GAP = 5;
+export function paceOf(w, mins, now = Date.now()) {
+  const len = (w?.windowMins || mins) * 60000;
+  if (!w || !Number.isFinite(w.usedPercent) || !w.resetsAt || w.resetsAt <= now || !(len > 0)) return null;
+  const elapsed = Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)), gap = w.usedPercent - elapsed * 100;
+  return { elapsed, gap, state: gap > PACE_GAP ? 'ahead' : gap < -PACE_GAP ? 'headroom' : 'on' };
+}

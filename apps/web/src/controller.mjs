@@ -1,4 +1,4 @@
-import { quoteNow, quoteSent, chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { quoteNow, quoteSent, chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, modes, AUTO, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -7,14 +7,14 @@ import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { PATH_KEYS, missionKeys, missionShown, missionValue, editItems } from './mission-files.mjs';
-import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents, sentMode } from './security.mjs';
 import { tileHtml, tileLevel, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
-import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
+import { PARTS, partOrder, WIDGETS } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 import { installMission } from './mission-view.mjs';
 import { installChat, askKey } from './chat-view.mjs';
@@ -83,7 +83,7 @@ export function mountShell({ askAdmin } = {}) {
   const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, sentImgs, takenBack, turnsOf, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
-  const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
+  const { PET_ROLES, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
   // O249: the send-to-server move loads on its first use (the startup JS budget); its calls wait for it, in order. A click
   // freezes the chat at once, as the move itself does (s.leaving), so nothing is sent while it loads. A failed load says so
@@ -104,6 +104,11 @@ export function mountShell({ askAdmin } = {}) {
 const sampleView = !!window.p9?.sample;
 const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], history: [], files: [], fileBody: {}, queue: [], notifications: [],
   apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
+// The sample's GET /agents answer, or (review 12) this computer's own catalog over the preload (main.mjs p9:agents), so history
+// replays, a new chat and its first send, and Settings have every agent's modes before GET /agents answers (chat-view.mjs
+// loadAgents replaces them). ponytail: only the modes; a third local agent's name waits for GET /agents (two ship today).
+// Review 13: it counts as the daemon's own catalog (security.mjs CATALOG) only when that daemon is this computer's.
+fillAgents(sampleView ? M.agents : window.p9?.agents?.agents ?? [], sampleView || window.p9?.agents?.local === true);
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 // The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
 const SP = { on: false, data: null, error: '', waiting: 0, timer: 0 };
@@ -245,12 +250,14 @@ function startDefaults(s, model) {
   const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
-// picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
+// picked for its agent on this computer (at first the catalog's auto, helpers AUTO); the loosened modes ask first, in red.
+// With no catalog at all (none over the preload, GET /agents not read) no mode is known: '' (the send names none, and the
+// daemon keeps the chat's own).
 // D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
-const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent].includes(m) ? m : ''; };
+const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent]?.includes(m) ? m : ''; };
 // A loosened last pick carries to a new chat only after "don't show again" (review #2): a plain "Turn on" was for that chat.
 // The D2 default was confirmed in Settings for new chats, so it holds as set.
-const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
+const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent]?.includes(m) ? m : AUTO[agent] ?? ''; };
 const looseOk = (agent, m) => new Promise(done => {
   const d = $('#looseDlg'); $('#looseT').textContent = `Turn on ${m} for ${names[agent]}?`; $('#looseP').textContent = LOOSE[m]; d.returnValue = '';
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
@@ -570,15 +577,17 @@ function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'p
 // section opens in a window). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
+// Review 13: the four widget windows' titles are the widgets' names in packages/protocol WIDGETS (CAT-2).
+const WIDGET_NAME = Object.fromEntries(WIDGETS.map(w => [w.id, w.label]));
 const wins = {
-  mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
+  mprimary: { show: () => live.primary, title: () => WIDGET_NAME.primary, card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
-  mnotes: { show: () => widgetOn('notifications'), title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
-  mlaunch: { show: () => widgetOn('apps'), title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
+  mnotes: { show: () => widgetOn('notifications'), title: () => WIDGET_NAME.notifications + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
+  mlaunch: { show: () => widgetOn('apps'), title: () => WIDGET_NAME.apps, card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (an app's or page's graphic
     // or icon is its launch button). ponytail: the registry has no icon field yet.
     body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
-  musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitCard(usage.limits, names); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? c.name + ' · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
+  musage: { show: () => widgetOn('usage'), title: () => WIDGET_NAME.usage, card: () => { const c = usage.limits && limitCard(usage.limits, names); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? c.name + ' · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's plan windows as rows with the pace tick
     inline: () => { const rows = usageRows();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>${tokensSay()}`) + profileLines(usage); } },
@@ -972,7 +981,8 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, termGreeting = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
+// CAT-2: until they are read, the desktop's own defaults (main.mjs DEFAULT_SETTINGS, over the preload): the one copy of them.
+let settings = structuredClone(window.p9.defaults), agentLock = null, fileProtect = null, termGreeting = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 // ST1/ST2: Settings → Mission Control files, the daemon's settings.json (not this window's settings), so the paths stay
 // editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
@@ -1334,7 +1344,7 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
-  const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
+  const stops = s.stops, body = { id: s.id, text, mode: sentMode(s.agent, n.mode), next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
   // Review 9: Interrupt and send ('now') goes at once, not behind a send still waiting for its answer (up to SEND_CAP): the
   // daemon holds it, stops the running turn and sends it at that end. A send made after it still waits for both.
   // ponytail: an earlier send that has not reached the daemon yet (dropped links only, no outcome-unknown) may land after it.

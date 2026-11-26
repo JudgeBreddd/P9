@@ -14,7 +14,7 @@ import { connectServer, forwardPath, restartServer, startServer, stopServer, ssh
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
-import { AGENT_IDS, SIGN_IN_KIND } from '../server/agents.mjs';
+import { AGENT_IDS, SIGN_IN_KIND, publicAgents } from '../server/agents.mjs';
 import { trimLog, unitOf, windowsTaskName } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
@@ -444,7 +444,7 @@ export async function createDesktop({ state, open } = {}) {
     ...(overlay && { titleBarStyle: 'hidden', titleBarOverlay: overlay }),
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_FIRST_RUN === 'off' ? ['--p9-first-run=off'] : []), // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, '--p9-defaults=' + JSON.stringify(DEFAULT_SETTINGS), ...(process.env.P9_FIRST_RUN === 'off' ? ['--p9-first-run=off'] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : []), ...(source && /^\d+$/.test(process.env.P9_SEND_CAP_MS ?? '') ? ['--p9-send-cap=' + process.env.P9_SEND_CAP_MS] : [])] } });
   window.removeMenu();
   // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
@@ -861,6 +861,11 @@ export async function createDesktop({ state, open } = {}) {
   // Test-only: the UI tests' sample data (test/sample-data.mjs), never in a packaged build (GitHub issue #4). JSON drops its helpers.
   const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
     ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
+  // Review 12 (CAT-2): this computer's agent catalog (GET /agents' answer) for the preload, so the window has every agent's modes
+  // before the daemon answers. Over IPC, not an argument: the catalog grows, and an argument has a length limit.
+  // Review 13: local says whether the daemon in use is this computer's own (the window reloads on every switch, so it holds
+  // for the window's life); on a remote the catalog only fills the pickers until the remote's GET /agents answers (security.mjs).
+  ipcMain.on('p9:agents', event => { event.returnValue = event.sender === window.webContents ? { agents: publicAgents().agents, local: !serverHost } : { agents: [], local: false }; });
   ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
   const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}],
     // Settings > General: {} reads the welcome message setting, { show } changes it.

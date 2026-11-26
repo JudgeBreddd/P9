@@ -143,7 +143,7 @@ let air = false; // A2 step 5: the client declared the _meta extension (claude-a
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 const connection = acp.connectAgent(stream, {
   async initialize(params) {
-    // As Claude asked for ACP 2 it offers no steering, like claude-agent-acp 0.106.0 (test/real-adapter-steering.test.mjs).
+    // As Claude asked for ACP 2 it offers no steering, like claude-agent-acp 0.106.0 to 0.112.0 (test/real-adapter-steering.test.mjs).
     // ponytail: it still answers protocol 1 and speaks v1; only the steering offer follows the version P9 asked for.
     steering = !existsSync('no-steering') && !(process.argv[2] === 'claude' && params?.protocolVersion >= 2);
     const declared = params?.clientCapabilities?._meta?.jetbrains?.air;

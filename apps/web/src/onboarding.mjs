@@ -1,3 +1,4 @@
+import { PROTECT_AFTER } from '../../../packages/protocol/index.mjs';
 // The onboarding card on an empty Mission (M4, threat model row 72) and the space picker (row 71), drawn the same on the desktop
 // and the phone. esc is the caller's escaper. Every word is P9's own; template names, titles, space names and the agents' names
 // (CAT-1h: agents, [{ id, name }], one build button each; the phone gives none) come from the daemon.
@@ -18,9 +19,8 @@ export function onboardCard({ templates = [], spaces = [], current = null, prote
     + spacePicker(spaces, current, esc)
     + '<p class="muted" data-onboard-note role="status"></p></section>';
 }
-// The same two lines are in the shipped guide (templates/guide.mjs).
-export const PROTECT_WORDS = ['File protection is on. Claude or Codex can write your space only while it is off.',
-  'Turn File protection back on once the build is done.'];
+// The second line is the shipped guide's too (templates/guide.mjs): both read it from packages/protocol (CAT-2).
+export const PROTECT_WORDS = ['File protection is on. Claude or Codex can write your space only while it is off.', PROTECT_AFTER];
 // Main and each scratch space there is; shown only once a scratch space exists.
 export const spacePicker = (spaces, current, esc) => (spaces.length || current
   ? '<label class="space-pick" data-space-picker><span>Space</span><select data-slot="select" data-space-pick aria-label="Space Mission shows">'

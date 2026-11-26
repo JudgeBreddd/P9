@@ -2,7 +2,7 @@
 // sprint pickers, the loosened-mode warnings, Unrestricted mode's start modes and the onboarding card. Kestrel is made up.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modes, LOOSE } from '../apps/web/src/helpers.mjs';
+import { LOOSE, LOOSE_SAID } from '../apps/web/src/helpers.mjs';
 import * as security from '../apps/web/src/security.mjs';
 import { rolesHtml } from '../apps/web/src/sprint-view.mjs';
 import { onboardCard } from '../apps/web/src/onboarding.mjs';
@@ -15,9 +15,7 @@ const NO_LOOSE = { id: 'wren', name: 'Wren', short: 'Wren', modes: [{ name: 'Loo
 
 test('CAT-1h: a catalog-only agent\'s loosest mode warns in the sprint role picker and is Unrestricted mode\'s start; the built-in ones stay', () => {
   globalThis.document ??= { addEventListener() {} }; // rolesHtml binds its Seen click once
-  const bypass = LOOSE['Bypass permissions'];
-  for (const a of [CLAUDE, KESTREL, NO_LOOSE]) modes[a.id] = a.modes.map((m) => m.name); // what the chat view's GET /agents read does (CAT-1f)
-  security.fillLoose?.([CLAUDE, KESTREL, NO_LOOSE]);
+  security.fillAgents([CLAUDE, KESTREL, NO_LOOSE]); // what the chat view's GET /agents read does (CAT-2)
   const o = { names: { claude: 'Claude', codex: 'Codex', kestrel: 'Kestrel', wren: 'Wren' }, profiles: [], lastModels: {}, lastPickers: {}, pickerKind: () => '' };
   const html = rolesHtml({ lead: 'L', prep: true, files: [] }, [{ key: 'w1', provider: 'kestrel', mode: 'Free run' }, { key: 'w2', provider: 'kestrel', mode: 'Ask first' }], o, esc);
   const pick = (role) => html.match(new RegExp(`<select[^>]*data-spr="mode" data-role="${role}"[^>]*>`))?.[0] ?? '';
@@ -27,8 +25,8 @@ test('CAT-1h: a catalog-only agent\'s loosest mode warns in the sprint role pick
   assert.equal(security.LOOSEST.kestrel, 'Free run', 'Unrestricted mode starts its new chats in its loosest mode');
   assert.equal(security.LOOSEST.wren, undefined, 'an agent with no loosened mode has none');
   assert.equal(security.LOOSEST.claude, 'Bypass permissions');
-  assert.equal(security.LOOSEST.codex, 'Full access', 'an agent the answer leaves out keeps its own');
-  assert.equal(LOOSE['Bypass permissions'], bypass, 'a built-in warning keeps its own words');
+  assert.equal(security.LOOSEST.codex, undefined, 'an agent the answer leaves out is not offered (CAT-2: GET /agents is the one list)');
+  assert.equal(LOOSE['Bypass permissions'], LOOSE_SAID['Bypass permissions'], 'a built-in warning keeps its own words');
   assert.equal(LOOSE['Look only'], undefined);
   console.log('PASS CAT-1h loose: a catalog-only agent\'s loosest mode warns in the sprint picker and is Unrestricted mode\'s start');
 });
@@ -48,7 +46,7 @@ test('CAT-1h: Unrestricted mode reads off once a catalog-only agent with a loose
   globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
   security.setStarts(true, 'p9-mode:'); security.setWarnsLoose(false); // turned on before the agent was read
   for (const k of ['p9-mode:kestrel', 'p9-mode-ok:Free run']) kept.delete(k);
-  security.fillLoose?.([KESTREL]);
+  security.fillAgents([KESTREL]);
   assert.equal(security.unrestricted(false, false, 'p9-mode:'), false, 'a new agent is not loosened without the owner turning it on');
   security.setStarts(true, 'p9-mode:'); security.setWarnsLoose(false); // the owner turns it on again
   assert.equal(kept.get('p9-mode:kestrel'), 'Free run');

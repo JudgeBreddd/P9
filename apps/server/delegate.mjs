@@ -553,7 +553,7 @@ export function createDelegate({ chat, allowed, usage }) {
       // Modes, before any chat is made and again after the user's answer: from an agent's call the lead is never wider
       // than that chat (modeFor refuses a wider row); no chat under the lead is wider than the lead.
       const modes = () => {
-        const L0 = roles.lead, picked = caller ? modeFor(caller, { provider: L0.provider, mode: null }, L0.mode) : { mode: L0.mode ?? (L0.provider === 'claude' ? 'Auto' : 'Auto review') };
+        const L0 = roles.lead, picked = caller ? modeFor(caller, { provider: L0.provider, mode: null }, L0.mode) : { mode: L0.mode ?? AUTO[L0.provider] };
         if (picked.error) return { ...picked, error: picked.error === 'mode-unknown' ? picked.error : 'role-refused', role: 'lead', field: 'mode', detail: 'Role lead, mode: ' + picked.detail };
         const leadMode = lead ? chat.info(sprint).mode ?? picked.mode : picked.mode, ceiling = tierOf(L0.provider, leadMode);
         const wide = roles.rest.find((r) => r.mode && tierOf(r.provider, r.mode) > ceiling);

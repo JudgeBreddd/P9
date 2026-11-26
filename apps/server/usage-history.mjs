@@ -5,6 +5,7 @@
 // written once (key: provider, window, reading time): a tick that finds the same reading again writes nothing.
 import { DatabaseSync } from 'node:sqlite';
 import { paceState } from './limits.mjs';
+import { PACE_STATES } from '../../packages/protocol/index.mjs';
 
 const MIN = 60000;
 // A window: a used % and a length; its reset may be unknown (then it has no projection and no pace).
@@ -38,10 +39,12 @@ export function startUsageHistory({ file, read, everyMs = 10 * MIN, now = Date.n
   const open = () => {
     if (db) return;
     const opened = new DatabaseSync(file);
+    // CAT-2: the CHECK's words are packages/protocol's PACE_STATES. ponytail: IF NOT EXISTS keeps an older file's CHECK, so a
+    // new pace word needs a table migration there; today's three are the same in both.
     try {
       opened.exec(`PRAGMA busy_timeout = 0; PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS limits (at INTEGER NOT NULL,
         provider TEXT NOT NULL, win TEXT NOT NULL, used_pct REAL NOT NULL,
-        resets_at INTEGER, window_mins INTEGER NOT NULL, projected_pct REAL, pace TEXT CHECK (pace IN ('ahead', 'on', 'headroom')),
+        resets_at INTEGER, window_mins INTEGER NOT NULL, projected_pct REAL, pace TEXT CHECK (pace IN (${PACE_STATES.map((p) => `'${p}'`).join(', ')})),
         as_of INTEGER NOT NULL, age_ms INTEGER NOT NULL, PRIMARY KEY (provider, win, as_of)) STRICT`);
       // The base reading: the newest of the same window (the same reset, as the usage pace script matches it) that is
       // 35-90 min older and was fresh (at most 10 min old) when written.

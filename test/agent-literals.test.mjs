@@ -12,13 +12,13 @@ import { root } from './helpers.mjs';
 const ALLOW = {
   // Claude-only: profiles run on Claude, its compact window, raw SDK messages, the handoff to Remote Control, its live
   // rate-limit reading, its poll and transcript folder; Codex-only: its rollout files, its usage app-server and CLI path.
-  'apps/server/chat.mjs': 11, 'apps/server/delegate.mjs': 6, 'apps/server/server.mjs': 3, 'apps/server/move.mjs': 6,
+  'apps/server/chat.mjs': 11, 'apps/server/delegate.mjs': 5, 'apps/server/server.mjs': 3, 'apps/server/move.mjs': 6,
   'apps/server/claude-usage.mjs': 2, 'apps/server/codex-usage.mjs': 2, 'apps/server/deps.mjs': 1,
   // Saved shapes: the telemetry table's CHECK and the memory index's provider field; the setup wizard's claudeCli/codexCli answer.
   'apps/server/telemetry.mjs': 4, 'apps/server/memory.mjs': 2, 'apps/server/setup-routes.mjs': 2,
   // Web: the sample view's two agents, pet roles, Claude-only buttons (handoff, cache timer) and the remote-install
   // checkboxes; moving them to GET /agents costs startup bytes (CAT-2).
-  'apps/web/src/chat-view.mjs': 10, 'apps/web/src/phone.ts': 12, 'apps/web/src/shell-start.ts': 7, 'apps/web/src/controller.mjs': 6,
+  'apps/web/src/chat-view.mjs': 10, 'apps/web/src/phone.ts': 12, 'apps/web/src/shell-start.ts': 7, 'apps/web/src/controller.mjs': 5,
   'apps/web/src/settings-view.mjs': 4, 'apps/web/src/cards-modal.mjs': 2, 'apps/web/src/onboarding.mjs': 2,
   'apps/web/src/helpers.mjs': 1, 'apps/web/src/mission-view.mjs': 1, 'apps/web/src/sprint-view.mjs': 1,
 };
