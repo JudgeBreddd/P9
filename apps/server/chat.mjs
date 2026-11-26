@@ -1943,7 +1943,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // revoked meanwhile, a throw) leaves through this one exit (finally, below): the chat is back to running, and an Interrupt
       // held meanwhile (sendNow) goes then, not after the chat's next turn. drain checks each held message's own authority, so
       // a desktop Interrupt still goes after a revoked phone's start, and the phone's own held work does not.
-      const startFailed = () => { if (live.get(id) !== session) return; if (!session.stopping) setState(id, 'running'); if (session.queued.some((x) => nows.has(x.body))) queueMicrotask(() => drain(id, session)); }; // after this start's own error event
+      // #540 review 14: a start the chat's close, Stop or exit ended has no turn end to settle what it carried, so this exit
+      // drains it: drain hands each one back as stopped (and keeps what P9's own shutdown keeps), as a stopped turn's end does.
+      const gone = () => live.get(id) !== session || session.stopping;
+      const startFailed = () => { if (!gone()) setState(id, 'running'); if (gone() ? session.held.length + session.queued.length : session.queued.some((x) => nows.has(x.body))) queueMicrotask(() => drain(id, session)); }; // after this start's own error event
       let begun = false;
       try {
         if (session.stopping) return refused(409, 'stopping');
@@ -1993,7 +1996,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           try { await Promise.race([session.setChain, wait(5000).then(() => { throw new Error('timeout'); })]); }
           catch { emit(id, 'error', { message: 'An earlier setting has not answered; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
         }
-        // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
+        // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing, and nor
+        // does a chat closed, stopped or exited meanwhile (#540 review 14: it answered 202 for a turn on a removed session).
+        if (gone()) return refused(409, 'stopping');
         stillAuthorized();
         begun = true;
       } finally { if (!begun) startFailed(); }

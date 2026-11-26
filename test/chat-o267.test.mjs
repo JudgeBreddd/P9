@@ -127,3 +127,35 @@ test('O267 review 13: a setting whose caller gave up before its turn on the chai
   assert.ok(!seen.some(echoed('back on opus')), 'nor its prompt');
   console.log('PASS O267 review 13 skip: ' + JSON.stringify(order) + ', the opus set whose caller gave up was skipped');
 });
+
+// #540 review 14
+test('O267 review 14: an Interrupt held while a start sets its model is handed back when the chat is closed', async (t) => {
+  const { chat, dir, id, until, started } = await setup(t, 'o267-close');
+  await writeFile(path.join(dir, 'slow-config'), '3000');
+  const first = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
+  await started(); // the adapter is ready and the start is setting its model
+  const now = await chat.prompt(id, { text: 'cut in', when: 'now' });
+  assert.equal(now.status, 202, JSON.stringify(now));
+  assert.ok(now.held, JSON.stringify(now));
+  assert.equal((await chat.stop(id, { close: true })).status, 200);
+  assert.notEqual((await first).status, 202, 'the closed start sent nothing');
+  const back = await until((e) => e.type === 'unheld' && e.data?.id === now.held, 'the held Interrupt was handed back');
+  assert.ok(!back.some(echoed('cut in')), 'and never sent');
+  console.log('PASS O267 review 14 close: the held Interrupt came back as ' + back.find((e) => e.type === 'unheld' && e.data?.id === now.held).data.why);
+});
+
+test('O267 review 14: a message waiting on a late setting when the chat is stopped is refused, not answered 202', async (t) => {
+  const { chat, dir, id, seen, started } = await setup(t, 'o267-stopwait');
+  await writeFile(path.join(dir, 'slow-config'), '7000'); // past the 5 s wait
+  const doomed = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
+  await started();
+  await unlink(path.join(dir, 'slow-config'));
+  assert.equal((await doomed).status, 500, 'the haiku set timed out');
+  const waiting = chat.prompt(id, { text: 'no picks' }); // waits for the haiku set still on its way
+  await pause(300);
+  assert.equal((await chat.stop(id)).status, 200);
+  const r = await waiting;
+  assert.equal(r.status, 409, 'refused after the Stop: ' + JSON.stringify(r));
+  assert.ok(!seen.some(echoed('no picks')), 'nothing reached the agent');
+  console.log('PASS O267 review 14 stop: the waiting message got ' + r.status + ' ' + r.error + ' after the Stop');
+});
