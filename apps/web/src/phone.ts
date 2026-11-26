@@ -145,7 +145,7 @@ async function request(path: string, signal?: AbortSignal) {
   const response = await fetch(path, { cache: 'no-store', signal });
   if (response.status === 401) toLogin();
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
+  if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body, status: response.status });
   return body;
 }
 // One ID per action, kept until the daemon answers it: another action in between must not cost a lost one its ID,
@@ -208,13 +208,21 @@ document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => {
 // after the newer one with a list from before the new chat (it put the old chat back, and its mode with it).
 let loads = Promise.resolve();
 const loadChat = () => loads = loads.then(readChat);
+// O269: one failed read (a busy host) left "Chat is unavailable." until a reload. It says why and reads again, 2 s doubling to 30 s.
+let retryChat = 0, retryWait = 0;
 async function readChat() {
+  clearTimeout(retryChat);
   try {
     const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request), loadAgents()]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
-  } catch { one('#events').innerHTML = one('#chatList').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
+    retryWait = 0;
+  } catch (error) {
+    one('#events').innerHTML = one('#chatList').innerHTML = `<div class="empty">Chat is unavailable (${escape((error as Error)?.message || 'no answer')}). Trying again…</div>`;
+    if ((error as { status?: number })?.status === 401) return; // signed out: the login page takes over
+    retryWait = Math.min(retryWait * 2 || 2000, 30000); retryChat = window.setTimeout(() => void loadChat(), retryWait);
+  }
 }
 // Most recently used first, in the daemon's order: the open chats, then History, the stopped ones a
 // message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
