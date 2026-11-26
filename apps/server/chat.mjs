@@ -26,7 +26,7 @@ import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey 
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted, eachImage, placed } from './ledger.mjs';
 import { shellEnd, shellStart } from './shell-edits.mjs';
-import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START } from './agents.mjs';
+import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START, RESULT_COPY } from './agents.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(AGENT_IDS);
@@ -459,20 +459,36 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // under that reply's id after the reply was over, or opens a new id and is 200 characters or more (no first piece
   // of a stream is a whole long reply; a short one may be a new reply that says the same). A reply is over at its
   // turn's end, at the next message sent, at a compaction, or when another reply starts.
+  // DUP-1 (a)/(b): a short copy under a new id. claude-agent-acp's result fallback (v1/acp-agent.js shouldForwardResult)
+  // forwards the reply it had streamed under the result's uuid, where a streamed reply has the API's message id (msg_…).
+  // The server's ledger to 2026-11-26: 7 uuid pieces repeat a reply streamed under another id, all within half a second
+  // of its last piece (the two short ones 85 and 115 characters); 112 others (limit notices, command output) repeat none.
+  // So a piece under a uuid that is exactly a reply streamed under an id that is not one, within COPY_MS of its last
+  // piece, is its copy at any length, once per reply. Words said again under any other id are a reply of their own.
+  // Review 3: the adapter also sends a command's own output under a uuid, but only in answer to a new prompt, and the
+  // fallback copies the reply of its own prompt. So a prompt sent to the agent ends every earlier reply's chance of a copy
+  // (copied, at the send below): output that matches a reply from before that prompt is kept. A steer goes through
+  // _session/steering, not a prompt, so the turn it joins keeps its copy rule.
+  // Review 7: the uuid rule is claude-agent-acp's (its fallback is where the copies come from; RESULT_COPY, agents.mjs);
+  // another agent's uuid reply that opens with the same words is its own.
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
-  // reply, or of a short reply under a new id is recorded.
+  // reply, or of a short reply under an id that is not a uuid or more than COPY_MS later is recorded.
+  const COPY_MS = 5000, UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const repeated = (session, update) => {
-    const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over;
+    const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over, at = Date.now();
     if (update?.sessionUpdate === 'compaction_update') { if (open) open.over = true; return false; }
     if (update?.sessionUpdate !== 'agent_message_chunk') return false;
     // A piece that is not text (an image, a link) belongs to its reply like any other; a reply that has one is never
     // taken for a copy's original.
     const id = update.messageId, text = typeof update.content?.text === 'string' ? update.content.text : null;
     if (typeof id !== 'string') { if (open) open.over = true; return false; }
-    if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; } return false; }
-    const copy = text !== null && heard.some((m) => !m.mixed && m.parts > 1 && m.text === text && (m.id === id || text.length >= 200));
+    if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; open.at = at; } return false; }
+    const same = (m) => !m.mixed && m.parts > 1 && m.text === text;
+    const fresh = RESULT_COPY[session.provider] && text !== null && UUID.test(id) && heard.find((m) => !m.mixed && m.text === text && !UUID.test(m.id) && !m.copied && at - m.at < COPY_MS);
+    if (fresh) fresh.copied = true;
+    const copy = Boolean(fresh) || (text !== null && heard.some((m) => same(m) && (m.id === id || text.length >= 200)));
     // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
-    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, ...(text === null && { mixed: true }) });
+    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, at, ...(text === null && { mixed: true }) });
     if (heard.length > 20) heard.shift();
     return copy;
   };
@@ -1992,7 +2008,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (content?.length && session.turn === turn && live.get(id) === session) emit(id, 'update', { sessionUpdate: 'tool_call', toolCallId: 'p9-shell-' + turn, title: 'Shell edits', kind: 'edit', status: 'completed', content, locations: content.map((c) => ({ path: c.path })) });
       });
       // The snapshot is taken before the prompt goes, so the agent's first write is never in it.
-      new Promise((resolve) => resolve(shellFrom.then(() => (session.cut === turn ? { stopReason: 'cancelled' } : session.agent.prompt({ sessionId: session.sessionId, prompt }))))).then(
+      new Promise((resolve) => resolve(shellFrom.then(() => (session.cut === turn ? { stopReason: 'cancelled' } : (session.heard?.forEach((m) => { m.copied = true; }), session.agent.prompt({ sessionId: session.sessionId, prompt })))))).then(
         (result) => shellEdits().then(() => result), (error) => shellEdits().then(() => { throw error; }),
       ).then(
         done,

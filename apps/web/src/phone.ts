@@ -145,7 +145,7 @@ async function request(path: string, signal?: AbortSignal) {
   const response = await fetch(path, { cache: 'no-store', signal });
   if (response.status === 401) toLogin();
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
+  if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body, status: response.status });
   return body;
 }
 // One ID per action, kept until the daemon answers it: another action in between must not cost a lost one its ID,
@@ -192,6 +192,8 @@ async function mutate(path: string, body: Json, deadline = 0) {
   return { status: response.status, body: result };
 }
 let openId = ''; // the chat on the chat screen; '' is the Chats list
+// O269: an automatic read waits while the page is hidden or offline, as the live poll does; a chat's, while Chat is not on screen.
+const awake = (view?: string) => !document.hidden && navigator.onLine && (!view || document.body.dataset.view === view);
 function show(view: string) {
   document.body.dataset.view = view;
   document.body.classList.toggle('inchat', view === 'chat' && !!openId);
@@ -208,13 +210,22 @@ document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => {
 // after the newer one with a list from before the new chat (it put the old chat back, and its mode with it).
 let loads = Promise.resolve();
 const loadChat = () => loads = loads.then(readChat);
+// O269: one failed read (a busy host) left "Chat is unavailable." until a reload. It says why and reads again, 2 s doubling to 30 s.
+let retryChat = 0, retryWait = 0;
 async function readChat() {
+  clearTimeout(retryChat);
   try {
     const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request), loadAgents()]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
-  } catch { one('#events').innerHTML = one('#chatList').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
+    retryWait = 0;
+  } catch (error) {
+    one('#events').innerHTML = one('#chatList').innerHTML = `<div class="empty">Chat is unavailable (${escape((error as Error)?.message || 'no answer')}). Trying again…</div>`;
+    if ((error as { status?: number })?.status === 401) return; // signed out: the login page takes over
+    retryWait = Math.min(retryWait * 2 || 2000, 30000);
+    retryChat = window.setTimeout(function again() { if (awake()) void loadChat(); else retryChat = window.setTimeout(again, 2000); }, retryWait);
+  }
 }
 // Most recently used first, in the daemon's order: the open chats, then History, the stopped ones a
 // message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
@@ -358,6 +369,9 @@ function take(result: Json, ids: string[]) {
 }
 // A stub chat's newest events, up to where the first read stopped; live events for it come after, so none repeat.
 const loading = new Map<string, Promise<void>>();
+// O269: a chat whose history read failed, and when; it reads again after HISTORY_RETRY, only while it is on screen (awake).
+const failed = new Map<string, { why: string; at: number; out: boolean }>(), HISTORY_RETRY = 5000;
+let retryHistory = 0;
 function history(id: string) {
   if (!state.stubs.has(id)) return Promise.resolve();
   if (!loading.has(id)) loading.set(id, (async () => {
@@ -365,7 +379,11 @@ function history(id: string) {
       take(await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
     } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
     state.stubs.delete(id);
-  })().finally(() => loading.delete(id)));
+  })().then(() => { failed.delete(id); }, (error) => { // O269: one failure state per chat, however often it redraws
+    // Signed out (401): the login page takes over, so no retry (out).
+    failed.set(id, { why: (error as Error)?.message || 'no answer', at: Date.now(), out: (error as { status?: number })?.status === 401 });
+    throw error; // still a failure to its callers: catch-up (jump) keeps a chat whose read failed a stub
+  }).finally(() => loading.delete(id)));
   return loading.get(id)!;
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
@@ -461,6 +479,7 @@ function foldBlocks(now: Folded, events: Json[]) {
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
         const image = type === 'agent' && imgSrc(data.content); if (image) { const block = own(blocks.length - 1); block.images = [...block.images ?? [], image]; }
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
+      else if (update === 'tool_call' && data.toolCallId != null && blocks.some((block) => block.kind === 'tool' && block.id === data.toolCallId)) { /* O266: a call sent again after a compaction keeps its row (chat-view.mjs) */ }
       else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) ?? (data.kind === 'switch_mode' ? '' : undefined) });
       else if (update === 'tool_call_update') {
         const index = blocks.findIndex((block) => block.kind === 'tool' && block.id === data.toolCallId);
@@ -735,8 +754,13 @@ function render() {
   const picked = openId;
   if (state.stubs.has(picked)) {
     phoneFolderLine.hidden = true;
-    one('#events').innerHTML = '<div class="empty">Loading…</div>';
-    history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
+    // O269: a redraw shows the failure until its retry is due, and only then reads again. Whatever drew the line (the
+    // failure itself, a reopen, a live redraw) arms the one timer for the time left, so a shown failure always retries.
+    const fail = failed.get(picked), left = fail ? fail.at + HISTORY_RETRY - Date.now() : 0, due = !fail || (left <= 0 && awake('chat'));
+    one('#events').innerHTML = due ? '<div class="empty">Loading…</div>' : `<div class="empty">Chat is unavailable (${escape(fail!.why)}). Trying again…</div>`;
+    const redraw = () => { if (openId === picked) render(); };
+    if (due) history(picked).then(redraw, redraw);
+    else if (!fail!.out) { clearTimeout(retryHistory); retryHistory = window.setTimeout(() => { if (openId === picked && state.stubs.has(picked)) render(); }, left > 0 ? left : 2000); }
     return;
   }
   const { blocks, strip } = build(picked), events = one<HTMLElement>('#events');
