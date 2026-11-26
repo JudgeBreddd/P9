@@ -1335,14 +1335,25 @@ test('A2 step 6b: quote a whole reply or a selection on the phone, as a chip wit
   await chips.first().locator('.quote-go').click();
   await until(marked, 'the chip shows its reply, marked', 5000);
   // The next message carries both quotes first, each with its comment; the chips go. The mark, taken off by hand just
-  // before, is put back by the redraw the send brings (it lasts 1.6 s from the tap).
+  // before, is put back by the redraw the send brings. Its 1.6 s end is held for this, so a slow run cannot outlast it.
   posts.length = 0;
-  await chips.first().locator('.quote-go').click(); await until(marked, 'a second tap marks it again', 1000);
+  await page.evaluate(() => { const set = window.p9SetTimeout = window.setTimeout; window.p9HeldMark = []; window.setTimeout = (f, ms, ...rest) => ms === 1600 ? (window.p9HeldMark.push(f), 0) : set(f, ms, ...rest); });
+  await chips.first().locator('.quote-go').click(); await until(marked, 'a second tap marks it again', 5000);
   await page.evaluate(() => document.querySelector('#events .quote-src').classList.remove('quote-src'));
   await send(page, 'and this');
-  await until(() => page.evaluate(() => !!document.querySelector('#events .quote-src')), 'a redraw keeps the mark', 1400);
+  await until(() => page.evaluate(() => !!document.querySelector('#events .quote-src')), 'a redraw keeps the mark', 5000);
   await said(page, 'echo:> echo:The first sentence.');
+  await page.evaluate(() => { window.setTimeout = window.p9SetTimeout; window.p9HeldMark.forEach((f) => f()); }); // the mark's end, let go: it goes
+  assert.equal(await page.locator('#events .quote-src').count(), 0, 'the mark goes when its time is up');
   assert.equal(posts.at(-1), '> echo:The first sentence. The second sentence.\n\nwhy this? really\n\n> first sentence. The\n\nand this');
   await until(async () => await chips.count() === 0, 'the sent quotes leave the box', 5000);
   assert.equal(await page.inputValue('#prompt'), '');
+  // Send tapped while the pencil is open: the send carries the chip as it was, and the edit comes back as a chip, not lost.
+  await reply.first().locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('x'); await page.keyboard.press('Enter'); // the first: the echo above also has its words
+  await chips.first().waitFor({ timeout: 5000 });
+  await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type(' more');
+  posts.length = 0; await page.click('#composer button[type="submit"]');
+  await until(async () => posts.length === 1, 'Send sent the chip', 5000);
+  assert.equal(posts[0], '> echo:The first sentence. The second sentence.\n\nx');
+  await until(async () => (await labels()).join('|') === 'x more', 'the edit comes back as a chip after the send', 5000);
 });

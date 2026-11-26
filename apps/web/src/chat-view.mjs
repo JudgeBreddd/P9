@@ -866,7 +866,7 @@ function paint(root, ss, only) {
     p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
     // A2 step 6: Quote on a reply quotes all of it; a selection inside one reply quotes that part. Either opens the box.
-    p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { s.quotes.splice(+b.dataset.unquote, 1); renderChats(); });
+    p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { const [q] = s.quotes.splice(+b.dataset.unquote, 1); if (q) quoteFate.set(q, null); renderChats(); });
     p.querySelectorAll('[data-quote-reply]').forEach(b => b.onclick = () => { const e = s.events[b.closest('[data-at]')?.dataset.at]; if (e?.text) quote(s, p, b.getBoundingClientRect(), e.text, e.text, src(s, e)); });
     // Follow-up: the chip's pencil opens the box with its comment; the chip itself shows the reply it came from.
     p.querySelectorAll('[data-quote-edit]').forEach(b => b.onclick = () => { const q = s.quotes?.[+b.dataset.quoteEdit]; if (q) quote(s, p, b.getBoundingClientRect(), q.text, q.text, q, q); });
@@ -912,12 +912,19 @@ const aliveIn = (s, p) => () => p.isConnected && p.dataset.id === s.id && p.chec
 // from: the reply quoted, { ev, chat } (src): the event itself (loading earlier steps keeps it) and its chat. Never matched by
 // its words (review: they found another chat's or reply's), nor by a cursor (a moved chat is renumbered on its new machine).
 // was: the chip being edited, replaced in place; without it the quote is added.
+// quoteFate: a chip edited -> the chip that replaced it; a chip whose × was clicked -> null. An edit still open follows it.
+const quoteFate = new WeakMap();
 const src = (s, ev) => ({ ev, chat: s.id });
 const quote = (s, p, rect, text, raw, from, was) => { import('./quote.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
   if (alive()) m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: (q, away) => { if (!outer.S.sessions.includes(s)) return; // the chat was deleted meanwhile
-      const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat }; if (was && i < 0) return; /* its chip was removed meanwhile: it stays gone */ if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
+      const qs = s.quotes ||= [], n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat };
+      let now = was; while (now && quoteFate.get(now)) now = quoteFate.get(now); // the chip as it is now (another edit may have replaced it)
+      if (now && quoteFate.get(now) === null) return; // its × was clicked meanwhile: it stays gone
+      const i = now ? qs.indexOf(now) : -1; if (now) quoteFate.set(now, n);
+      if (i >= 0) qs[i] = n; else qs.push(n); // gone without its × (a send took it): the edit comes back as a chip
+      renderChats(); if (!away) ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
 // A selection in a reply shows a small Comment button beside it (the selection stays, so Copy works); the button opens the box.
 const commentOn = (s, p, view, range, text, raw, from) => import('./quote.mjs').then(m => {

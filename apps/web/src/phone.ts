@@ -1380,15 +1380,20 @@ function dropQuotes(id: string, sent: Quote[]) {
   if (left.length) quotes.set(id, left); else quotes.delete(id);
   if (id === openId) { renderAttached(); label(); }
 }
+// was: the chip being edited, replaced where it is. quoteFate: a chip edited -> the chip that replaced it; a chip whose ✕ was
+// tapped -> null. An edit still open follows it.
+const quoteFate = new WeakMap<Quote, Quote | null>();
 // was: the chip being edited, replaced where it is.
 function openQuote(id: string, rect: DOMRect, text: string, raw: string, key: string, was?: Quote) {
   import('./quote.mjs').then((m) => {
     const alive = quoteAlive(id); if (!alive()) return;
     m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, back: () => one<HTMLTextAreaElement>('#prompt').focus(),
       add: (q: { text: string; comment: string }, away?: boolean) => {
-        const list = [...quotes.get(id) ?? []], n = { text: was?.text ?? q.text, comment: q.comment, key }, i = was ? list.indexOf(was) : -1; // a new list: a send on its way keeps its own
-        if (was && i < 0) return; // its chip was removed meanwhile (its ✕ tapped while the pencil was open): it stays gone
-        if (i >= 0) list[i] = n; else list.push(n);
+        const list = [...quotes.get(id) ?? []], n = { text: was?.text ?? q.text, comment: q.comment, key }; // a new list: a send on its way keeps its own
+        let now = was; while (now && quoteFate.get(now)) now = quoteFate.get(now); // the chip as it is now (another edit may have replaced it)
+        if (now && quoteFate.get(now) === null) return; // its ✕ was tapped meanwhile: it stays gone
+        const i = now ? list.indexOf(now) : -1; if (now) quoteFate.set(now, n);
+        if (i >= 0) list[i] = n; else list.push(n); // gone without its ✕ (a send took it): the edit comes back as a chip
         quotes.set(id, list); if (id === openId) { renderAttached(); label(); if (!away) one<HTMLTextAreaElement>('#prompt').focus(); }
       } });
   }, () => note('The quote box did not load. Try again.'));
@@ -1453,7 +1458,7 @@ async function attachNow(id: string, files: Iterable<File>) {
 }
 one<HTMLElement>('#attached').onclick = (event) => {
   const at = (event.target as Element).closest<HTMLButtonElement>('[data-unquote], [data-quote-edit], [data-quote-go]'), q = at && quotes.get(openId)?.[Number(at.dataset.unquote ?? at.dataset.quoteEdit ?? at.dataset.quoteGo)];
-  if (at && q) { if (at.dataset.unquote !== undefined) dropQuotes(openId, [q]); else if (at.dataset.quoteEdit !== undefined) openQuote(openId, at.getBoundingClientRect(), q.text, q.text, q.key, q); else showQuoted(q); return; }
+  if (at && q) { if (at.dataset.unquote !== undefined) { quoteFate.set(q, null); dropQuotes(openId, [q]); } else if (at.dataset.quoteEdit !== undefined) openQuote(openId, at.getBoundingClientRect(), q.text, q.text, q.key, q); else showQuoted(q); return; }
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
   attached.get(openId)?.splice(Number(button.dataset.unattach), 1); renderAttached();
 };
