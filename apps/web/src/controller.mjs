@@ -1342,8 +1342,9 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // before what it holds (drain): the Interrupt is the message meant to go next. It still goes once.
   // Review 11: so a send whose turn comes while an Interrupt is still on its way (its files encoding, or its link waiting)
   // waits for that Interrupt's answer too (nowsOf: every 'now' not answered yet), read when its turn comes.
-  const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async (first) => { await first; return s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }); };
-  const mine = when === 'now' ? go() : prev.then(() => go(nowsOf[s.id])); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
+  // Review 12: read again after each wait, so an Interrupt made while it waited (still unanswered) is waited for too.
+  const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async (barrier) => { for (let seen; barrier && seen !== nowsOf[s.id];) await (seen = nowsOf[s.id]); return s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }); };
+  const mine = when === 'now' ? go() : prev.then(() => go(true)); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
   if (when === 'now') nowsOf[s.id] = Promise.allSettled([nowsOf[s.id], mine]);
   const r = await mine.finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.

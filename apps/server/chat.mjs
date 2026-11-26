@@ -983,19 +983,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   // NARROW (catalog): each agent's no-write mode, the lock's and a turn answering another chat's question.
   const modeFor = (provider) => locked ? NARROW[provider] : START[provider];
-  // One set at a time per session, sent in the order asked: a set that answers late can never land after a later one.
-  // modeWaits counts the sets not settled yet; while there is one, a prompt sets its own mode instead of trusting session.mode.
+  // One set at a time per session (mode, model, effort), sent in the order asked: a set that answers late can never land
+  // after a later one. setWaits counts the sets not settled yet; while there is one, a prompt sets its own mode, model and
+  // settings instead of trusting what P9 last heard (#540 review 12: a set that timed out may still land). then: what the
+  // set's answer changes, run when it comes, late or not.
   // MC-3: the mode event the window's and the phone's pills show. told: this run of the session has said its mode, so a
   // prompt that set none (its mode was already the session's) still tells it once (prompt, below).
   const tellMode = (session, provider) => { session.told = true; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); };
-  const setMode = (session, provider, value = modeFor(provider), tell = true) => {
-    const send = () => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
-      .then((result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) tellMode(session, provider); return result; }); // P6: the phone's pill shows the mode set
-    session.modeWaits = (session.modeWaits ?? 0) + 1;
-    const set = (session.modeChain ?? Promise.resolve()).then(send);
-    session.modeChain = set.catch(() => {}).finally(() => { session.modeWaits -= 1; });
+  const setOption = (session, configId, value, then) => {
+    const send = () => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }).then(then);
+    session.setWaits = (session.setWaits ?? 0) + 1;
+    const set = (session.setChain ?? Promise.resolve()).then(send);
+    session.setChain = set.catch(() => {}).finally(() => { session.setWaits -= 1; });
     return set;
   };
+  const setMode = (session, provider, value = modeFor(provider), tell = true) => setOption(session, 'mode', value,
+    (result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) tellMode(session, provider); return result; }); // P6: the phone's pill shows the mode set
   // The chat's Mode picker, sent with each desktop prompt (Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   // MODES: from the catalog (agents.mjs).
@@ -1932,51 +1935,56 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
       release();
-      // #540 review 11: a start that fails before its turn is that turn's end for an Interrupt held meanwhile (sendNow): it goes then,
-      // not after the chat's next turn. The authorization failures below keep their plain state change: nothing is sent for them.
-      const startFailed = () => { if (live.get(id) !== session) return; setState(id, 'running'); if (session.queued.some((x) => nows.has(x.body))) queueMicrotask(() => drain(id, session)); }; // after this start's own error event
-      if (session.stopping) return refused(409, 'stopping');
-      try { stillAuthorized(); } catch (error) { setState(id, 'running'); throw error; }
-      setState(id, 'turn');
-      // A mode that cannot be set stops the turn: running it in another mode could do what Plan or Manual would not.
-      // A question to the user that the agent raised on its own stays open: another chat's question does not decline it.
-      if (solo && session.pending.size) { if (live.get(id) === session) setState(id, 'running'); return refused(409, 'waiting-on-user'); }
-      if (solo) session.back ??= session.mode;
-      const want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
-      if (want && (want !== session.mode || session.modeWaits)) {
-        // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
-        try { await Promise.race([setMode(session, conversation.provider, want, !solo), wait(5000).then(() => { throw new Error('timeout'); })]); }
-        catch { startFailed(); emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
-      }
-      if (!solo) session.back = undefined;
-      // MC-3: a prompt with no mode, or with the one the session is already in, set none; the pill learns it here once.
-      if (!solo && !session.told && session.mode) tellMode(session, conversation.provider);
-      if (body.model && body.model !== session.models?.current) {
-        if (!session.models?.options.some((o) => o.value === body.model)) {
-          startFailed(); emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.', ends: true }); return refused(400, 'model-unknown');
+      // #540 review 11 and 12: every way this start can end before its turn (a Stop, a refused or timed-out setting, a device
+      // revoked meanwhile, a throw) leaves through this one exit (finally, below): the chat is back to running, and an Interrupt
+      // held meanwhile (sendNow) goes then, not after the chat's next turn. drain checks each held message's own authority, so
+      // a desktop Interrupt still goes after a revoked phone's start, and the phone's own held work does not.
+      const startFailed = () => { if (live.get(id) !== session) return; if (!session.stopping) setState(id, 'running'); if (session.queued.some((x) => nows.has(x.body))) queueMicrotask(() => drain(id, session)); }; // after this start's own error event
+      let begun = false;
+      try {
+        if (session.stopping) return refused(409, 'stopping');
+        stillAuthorized();
+        setState(id, 'turn');
+        // A mode that cannot be set stops the turn: running it in another mode could do what Plan or Manual would not.
+        // A question to the user that the agent raised on its own stays open: another chat's question does not decline it.
+        if (solo && session.pending.size) return refused(409, 'waiting-on-user');
+        if (solo) session.back ??= session.mode;
+        const want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
+        if (want && (want !== session.mode || session.setWaits)) {
+          // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
+          try { await Promise.race([setMode(session, conversation.provider, want, !solo), wait(5000).then(() => { throw new Error('timeout'); })]); }
+          catch { emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
         }
-        try {
-          const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'model', value: body.model }), wait(5000).then(() => { throw new Error('timeout'); })]);
-          if (!models(session, id, result?.configOptions)) { session.models.current = body.model; emit(id, 'config', configOf(session)); }
-        } catch { startFailed(); emit(id, 'error', { message: 'The model could not be set; nothing was sent.', ends: true }); return refused(500, 'model-failed'); }
-      }
-      // After the model: a model switch can change the effort list. A refused or failed setting stops the turn, like Model.
-      for (const [configId, value] of picks) {
-        const o = session.pickers?.find((x) => x.id === configId);
-        if (value === o?.current) continue;
-        if (!o?.options.some((x) => x.value === value)) {
-          startFailed(); emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.', ends: true }); return refused(400, 'config-unknown');
+        if (!solo) session.back = undefined;
+        // MC-3: a prompt with no mode, or with the one the session is already in, set none; the pill learns it here once.
+        if (!solo && !session.told && session.mode) tellMode(session, conversation.provider);
+        if (body.model && (body.model !== session.models?.current || session.setWaits)) {
+          if (!session.models?.options.some((o) => o.value === body.model)) {
+            emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.', ends: true }); return refused(400, 'model-unknown');
+          }
+          try {
+            const model = body.model;
+            await Promise.race([setOption(session, 'model', model, (result) => { if (!models(session, id, result?.configOptions)) { session.models.current = model; emit(id, 'config', configOf(session)); } }), wait(5000).then(() => { throw new Error('timeout'); })]);
+          } catch { emit(id, 'error', { message: 'The model could not be set; nothing was sent.', ends: true }); return refused(500, 'model-failed'); }
         }
-        try {
-          const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }), wait(5000).then(() => { throw new Error('timeout'); })]);
-          if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); }
-        } catch { startFailed(); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
-      }
-      if (photos(images).length && !session.capabilities.promptCapabilities?.image) {
-        startFailed(); emit(id, 'error', { message: 'This agent does not take images; nothing was sent.', ends: true }); return refused(400, 'images-unsupported');
-      }
-      // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
-      try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
+        // After the model: a model switch can change the effort list. A refused or failed setting stops the turn, like Model.
+        for (const [configId, value] of picks) {
+          const o = session.pickers?.find((x) => x.id === configId);
+          if (value === o?.current && !session.setWaits) continue;
+          if (!o?.options.some((x) => x.value === value)) {
+            emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.', ends: true }); return refused(400, 'config-unknown');
+          }
+          try {
+            await Promise.race([setOption(session, configId, value, (result) => { if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); } }), wait(5000).then(() => { throw new Error('timeout'); })]);
+          } catch { emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
+        }
+        if (photos(images).length && !session.capabilities.promptCapabilities?.image) {
+          emit(id, 'error', { message: 'This agent does not take images; nothing was sent.', ends: true }); return refused(400, 'images-unsupported');
+        }
+        // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
+        stillAuthorized();
+        begun = true;
+      } finally { if (!begun) startFailed(); }
       decline(id, session, body);
       const turn = session.turn = randomUUID();
       // MC-15: the folder's state as the turn starts; Shell edits at its end are what changed since (shell-edits.mjs).

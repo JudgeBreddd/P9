@@ -225,6 +225,9 @@ test('O267: Interrupt while the previous prompt is still setting its model waits
   const went = await until(instance, (e) => e.conversation === id && e.type === 'user' && e.data.text === 'cut in after a failed start', done.cursor);
   const users = went.seen.filter((e) => e.conversation === id && e.type === 'user').map((e) => e.data.text);
   assert.deepEqual(users, ['second, on haiku', 'cut in after a failed start'], 'the failed one (its user event comes before its settings), then the Interrupt: ' + JSON.stringify(users));
+  // Review 12: and it ran: the agent answered it and its turn ended (its user event is written before the adapter's settings).
+  const ran = await until(instance, (e) => e.conversation === id && e.type === 'turn-end', went.cursor);
+  assert.ok([...went.seen, ...ran.seen].some((e) => e.conversation === id && e.type === 'update' && String(e.data?.content?.text).startsWith('echo:') && e.data.content.text.includes('cut in after a failed start')), 'the agent answered the Interrupt');
   console.log('PASS O267 interrupt while starting: held 202, sent once after the starting turn, and at once when that start fails');
 });
 
