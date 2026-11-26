@@ -528,6 +528,28 @@ const connection = acp.connectAgent(stream, {
       setTimeout(async () => { await piece('L1', long + tail); await piece('L2', long + tail); }, 300);
       return { stopReason: 'end_turn' };
     }
+    // DUP-1 (a)/(b): claude-agent-acp's result fallback. A turn's result that reports no output tokens ends it, and the
+    // adapter forwards the result text, the reply the agent already streamed, whole under a new id: after the turn-end
+    // (twice short, as the server's ledger shows it) or before it (twice early, as the adapter's source orders it). Then
+    // the same words once more under S2, a reply of their own, and the marker 'twice: end'. said again: the agent says its
+    // streamed words again at once as a new reply of its own (the API's own kind of id, not the result's uuid).
+    if (text === 'twice short' || text === 'twice early' || text === 'said again') {
+      const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
+      const copy = () => piece('5b0e5d55-ffc2-4f6b-9a39-2d0c0f3c6b11', 'Done, merged.');
+      const rest = async () => { await piece('S2', 'Done, merged.'); await piece('M', 'twice: end'); };
+      if (text === 'said again') { await piece('S1', 'Done, '); await piece('S1', 'merged.'); await piece('R1', 'Done, merged.'); await piece('M2', 'twice: end'); }
+      else {
+        await piece('S1', 'Done, '); await piece('S1', 'merged.');
+        if (text === 'twice early') { await copy(); setTimeout(rest, 300); } else setTimeout(async () => { await copy(); await rest(); }, 300);
+      }
+      return { stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 } };
+    }
+    // DUP-1 review 3: a command's own output, which the adapter sends under a uuid too, saying what the last reply said.
+    if (text === 'command result') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: '0c6a4f0e-3d4b-4b8e-9a51-7c2e1f9d3a20', content: { type: 'text', text: 'Done, merged.' } } });
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'M3', content: { type: 'text', text: 'twice: end' } } });
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }
