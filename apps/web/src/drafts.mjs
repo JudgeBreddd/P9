@@ -1,9 +1,11 @@
 // A2 step 7: the saved drafts menu, opened by Drafts beside the paperclip or by Ctrl+S in an empty box. Loads on first use
 // (chat-view.mjs drafts). A draft clicked leaves the list and goes back in the box; its x deletes it; Esc or a click outside
-// closes the menu. The list is chat-view's DRAFTS key: newest first, text and when it was saved.
+// closes the menu. The list is chat-view's DRAFTS key: newest first, text, quotes and when it was saved.
 import { ageOf } from './helpers.mjs';
 let shut = null;
-export const readDrafts = key => { try { const d = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(d) ? d.filter(x => typeof x?.text === 'string' && x.text) : []; } catch { return []; } };
+// Quotes a draft carries (step 6 follow-up): text and comment, anything else dropped.
+const okQuotes = q => Array.isArray(q) ? q.filter(x => typeof x?.text === 'string' && x.text).map(x => ({ text: x.text, comment: typeof x.comment === 'string' ? x.comment : '' })) : undefined;
+export const readDrafts = key => { try { const d = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(d) ? d.filter(x => typeof x?.text === 'string' && (x.text || okQuotes(x.quotes)?.length)).map(x => ({ ...x, quotes: okQuotes(x.quotes) })) : []; } catch { return []; } };
 export function draftsMenu({ rect, key, take, remove, alive, back, host = document.body }) {
   shut?.();
   const box = Object.assign(document.createElement('div'), { className: 'drafts-menu', role: 'dialog' }), ac = new AbortController();
@@ -19,10 +21,11 @@ export function draftsMenu({ rect, key, take, remove, alive, back, host = docume
     if (!d.length) return close(true);
     box.replaceChildren(...d.map(x => {
       const row = Object.assign(document.createElement('div'), { className: 'draft' });
-      const use = Object.assign(document.createElement('button'), { className: 'draft-take', title: x.text });
-      use.append(Object.assign(document.createElement('span'), { className: 'truncate', textContent: x.text.replace(/\s+/g, ' ').slice(0, 200) }),
+      const q = x.quotes?.length ? `${x.quotes.length} quote${x.quotes.length > 1 ? 's' : ''}` : '', words = x.text.replace(/\s+/g, ' ').trim();
+      const use = Object.assign(document.createElement('button'), { className: 'draft-take', title: [x.text, ...(x.quotes || []).map(y => '> ' + y.text + (y.comment ? '\n' + y.comment : ''))].filter(Boolean).join('\n\n') });
+      use.append(Object.assign(document.createElement('span'), { className: 'truncate', textContent: (q && words ? q + ' · ' : q) + words.slice(0, 200) }),
         Object.assign(document.createElement('span'), { className: 'draft-age', textContent: x.at ? ageOf(x.at) : '' }));
-      use.onclick = () => act(x, rest => { if (take(x.text, rest)) close(); });
+      use.onclick = () => act(x, rest => { if (take(x, rest)) close(); });
       const del = Object.assign(document.createElement('button'), { className: 'draft-del', textContent: '×', title: 'Delete this draft' });
       del.setAttribute('aria-label', 'Delete this draft');
       del.onclick = () => act(x, rest => { if (remove(rest)) draw(); });

@@ -638,7 +638,7 @@ function pane(s, i, bare) {
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf, SHUT.get(), shelved)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? esc(outer.names[s.agent]) + ' is working…' : 'Sending…'}${(e => working && e?.t === 'tool' ? `<span class="step truncate" title="${esc(e.title)}">${esc(e.title)}</span>` : '')(s.events.findLast(e => e.t === 'tool' || e.t === 'user'))}</div>` : ''}${s.goal ? (st => `<div class="goal" data-key="goal" title="Goal: ${esc(s.goal.objective + st)}"><span class="truncate">Goal: ${esc(s.goal.objective)}</span>${st ? `<span class="st">${esc(st)}</span>` : ''}</div>`)(s.goal.status === 'active' ? '' : ' · ' + s.goal.status) : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? strip(s, since, s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q.t)}</span><button title="${loading(s) ? 'Loading this chat…' : 'Interrupt and send this now'}" data-qnow="${j}"${loading(s) ? ' disabled' : ''}>${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')) : ''}
-      <div class="composer" data-key="composer"><div class="slash" data-slash hidden></div>${s.images?.length || s.quotes?.length ? `<div class="attach" data-key="attach">${(s.quotes || []).map((q, i) => `<span class="att att-file att-quote" title="${esc(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><span class="truncate">“${esc(q.text.slice(0, 80))}”${q.comment ? ' · ' + esc(q.comment.slice(0, 80)) : ''}</span><button data-unquote="${i}" title="Remove" aria-label="Remove this quote">×</button></span>`).join('')}${(s.images || []).map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>\n${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span>${(n => n ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="drafts-btn" data-key="drafts" title="Saved drafts (Ctrl+S in the box saves one)" data-drafts>Drafts ${n}</button>` : '')(draftsN())}<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer" data-key="composer"><div class="slash" data-slash hidden></div>${s.images?.length || s.quotes?.length ? `<div class="attach" data-key="attach">${(s.quotes || []).map((q, i) => `<span class="att att-quote" title="${esc(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><button class="quote-go" data-quote-go="${i}" aria-label="Show the quoted reply"><span class="truncate">${q.comment ? esc(q.comment.slice(0, 60)) : `“${esc(q.text.replace(/\s+/g, ' ').trim().slice(0, 40))}”`}</span></button><button class="quote-edit" data-quote-edit="${i}" title="Edit the comment" aria-label="Edit the comment">${svg.edit}</button><button data-unquote="${i}" title="Remove" aria-label="Remove this quote">×</button></span>`).join('')}${(s.images || []).map((im, i) => `<span class="att${im.file ? ' att-file' : ''}" title="${esc(im.name)}">${im.file ? `<span class="truncate">${esc(im.name)}</span>` : `<img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}">`}<button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>\n${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span>${(n => n ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="drafts-btn" data-key="drafts" title="Saved drafts (Ctrl+S in the box saves one)" data-drafts>Drafts ${n}</button>` : '')(draftsN())}<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach files (6 MiB each; 4 images, 4 files)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen || loading(s) ? 'disabled ' : ''}title="${loading(s) ? 'Loading this chat…' : working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
@@ -772,7 +772,7 @@ function paint(root, ss, only) {
         }
       }
       // A2 step 7: Ctrl+S saves the box's text as a draft and empties the box; in an empty box it opens the saved drafts.
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyS') { e.preventDefault(); return ta.value.trim() ? putAside(s, ta) : draftsOf(s, p); }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyS') { e.preventDefault(); return ta.value.trim() || s.quotes?.length ? putAside(s, ta) : draftsOf(s, p); }
       // Tab with an empty box still moves focus on.
       const key = busy(s) && !s.readonly && turnKey(e);
       if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
@@ -867,9 +867,12 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
     // A2 step 6: Quote on a reply quotes all of it; a selection inside one reply quotes that part. Either opens the box.
     p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { s.quotes.splice(+b.dataset.unquote, 1); renderChats(); });
-    p.querySelectorAll('[data-quote-reply]').forEach(b => b.onclick = () => { const e = s.events[b.closest('[data-at]')?.dataset.at]; if (e?.text) quote(s, p, b.getBoundingClientRect(), e.text); });
+    p.querySelectorAll('[data-quote-reply]').forEach(b => b.onclick = () => { const e = s.events[b.closest('[data-at]')?.dataset.at]; if (e?.text) quote(s, p, b.getBoundingClientRect(), e.text, e.text, e); });
+    // Follow-up: the chip's pencil opens the box with its comment; the chip itself shows the reply it came from.
+    p.querySelectorAll('[data-quote-edit]').forEach(b => b.onclick = () => { const q = s.quotes?.[+b.dataset.quoteEdit]; if (q) quote(s, p, b.getBoundingClientRect(), q.text, q.text, q.ev, q); });
+    p.querySelectorAll('[data-quote-go]').forEach(b => b.onclick = () => showSource(s, p, s.quotes?.[+b.dataset.quoteGo]));
     const hist = p.querySelector('.hist');
-    if (hist) hist.onpointerup = () => setTimeout(() => { const sel = getSelection(), r = !sel.isCollapsed && sel.rangeCount && sel.getRangeAt(0), at = r && r.commonAncestorContainer, msg = at && (at.nodeType === 1 ? at : at.parentElement).closest('.msg.agent'), raw = msg && hist.contains(msg) && sel.toString(), text = raw && raw.trim(); if (text) quote(s, p, r.getBoundingClientRect(), text, raw); });
+    if (hist) hist.onpointerup = () => setTimeout(() => { const sel = getSelection(), r = !sel.isCollapsed && sel.rangeCount && sel.getRangeAt(0), at = r && r.commonAncestorContainer, msg = at && (at.nodeType === 1 ? at : at.parentElement).closest('.msg.agent'), raw = msg && hist.contains(msg) && sel.toString(), text = raw && raw.trim(); if (text) commentOn(s, p, () => r.getBoundingClientRect(), text, raw, s.events[msg.closest('[data-at]')?.dataset.at]); });
     const more = p.querySelector('[data-earlier]'); if (more) more.onclick = async () => {
       if (s.fetching) return;
       const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
@@ -906,14 +909,34 @@ const adding = new Map(); // chat id -> its attach now
 // visibility), and in the top dialog when one is open (raiseToasts' rule: the last opened still modal). The quote box checks it
 // when it loads, while it is open, and on Comment; the drafts menu when it loads and when a draft is taken.
 const aliveIn = (s, p) => () => p.isConnected && p.dataset.id === s.id && p.checkVisibility({ visibilityProperty: true }) && (outer.modals.filter(d => d.matches(':modal')).pop()?.contains(p) ?? true);
-const quote = (s, p, rect, text, raw) => { import('./quote.mjs').then(m => {
+// ev: the reply quoted (kept as the event itself, so loading earlier steps does not lose it; not saved with a draft: showSource
+// finds it by text then).
+// was: the chip being edited, replaced in place; without it the quote is added.
+const quote = (s, p, rect, text, raw, ev, was) => { import('./quote.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
-  if (alive()) m.quoteBox({ rect, text, raw, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
-    add: q => { (s.quotes ||= []).push(q); renderChats(); ta()?.focus(); } });
+  if (alive()) m.quoteBox({ rect, text, raw, comment: was?.comment, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
+    add: (q, away) => { const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev }; if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
+// A selection in a reply shows a small Comment button beside it (the selection stays, so Copy works); the button opens the box.
+const commentOn = (s, p, at, text, raw, ev) => import('./quote.mjs').then(m => {
+  const alive = aliveIn(s, p);
+  if (alive()) m.commentButton({ at, alive, host: p.closest('dialog') || document.body, pick: rect => quote(s, p, rect, text, raw, ev) });
+}, () => {});
+// A chip clicked: its reply scrolled to the middle of the chat and marked for a moment, earlier steps drawn first if it is
+// above the ones shown. Its reply is the event it was quoted from; when that is gone (the chat's steps loaded again, or the
+// quote came back from a saved draft) the latest reply containing the quoted text. None: it says so.
+function showSource(s, p, q) {
+  const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), cut = q?.text.replace(/…$/, '');
+  let i = q?.ev ? list.indexOf(q.ev) : -1; if (i < 0 && cut) i = list.findLastIndex(e => e.t === 'agent' && e.text?.includes(cut));
+  if (i < 0) return outer.toast({ kind: 'chat', txt: 'The reply this quote came from is not in this chat.' }, true);
+  if (list.length - i > (s.tail || TAIL)) { s.tail = list.length - i; renderChats(); }
+  const el = p.querySelector(`.hist [data-at="${s.events.indexOf(list[i])}"]`); if (!el) return;
+  el.scrollIntoView({ block: 'center' }); el.classList.remove('quote-src'); void el.offsetWidth; el.classList.add('quote-src');
+}
 
 // A2 step 7: drafts saved aside with Ctrl+S in the box, newest first, in this machine's window storage, so any chat can take
-// one back. The menu (drafts.mjs) loads on first use. ponytail: text only, the last 20 kept; files and quotes stay in the box.
+// one back. The menu (drafts.mjs) loads on first use. ponytail: text and quotes (with their comments), the last 20 kept; files
+// stay in the box. A quote taken back from a draft finds its reply by its text (showSource).
 const DRAFTS = 'p9-drafts';
 let draftsCount = null; // review: the button's count, read again only after a write or another window's change
 window.addEventListener('storage', e => { if (e.key === DRAFTS) { draftsCount = null; renderChats(); } }); // another window saved or took one
@@ -921,12 +944,13 @@ const draftsN = () => draftsCount ??= (() => { try { return JSON.parse(localStor
 // The whole list in one write, so a full store changes nothing (the box and the list stay as they were). false: not written.
 const putDrafts = d => { draftsCount = null; try { localStorage.setItem(DRAFTS, JSON.stringify(d.slice(0, 20))); return true; } catch { return false; } };
 const storeFull = what => outer.toast({ kind: 'draft not saved', txt: `The window storage is full, so ${what}.`, level: 'warn' }, true);
-const withChips = s => s.images?.length || s.quotes?.length ? 'Text saved as a draft; the attachments stay in the box.' : '';
+const withChips = s => s.images?.length ? 'Saved as a draft; the attached files stay in the box.' : '';
+const boxDraft = (s, ta) => ({ text: ta.value, at: Date.now(), ...(s.quotes?.length ? { quotes: s.quotes.map(({ text, comment }) => ({ text, comment })) } : {}) });
 function putAside(s, ta) {
   let d; try { d = JSON.parse(localStorage.getItem(DRAFTS) || '[]'); if (!Array.isArray(d)) d = []; } catch { d = []; }
-  if (!putDrafts([{ text: ta.value, at: Date.now() }, ...d])) return storeFull('the draft stays in the box');
+  if (!putDrafts([boxDraft(s, ta), ...d])) return storeFull('the draft stays in the box');
   const p = ta.closest('.pane'), note = withChips(s);
-  ta.value = s.draft = ''; s.recall = null; renderChats(); p?.querySelector('.composer textarea')?.focus();
+  ta.value = s.draft = ''; s.quotes = []; s.recall = null; renderChats(); p?.querySelector('.composer textarea')?.focus();
   if (note) outer.toast({ kind: 'draft saved', txt: note }, true);
 }
 // Bound to the pane it was opened from (review): nothing opens or is taken once that pane shows another chat, is hidden, sits
@@ -935,10 +959,10 @@ function putAside(s, ta) {
 const draftsOf = (s, p) => import('./drafts.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), shown = aliveIn(s, p), alive = () => shown() && !!ta() && !ta().disabled;
   if (alive()) m.draftsMenu({ host: p.closest('dialog') || document.body, rect: (p.querySelector('[data-drafts]') || p.querySelector('[data-attach]')).getBoundingClientRect(), key: DRAFTS, alive,
-    take: (text, rest) => {
-      const cur = ta().value.trim() ? [{ text: ta().value, at: Date.now() }] : [], note = cur.length && withChips(s);
+    take: ({ text, quotes }, rest) => {
+      const cur = ta().value.trim() || s.quotes?.length ? [boxDraft(s, ta())] : [], note = cur.length && withChips(s);
       if (!putDrafts([...cur, ...rest])) return storeFull('nothing changed: the box and the drafts are as they were'), false;
-      s.draft = text; s.recall = null; renderChats();
+      s.draft = text; s.quotes = (quotes || []).map(({ text, comment }) => ({ text, comment })); s.recall = null; renderChats();
       const b = ta(); if (b) { b.value = text; b.focus(); b.setSelectionRange(text.length, text.length); }
       if (note) outer.toast({ kind: 'draft saved', txt: note }, true);
       return true;

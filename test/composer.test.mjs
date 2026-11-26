@@ -511,8 +511,18 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
     const at = n.data.indexOf('The second'), r = document.createRange(); r.setStart(n, at); r.setEnd(n, at + 'The second sentence.'.length);
     getSelection().removeAllRanges(); getSelection().addRange(r); m.closest('.hist').dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
     const b = r.getBoundingClientRect(); return { bottom: b.bottom, left: b.left }; });
+  // Follow-up (owner): the selection only shows a small Comment button beside it, and stays selected (Copy works); the
+  // button opens the box.
+  const pop = page.locator('.comment-pop');
   const sel = await select();
+  await pop.waitFor({ timeout: 5000 }); await page.waitForTimeout(300);
+  assert.equal(await box.count(), 0, 'a selection alone opens no box');
+  assert.equal(await page.evaluate(() => getSelection().toString()), 'The second sentence.', 'the text stays selected, so it can be copied');
+  const pshot = await page.screenshot({ type: 'png', clip: { x: Math.max(0, sel.left - 40), y: Math.max(0, sel.bottom - 60), width: 520, height: 140 } });
+  if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'a2-comment-button.png'), pshot); else console.log('P9_SHOT a2-comment-button ' + pshot.toString('base64'));
+  await pop.click();
   await box.waitFor({ timeout: 5000 });
+  assert.equal(await pop.count(), 0, 'the button goes when the box opens');
   const at = await box.evaluate((b) => { const r = b.getBoundingClientRect(); return { top: r.top, left: r.left, focused: document.activeElement === b.querySelector('textarea') }; });
   assert.ok(at.top >= sel.bottom && at.top <= sel.bottom + 8 && Math.abs(at.left - Math.max(8, sel.left)) < 1, 'the box opens just under the selection: ' + JSON.stringify({ at, sel }));
   assert.ok(at.focused, 'the box takes the typing');
@@ -524,7 +534,17 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   await until(async () => await box.count() === 0 && await chips.count() === 1, 'Enter makes a chip and closes the box', 5000);
   assert.equal(await chips.first().getAttribute('title'), 'The second sentence.\n\nwhy this?', 'the chip holds the quote and the comment');
   assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the message box has the typing again');
-  await select(); await box.waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  assert.equal((await chips.first().locator('.quote-go').textContent()).trim(), 'why this?', 'a chip with a comment shows the comment');
+  // The pencil opens the box with the comment in it; Enter saves the change on the same chip.
+  await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 });
+  assert.equal(await box.locator('textarea').inputValue(), 'why this?', 'the pencil opens the box with its comment');
+  await page.keyboard.type(' really'); await page.keyboard.press('Enter');
+  await until(async () => await box.count() === 0 && (await chips.first().getAttribute('title')) === 'The second sentence.\n\nwhy this? really', 'the edit is saved on the chip', 5000);
+  assert.equal(await chips.count(), 1, 'editing adds no chip');
+  await select(); await pop.waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
+  await until(async () => await pop.count() === 0, 'Esc takes the Comment button away', 5000);
+  await select(); await pop.waitFor({ timeout: 5000 });
+  await pop.click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.press('Escape');
   await until(async () => await box.count() === 0, 'Esc closes the box', 5000);
   assert.equal(await chips.count(), 1, 'Esc adds nothing');
   await reply.hover(); await reply.locator('[data-quote-reply]').click();
@@ -532,6 +552,7 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   assert.equal(await box.locator('blockquote').textContent(), 'echo:' + said_, 'Quote takes the whole reply');
   await page.keyboard.press('Enter');
   await until(async () => await chips.count() === 2, 'a second chip, with no comment', 5000);
+  assert.equal((await chips.nth(1).locator('.quote-go').textContent()).trim(), '“echo:The first sentence. The second sent”', 'a chip with no comment shows the start of its quote');
   const png = await pane.locator('.composer').screenshot({ type: 'png' });
   if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'a2-quote.png'), png); else console.log('P9_SHOT a2-quote ' + png.toString('base64'));
   await chips.first().locator('[data-unquote]').click();
@@ -545,10 +566,20 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   await pane.locator('.msg.agent').first().hover(); await pane.locator('.msg.agent').first().locator('[data-quote-reply]').click();
   await box.waitFor({ timeout: 5000 }); await page.keyboard.type('only this'); await page.keyboard.press('Enter');
   await until(async () => await chips.count() === 1, 'the chip', 5000);
+  // The chip shows its reply: the chat scrolls it into the middle and marks it.
+  const hist = pane.locator('.hist');
+  await hist.evaluate((h) => { h.style.maxHeight = '140px'; h.scrollTo({ top: h.scrollHeight, behavior: 'instant' }); });
+  const was = await hist.evaluate((h) => h.scrollTop);
+  await chips.first().locator('[data-quote-go]').click();
+  const first = pane.locator('.msg.agent').first();
+  await until(async () => await first.evaluate((m) => m.classList.contains('quote-src')), 'the quoted reply is marked', 5000);
+  const seen = () => hist.evaluate((h, was) => { const r = h.querySelector('.msg.agent').getBoundingClientRect(), b = h.getBoundingClientRect(); return h.scrollTop < was && r.bottom > b.top && r.top < b.bottom; }, was);
+  await until(seen, 'the chat scrolled (smoothly) to the quoted reply', 5000);
+  await hist.evaluate((h) => { h.style.maxHeight = ''; });
   await composer.click(); await page.keyboard.press('Enter');
   await until(async () => (await users(instance, id)).includes('> echo:hello\n\nonly this'), 'a quote with nothing typed sends', 15000);
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('PASS A2 step 6: select or Quote opens a box under it; Enter makes a chip, x removes it, the send carries quote and comment');
+  console.log('PASS A2 step 6: a selection shows Comment (copy kept), Comment or Quote opens the box; the chip shows the comment or the quote start, the pencil edits it, a click shows its reply; x removes it; the send carries quote and comment');
 });
 
 // A2 step 6, review round 1: the message box is kept as chips come and go (its undo history with it); Esc from the box's
@@ -570,6 +601,16 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => await box.count() === 0, 'Ctrl+2 closes the box', 5000);
   await page.keyboard.press('Control+1'); await composer.waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await chips.count(), 1, 'and added nothing');
+  // Follow-up (owner): a comment typed and not sent is kept as a chip when the box closes that way, not lost.
+  await quote(); await page.keyboard.type('keep me'); await page.keyboard.press('Control+2');
+  await until(async () => await box.count() === 0, 'Ctrl+2 closes the box with a comment typed', 5000);
+  await page.keyboard.press('Control+1'); await composer.waitFor({ state: 'visible', timeout: 5000 });
+  await until(async () => await chips.count() === 2, 'the typed comment came back as a chip', 5000);
+  assert.ok((await chips.nth(1).getAttribute('title')).endsWith('\n\nkeep me'), 'with its comment');
+  await quote(); await page.keyboard.type('dropped'); await page.keyboard.press('Escape');
+  await until(async () => await box.count() === 0, 'Esc closes it', 5000);
+  assert.equal(await chips.count(), 2, 'Esc drops what was typed');
+  await chips.nth(1).locator('[data-unquote]').click(); await until(async () => await chips.count() === 1, 'back to one chip', 5000);
   // A command the agent lists goes alone; the chip waits for the next message.
   await composer.click(); await page.keyboard.type('/compact'); await page.keyboard.press('Enter');
   await until(async () => (await users(instance, id)).includes('/compact'), 'the command went as typed', 15000);
@@ -644,6 +685,20 @@ test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked come
   await page.keyboard.press('Escape');
   await until(async () => await menu.count() === 0, 'Esc closes the list', 5000);
   assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the box has the typing again');
+  // Step 6 follow-up: a draft keeps the box's quotes with their comments, and taking it back brings them back as chips.
+  const reply = pane.locator('.msg.agent').first(), chips = pane.locator('.attach .att-quote'), qbox = page.locator('.quote-box');
+  await reply.hover(); await reply.locator('[data-quote-reply]').click(); await qbox.waitFor({ timeout: 5000 });
+  await page.keyboard.type('keep this'); await page.keyboard.press('Enter');
+  await until(async () => await chips.count() === 1, 'a quote chip', 5000);
+  await composer.click(); await page.keyboard.press('Control+s');
+  await until(async () => (await composer.inputValue()) === '' && await chips.count() === 0 && (await btn.textContent())?.trim() === 'Drafts 2', 'the text and its quote saved aside together', 5000);
+  await btn.click(); await menu.waitFor({ timeout: 5000 });
+  assert.equal(await menu.locator('.draft-take .truncate').first().textContent(), '1 quote · first idea', 'the draft says it carries a quote');
+  await menu.locator('.draft-take').first().click();
+  await until(async () => (await composer.inputValue()) === 'first idea' && await chips.count() === 1, 'taken back: the text and the chip', 5000);
+  assert.equal(await chips.first().getAttribute('title'), (await reply.locator('.md, p').first().textContent()).trim() + '\n\nkeep this', 'the chip has its quote and comment');
+  await chips.first().locator('[data-quote-go]').click();
+  await until(async () => await reply.evaluate((m) => m.classList.contains('quote-src')), 'a quote back from a draft still finds its reply (by its text)', 5000);
   await btn.click(); await menu.locator('.draft-del').first().click();
   await until(async () => await menu.count() === 0 && await btn.count() === 0, 'x deleted the last draft; no list, no Drafts', 5000);
   assert.equal(await composer.inputValue(), 'first idea', 'the box kept its text');
