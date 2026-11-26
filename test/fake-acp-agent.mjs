@@ -381,7 +381,9 @@ const connection = acp.connectAgent(stream, {
     if (text === 'toolrepeat' || text === 'toolrepeat far') {
       const call = { sessionUpdate: 'tool_call', toolCallId: 'repeat-1', title: 'repeat me', kind: 'execute', status: 'pending' }, done = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-1', status: 'completed' };
       const between = text === 'toolrepeat far' ? Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' })) : [];
-      for (const update of [call, done, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, call, done]) await connection.sessionUpdate({ sessionId, update });
+      // far: the first run's output comes with its update; the run sent again after the compaction is status only.
+      const first = text === 'toolrepeat far' ? { ...done, content: [{ type: 'content', content: { type: 'text', text: 'first run output' } }] } : done;
+      for (const update of [call, first, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, call, done]) await connection.sessionUpdate({ sessionId, update });
       await say('after repeat');
       return { stopReason: 'end_turn' };
     }

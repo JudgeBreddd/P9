@@ -900,6 +900,7 @@ test('O266: Show earlier across a compaction still draws the call once, finished
   await fresh.locator('details.tool', { hasText: 'step 0' }).waitFor({ timeout: 15000 });
   assert.equal(await rows.count(), 1, 'one row for the call after Show earlier');
   assert.equal((await rows.locator('[data-slot=badge]').first().textContent()).trim(), 'completed');
+  assert.match(await rows.first().textContent(), /first run output/, 'the first run\'s output is kept, not replaced by the status-only repeat');
   assert.equal(await fresh.evaluate((h) => { const all = [...h.querySelectorAll('details.tool')], at = (w) => all.findIndex((d) => d.textContent.includes(w)); return at('repeat me') < at('step 0'); }), true, 'where it first ran, above the calls after it');
   assert.deepEqual(errors, [], 'no page errors');
 });
