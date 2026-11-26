@@ -5,7 +5,8 @@ export const WHATS_NEW = {
   version: '0.1.9-beta.16',
   changes: [
     "Sprints: the lead watches plan usage and holds only a worker near a cap; closing a sprint pauses its schedules.",
-    "Chat: a send that got no answer is retried safely, and a chat stopped before its turn gives your message and files back.",
+    "Remote: a send still waiting for its answer is asked about again instead of sent twice.",
+    "Phone: a message the phone cannot store in its queue stays in the box with a note saying why.",
     "Chat box: Ctrl+S saves its text as a draft; Drafts beside the paperclip brings one back.",
     "Desktop chat: selected text shows a small Comment button, so Copy still works; a quote is a small chip you can edit.",
     "Phone chat: quote part of a reply with a comment, as on desktop.",
@@ -13,6 +14,6 @@ export const WHATS_NEW = {
     "A reply no longer shows twice when the agent sends it again after its turn ends.",
     "A tool call shown again after a compaction stays one row instead of coming back as pending.",
     "Dev Focus: the editor's terminal draws its letters at full size.",
-    "Desktop: open chats keep their place in the panel after the window reloads.",
+    "Desktop: open chats keep their order in the panel after a restart.",
   ],
 };
