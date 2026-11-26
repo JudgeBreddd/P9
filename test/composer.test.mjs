@@ -651,3 +651,45 @@ test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked come
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 7: Ctrl+S puts aside, Drafts lists newest first, pick brings back, x deletes, Esc closes');
 });
+
+// A2 step 7 review (#535): a full store changes nothing on a swap; a row another window took is redrawn away, not brought back;
+// a menu whose pane now shows another chat takes nothing; a restored leading blank line survives a repaint.
+test('A2 step 7 review: full store keeps the box, a taken row is not brought back, a moved pane takes nothing', { timeout: 90000 }, async (t) => {
+  const { page, pane, errors } = await setup(t, 'a2-drafts-review');
+  const composer = pane.locator('.composer textarea'), btn = pane.locator('[data-drafts]'), menu = page.locator('.drafts-menu');
+  // As another window writes it; quiet: the storage event that window would send is missed (a stale row).
+  const seed = (d, quiet) => page.evaluate(([d, quiet]) => { localStorage.setItem('p9-drafts', JSON.stringify(d)); if (!quiet) window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' })); }, [d, quiet]);
+  const store = () => page.evaluate(() => JSON.parse(localStorage.getItem('p9-drafts')).map((x) => x.text));
+  await seed([{ text: 'saved one', at: 1 }, { text: '\nblank first', at: 2 }]);
+  await composer.click(); await page.keyboard.type('typed now'); await composer.evaluate((b) => b.dispatchEvent(new Event('input', { bubbles: true })));
+  // Full store: picking a draft with text in the box must leave both as they were.
+  await page.evaluate(() => { const o = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (k === 'p9-drafts') throw new DOMException('full', 'QuotaExceededError'); return o.call(this, k, v); }; window.__unfull = () => { Storage.prototype.setItem = o; }; });
+  await btn.click(); await menu.waitFor({ timeout: 5000 });
+  await menu.locator('.draft-take').first().click();
+  await page.locator('#toasts .toast', { hasText: 'nothing changed' }).waitFor({ timeout: 5000 });
+  assert.equal(await composer.inputValue(), 'typed now', 'the box kept its text');
+  assert.deepEqual(await store(), ['saved one', '\nblank first'], 'the list is as it was');
+  await page.evaluate(() => window.__unfull());
+  // Another window took 'saved one' (no storage event in this window, so the row is stale): clicking it brings nothing back.
+  await seed([{ text: '\nblank first', at: 2 }], true);
+  await menu.locator('.draft-take', { hasText: 'saved one' }).click();
+  await until(async () => await menu.locator('.draft-take', { hasText: 'saved one' }).count() === 0, 'the stale row redrawn away', 5000);
+  assert.equal(await composer.inputValue(), 'typed now', 'nothing restored from the stale row');
+  // The pane now shows another chat: the open menu takes nothing and closes.
+  const id = await pane.evaluate((p) => p.dataset.id);
+  await pane.evaluate((p) => { p.dataset.id = 'another-chat'; });
+  await menu.locator('.draft-take').first().click();
+  await until(async () => await menu.count() === 0, 'the menu closed', 5000);
+  await pane.evaluate((p, id) => { p.dataset.id = id; }, id);
+  assert.equal(await composer.inputValue(), 'typed now', 'nothing taken into a pane showing another chat');
+  assert.deepEqual(await store(), ['\nblank first'], 'the draft is still saved');
+  // Taken for real: the box text is saved in the same write, and the leading blank line is kept through a repaint.
+  await btn.click(); await menu.waitFor({ timeout: 5000 }); await menu.locator('.draft-take').first().click();
+  await until(async () => (await composer.inputValue()) === '\nblank first', 'the draft is in the box', 5000);
+  assert.deepEqual(await store(), ['typed now'], 'the box text took its place in the list');
+  await page.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' }))); // a repaint
+  await until(async () => (await btn.textContent())?.trim() === 'Drafts 1', 'repainted', 5000);
+  assert.equal(await composer.inputValue(), '\nblank first', 'the leading blank line survived the repaint');
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
+});

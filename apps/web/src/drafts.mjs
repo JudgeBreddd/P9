@@ -4,27 +4,31 @@
 import { ageOf } from './helpers.mjs';
 let shut = null;
 export const readDrafts = key => { try { const d = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(d) ? d.filter(x => typeof x?.text === 'string' && x.text) : []; } catch { return []; } };
-export function draftsMenu({ rect, key, take, changed, back, host = document.body }) {
+export function draftsMenu({ rect, key, take, remove, alive, back, host = document.body }) {
   shut?.();
   const box = Object.assign(document.createElement('div'), { className: 'drafts-menu', role: 'dialog' }), ac = new AbortController();
   box.setAttribute('aria-label', 'Saved drafts');
   const close = shut = (refocus) => { ac.abort(); box.remove(); if (shut === close) shut = null; if (refocus) back?.(); };
-  const without = x => readDrafts(key).filter(y => !(y.at === x.at && y.text === x.text));
-  const write = d => { try { localStorage.setItem(key, JSON.stringify(d)); } catch {} };
+  // A draft is its time and text (two equal on both are the same draft). Every action reads the list as it is now, so a row
+  // another window took is redrawn away instead of brought back. ponytail: no lock across windows; one person acts in one
+  // window at a time, and each read-and-write is one synchronous step.
+  const same = x => y => y.at === x.at && y.text === x.text;
+  const act = (x, fn) => { if (!alive()) return close(); const d = readDrafts(key); if (!d.some(same(x))) return draw(); fn(d.filter(y => !same(x)(y))); };
   const draw = () => {
-    const d = readDrafts(key);
+    const had = box.contains(document.activeElement), d = readDrafts(key);
     if (!d.length) return close(true);
     box.replaceChildren(...d.map(x => {
       const row = Object.assign(document.createElement('div'), { className: 'draft' });
       const use = Object.assign(document.createElement('button'), { className: 'draft-take', title: x.text });
       use.append(Object.assign(document.createElement('span'), { className: 'truncate', textContent: x.text.replace(/\s+/g, ' ').slice(0, 200) }),
         Object.assign(document.createElement('span'), { className: 'draft-age', textContent: x.at ? ageOf(x.at) : '' }));
-      use.onclick = () => { write(without(x)); close(); take(x.text); };
+      use.onclick = () => act(x, rest => { if (take(x.text, rest)) close(); });
       const del = Object.assign(document.createElement('button'), { className: 'draft-del', textContent: '×', title: 'Delete this draft' });
       del.setAttribute('aria-label', 'Delete this draft');
-      del.onclick = () => { write(without(x)); changed(); draw(); box.querySelector('.draft-take')?.focus(); };
+      del.onclick = () => act(x, rest => { if (remove(rest)) draw(); });
       row.append(use, del); return row;
     }));
+    if (had && !box.contains(document.activeElement)) box.querySelector('.draft-take')?.focus();
   };
   draw();
   if (!box.childElementCount) return;
@@ -40,6 +44,7 @@ export function draftsMenu({ rect, key, take, changed, back, host = document.bod
     }
   };
   box.addEventListener('focusout', e => { if (e.relatedTarget && !box.contains(e.relatedTarget)) close(); }, { signal: ac.signal });
+  addEventListener('storage', e => { if (e.key === key) draw(); }, { signal: ac.signal }); // another window changed the list
   document.addEventListener('pointerdown', e => { if (!box.contains(e.target)) close(); }, { capture: true, signal: ac.signal });
   box.querySelector('.draft-take').focus();
 }
