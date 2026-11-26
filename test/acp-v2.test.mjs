@@ -281,5 +281,13 @@ test('O266: a tool row keeps a run of streamed output pieces as one update', () 
   assert.deepEqual(ups[0]._meta, { 'p9/append': true }, 'and is still a piece to add');
   assert.equal(ups[1], status);
   assert.equal(text(ups[2]), 'ab');
-  console.log('PASS O266 review 6: 3,000 streamed pieces kept as one update');
+  // Review 7: a whole snapshot (a terminal_update's output, no p9/append) replaces the content before it: the snapshots and
+  // pieces just before it go, an update with a status or an exit stays.
+  const whole = (text) => ({ sessionUpdate: 'tool_call_update', toolCallId: 't', content: [{ type: 'content', content: { type: 'text', text } }] });
+  const exit = { ...bit('x'), _meta: { 'p9/exit': { exitCode: 1 } } }, snaps = [];
+  for (let i = 0; i < 3000; i++) upKept(snaps, whole('out ' + i));
+  assert.equal(snaps.length, 1, 'thousands of snapshots kept as the newest');
+  upKept(snaps, bit('a')); upKept(snaps, status); upKept(snaps, whole('w1')); upKept(snaps, bit('b')); upKept(snaps, exit); upKept(snaps, bit('c')); upKept(snaps, whole('w2'));
+  assert.deepEqual(snaps.map((d) => d.status ?? (d._meta?.['p9/exit'] ? 'exit' : text(d))), ['out 2999', 'a', 'completed', 'w1', 'b', 'exit', 'w2'], 'only content before a snapshot goes, back to the last other update');
+  console.log('PASS O266 review 6/7: 3,000 streamed pieces kept as one update; 3,000 snapshots as the newest');
 });
