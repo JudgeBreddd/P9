@@ -444,7 +444,7 @@ export async function createDesktop({ state, open } = {}) {
     ...(overlay && { titleBarStyle: 'hidden', titleBarOverlay: overlay }),
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_FIRST_RUN === 'off' ? ['--p9-first-run=off'] : []), // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, '--p9-defaults=' + JSON.stringify(DEFAULT_SETTINGS), ...(process.env.P9_FIRST_RUN === 'off' ? ['--p9-first-run=off'] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
   // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
