@@ -251,7 +251,7 @@ export function createDelegate({ chat, allowed, usage }) {
   // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
   // O141 review 2: what a scheduled prompt may not wake or be set from: a chat of a sprint closed, or being closed (marked
   // once the owner allowed Close, before it waits on any Stop, so a schedule due meanwhile cannot restart a stopped worker).
-  // Review 4: only being closed is again: a once prompt due then is tried later (schedules.mjs), so a Close that fails keeps it.
+  // Review 4: only being closed is again: a once prompt due then waits in place (schedules.mjs wait), so a Close that fails keeps it.
   const closing = new Set();
   const asleep = (id) => { for (let at = id, n = 0; at && n < 8; at = chat.info(at)?.parent, n += 1) if (closing.has(at) || chat.projects.closed(at)) return { error: 'sprint-closed', detail: 'That chat is in a closed sprint: nothing scheduled wakes it.', ...(!chat.projects.closed(at) && { again: true }) }; return null; };
   const shutFor = (caller) => { for (let id = caller, n = 0; id && n < 8; id = chat.info(id)?.parent, n += 1) if (chat.projects.closed(id)) return { error: 'sprint-closed', detail: 'This sprint is closed: it starts no more chats.' }; return null; };
@@ -970,7 +970,8 @@ export function createDelegate({ chat, allowed, usage }) {
   // not the user's words), so a paused sprint keeps it for Resume (S13) and a stopped worker takes a place under Workers
   // per chat as send_chat's start does. To another chat it goes as that chat's send_chat with when: queue, checked then.
   // No database (a test's chat without the ledger): no schedules, and the three tools say so.
-  const schedules = chat.db ? createSchedules({ db: chat.db, fire: async (s) => {
+  // O141 review 5: a one-shot due while its sprint is being closed waits in place (schedules.mjs), checked before it is taken.
+  const schedules = chat.db ? createSchedules({ db: chat.db, wait: (s) => Boolean(asleep(s.owner)?.again || asleep(s.chat)?.again), fire: async (s) => {
     const shut = asleep(s.owner) ?? asleep(s.chat); // the owner, or a chat elsewhere whose schedule names a sprint's worker
     if (shut) return shut;
     if (s.chat !== s.owner) return sendChat(s.owner, { chat: s.chat, text: s.text, when: 'queue' });

@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 export const SCHEDULE_TEXT_MAX = 4000, SCHEDULES_MAX = 20, EVERY_MIN = 1, EVERY_MAX = 7 * 24 * 60; // minutes
 const MINUTE = 60_000, CHECK_MS = 60_000, AGAIN_MS = 10_000; // the timer is armed at most a minute ahead, so a changed clock is caught
 
-export function createSchedules({ db, fire, now = () => Date.now() }) {
+export function createSchedules({ db, fire, wait = () => false, now = () => Date.now() }) {
   db.exec(`CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, owner TEXT NOT NULL, chat TEXT NOT NULL, text TEXT NOT NULL,
     every INTEGER, next INTEGER NOT NULL, paused INTEGER NOT NULL DEFAULT 0, last TEXT) STRICT`);
   let timer = null, firing = false;
@@ -30,15 +30,18 @@ export function createSchedules({ db, fire, now = () => Date.now() }) {
       // sent goes as it is now, or not at all. Due by the time the run began, so a row moved on is not taken again.
       const due = db.prepare('SELECT * FROM schedules WHERE paused = 0 AND next <= ? ORDER BY next LIMIT 1'), cutoff = now();
       for (let row = due.get(cutoff); row; row = due.get(cutoff)) {
+        // O141 review 5: wait(row), a one-shot that cannot go for now but may soon (its sprint is being closed), stays in
+        // place AGAIN_MS later, still listed, so a Close that succeeds pauses it and one that fails lets it go.
+        if (!row.every && wait(row)) {
+          db.prepare('UPDATE schedules SET next = ?, last = ? WHERE id = ?').run(now() + AGAIN_MS, new Date(now()).toISOString() + ' waiting: its sprint is being closed', row.id);
+          continue;
+        }
         // Moved on (or gone) before it is sent, so a send that throws or a crash mid-send never sends it twice.
         if (row.every) {
           const step = row.every * MINUTE, missed = Math.floor((now() - row.next) / step) + 1;
           db.prepare('UPDATE schedules SET next = ? WHERE id = ?').run(row.next + missed * step, row.id);
         } else db.prepare('DELETE FROM schedules WHERE id = ?').run(row.id);
         const sent = await Promise.resolve(fire(row)).catch((error) => ({ error: error?.message ?? 'send-failed' }));
-        // O141 review 4: again, a refusal that sent nothing and may not hold for long (a sprint being closed): a once
-        // prompt comes back AGAIN_MS later, so it is not lost if that passes (a Close that failed).
-        if (sent?.again && !row.every) db.prepare('INSERT INTO schedules (id, owner, chat, text, every, next, paused) VALUES (?, ?, ?, ?, NULL, ?, 0)').run(row.id, row.owner, row.chat, row.text, now() + AGAIN_MS);
         const last = new Date(now()).toISOString() + ' ' + (sent?.error ? 'not sent: ' + sent.error + (sent.reason ? ' (' + sent.reason + ')' : '') : typeof sent?.sent === 'string' ? sent.sent : 'sent');
         db.prepare('UPDATE schedules SET last = ? WHERE id = ?').run(last, row.id);
       }
