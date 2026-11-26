@@ -178,7 +178,12 @@ test('O141: a once prompt due during a Close that fails is kept and goes after',
   const { instance, sprint, made, w } = await watchSprint(t, 'setTimeout(() => process.exit(1), 7000);');
   const early = await w.tool('schedule_prompt', { text: 'early', at: new Date(Date.now() + 3000).toISOString() });
   assert.equal(early.action, 'scheduled', JSON.stringify(early));
-  const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  const closing = call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  // Review 5: due while Close runs, it stays listed (waiting), so a crash or a Close that succeeds cannot lose it unpaused.
+  await pause(5000);
+  const listed = (await w.tool('list_schedules')).schedules.find((x) => x.id === early.id);
+  assert.match(listed?.last ?? '', /waiting/, 'still listed and waiting while Close runs: ' + JSON.stringify(listed));
+  const closed = await closing;
   assert.notEqual(closed.status, 200, 'the failing before-close script refused Close: ' + JSON.stringify(closed));
   const got = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\nearly'));
   assert.deepEqual(await got(), [], 'not sent while Close was under way');
