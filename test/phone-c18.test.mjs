@@ -142,19 +142,19 @@ test('c18 row 66: the phone turns the agent lock and File protection on and off 
   const { session } = await phone(t, server);
   const post = (route, body, extra = {}) => server.remote(route, { method: 'POST', session, body, headers: { ...op(), ...extra } });
   // The agent lock: on and off from the phone, and the desktop sees it.
-  assert.deepEqual([(await post('/agent-lock', { on: true })).status, (await server.desk('/agent-lock')).body], [200, { on: true }]);
-  assert.deepEqual((await post('/agent-lock', { on: false })).body, { on: false });
+  assert.deepEqual([(await post('/agent-lock', { on: true })).status, (await server.desk('/agent-lock')).body.on], [200, true]);
+  assert.deepEqual((await post('/agent-lock', { on: false })).body.on, false);
   // File protection: the phone reads it and turns it off and on again.
-  assert.deepEqual((await server.remote('/file-protection', { session })).body, { on: true });
-  assert.deepEqual([(await post('/file-protection', { on: false })).body, (await server.desk('/file-protection')).body], [{ on: false }, { on: false }]);
-  assert.deepEqual((await post('/file-protection', { on: true })).body, { on: true });
+  assert.deepEqual((await server.remote('/file-protection', { session })).body.on, true);
+  assert.deepEqual([(await post('/file-protection', { on: false })).body.on, (await server.desk('/file-protection')).body.on], [false, false]);
+  assert.deepEqual((await post('/file-protection', { on: true })).body.on, true);
   // Refused: no session, a wrong CSRF token, a body of any other shape; nothing changed.
   for (const route of ['/agent-lock', '/file-protection']) {
     assert.equal((await server.remote(route, { method: 'POST', body: { on: true }, headers: op() })).status, 401, route + ' no session');
     assert.equal((await post(route, { on: route === '/agent-lock' }, { 'x-p9-csrf': 'wrong' })).status, 403, route + ' wrong CSRF');
     for (const bad of [{ on: 'off' }, { on: false, x: 1 }, {}]) assert.equal((await post(route, bad)).status, 400, route + ' ' + JSON.stringify(bad));
   }
-  assert.deepEqual([(await server.desk('/agent-lock')).body, (await server.desk('/file-protection')).body], [{ on: false }, { on: true }]);
+  assert.deepEqual([(await server.desk('/agent-lock')).body.on, (await server.desk('/file-protection')).body.on], [false, true]);
 
   // settings.json: the phone reads it (not the desktop's phone address) and saves a row through the same checks, keeping .bak.
   const read = await server.remote('/setup/settings', { session });

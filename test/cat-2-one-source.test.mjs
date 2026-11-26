@@ -179,35 +179,38 @@ test('CAT-2 review 14: Unrestricted changes both daemon settings or neither, and
   globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
   t.after(() => { delete globalThis.localStorage; });
   security.fillAgents(agents);
-  const daemon = (lock, protect, answer = () => null) => { const d = { lock, protect, calls: [] };
-    d.write = async (key, want) => { d.calls.push(key + ':' + want); const r = answer(key, want, d); if (r) return r; d[key] = want; return { on: want }; }; return d; };
+  const daemon = (lock, protect, answer = () => null) => { const d = { lock, protect, calls: [], rev: { lock: 'l0', protect: 'p0' }, n: 0 };
+    d.set = (key, want) => { d[key] = want; d.rev[key] = key + ++d.n; };
+    d.read = async (key) => ({ on: d[key], rev: d.rev[key] });
+    d.write = async (key, want, rev) => { d.calls.push(key + ':' + want); const r = answer(key, want, d); if (r) return r;
+      if (rev === undefined || rev === d.rev[key]) d.set(key, want); return d.read(key); }; return d; };
   const start = { lock: true, protect: true };
   // Both writes go through: on.
-  let d = daemon(true, true), r = await security.changeFree(true, start, d.write);
+  let d = daemon(true, true), r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state, r.note, d.calls], [true, { lock: false, protect: false }, '', ['protect:false', 'lock:false']], 'both off, in order');
   // The lock refused after protection went off: protection goes back on, nothing is reported as changed.
   d = daemon(true, true, (key) => key === 'lock' ? { error: 'refused' } : null);
-  r = await security.changeFree(true, start, d.write);
+  r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state, d.protect, d.calls], [false, { lock: true, protect: true }, true, ['protect:false', 'lock:false', 'protect:true']], 'lock refused: protection put back');
   assert.match(r.note, /^Not changed: refused\.$/);
   // "Keep protection on" (200, still on): nothing else is written.
   d = daemon(true, true, (key) => key === 'protect' ? { on: true } : null);
-  r = await security.changeFree(true, start, d.write);
+  r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state, r.note, d.calls], [false, start, '', ['protect:false']], 'kept on: no further write, no note');
   // The modes go while the writes run (a daemon whose catalog has no loosest mode): both go back, newest first.
   d = daemon(true, true, (key) => { if (key === 'lock') security.fillAgents([]); return null; });
-  r = await security.changeFree(true, start, d.write);
+  r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state, d.lock, d.protect, d.calls], [false, start, true, true, ['protect:false', 'lock:false', 'lock:true', 'protect:true']], 'modes gone: both put back');
   assert.match(r.note, /modes changed meanwhile/);
   // A put-back that fails is named.
   security.fillAgents(agents);
   d = daemon(true, true, (key, want) => { if (key === 'lock' && want === false) security.fillAgents([]); return key === 'lock' && want === true ? { error: 'down' } : null; });
-  r = await security.changeFree(true, start, d.write);
+  r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state], [false, { lock: false, protect: true }], 'the lock could not go back: shown as it is');
   assert.match(r.note, /Could not put back Agent lock: set it again above\./i);
   // Off turns protection back on only; the lock stays off.
   security.fillAgents(agents);
-  d = daemon(false, false); r = await security.changeFree(false, { lock: false, protect: false }, d.write);
+  d = daemon(false, false); r = await security.changeFree(false, { lock: false, protect: false }, d.write, d.read);
   assert.deepEqual([r.ok, d.calls], [true, ['protect:true']], 'off: protection only');
   // "Unavailable" once the daemon's catalog came back with no loosest mode; "waiting" before.
   security.fillAgents([{ id: 'claude', name: 'Claude', modes: [{ name: 'Default' }] }]);
@@ -220,6 +223,41 @@ test('CAT-2 review 14: Unrestricted changes both daemon settings or neither, and
   assert.match(chat, /  fillAgents\(agents\); if \(outer\.\$\('#setDlg'\)\?\.open\) outer\.refreshDefaults\(\);/, 'the catalog landing redraws Settings open');
   assert.match(settings, /if \(outer\.\$\('#setSecurity'\) && !outer\.\$\('#setBody'\)\.contains\(document\.activeElement\)\) return renderSettings\(\);/, 'and the redraw covers the security rows');
   console.log('PASS CAT-2 review 14: both settings or neither, failed put-backs named; only catalog modes sent; Settings follows the catalog');
+});
+
+// O267b: a write whose reply was lost may have been made: changeFree reads the setting back before it counts it as unchanged.
+// A put-back carries the rev of the change it undoes, so a newer change from another device stays (both the daemon's routes
+// keep a rev for this: a boolean cannot tell a newer change of the same value from ours). Settings open with focus inside
+// patches the security rows in place when the catalog lands, instead of skipping them.
+test('O267b: Unrestricted reads a write back when its reply is lost, and a put-back never overwrites a newer change', async (t) => {
+  const agents = publicAgents().agents, kept = new Map();
+  globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
+  t.after(() => { delete globalThis.localStorage; });
+  security.fillAgents(agents);
+  const daemon = (answer) => { const d = { lock: true, protect: true, calls: [], rev: { lock: 'l0', protect: 'p0' }, n: 0, readable: true };
+    d.set = (key, want) => { d[key] = want; d.rev[key] = key + ++d.n; };
+    d.read = async (key) => d.readable ? { on: d[key], rev: d.rev[key] } : {};
+    d.write = async (key, want, rev) => { d.calls.push(key + ':' + want); const r = await answer(key, want, d, rev); if (r) return r;
+      if (rev === undefined || rev === d.rev[key]) d.set(key, want); return d.read(key); }; return d; };
+  const start = { lock: true, protect: true };
+  // The protection write was made but its reply lost; then the lock is refused: protection is read back as off, so it is put back.
+  let d = daemon((key, want, d) => { if (key === 'protect' && !want) { d.set('protect', false); return {}; } return key === 'lock' ? { error: 'refused' } : null; });
+  let r = await security.changeFree(true, start, d.write, d.read);
+  assert.deepEqual([r.ok, r.state, d.protect, d.calls, r.note], [false, start, true, ['protect:false', 'lock:false', 'protect:true'], 'Not changed: refused.'], 'lost reply: read back, put back');
+  // The reply and the read both lost: the setting shows unknown, never the old value, and nothing more is written.
+  d = daemon((key, want, d) => { if (key === 'protect') { d.set('protect', false); d.readable = false; return {}; } return null; });
+  r = await security.changeFree(true, start, d.write, d.read);
+  assert.deepEqual([r.ok, r.state, d.calls], [false, { lock: true, protect: null }, ['protect:false']], 'not known: unknown');
+  assert.match(r.note, /did not say whether File protection changed/);
+  // Another device turns protection off again (the same value, a newer change) while the lock is refused: the put-back leaves it.
+  d = daemon((key, want, d) => { if (key === 'lock') { d.set('protect', false); return { error: 'refused' }; } return null; });
+  r = await security.changeFree(true, start, d.write, d.read);
+  assert.deepEqual([r.ok, r.state, d.protect, d.calls], [false, { lock: true, protect: false }, false, ['protect:false', 'lock:false', 'protect:true']], 'a newer change stays');
+  assert.match(r.note, /Could not put back File protection/);
+  const settings = await readFile(path.join(root, 'apps/web/src/settings-view.mjs'), 'utf8');
+  assert.match(settings, /fresh\.innerHTML = securityGroup\(box\);/, 'focus inside Settings: the security rows are drawn fresh off screen');
+  assert.match(settings, /o\.checked = n\.checked; o\.disabled = n\.disabled;/, 'and patched in place, so the focused row keeps its focus');
+  console.log('PASS O267b: lost replies read back; put-backs keep a newer change; Settings rows follow the catalog with focus inside');
 });
 
 // Review 15: the outgoing mode is checked only against the catalog of the daemon in use. Before a remote's GET /agents

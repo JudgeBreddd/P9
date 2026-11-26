@@ -64,26 +64,34 @@ export const freeLocked = (lock, protect) => lock === null || protect === null |
 export const sentMode = (agent, mode) => (!CATALOG.ours || modes[agent]?.includes(mode)) && mode || undefined;
 export const modesNote = () => CATALOG.ours ? SECURITY.noLoose : SECURITY.noModes;
 // Review 14: Unrestricted mode as one change of the daemon's two settings, File protection then the agent lock (desktop
-// settings-view.mjs, phone phone.ts). write(key, on) makes one change and answers the daemon's { on } (the setting as it
-// now is), or { error } when it was refused or not answered. A refusal, a "keep it" answer (on comes back unchanged), or
-// (turning on) no loosened mode known once the writes are done (the catalog can land meanwhile) puts back every setting
-// this changed, newest first, and names any it could not put back. ok: both are as asked, so the device may set its own part.
-export async function changeFree(on, state, write) {
+// settings-view.mjs, phone phone.ts). write(key, on, rev) makes one change and answers the daemon's { on, rev } (the
+// setting as it now is), or { error } when it was refused or not answered; read(key) answers the same without a change.
+// A refusal, a "keep it" answer (on comes back unchanged), or (turning on) no loosened mode known once the writes are done
+// (the catalog can land meanwhile) puts back every setting this changed, newest first, and names any it could not put back.
+// ok: both are as asked, so the device may set its own part.
+// O267b: a write with no { on } may still have been made (its reply lost on the way back), so the setting is read: as asked,
+// it counts as done; not read, it shows unknown (null), never the old value. A put-back sends the rev of the change it
+// undoes, so a newer change (another device, another switch) stays; an older daemon gives no rev, and its put-back is plain.
+// ponytail: a write whose answer and read are both lost is not put back (its state shows unknown); set it again by hand.
+export async function changeFree(on, state, write, read) {
   const now = { ...state }, done = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
+  const known = (r) => typeof r?.on === 'boolean';
   let note = null;
   for (const [key, want] of [['protect', !on], ...(on ? [['lock', false]] : [])]) {
     if (now[key] === want) continue;
-    const r = await write(key, want);
-    if (typeof r?.on === 'boolean') now[key] = r.on;
-    if (now[key] !== want) { note = typeof r?.on === 'boolean' ? '' : 'Not changed: ' + (r?.error || 'P9 did not answer') + '.'; break; }
-    done.push(key);
+    const w = await write(key, want), r = known(w) ? w : await read(key);
+    now[key] = known(r) ? r.on : null;
+    if (now[key] === null) { note = 'Stopped: P9 did not say whether ' + names[key] + ' changed, so it shows as unknown.'; break; }
+    if (now[key] !== want) { note = known(w) ? '' : 'Not changed: ' + (w?.error || 'P9 did not answer') + '.'; break; }
+    done.push([key, r.rev]);
   }
   if (note === null && on && !modesKnown()) note = 'Not changed: the agents\' modes changed meanwhile.';
   if (note === null) return { ok: true, state: now, note: '' };
   const lost = [];
-  for (const key of done.reverse()) {
-    const r = await write(key, state[key]);
-    if (r?.on === state[key]) now[key] = state[key]; else { if (typeof r?.on === 'boolean') now[key] = r.on; lost.push(names[key]); }
+  for (const [key, rev] of done.reverse()) {
+    const w = await write(key, state[key], rev), r = known(w) ? w : await read(key);
+    now[key] = known(r) ? r.on : null;
+    if (now[key] !== state[key]) lost.push(names[key]);
   }
   if (lost.length) note = (note ? note + ' ' : '') + 'Could not put back ' + lost.join(' and ') + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.';
   return { ok: false, state: now, note };

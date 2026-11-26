@@ -1652,7 +1652,8 @@ export async function createDesktop({ state, open } = {}) {
   // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,
   // which the page can neither draw nor answer; turning it on never asks.
   ipcMain.handle('p9:file-protection', async (event, ...args) => {
-    if (!fromApp(event) || args.length > 1 || (args.length && typeof args[0] !== 'boolean')) throw new Error('ipc-sender-refused');
+    // O267b: (on, rev): rev, the daemon's name for the change a put-back undoes (server.mjs POST /file-protection).
+    if (!fromApp(event) || args.length > 2 || (args.length && typeof args[0] !== 'boolean') || (args.length > 1 && (typeof args[1] !== 'string' || args[1].length > 64))) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     try {
       if (!args.length) return await daemonRequest(state, 'GET', '/file-protection');
@@ -1664,7 +1665,7 @@ export async function createDesktop({ state, open } = {}) {
         if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [FILE_PROTECTION_DOCS], { shell: false, stdio: 'ignore' }).on('error', () => {});
         else await shell.openExternal(FILE_PROTECTION_DOCS);
       }
-      return await daemonRequest(state, 'POST', '/file-protection', { on: args[0] });
+      return await daemonRequest(state, 'POST', '/file-protection', { on: args[0], ...(args.length > 1 && { rev: args[1] }) });
     } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // The shell's DUWOP look (colours as #rrggbbaa), kept for the next Dev Focus start and passed on to a running one.

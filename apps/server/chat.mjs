@@ -616,7 +616,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // Agent lock (threat model row 15): kept in the ledger so a restart keeps it. While on, sessions run in the provider's
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-  let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
+  let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on'; let lockRev = randomUUID(); // O267b: setLock's rev
   // S13 Pause sprint (SECURITY.md § Pause sprint): prefs paused:<lead> is the list, in order, of what agents and P9 sent that
   // lead's workers while it is paused ({ id, chat, held, from, mixed, body }). In the ledger, so a restart keeps the pause
   // and every message it holds. Absent: not paused.
@@ -1694,7 +1694,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // The watcher (telemetry.mjs) reads a live chat's CPU and peak memory from its systemd scope: the unit, or null.
     scopeOf: (id) => live.get(id)?.proc.unit ?? null,
     // With a chat's id: also on while that chat's turn answers another chat's question (peer help), for P9's own tools.
-    lock: (id) => ({ status: 200, on: locked || Boolean(live.get(id)?.solo) }),
+    lock: (id) => ({ status: 200, on: locked || Boolean(live.get(id)?.solo), rev: lockRev }),
     // Unrestricted mode (v0.1.6 U1-U5): the agent lock off and File protection off, the two switches the mode turns off and the
     // daemon holds. Folder roots may hold home and the workspace, P9's MCP tools stop asking, a chat may start in any folder.
     loose: (id) => loose() && !live.get(id)?.solo,
@@ -1734,9 +1734,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     pin: (id, card) => emit(id, 'card', card),
     unpin: (id, card) => emit(id, 'unpin', { id: card }),
     // Desktop only (server.mjs). Live sessions switch now; one whose mode change fails is stopped rather than left writable.
+    // O267b: rev, as POST /file-protection's (server.mjs): sent, the change is made only if it is still the last one.
     async setLock(body) {
-      if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return refused(400, 'request-refused');
-      locked = body.on;
+      const { on, rev, ...rest } = body && typeof body === 'object' ? body : {};
+      if (typeof on !== 'boolean' || Object.keys(rest).length || (rev !== undefined && typeof rev !== 'string')) return refused(400, 'request-refused');
+      if (rev !== undefined && rev !== lockRev) return { status: 200, on: locked, rev: lockRev };
+      locked = on; lockRev = randomUUID();
       db.prepare("INSERT INTO prefs (key, value) VALUES ('agent-lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(locked ? 'on' : 'off');
       await Promise.all([...live].map(async ([id, session]) => {
         if (!session.sessionId || session.stopping) return; // still starting: connect reads the new value itself
@@ -1751,7 +1754,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try { await setMode(session, row(id).provider, undefined, true, 5000); }
         catch { if (locked) await stopConversation(id); }
       }));
-      return { status: 200, on: locked };
+      return { status: 200, on: locked, rev: lockRev };
     },
     // Most recently used first, for the desktop's History and the phone. used: the chat's newest event,
     // not counting NOT_USE (protocol): the stops a close, an exit or a restart write, a move, rename or archive, nor the created event (its time is a later Date.now()
