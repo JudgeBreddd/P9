@@ -1179,6 +1179,9 @@ function tailed(s, body) {
   s.more = from;
   s.early = new Set([...(s.early ?? []), ...(from === undefined ? [] : body.events.filter(e => e.conversation === s.id && e.cursor < from).map(e => e.cursor))]);
 }
+// One tool_call_update on its row, the live rule. ups: the row's own updates, so Show earlier can put them on the row where
+// the call first ran (O266). ponytail: a row keeps its updates as long as the chat is open; a diff is held twice.
+function toolUpdate(tool, d) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d._meta?.['p9/append'] === true) { const piece = toolText(d.content); tool.output = ((tool.output ?? '') + piece).slice(-4000); tool.added = ((tool.added ?? '') + piece).slice(-4000); } else if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); tool.whole = true; tool.added = ''; } const exit = exitTag(d._meta?.['p9/exit']); if (exit) tool.exit = exit; }
 async function earlier(s) {
   const from = s.more, r = await window.p9.chat('events', { after: 0, only: [s.id], until: from - 1, tail: TAIL });
   // O251: a jump meanwhile made the chat a stub and read it again from its newest blocks; this page would skip what lies between.
@@ -1186,19 +1189,14 @@ async function earlier(s) {
   const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
   for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
   // O266: a call sent again after a compaction can have its first on this page and its second below: one row, where it
-  // first ran. The older row is the base and the newer one's updates go on it by the live rules (applyChat): a field only
-  // when it has content, never a replayed pending; output replaced only when an update set it whole there (whole), else
-  // only the pieces streamed after the repeated call (added) are added, as the live rules skip a repeated call; files by path, and a file there with no diff of its own keeps the older one's entry (editFiles).
+  // first ran. The newer row came from the repeated call, which the live rules skip, so only its own updates (ups) go on
+  // the older row, by the live rule (toolUpdate); what the repeated call alone carried is not added.
   const below = new Map(s.events.filter(e => e.t === 'tool' && e.id != null).map(e => [e.id, e]));
-  const has = v => v != null && v !== '' && !(Array.isArray(v) && !v.length);
   old.events = old.events.map(e => {
     const n = e.t === 'tool' && below.get(e.id); if (!n) return e;
     s.events.splice(s.events.indexOf(n), 1);
-    const row = { ...e }; for (const [k, v] of Object.entries(n)) if (has(v) && !['output', 'files', 'whole', 'added'].includes(k) && !(k === 'status' && v === 'pending')) row[k] = v;
-    row.output = n.whole ? n.output : ((e.output ?? '') + (n.added ?? '')).slice(-4000);
-    row.added = n.whole ? n.added : ((e.added ?? '') + (n.added ?? '')).slice(-4000);
-    row.whole = e.whole || n.whole;
-    if (n.files?.length) { const by = new Map((e.files ?? []).map(f => [f.path, f])); for (const f of n.files) if (f.diff?.length || !by.has(f.path)) by.set(f.path, f); row.files = [...by.values()]; }
+    const row = { ...e, ups: [...(e.ups ?? []), ...(n.ups ?? [])] };
+    for (const d of n.ups ?? []) toolUpdate(row, d);
     return row;
   });
   s.events = [...old.events, ...s.events];
@@ -1273,7 +1271,7 @@ function applyChat(ev, into) {
         else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
       } else if (d.sessionUpdate === 'tool_call' && d.toolCallId != null && s.events.some(e => e.t === 'tool' && e.id === d.toolCallId)) { /* O266: after a compaction the adapter sends earlier calls again, pending, each followed by its update: the row it has is kept, not drawn twice and left pending */ }
       else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d._meta?.['p9/append'] === true) { const piece = toolText(d.content); tool.output = ((tool.output ?? '') + piece).slice(-4000); tool.added = ((tool.added ?? '') + piece).slice(-4000); } else if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); tool.whole = true; tool.added = ''; } const exit = exitTag(d._meta?.['p9/exit']); if (exit) tool.exit = exit; } } // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag
+      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { toolUpdate(tool, d); (tool.ups ??= []).push(d); } } // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       // O126: the agent's own title only on a chat the user never named. O172: nor on a sprint chat's role name (the list's named, sprintFields).
       else if (d.sessionUpdate === 'session_info_update') { if (!s.named && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
