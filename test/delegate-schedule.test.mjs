@@ -111,14 +111,11 @@ test('O140 other chat: a once prompt scheduled to a busy chat waits for its turn
 });
 
 
-// O141: the lead's usage watch is its own scheduled prompt (sprint-files.mjs LEAD). Closing the sprint pauses every schedule
-// its chats own, so a closed sprint's lead or worker is never woken by one; the schedules stay listed, paused.
-// Review 2: a schedule due while Close is under way (here a blocking before-close script holds it 7 s, under the test's 10 s request limit), the worker's own or
-// one a chat elsewhere in the project set for it, is not sent; nor can that chat set or turn one back on for it afterwards.
-test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed lead and worker are not woken', { timeout: 180000 }, async (t) => {
+// O141: a started sprint (Start refuses a model P9 has not seen, so one chat reads the model list first), its lead on 'mcp',
+// and one worker w1; hook is the blocking before-close script's code.
+async function watchSprint(t, hook) {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
-  // A started sprint (Start refuses a model P9 has not seen, so one chat reads the model list first), its lead on 'mcp'.
   const warm = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
   await call(instance, `/chat/${warm}/prompt`, 'POST', { text: 'config' });
   await until(instance, (e) => e.conversation === warm && e.data?.content?.text?.startsWith('config:'));
@@ -131,7 +128,7 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
   writeFileSync(path.join(sp.folder, 'sprint.md'), '# Plan\n\n- [ ] a1: the piece. Role: w1.\n');
   writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
   writeFileSync(path.join(sp.folder, 'roles/lead.work.md'), 'mcp');
-  const wait = path.join(instance.workspace, 'wait.mjs'); writeFileSync(wait, 'setTimeout(() => {}, 7000);');
+  const wait = path.join(instance.workspace, 'wait.mjs'); writeFileSync(wait, hook);
   writeFileSync(path.join(sp.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'wait', command: process.execPath + ' ' + wait, point: 'before-close', blocking: true }] }));
   const hooks = (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
   const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks }); assert.equal(started.status, 200, JSON.stringify(started));
@@ -140,6 +137,15 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
   const made = await L.tool('open_chat', { text: 'mcp', key: 'w1' }); assert.ok(made.chat && !made.error, JSON.stringify(made));
   await L.done(made.chat);
   const w = await connect(t, instance, made.chat);
+  return { instance, project, sprint, made, L, w };
+}
+
+// O141: the lead's usage watch is its own scheduled prompt (sprint-files.mjs LEAD). Closing the sprint pauses every schedule
+// its chats own, so a closed sprint's lead or worker is never woken by one; the schedules stay listed, paused.
+// Review 2: a schedule due while Close is under way (here a blocking before-close script holds it 7 s, under the test's 10 s request limit), the worker's own or
+// one a chat elsewhere in the project set for it, is not sent; nor can that chat set or turn one back on for it afterwards.
+test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed lead and worker are not woken', { timeout: 180000 }, async (t) => {
+  const { instance, project, sprint, made, L, w } = await watchSprint(t, 'setTimeout(() => {}, 7000);');
   const soon = (s) => new Date(Date.now() + s * 1000).toISOString();
   const o = await agent(t, instance, { project }); // a chat elsewhere in the same project
   const watch = await L.tool('schedule_prompt', { text: 'watch', at: soon(30), every: 10 });
@@ -164,6 +170,21 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
   const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 }); t.after(() => db.close());
   assert.deepEqual(db.prepare("SELECT owner, paused FROM schedules WHERE text IN ('watch', 'wake') ORDER BY owner = ? DESC").all(sprint).map((r) => [r.owner, r.paused]), [[sprint, 1], [made.chat, 1]]);
   console.log('PASS O141: close paused the lead\'s and the worker\'s schedules; neither woke');
+});
+
+// O141 review 4: a once prompt due while Close is under way is not sent then; a Close that fails (its blocking before-close
+// script exits 1 after 7 s) keeps it, and it goes shortly after.
+test('O141: a once prompt due during a Close that fails is kept and goes after', { timeout: 120000 }, async (t) => {
+  const { instance, sprint, made, w } = await watchSprint(t, 'setTimeout(() => process.exit(1), 7000);');
+  const early = await w.tool('schedule_prompt', { text: 'early', at: new Date(Date.now() + 3000).toISOString() });
+  assert.equal(early.action, 'scheduled', JSON.stringify(early));
+  const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  assert.notEqual(closed.status, 200, 'the failing before-close script refused Close: ' + JSON.stringify(closed));
+  const got = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\nearly'));
+  assert.deepEqual(await got(), [], 'not sent while Close was under way');
+  for (let i = 0; i < 40 && !(await got()).length; i++) await pause(500);
+  assert.equal((await got()).length, 1, 'sent once after the Close failed');
+  console.log('PASS O141 review 4: a once prompt due during a failed Close was kept and sent after');
 });
 
 // O141 review 3: Close stops every chat of its sprint, but a prompt already on its way (a schedule sent just before Close)
