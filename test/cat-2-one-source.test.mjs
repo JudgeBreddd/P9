@@ -41,6 +41,9 @@ test('CAT-2 modes: the window takes each agent\'s modes, its loosest mode and it
       assert.equal(security.LOOSEST[a.id], a.modes.find((m) => m.tier === 4)?.name);
     }
     assert.equal(helpers.LOOSE['Bypass permissions'], helpers.LOOSE_SAID['Bypass permissions']);
+    // An older server's answer names no modes: none offered, and the page does not stop there.
+    security.fillAgents([{ id: 'claude', name: 'Claude' }]);
+    assert.deepEqual(helpers.modes.claude, [], 'no modes from an older server');
     // Before GET /agents answers, nothing is known: Unrestricted reads off rather than on.
     security.fillAgents([]);
     assert.deepEqual([helpers.modes, helpers.AUTO, helpers.LOOSE, security.LOOSEST], [{}, {}, {}, {}]);

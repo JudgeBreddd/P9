@@ -29,9 +29,10 @@ export const LOOSEST = {};
 export const fillAgents = (agents) => {
   for (const t of [modes, AUTO, LOOSE, LOOSEST]) for (const k in t) delete t[k];
   for (const a of agents) {
-    modes[a.id] = a.modes.map((m) => m.name);
+    const all = a.modes ?? []; // an older server's GET /agents names none: no modes offered, nothing thrown
+    modes[a.id] = all.map((m) => m.name);
     if (a.auto) AUTO[a.id] = a.auto;
-    for (const m of a.modes) if (m.tier === 4) { LOOSEST[a.id] = m.name;
+    for (const m of all) if (m.tier === 4) { LOOSEST[a.id] = m.name;
       LOOSE[m.name] ??= LOOSE_SAID[m.name] ?? (a.short || a.name) + ' acts without asking first: it can run any command and change any file it can reach.'; }
   }
 };
