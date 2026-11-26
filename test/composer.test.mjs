@@ -755,11 +755,15 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   // 'held': the daemon runs the first try (held mid-turn) but its answer is lost; the second meets a dropped link (503);
   // the third gets the daemon's own answer replayed (202 with its held ID).
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o267 = [];
-    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late'].includes(text)) return h(e, ...args);
+    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late', 'dropped', 'long work'].includes(text)) return h(e, ...args);
       globalThis.o267.push([text, args[1].op, JSON.stringify(args[1])]);
       const n = globalThis.o267.filter(([x]) => x === text).length;
       if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
       if (text === 'landed' && n >= 3) return h(e, ...args);
+      // Review 9: 'dropped': the daemon takes the first try but the link drops before its answer (503), and drops again on
+      // the second; the third gets its own answer replayed. 'long work': its turn starts, its answer never comes until told.
+      if (text === 'dropped') { if (n === 1) await h(e, ...args); return n <= 2 ? { status: 503, body: { error: 'daemon-unavailable' } } : h(e, ...args); }
+      if (text === 'long work') { if (n === 1) void h(e, ...args); if (globalThis.o267settle) return h(e, ...args); }
       // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at the cap.
       // Round 5: 'stalled' never answers its first try: the cap counts from it too.
       // Review 7: 'late' lands at 62 s, past the old 60 s deadline and inside the cap.
@@ -817,8 +821,31 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   assert.equal(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'late').length), 1, 'one try: its own answer came');
   assert.equal(await composer.inputValue(), '', 'a late answer does not put it back in the box');
   assert.equal(await page.locator('#toasts .toast', { hasText: 'operation-reused' }).count(), 0, 'no reused-ID refusal');
+  // Review 9: two dropped links before any outcome-unknown are unsure too: it keeps asking and arrives once, not back in the box.
+  await until(async () => (await pane.locator('.working').count()) === 0, 'the late turns ended', 30000);
+  await send('dropped');
+  await until(async () => (await users(instance, id)).includes('dropped') && (await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'dropped').length)) === 3, 'its third try got its own answer', 20000);
+  await page.waitForTimeout(1000);
+  assert.equal(await composer.inputValue(), '', 'not put back in the box after the dropped links');
+  assert.equal((await users(instance, id)).filter((u) => u === 'dropped').length, 1, 'arrived once');
+  assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'dropped').map(([, op]) => op))).size, 1, 'one operation');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'its turn ended', 30000);
+  // Review 9: Interrupt and send does not wait behind a send whose answer never came: the running turn stops and the new
+  // message goes long before the cap. Then the first send's answer comes, and it stays sent.
+  await send('long work');
+  await until(async () => (await users(instance, id)).includes('long work') && (await pane.locator('.working').count()) === 1, 'the long turn runs, its answer not back', 20000);
+  await page.waitForTimeout(1500);
+  await composer.fill('cut in'); const cut = Date.now(); await composer.press('Control+Enter');
+  await until(async () => (await users(instance, id)).includes('cut in'), 'the interrupt went while the first send was unanswered', 20000);
+  assert.ok(Date.now() - cut < 20000, 'well before the cap');
+  await app.evaluate(() => { globalThis.o267settle = true; });
+  await until(async () => (await pane.locator('.working').count()) === 0, 'the cut-in turn ended', 30000);
+  await page.waitForTimeout(2500);
+  assert.equal((await users(instance, id)).filter((u) => u === 'long work').length, 1, 'the first send arrived once');
+  assert.equal(await composer.inputValue(), '', 'and its late answer does not put it back in the box');
+  assert.equal(await page.locator('#toasts .toast', { hasText: 'not sure' }).count(), 0, 'no unsure line');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('PASS O267: an unknown outcome asks again with its own ID; identical words elsewhere do not settle it; a late answer is its own; never answered by the cap, back in the box unsure');
+  console.log('PASS O267: an unknown outcome asks again with its own ID; identical words elsewhere do not settle it; a late answer is its own; never answered by the cap, back in the box unsure; dropped links stay unsure; an interrupt does not wait behind an unanswered send');
 });
 
 // A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,

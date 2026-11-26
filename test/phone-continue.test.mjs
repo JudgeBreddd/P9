@@ -445,9 +445,10 @@ test('O267: a queued message goes as its chat\'s turn ends, also from the chat l
 });
 
 // O267 review 7: a wake that comes while a drain runs (another chat's turn ends) is not held behind that drain's refresh.
-// One pass tries chat B (refused: its turn runs), then sends chat A's message; B's turn ends while A's send is out. B's
-// message goes while the refresh after A's send has no answer (it used to wait for that refresh first). On the chat list,
-// where no chat redraw wakes the queue.
+// Review 9: chat B is refused three times first, so its own retry is 8 s away; then chat A's message goes out and is held,
+// B's turn ends meanwhile, and B's message must go before that 8 s retry could: only the turn end can have sent it. It goes
+// while the refresh after A's send has no answer (it used to wait for that refresh first). On the chat list, where no chat
+// redraw wakes the queue.
 test('O267: a chat whose turn ends during another chat\'s send gets its queued message before that send\'s refresh answers', { timeout: 120000 }, async (t) => {
   const { page, server } = await phoneOn(t);
   const a = await newChat(page, 'claude'), b = await newChat(page, 'claude');
@@ -458,28 +459,34 @@ test('O267: a chat whose turn ends during another chat\'s send gets its queued m
   await page.route('**/chat/*/prompt', async (route) => {
     const text = route.request().postDataJSON()?.text;
     if (!['slow', 'for b'].includes(text)) return route.continue();
-    tries.push(text);
-    if (text === 'for b' && tries.filter((x) => x === 'for b').length === 1) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    tries.push([text, Date.now()]);
+    if (text === 'for b' && tries.filter(([x]) => x === 'for b').length <= 3) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
     if (text === 'slow') await holdA; // A's message starts a turn that keeps running, so no turn end of A's wakes the queue
     return route.continue().catch(() => {});
   });
   await page.route('**/chat/events*', async (route) => { if (armed) { reads++; await holdReads; } return route.continue().catch(() => {}); });
-  await setOnline(page, false);
-  await page.evaluate(([a, b]) => {
-    localStorage.setItem('p9-queue:' + a, JSON.stringify([{ qid: crypto.randomUUID(), text: 'slow' }]));
+  const forB = () => tries.filter(([x]) => x === 'for b');
+  await page.evaluate((b) => {
     localStorage.setItem('p9-queue:' + b, JSON.stringify([{ qid: crypto.randomUUID(), text: 'for b' }]));
-    dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + a })); // the phone reads its queues from storage again
-  }, [a, b]);
-  await setOnline(page, true);
-  await until(async () => tries.length === 2, 'B refused, then A asked');
-  assert.deepEqual(tries, ['for b', 'slow'], 'the pass tries B before A, so only a wake can send B now');
+    dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + b })); // the phone reads its queues from storage again
+  }, b);
+  await until(async () => forB().length >= 2, 'B refused twice (2 s wait)');
+  await until(async () => forB().length >= 3, 'B refused three times (4 s wait), so its next wait is 8 s');
+  const refused = forB()[2][1];
+  await page.evaluate((a) => {
+    localStorage.setItem('p9-queue:' + a, JSON.stringify([{ qid: crypto.randomUUID(), text: 'slow' }]));
+    dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + a }));
+  }, a);
+  await until(async () => tries.some(([x]) => x === 'slow'), 'A asked (and held)');
   await call(server, '/chat/' + b + '/cancel', {});
   const userOf = async (id, text) => (await server.desk('/chat/events?after=0&only=' + id)).body.events.some((e) => e.type === 'user' && e.data?.text === text);
   await until(async () => (await server.desk('/chat/events?after=0&only=' + b)).body.events.some((e) => ['turn-end', 'interrupted', 'stopped'].includes(e.type)), 'B\'s turn ended');
-  await page.waitForTimeout(3000); // the phone sees it (and B's 2 s wait runs out) while A's send is still out
+  await page.waitForTimeout(1000); // the phone sees it while A's send is still out
   armed = true; releaseA();
   await until(async () => await userOf(a, 'slow'), 'A sent');
   await until(async () => await userOf(b, 'for b'), 'B sent while every events read after A\'s send has no answer');
+  assert.equal(forB().length, 4, 'B asked once more');
+  assert.ok(forB()[3][1] - refused < 8000, `B went ${forB()[3][1] - refused} ms after its last refusal, before its own 8 s retry: the turn end woke it`);
   assert.ok(reads >= 1, 'a read was held meanwhile');
   armed = false; releaseReads();
   await until(async () => (await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]').length, 'p9-queue:' + b)) === 0, 'and gone from B\'s queue');

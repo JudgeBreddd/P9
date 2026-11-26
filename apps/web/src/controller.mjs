@@ -1281,18 +1281,25 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   // still its own and nothing is sent twice. The cap is for an ID the daemon never finishes: a daemon restarted mid-send
   // answers outcome-unknown for it for good (ledger.mjs). ponytail: 60 s for every other action, as before.
   const end = start + (action === 'prompt' ? SEND_CAP : 60000), unknown = { status: 409, body: { error: 'outcome-unknown', operation: body.op } };
-  const ask = () => body.op ? Promise.race([window.p9.chat(action, body), new Promise(res => setTimeout(() => res(unknown), Math.max(0, end - Date.now())))]) : window.p9.chat(action, body);
+  // Review 9: one deadline for the whole call, cleared once it settles (it used to be one timer per try, each left running).
+  let timer; const cap = body.op && new Promise(res => { timer = setTimeout(() => res(unknown), end - start); });
+  const ask = () => body.op ? Promise.race([window.p9.chat(action, body), cap]) : window.p9.chat(action, body);
   const pause = () => new Promise(res => setTimeout(res, 1000));
-  let r = await ask();
-  // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
-  if (r.status === 503 && body.op) { await pause(); if (Date.now() < end) r = await ask(); }
-  for (let unsure = false; body.op;) {
-    if (r.status === 409 && r.body?.error === 'outcome-unknown') unsure = true; else if (!(unsure && r.status === 503)) break;
-    if (end - Date.now() <= 1000) { r = unknown; break; }
-    await pause();
-    if (Date.now() >= end) { r = unknown; break; } // a pause that woke late (a suspended timer) asks nothing more
+  let r;
+  try {
     r = await ask();
-  }
+    // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
+    if (r.status === 503 && body.op) { await pause(); if (Date.now() < end) r = await ask(); }
+    // Review 9: a prompt is unsure from its first dropped link too: the daemon may have taken it before the link went, so
+    // it keeps asking under its ID (one restarted daemon that never saw it runs it then) rather than coming back to be sent again.
+    for (let unsure = action === 'prompt'; body.op;) {
+      if (r.status === 409 && r.body?.error === 'outcome-unknown') unsure = true; else if (!(unsure && r.status === 503)) break;
+      if (end - Date.now() <= 1000) { r = unknown; break; }
+      await pause();
+      if (Date.now() >= end) { r = unknown; break; } // a pause that woke late (a suspended timer) asks nothing more
+      r = await ask();
+    }
+  } finally { clearTimeout(timer); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
   // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.
   if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
@@ -1324,7 +1331,12 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
   const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
-  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
+  // Review 9: Interrupt and send ('now') goes at once, not behind a send still waiting for its answer (up to SEND_CAP): the
+  // daemon holds it, stops the running turn and sends it at that end. A send made after it still waits for both.
+  // ponytail: an earlier send that has not reached the daemon yet (dropped links only, no outcome-unknown) may land after it.
+  const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) });
+  const mine = when === 'now' ? go() : prev.then(go); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
+  const r = await mine.finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
   if (r.status === 202) {
     const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
