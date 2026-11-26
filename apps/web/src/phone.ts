@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { pastedFiles, limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
@@ -374,6 +374,11 @@ type Block = { kind: string; text: string; at?: string; id?: unknown; status?: s
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
+// A2 step 6b: per chat, the quotes waiting above the message box (see openQuote). key: the reply's own (b + its time), which
+// finds it again after a redraw.
+type Quote = { text: string; comment: string; key: string };
+let mark: { key: string } | null = null; // showQuoted
+const quotes = new Map<string, Quote[]>();
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 let sentLanded = 0; // photos fetched into sentCache or shots: the list key counts these, since a landing photo leaves the size as it was
 // O249: an agent's picture by its place (shot:<cursor/n>), fetched when it scrolls into view (watchShots).
@@ -510,7 +515,7 @@ function whoSent(data?: Json) {
 function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') { const who = whoSent(block.who); return `<article data-kind="user" class="msg user"${who ? ' data-from' : ''}>${who ? `<div class="who">${escape(who)}</div>` : ''}${escape(block.text)}${block.files?.length ? `<div class="sent-files">📎 ${escape(block.files.join(', '))}</div>` : ''}${sentImgs(openId, block.sent)}</article>`; }
-  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent', shotGot)}</article>`;
+  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent', shotGot)}${block.text ? '<button type="button" class="quote-reply" data-quote-reply aria-label="Quote this reply"></button>' : ''}</article>`;
   if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'report') return `<article data-kind="report" class="report"${block.pinned ? ' hidden' : ''}><div class="eyebrow">Worker report</div><div class="msg">${md.parse(block.text) as string}</div></article>`;
   if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
@@ -759,6 +764,7 @@ function render() {
     }
   }
   patch(events, shown); watchShots(picked, events);
+  if (mark) keyed(mark.key)?.classList.add('quote-src'); // A2 step 6b: the jump's mark through a redraw
   const info = phoneFolders.get(picked);
   if (!info && !phoneFoldersLoading.has(picked)) {
       phoneFoldersLoading.add(picked);
@@ -1102,7 +1108,7 @@ addEventListener('pagehide', keepDraft); document.addEventListener('visibilitych
 function label() {
   const id = openId, send = one<HTMLButtonElement>('#composer button[type="submit"]');
   const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
-  const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
+  const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length && !(quotes.get(id) ?? []).length;
   const box = one<HTMLTextAreaElement>('#prompt');
   if (id === boxFor) setDraft(id, box.value);
   box.placeholder = 'Message ' + agentName(provider(id));
@@ -1205,16 +1211,19 @@ async function submitFromBox(event: Event) {
   event.preventDefault(); const id = openId; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+  // A2 step 6b: the chat's quotes go first, each with its comment (helpers.mjs quoted). A slash command goes as typed and
+  // its quotes stay for the next message. ponytail: any text starting with / counts as a command here.
+  const typed = (art ?? input.value).trim(), qs = art === null && !typed.startsWith('/') ? quotes.get(id) ?? [] : [];
   // O21: Stop only when the box is empty at the tap. data-stop is from the last redraw, and text can reach the box with
   // no input event (a keyboard's own insert, dictation): that tap then stopped the turn, or did nothing, and sent nothing.
-  if (id && submitter?.dataset.stop === 'true' && art === null && !input.value.trim() && !images.length) {
+  if (id && submitter?.dataset.stop === 'true' && art === null && !input.value.trim() && !images.length && !qs.length) {
     const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (result.body.error === 'no-turn') note('Nothing to stop: the turn had already ended.');
     else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
-  const text = (art ?? input.value).trim();
+  const text = quoted(qs, typed);
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
   note(); one<HTMLElement>('#slash').hidden = true; // an earlier why is not about this send
@@ -1236,7 +1245,7 @@ async function submitFromBox(event: Event) {
   if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
   if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
     if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
-    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
+    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }]); spend(id, picked); if (art === null) input.value = ''; dropQuotes(id, qs); renderQueue(); label(); void drain(); return true;
   }
   if (!again && submitter?.dataset.when === 'now' && running(id)) {
     // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
@@ -1261,12 +1270,12 @@ async function submitFromBox(event: Event) {
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { if (text) editDraft(id, (now) => now.replace(text, '').trim()); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(text, '').trim()); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
@@ -1357,13 +1366,66 @@ function attachedStore(mode: IDBTransactionMode, use: (store: IDBObjectStore) =>
   open.onerror = () => { attachedRead = true; };
   open.onsuccess = () => { const db = open.result, tx = db.transaction('chats', mode); use(tx.objectStore('chats')); tx.oncomplete = tx.onerror = () => db.close(); };
 }
+// A2 step 6b: quote a reply on the phone with the desktop's box and button (quote.mjs, loaded on first use). Quote under a
+// reply quotes all of it; text selected in one reply gets a small Comment button beside it (Copy still works). The box's
+// Comment adds a chip above the message box: its comment, else the quote's start. The pencil edits the comment, a tap on
+// the chip scrolls to its reply and marks it, ✕ removes it. A comment typed and not added is kept as the chip when the box
+// closes by leaving (another screen or chat, a tap outside); Cancel drops it. Kept per chat until sent.
+// ponytail: in memory only, so a reload drops them (the message box's own text is the only thing a reload keeps).
+// The chat it was asked from is still the one on screen, with no sheet over it.
+const quoteAlive = (id: string) => () => openId === id && document.body.dataset.view === 'chat' && !one<HTMLDialogElement>('#sheet').open && !document.hidden;
+function dropQuotes(id: string, sent: Quote[]) {
+  if (!sent.length) return;
+  const left = (quotes.get(id) ?? []).filter((q) => !sent.includes(q));
+  if (left.length) quotes.set(id, left); else quotes.delete(id);
+  if (id === openId) { renderAttached(); label(); }
+}
+// was: the chip being edited, replaced where it is.
+function openQuote(id: string, rect: DOMRect, text: string, raw: string, key: string, was?: Quote) {
+  import('./quote.mjs').then((m) => {
+    const alive = quoteAlive(id); if (!alive()) return;
+    m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, back: () => one<HTMLTextAreaElement>('#prompt').focus(),
+      add: (q: { text: string; comment: string }, away?: boolean) => {
+        const list = quotes.get(id) ?? [], n = { text: was?.text ?? q.text, comment: q.comment, key }, i = was ? list.indexOf(was) : -1;
+        if (i >= 0) list[i] = n; else list.push(n);
+        quotes.set(id, list); if (id === openId) { renderAttached(); label(); if (!away) one<HTMLTextAreaElement>('#prompt').focus(); }
+      } });
+  }, () => note('The quote box did not load. Try again.'));
+}
+// The reply a chip came from; earlier replies are drawn first if it is above them, up to 600 more (as the desktop's bound:
+// the window stays that size while the chat is open, so every redraw would carry them). mark: the marked reply, drawn
+// with quote-src again after every patch (render), as a block that changes is drawn afresh. Each jump has its own mark, and a
+// second tap restarts it.
+const keyed = (key: string) => [...one('#events').children as HTMLCollectionOf<HTMLElement>].find((el) => el.dataset.key === key);
+function showQuoted(q: Quote) {
+  let el = keyed(q.key); if (!el && hiddenBlocks > 0 && hiddenBlocks <= 600) { windowSize += hiddenBlocks; render(); el = keyed(q.key); }
+  if (!el) { note(hiddenBlocks > 600 ? 'The reply this quote came from is too far up to jump to.' : 'The reply this quote came from is not on screen any more.'); return; }
+  const m = mark = { key: q.key }; window.setTimeout(() => { if (mark === m) { mark = null; keyed(m.key)?.classList.remove('quote-src'); } }, 1600);
+  el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.classList.remove('quote-src'); void el.offsetWidth; el.classList.add('quote-src');
+}
+one('#events').addEventListener('click', (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-quote-reply]'), key = button?.closest<HTMLElement>('[data-key]')?.dataset.key;
+  const text = key && openId ? build(openId).blocks.find((block) => block.kind === 'agent' && 'b' + block.at === key)?.text : '';
+  if (button && key && text) openQuote(openId, button.getBoundingClientRect(), text, text, key);
+});
+// A selection inside one reply, once it has settled (a long press, then its handles), gets the Comment button.
+let selectionWait = 0;
+document.addEventListener('selectionchange', () => { clearTimeout(selectionWait); selectionWait = window.setTimeout(commentOnSelection, 300); });
+function commentOnSelection() {
+  const selection = getSelection(); if (!selection || selection.isCollapsed || !selection.rangeCount || !openId) return;
+  const range = selection.getRangeAt(0), from = range.startContainer, reply = (from instanceof Element ? from : from.parentElement)?.closest<HTMLElement>('#events article[data-kind="agent"][data-key]');
+  const raw = selection.toString(), text = raw.trim(), id = openId, key = reply?.dataset.key, copy = range.cloneRange();
+  if (!reply || !key || !reply.contains(range.endContainer) || !text) return;
+  import('./quote.mjs').then((m) => { const alive = quoteAlive(id); if (alive()) m.commentButton({ range: copy, raw, view: body, alive, pick: (rect: DOMRect) => openQuote(id, rect, text, raw, key) }); }, () => {});
+}
 let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
 function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
 try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
+const chipName = (q: Quote) => q.comment ? escape(q.comment.slice(0, 60)) : `“${escape(q.text.replace(/\s+/g, ' ').trim().slice(0, 40))}”`;
 function renderAttached() {
-  const list = attached.get(openId) ?? [], box = one<HTMLElement>('#attached');
-  box.hidden = !list.length; keepAttached();
-  box.innerHTML = list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  const list = attached.get(openId) ?? [], qs = quotes.get(openId) ?? [], box = one<HTMLElement>('#attached');
+  box.hidden = !list.length && !qs.length; keepAttached();
+  box.innerHTML = qs.map((q, i) => `<span class="chip-quote" title="${escape(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><button type="button" class="quote-go" data-quote-go="${i}" aria-label="Show the reply quoted: ${chipName(q)}"><span>${chipName(q)}</span></button><button type="button" class="quote-edit" data-quote-edit="${i}" aria-label="Edit the comment on ${chipName(q)}">✎</button><button type="button" data-unquote="${i}" aria-label="Remove the quote ${chipName(q)}">✕</button></span>`).join('') + list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
 // One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file
@@ -1385,6 +1447,8 @@ async function attachNow(id: string, files: Iterable<File>) {
   renderAttached(); return ok;
 }
 one<HTMLElement>('#attached').onclick = (event) => {
+  const at = (event.target as Element).closest<HTMLButtonElement>('[data-unquote], [data-quote-edit], [data-quote-go]'), q = at && quotes.get(openId)?.[Number(at.dataset.unquote ?? at.dataset.quoteEdit ?? at.dataset.quoteGo)];
+  if (at && q) { if (at.dataset.unquote !== undefined) dropQuotes(openId, [q]); else if (at.dataset.quoteEdit !== undefined) openQuote(openId, at.getBoundingClientRect(), q.text, q.text, q.key, q); else showQuoted(q); return; }
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
   attached.get(openId)?.splice(Number(button.dataset.unattach), 1); renderAttached();
 };

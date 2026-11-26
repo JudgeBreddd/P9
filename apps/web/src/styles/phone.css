@@ -420,3 +420,14 @@ section[data-view=files]:has(#fileView[data-image]:not([hidden])) :is(#save,#mor
 .uh-table .dot{display:inline-block;margin-right:6px;vertical-align:middle}
 #upanel .stats div{display:flex;justify-content:space-between;gap:8px;padding:6px 2px;font-size:14px;border-bottom:1px solid var(--line)}
 #usage .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dim)}#usage .dot[data-agent="claude"]{background:#d97757}#usage .dot[data-agent="codex"]{background:#3b82f6}
+/* A2 step 6b: quoting a reply (quote.mjs). Quote under a reply, the Comment button beside a selection, the comment box, the
+   quote chips above the message box (small: the comment or the quote's start), and the mark on a reply a chip was tapped for. */
+#events .quote-reply{display:block;position:relative;min-height:0;height:28px;margin:6px 0 0 auto;padding:0 12px;border:1px solid var(--line);border-radius:14px;background:none;color:var(--dim);font-size:12px}#events .quote-reply::before{content:"Quote"}#events .quote-reply::after{content:"";position:absolute;inset:-8px}
+.comment-pop{position:fixed;z-index:60;min-height:0;height:36px;padding:0 16px;border:1px solid var(--line);border-radius:18px;background:var(--panel);color:var(--text);font-size:14px;box-shadow:0 4px 12px rgb(0 0 0/.35)}
+.quote-box{position:fixed;z-index:60;display:grid;gap:8px;width:min(360px,calc(100vw - 16px));padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);box-shadow:0 12px 32px rgb(0 0 0/.45)}
+.quote-box blockquote{margin:0;padding-left:8px;border-left:2px solid var(--line);color:var(--dim);font-size:13px;max-height:4.5em;overflow:hidden;white-space:pre-wrap}
+.quote-box textarea{resize:none;min-height:0;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
+.quote-box .quote-bar{display:flex;justify-content:flex-end;gap:8px}.quote-box button{min-height:40px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:none}.quote-box [type=submit]{background:var(--cyan);color:var(--on-cyan);border-color:transparent}
+.chip-quote{display:flex;align-items:center;height:32px;max-width:240px;border:1px solid var(--line);border-radius:16px;font-size:13px}.chip-quote button{position:relative;flex:none;min-height:0;height:30px;padding:0 6px;border:0;background:none;color:var(--text);font-weight:400}
+.chip-quote .quote-go{flex:1 1 auto;min-width:0;padding-left:12px}.chip-quote .quote-go span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chip-quote .quote-edit,.chip-quote [data-unquote]{width:30px;color:var(--dim)}
+#events .msg.quote-src{animation:quote-src 1.6s ease-out}@keyframes quote-src{0%,40%{box-shadow:0 0 0 2px var(--cyan)}100%{box-shadow:0 0 0 2px transparent}}
