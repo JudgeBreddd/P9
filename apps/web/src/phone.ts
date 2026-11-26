@@ -12,7 +12,7 @@ import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords, previewCard, freeName } from './onboarding.mjs';
-import { FILE_PROTECTION_RISK, partOrder } from '../../../packages/protocol/index.mjs';
+import { FILE_PROTECTION_RISK, partOrder, WIDGETS } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 import { pressHold } from './press-hold.mjs';
@@ -1747,7 +1747,7 @@ const queueBy = () => { try { return localStorage.getItem('p9-queue-sort') === '
 const sortQueue = (items: Waiting[]) => items.sort(queueBy() === 'project' ? (a, b) => a.name.localeCompare(b.name) : (a, b) => (b.updated || 0) - (a.updated || 0));
 let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: string[]; space?: { id: string; widget?: string; widgets?: string[]; refs?: { id: string; kind?: string }[] }[] } = { queue: [], scripts: [] };
 // P9's built-in tiles a section may name (W-D); naming any decides which show. The phone has no editor, so edit is the desktop's alone.
-const TILE_WIDGETS = ['idea', 'sprint', 'edit'];
+const TILE_WIDGETS = WIDGETS.filter((w) => w.tile).map((w) => w.id); // packages/protocol WIDGETS (CAT-2)
 const naming = (s: { widget?: string; widgets?: string[] }, w: string) => s.widget === w || !!s.widgets?.includes(w);
 const checklists: Record<string, unknown> = {};
 // O67: the closed row's line, as a folder row has its count: what the list holds, once it was read.
@@ -1876,8 +1876,10 @@ async function loadMission(cached = false) {
     // The phone's own order of a section's parts (information first, its buttons last). A widget is a row opening the phone's own window
     // for it (W-I on the phone); one the phone has none for says where it is.
     const PHONE_PARTS = ['text', 'quick_note', 'notes', 'logs', 'data', 'cards', 'links', 'folders', 'checklists', 'refs', 'widgets', 'buttons'];
-    const PHONE_WIDGET: Record<string, [string, string]> = { waiting: ['queue', 'Waiting on you'], primary: ['primary', 'Main project'], idea: ['idea', '+ New idea'], sprint: ['sprint', 'Sprint status'], apps: ['pages', 'Apps and pages'] };
-    const widgetRow = (w: string) => PHONE_WIDGET[w] ? `<p class="tile-row" data-widget="${escape(w)}"><button type="button" class="link" data-open="${PHONE_WIDGET[w][0]}">${escape(PHONE_WIDGET[w][1])}</button></p>`
+    // The phone window each widget opens; its words are packages/protocol WIDGETS' labels (CAT-2).
+    const PHONE_WIDGET: Record<string, string> = { waiting: 'queue', primary: 'primary', idea: 'idea', sprint: 'sprint', apps: 'pages' };
+    const widgetLabel = (w: string) => WIDGETS.find((x) => x.id === w)?.label ?? w;
+    const widgetRow = (w: string) => PHONE_WIDGET[w] ? `<p class="tile-row" data-widget="${escape(w)}"><button type="button" class="link" data-open="${PHONE_WIDGET[w]}">${escape(widgetLabel(w))}</button></p>`
       : `<p class="muted tile-row" data-widget="${escape(w)}">${w === 'usage' ? 'Usage has its own tab.' : w === 'notifications' ? 'Notifications show on the desktop.' : 'Edit names and icons on the desktop.'}</p>`;
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
     for (const space of (data.space ?? []) as { id: string; title: string; text: string; widget?: string; widgets?: string[]; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {

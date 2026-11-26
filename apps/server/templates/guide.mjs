@@ -1,5 +1,9 @@
 // The shipped Mission guide (threat model row 72): shown on the onboarding card's "Build it yourself" page, and the whole first
-// message of a "Have Claude/Codex build it" chat. Nothing from a request or a file is ever added to it.
+// message of a "Have Claude/Codex build it" chat. Nothing from a request or a file is ever added to it: only packages/protocol's
+// constants (CAT-2: the widgets and the File protection line, so the guide names every widget the space takes).
+import { WIDGETS, PROTECT_AFTER } from '../../../packages/protocol/index.mjs';
+
+const or = (words) => words.slice(0, -1).join(', ') + ' or ' + words.at(-1);
 export const GUIDE = `# Build your Mission Control space
 
 Mission Control is your control room in P9. It shows one space: a list of sections in order. Each section has a heading, a line of text, and the things you want in reach: buttons that run your scripts, live numbers, log views, notes, folders and links.
@@ -19,7 +23,7 @@ In a P9 chat, Claude and Codex have P9's Mission tools. The agent should:
 1. Call describe_mission to read the format and an example of every item.
 2. Ask you what you want, one section at a time.
 3. Add each section with add_section, in one write: its set takes the section's other fields (icon, widget, buttons, data, cards and the rest), as patch_section does.
-4. For a built-in panel (Waiting on you, Usage, Apps and pages or Notifications), give add_section's set a widget. For a section already there, call update_section with widget.
+4. For one of P9's built-in panels or tiles, give add_section's set a widget: ${or(WIDGETS.map((w) => `${w.id} (${w.label}${w.tile ? ' tile' : ''})`))}. For a section already there, call update_section with widget.
 5. Place each section meant to be seen at a glance (cards, data tiles, lists, folders) in a column: place col1 to col6, and span for a wider one. A section with no place is a top-row tile that shows its items only in its window, so a space of tiles leaves the page empty. Keep tiles for groups of buttons.
 6. To show a button you already have in the registry, call update_section with refs and the button's ID. Never copy its command into a new button.
 7. Add new buttons with add_button. Add data tiles, log views, folders, links and checklists with set_section_items.
@@ -30,7 +34,7 @@ In a P9 chat, Claude and Codex have P9's Mission tools. The agent should:
 
 To try changes without touching the space you use, the agent passes a scratch space name, such as "draft", to each write tool. Pick that name in Mission's space picker to see it, and pick Main to go back.
 
-An agent can write your space only while File protection is off and the agent lock is off. Both are switches in Settings. Turn File protection back on once the build is done.
+An agent can write your space only while File protection is off and the agent lock is off. Both are switches in Settings. ${PROTECT_AFTER}
 
 ## Build it yourself
 
