@@ -2268,7 +2268,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const held = pausedOf(lead);
       if (!held) return null;
       const list = last ? [...held, { id: randomUUID(), at: Date.now(), chat: lead, held: null, from: last.from, mixed: null, body: { text: last.text, ...(last.mode !== undefined && { mode: last.mode }) } }] : held;
-      for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
+      for (const item of held) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' }); // last was never shown held
       db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
       try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       wakeAll('resumed');
