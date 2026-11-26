@@ -11,7 +11,7 @@ export const WHATS_NEW = {
     "Desktop chat: selected text shows a small Comment button, so Copy still works; a quote is a small chip you can edit.",
     "Phone chat: quote part of a reply with a comment, as on desktop.",
     "Phone: the chat list tries again after a failed load and says why.",
-    "A reply no longer shows twice when the agent sends it again after its turn ends.",
+    "A short reply no longer shows twice when the agent sends it again after its turn ends.",
     "A tool call shown again after a compaction stays one row instead of coming back as pending.",
     "Dev Focus: the editor's terminal draws its letters at full size.",
     "Desktop: open chats keep their order in the panel after a restart.",
