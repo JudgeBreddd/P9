@@ -1277,10 +1277,14 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   // O267: outcome-unknown is the daemon still running the first try of this ID. The same ID again gets that try's own
   // answer once it ends (a prompt answers when its turn starts), never a second copy. Once unsure, a dropped link (503)
   // keeps it unsure and asks again too: the first try may still land. ponytail: one 60 s deadline from the send; then unsure.
+  // The deadline also bounds each try: a stalled one (the bridge waits up to 90 s for a prompt) ends unsure at 60 s.
+  const unknown = { status: 409, body: { error: 'outcome-unknown', operation: body.op } };
   for (let unsure = false; body.op;) {
     if (r.status === 409 && r.body?.error === 'outcome-unknown') unsure = true; else if (!(unsure && r.status === 503)) break;
-    if (Date.now() - start > 60000) { r = { status: 409, body: { error: 'outcome-unknown', operation: body.op } }; break; }
-    await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body);
+    const left = start + 60000 - Date.now();
+    if (left <= 1000) { r = unknown; break; }
+    await new Promise(res => setTimeout(res, 1000));
+    r = await Promise.race([window.p9.chat(action, body), new Promise(res => setTimeout(() => res(unknown), left - 1000))]);
   }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
   // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.

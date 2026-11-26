@@ -1180,7 +1180,12 @@ async function drain() {
         const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' }, 0, qid); // O267: its qid is its operation, across reloads
         // O62: refused because the turn is still ending (a Stop just pressed: the daemon holds nothing for a turn that is
         // stopping). The message stays queued and goes a moment later; it used to come back into the box as "Not sent".
-        if (result.status === 409 && (result.body.error === 'turn-running' || result.body.error === 'outcome-unknown')) { retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break; }
+        if (result.status === 409 && (result.body.error === 'turn-running' || result.body.error === 'outcome-unknown')) {
+          // O267: turn-running is the daemon's answer, final for that operation ID (a retry under it gets the same refusal back),
+          // so the message takes a new one. outcome-unknown is no answer: it keeps its ID, and the daemon replays what happened.
+          if (result.body.error === 'turn-running') keepQueue(id, queued(id).map((item) => item.qid === qid ? { ...item, qid: crypto.randomUUID() } : item));
+          retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break;
+        }
         // Any other answer is final for this message: it went, or the daemon refused it and says why (the text goes back in its chat's box).
         keepQueue(id, queued(id).filter((item) => item.qid !== qid));
         // O209: taken from the queue, the picks it carried are in effect, so a newer pick of the same value is spent now (as a send taken at once).

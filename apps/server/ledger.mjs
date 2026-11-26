@@ -185,7 +185,6 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     recent: db.prepare('SELECT COUNT(*) AS n FROM operations WHERE login = ? AND at > ?'),
     begin: db.prepare("INSERT INTO operations (id, login, fingerprint, state, at) VALUES (?, ?, ?, 'running', ?)"),
     finish: db.prepare("UPDATE operations SET state = 'done', status = ?, body = ? WHERE id = ?"),
-    forget: db.prepare('DELETE FROM operations WHERE id = ?'),
   };
   const fresh = () => ({ cursor: 0, totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }, contexts: new Map(), costs: new Map(),
     latest: 0, discarded: 0, samples: 0, claudeLive: null, profiles: new Map() });
@@ -356,12 +355,10 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     recent: (login, since) => statements.recent.get(login, since).n,
     begin: (id, login, fingerprint) => statements.begin.run(id, login, fingerprint, Date.now()),
     finish: (id, status, body) => statements.finish.run(status, body, id),
-    forget: (id) => statements.forget.run(id),
   };
 }
 
 // Hono middleware for every route that is not a read.
-const tryAgain = (status, body) => { if (status !== 409) return false; try { return JSON.parse(body)?.error === 'turn-running'; } catch { return false; } };
 export function operations(ledger, login) {
   return async (c, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next();
@@ -381,10 +378,7 @@ export function operations(ledger, login) {
     if (typeof login === 'function' && ledger.recent(owner, Date.now() - 3600 * 1000) >= REMOTE_OPS_PER_HOUR) return c.json({ error: 'operation-quota' }, 429);
     ledger.begin(id, owner, fingerprint);
     await next();
-    const body = await c.res.clone().text();
-    // O267: a turn-running refusal did nothing and says "try again". Kept, it was replayed to every retry under the same ID
-    // (a phone's queued message keeps its ID across tries), so the message never went; forgotten, the retry runs.
-    if (tryAgain(c.res.status, body)) ledger.forget(id); else ledger.finish(id, c.res.status, body);
+    ledger.finish(id, c.res.status, await c.res.clone().text());
   };
 }
 
