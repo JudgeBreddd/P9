@@ -767,7 +767,7 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await menu.locator('.draft-take').first().click();
   const chip = pane.locator('.attach .att-quote'); await until(async () => await chip.count() === 1, 'its chip', 5000);
   await chip.first().locator('[data-quote-go]').click();
-  await page.locator('#toasts .toast', { hasText: 'is not in this chat any more' }).waitFor({ timeout: 5000 });
+  await page.locator('#toasts .toast', { hasText: 'is not available in this window' }).waitFor({ timeout: 5000 });
   assert.equal(await pane.locator('.msg.quote-src').count(), 0, 'no reply here marked as its source');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
@@ -792,10 +792,12 @@ test('A2 step 6 review: a chip whose reply is above the drawn steps widens the w
   await chips.first().locator('[data-quote-go]').click();
   await until(async () => await hello.count() === 1 && await hello.evaluate((m) => { const r = m.getBoundingClientRect(), b = m.closest('.hist').getBoundingClientRect();
     return m.classList.contains('quote-src') && r.bottom > b.top && r.top < b.bottom; }), 'the window widened to the reply, marked and in view', 5000);
-  // A repaint after the jump (the drafts count read again redraws the chats) keeps it drawn and in view.
-  await page.evaluate(() => { window.__paints = 0; new MutationObserver(() => window.__paints++).observe(document.querySelector('.pane .hist'), { subtree: true, childList: true, attributes: true }); window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' })); });
-  await until(() => page.evaluate(() => window.__paints > 0), 'the history repainted', 5000);
-  assert.equal(await hello.count(), 1, 'still drawn after the repaint');
+  // Repaints after the jump keep it drawn and in view: the mark ending, then another window's draft (the drafts count
+  // changes, so the pane is drawn again; a sentinel on the reply proves the redraw went over it).
+  await until(async () => !(await hello.evaluate((m) => m.classList.contains('quote-src'))), 'the mark ended', 5000);
+  await hello.evaluate((m) => { m.setAttribute('data-sentinel', '1'); const d = JSON.parse(localStorage.getItem('p9-drafts') || '[]');
+    localStorage.setItem('p9-drafts', JSON.stringify([{ id: 'other-window', text: 'from another window', at: Date.now() }, ...d])); window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' })); });
+  await until(async () => await hello.count() === 1 && await hello.evaluate((m) => !m.hasAttribute('data-sentinel')), 'the history was drawn again', 5000);
   assert.ok(await hello.evaluate((m) => { const r = m.getBoundingClientRect(), b = m.closest('.hist').getBoundingClientRect(); return r.bottom > b.top && r.top < b.bottom; }), 'still in view');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 6 review: a far quote widens the window and shows its reply');

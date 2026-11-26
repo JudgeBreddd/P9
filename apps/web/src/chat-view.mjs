@@ -933,7 +933,7 @@ const commentOn = (s, p, view, range, text, raw, from) => import('./quote.mjs').
 function showSource(s, p, q) {
   const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question');
   const i = q?.ev ? list.indexOf(q.ev) : -1;
-  if (i < 0) return outer.toast({ kind: 'chat', txt: q?.chat && q.chat !== s.id ? 'The reply this quote came from is in another chat.' : 'The reply this quote came from is not in this chat any more.' }, true);
+  if (i < 0) return outer.toast({ kind: 'chat', txt: q?.chat && q.chat !== s.id ? 'The reply this quote came from is in another chat.' : 'This quote\'s link to its reply is not available in this window.' }, true);
   const want = list.length - i;
   if (want > GROW_MAX) return outer.toast({ kind: 'chat', txt: 'The reply this quote came from is too far up to jump to. Scroll up with Show earlier.' }, true);
   const mark = s.mark = { ev: list[i] }; outer.setTimeout(() => { if (s.mark === mark) { s.mark = null; renderChats(); } }, 1600); // each jump its own
@@ -952,15 +952,21 @@ function showSource(s, p, q) {
 // (draftLinks, by draft id), so a chip taken back here still shows its reply. ponytail: lost on a reload; then it says so.
 const DRAFTS = 'p9-drafts';
 let draftsCount = null; // review: the button's count, read again only after a write or another window's change
-window.addEventListener('storage', e => { if (e.key === DRAFTS) { draftsCount = null; renderChats(); } }); // another window saved or took one
+window.addEventListener('storage', e => { if (e.key === DRAFTS) { draftsCount = null; keepLinks(storedIds()); renderChats(); } }); // another window saved or took one
 const draftsN = () => draftsCount ??= (() => { try { return JSON.parse(localStorage.getItem(DRAFTS) || '[]').length || 0; } catch { return 0; } })();
 // The whole list in one write, so a full store changes nothing (the box and the list stay as they were). false: not written.
-const putDrafts = d => { draftsCount = null; try { localStorage.setItem(DRAFTS, JSON.stringify(d.slice(0, 20))); return true; } catch { return false; } };
+const putDrafts = d => { draftsCount = null; const list = d.slice(0, 20), add = newLinks; newLinks = null;
+  try { localStorage.setItem(DRAFTS, JSON.stringify(list)); } catch { return false; }
+  if (add) draftLinks.set(add.id, add.links); keepLinks(new Set(list.map(x => x.id))); return true; };
 const storeFull = what => outer.toast({ kind: 'draft not saved', txt: `The window storage is full, so ${what}.`, level: 'warn' }, true);
 const withChips = s => s.images?.length ? 'Saved as a draft; the attached files stay in the box.' : '';
-const draftLinks = new Map(); // draft id -> its quotes' { ev, chat }
+// draftLinks: draft id -> its quotes' { ref, chat }, ref a WeakRef to the reply (a chat closed or reloaded lets it go). Only
+// drafts still stored (review): added once putDrafts has written that draft, pruned after every write and another window's.
+const draftLinks = new Map(); let newLinks = null;
+const keepLinks = ids => { for (const id of draftLinks.keys()) if (!ids.has(id)) draftLinks.delete(id); };
+const storedIds = () => { try { return new Set(JSON.parse(localStorage.getItem(DRAFTS) || '[]').map(x => x?.id)); } catch { return new Set(); } };
 const boxDraft = (s, ta) => { const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
-  if (s.quotes?.length) draftLinks.set(id, s.quotes.map(({ ev, chat }) => ({ ev, chat })));
+  newLinks = s.quotes?.length ? { id, links: s.quotes.map(({ ev, chat }) => ({ ref: ev && new WeakRef(ev), chat })) } : null;
   return { id, text: ta.value, at: Date.now(), ...(s.quotes?.length ? { quotes: s.quotes.map(({ text, comment }) => ({ text, comment })) } : {}) }; };
 function putAside(s, ta) {
   let d; try { d = JSON.parse(localStorage.getItem(DRAFTS) || '[]'); if (!Array.isArray(d)) d = []; } catch { d = []; }
@@ -976,9 +982,10 @@ const draftsOf = (s, p) => import('./drafts.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), shown = aliveIn(s, p), alive = () => shown() && !!ta() && !ta().disabled;
   if (alive()) m.draftsMenu({ host: p.closest('dialog') || document.body, rect: (p.querySelector('[data-drafts]') || p.querySelector('[data-attach]')).getBoundingClientRect(), key: DRAFTS, alive,
     take: ({ id, text, quotes }, rest) => {
+      const links = draftLinks.get(id) || []; // before the write prunes it
       const cur = ta().value.trim() || s.quotes?.length ? [boxDraft(s, ta())] : [], note = cur.length && withChips(s);
       if (!putDrafts([...cur, ...rest])) return storeFull('nothing changed: the box and the drafts are as they were'), false;
-      s.draft = text; const links = draftLinks.get(id) || []; draftLinks.delete(id); s.quotes = (quotes || []).map(({ text, comment }, i) => ({ text, comment, ...links[i] })); s.recall = null; renderChats();
+      s.draft = text; s.quotes = (quotes || []).map(({ text, comment }, i) => ({ text, comment, ev: links[i]?.ref?.deref(), chat: links[i]?.chat })); s.recall = null; renderChats();
       const b = ta(); if (b) { b.value = text; b.focus(); b.setSelectionRange(text.length, text.length); }
       if (note) outer.toast({ kind: 'draft saved', txt: note }, true);
       return true;
