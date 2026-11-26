@@ -25,11 +25,11 @@ const until = async (check, what, ms = 15000) => {
 };
 
 // One chat with the given agent, answered "hello" once, and a window on it.
-async function setup(t, name, { provider = 'claude', files = [] } = {}) {
+async function setup(t, name, { provider = 'claude', files = [], env: extra = {} } = {}) {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   for (const file of files) await writeFile(path.join(instance.workspace, file), '');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-' + name + '-')), 'profile');
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
   const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   const agentSaid = async (text) => (await said(instance, id, 'update')).some((e) => e.data.content?.text === text);
@@ -747,25 +747,23 @@ test('A2 step 6: a refused send made with the pencil open gives back the edited 
 // O267: a send whose retry gets outcome-unknown (a remote's first try still in flight) asks again with the same operation
 // ID until the daemon answers, so its own answer settles it (a held one keeps its files the normal way); an identical
 // message from elsewhere does not count as it. Never answered: back in the box, saying it may still have arrived.
-test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 540000 }, async (t) => {
-  const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown', { files: ['slow-tools'] });
+// Review 7: it asks until the send cap (10 minutes; 65 s here, P9_SEND_CAP_MS), so one that lands late is delivered once.
+test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 420000 }, async (t) => {
+  const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown', { files: ['slow-tools'], env: { P9_SEND_CAP_MS: '65000' } });
   const composer = pane.locator('.composer textarea');
   // 'landed': the daemon's first two answers are lost in flight, the third try is the one it runs. 'lost': never answered.
   // 'held': the daemon runs the first try (held mid-turn) but its answer is lost; the second meets a dropped link (503);
   // the third gets the daemon's own answer replayed (202 with its held ID).
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o267 = [];
-    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late', 'again', 'switched'].includes(text)) return h(e, ...args);
+    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late'].includes(text)) return h(e, ...args);
       globalThis.o267.push([text, args[1].op, JSON.stringify(args[1])]);
       const n = globalThis.o267.filter(([x]) => x === text).length;
       if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
       if (text === 'landed' && n >= 3) return h(e, ...args);
-      // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at 60 s.
-      // Round 5: 'stalled' never answers its first try: the 60 s deadline counts from it too.
-      // Review 5: 'late' lands at 62 s, after the window gave up on it at 60 s; a send again goes straight to the daemon.
-      // Review 6: 'again' lands at once but its answer never comes: unsure at 60 s, yet in the chat. 'switched' is 'late' with
-      // the mode changed before it is sent again.
-      if (text === 'again') { if (n === 1) { await h(e, ...args); await new Promise(() => {}); } return h(e, ...args); }
-      if (text === 'late' || text === 'switched') { if (n === 1) await new Promise((res) => setTimeout(res, 62000)); return h(e, ...args); }
+      // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at the cap.
+      // Round 5: 'stalled' never answers its first try: the cap counts from it too.
+      // Review 7: 'late' lands at 62 s, past the old 60 s deadline and inside the cap.
+      if (text === 'late') { await new Promise((res) => setTimeout(res, 62000)); return h(e, ...args); }
       if (text === 'stalled') { globalThis.o267stalled = Date.now(); await new Promise(() => {}); }
       if (text === 'lost') { globalThis.o267lost ??= Date.now(); if (Date.now() - globalThis.o267lost > 50000) await new Promise(() => {}); }
       return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
@@ -798,49 +796,29 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   await send('lost');
   await page.waitForTimeout(5000);
   assert.equal(await composer.inputValue(), '', 'not back in the box while P9 may still be running it');
-  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once P9 never answered', 75000);
-  assert.ok(Date.now() - (await app.evaluate(() => globalThis.o267lost)) < 66000, 'by the 60 s deadline, though its last try stalled');
+  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once P9 never answered', 80000);
+  assert.ok(Date.now() - (await app.evaluate(() => globalThis.o267lost)) < 71000, 'by the cap, though its last try stalled');
   await page.locator('#toasts .toast', { hasText: 'Still not sure your message arrived' }).waitFor({ timeout: 5000 });
   assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'lost').map(([, op]) => op))).size, 1, 'one operation throughout');
   assert.equal((await users(instance, id)).filter((u) => u === 'lost').length, 0);
   await composer.fill(''); await send('stalled');
-  await until(async () => (await composer.inputValue()) === 'stalled', 'back in the box though its first try never answered', 75000);
+  await until(async () => (await composer.inputValue()) === 'stalled', 'back in the box though its first try never answered', 80000);
   const waited = Date.now() - (await app.evaluate(() => globalThis.o267stalled));
-  assert.ok(waited < 64000, `by the 60 s deadline from the first try (${waited} ms)`);
+  assert.ok(waited < 69000, `by the cap from the first try (${waited} ms)`);
   assert.equal((await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'stalled').length)), 1, 'one try: it never answered');
-  // Review 5: back in the box at 60 s while its first try is still on its way, then sent again: the same operation, so the
-  // daemon runs it once, whichever try reaches it first.
+  // Review 7: an answer at 62 s is still this send's own: delivered once, never back in the box, and a send made meanwhile
+  // waits in the chat's line behind it, so it goes after it.
   await composer.fill(''); await send('late');
-  await until(async () => (await composer.inputValue()) === 'late', 'back in the box at the deadline', 75000);
-  await composer.fill(''); await send('late');
-  await until(async () => (await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'late').length)) === 2, 'sent again', 10000);
-  await page.waitForTimeout(8000); // past the first try's 62 s
-  assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'late').map(([, op]) => op))).size, 1, 'sent again under its first operation ID');
-  assert.equal((await users(instance, id)).filter((u) => u === 'late').length, 1, 'arrived once though the first try landed late');
-  // Review 6: an unsure send that the chat then shows arrived: the same words sent again are a new message, not its replay.
-  await until(async () => (await pane.locator('.working').count()) === 0, 'the late turn ended', 30000);
-  await composer.fill(''); await send('again');
-  await until(async () => (await composer.inputValue()) === 'again', 'back in the box at the deadline', 75000);
-  await until(async () => (await users(instance, id)).filter((u) => u === 'again').length === 1, 'its first try is in the chat', 10000);
-  await page.waitForTimeout(1500); // the window has the chat's events
-  await composer.fill(''); await send('again');
-  await until(async () => (await users(instance, id)).filter((u) => u === 'again').length === 2, 'sent again on purpose: it arrived a second time', 20000);
-  assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'again').map(([, op]) => op))).size, 2, 'a new operation for the second message');
-  // Review 6: sent again after the mode changed, it is the same request as the first try (same ID, same body), so the
-  // daemon takes it as the same operation, never as an ID reused for another request.
-  await until(async () => (await pane.locator('.working').count()) === 0, 'those turns ended', 30000);
-  await composer.fill(''); await send('switched');
-  await until(async () => (await composer.inputValue()) === 'switched', 'back in the box at the deadline', 75000);
-  await pane.locator('[data-pill="Mode"]').click(); await page.locator('#pillMenu [data-mode="Plan"]').click();
-  await composer.fill(''); await send('switched');
-  await until(async () => (await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'switched').length)) === 2, 'sent again', 10000);
-  await page.waitForTimeout(8000); // past the first try's 62 s
-  const tries = await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'switched'));
-  assert.equal(tries[1][2], tries[0][2], 'sent again as the same request, though the mode changed meanwhile');
-  assert.equal((await users(instance, id)).filter((u) => u === 'switched').length, 1, 'arrived once');
+  await page.waitForTimeout(2000); await send('behind');
+  await until(async () => (await users(instance, id)).includes('behind'), 'the send behind it went', 90000);
+  const order = await users(instance, id);
+  assert.equal(order.filter((u) => u === 'late').length, 1, 'the late send arrived once');
+  assert.ok(order.lastIndexOf('late') < order.indexOf('behind'), 'and before the send made behind it');
+  assert.equal(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'late').length), 1, 'one try: its own answer came');
+  assert.equal(await composer.inputValue(), '', 'a late answer does not put it back in the box');
   assert.equal(await page.locator('#toasts .toast', { hasText: 'operation-reused' }).count(), 0, 'no reused-ID refusal');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('PASS O267: an unknown outcome asks again with its own ID; identical words elsewhere do not settle it; never answered, back in the box unsure');
+  console.log('PASS O267: an unknown outcome asks again with its own ID; identical words elsewhere do not settle it; a late answer is its own; never answered by the cap, back in the box unsure');
 });
 
 // A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,

@@ -88,7 +88,7 @@ export function chatFailed(action, body, ms) {
   // A send over the size limits (chat.mjs file-too-large, server.mjs body-too-large): the daemon's message says which.
   if (action === 'prompt' && /too-large$/.test(body?.error)) return body.message ?? null;
   // O255: mid-turn sends wait in the daemon, so this refusal is a run nobody prompted (its end sends nothing waiting) or a Stop.
-  if (action === 'prompt' && body?.error === 'outcome-unknown') return 'Still not sure your message arrived: P9 has not finished it after ' + Math.round(ms / 1000) + ' seconds. It is back in the box; check the chat before sending it again.';
+  if (action === 'prompt' && body?.error === 'outcome-unknown') return 'Still not sure your message arrived: P9 has not finished it after ' + (ms >= 120000 ? Math.round(ms / 60000) + ' minutes' : Math.round(ms / 1000) + ' seconds') + '. It is back in the box; check the chat before sending it again.';
   if (action === 'prompt' && /^turn-[rs]/.test(body?.error)) return 'Not sent: the agent is busy; it is back in the box.';
   if (body?.error === 'profile-gone') return 'This chat\'s provider profile was removed in Settings. The chat can be read, not continued.';
   if (body?.error !== 'daemon-unavailable') return null;

@@ -1269,13 +1269,18 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // load, then a long poll); the sample sessions go. Sends, answers and Stop go to window.p9.chat; what happened comes
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
+// A source checkout's test run can shorten it (P9_SEND_CAP_MS, main.mjs); a packaged build always waits 10 minutes.
+const SEND_CAP = window.p9?.sendCap || 600000;
 liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { op: crypto.randomUUID(), ...payload }, start = Date.now();
   // O267: outcome-unknown is the daemon still running the first try of this ID. The same ID again gets that try's own
   // answer once it ends (a prompt answers when its turn starts), never a second copy. Once unsure, a dropped link (503)
-  // keeps it unsure and asks again too: the first try may still land. ponytail: one 60 s deadline from the first try,
-  // for every try (the bridge waits up to 90 s for a prompt) and checked again after each pause; then unsure.
-  const end = start + 60000, unknown = { status: 409, body: { error: 'outcome-unknown', operation: body.op } };
+  // keeps it unsure and asks again too: the first try may still land. One deadline from the first try, for every try,
+  // checked again after each pause; then unsure. Review 7: a prompt keeps asking under its one ID for up to 10 minutes
+  // (SEND_CAP), showing Sending… while a later send waits behind it in its chat's line, so an answer that comes late is
+  // still its own and nothing is sent twice. The cap is for an ID the daemon never finishes: a daemon restarted mid-send
+  // answers outcome-unknown for it for good (ledger.mjs). ponytail: 60 s for every other action, as before.
+  const end = start + (action === 'prompt' ? SEND_CAP : 60000), unknown = { status: 409, body: { error: 'outcome-unknown', operation: body.op } };
   const ask = () => body.op ? Promise.race([window.p9.chat(action, body), new Promise(res => setTimeout(() => res(unknown), Math.max(0, end - Date.now())))]) : window.p9.chat(action, body);
   const pause = () => new Promise(res => setTimeout(res, 1000));
   let r = await ask();
@@ -1312,26 +1317,14 @@ const lines = {};
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
-// O267 review 5: a send that ended unsure (no answer by the deadline) keeps its operation ID and the exact request it sent, so
-// sending the same words and files again from the box sends that request again: if the first try still lands, the daemon
-// answers both as one (review 6: the request as it was, so a mode or turn changed meanwhile is not a different operation).
-// Used once: the chat's next send takes it, so another send waiting in the line gets its own ID. And not once the chat
-// shows more user messages with those words than before the first try: it landed, so the same words again are a new message.
-// ponytail: one per chat, the last unsure send; counted by words, so an older same-words message loaded by Show earlier
-// meanwhile reads as landed (a new ID: a duplicate only if the first try is still running and lands after).
-const unsureOps = new Map();
+// O267 review 7: every send is its own operation; one still unsure keeps asking (liveChat.call) rather than being sent again.
 liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agent); const turns = turnsOf.get(s.id), was = s.working; s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
   // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
   // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
-  const said = () => s.events.filter(e => e.t === 'user' && e.text === text).length, u = unsureOps.get(s.id); unsureOps.delete(s.id);
-  const again = u && u.text === text && u.images.length === images.length && u.images.every((x, n) => x === images[n]) && said() === u.said ? u : null;
-  const op = again ? again.op : crypto.randomUUID(), before = again ? again.said : said();
   const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
-  let sent;
-  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', sent = again?.sent ?? { op, ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
-  if (r.status === 409 && r.body?.error === 'outcome-unknown') unsureOps.set(s.id, { op, text, images, sent, said: before });
+  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
   if (r.status === 202) {
     const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
