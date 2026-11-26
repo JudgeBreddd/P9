@@ -459,15 +459,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // under that reply's id after the reply was over, or opens a new id and is 200 characters or more (no first piece
   // of a stream is a whole long reply; a short one may be a new reply that says the same). A reply is over at its
   // turn's end, at the next message sent, at a compaction, or when another reply starts.
-  // DUP-1 (a)/(b): a short copy under a new id. Both on the server since 2026-11-13 (85 and 115 characters) came within
-  // half a second of their reply's last piece, in the same turn (no message sent between), next to a turn-end with no
-  // usage: claude-agent-acp's result fallback (v1/acp-agent.js shouldForwardResult) forwarding the reply it had streamed.
-  // So a piece that opens a new id and is exactly a reply of this turn streamed in pieces, within COPY_MS of that
-  // reply's last piece, is its copy at any length, before or after the turn-end. Only once per reply: the same words
-  // again after that are a reply of their own. A reply of an earlier turn is never matched this way, however short.
+  // DUP-1 (a)/(b): a short copy under a new id. claude-agent-acp's result fallback (v1/acp-agent.js shouldForwardResult)
+  // forwards the reply it had streamed under the result's uuid, where a streamed reply has the API's message id (msg_…).
+  // The server's ledger to 2026-11-26: 7 uuid pieces repeat a reply streamed under another id, all within half a second
+  // of its last piece (the two short ones 85 and 115 characters); 112 others (limit notices, command output) repeat none.
+  // So a piece under a uuid that is exactly a reply streamed under an id that is not one, within COPY_MS of its last
+  // piece, is its copy at any length, once per reply. Words said again under any other id are a reply of their own.
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
-  // reply, or of a short reply under a new id in a later turn or more than COPY_MS later is recorded.
-  const COPY_MS = 5000;
+  // reply, or of a short reply under an id that is not a uuid or more than COPY_MS later is recorded.
+  const COPY_MS = 5000, UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const repeated = (session, update) => {
     const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over, at = Date.now();
     if (update?.sessionUpdate === 'compaction_update') { if (open) open.over = true; return false; }
@@ -478,11 +478,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (typeof id !== 'string') { if (open) open.over = true; return false; }
     if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; open.at = at; } return false; }
     const same = (m) => !m.mixed && m.parts > 1 && m.text === text;
-    const fresh = text !== null && heard.find((m) => same(m) && m.id !== id && !m.copied && m.turn === (heard.turn ?? 0) && at - m.at < COPY_MS);
+    const fresh = text !== null && UUID.test(id) && heard.find((m) => !m.mixed && m.text === text && !UUID.test(m.id) && !m.copied && at - m.at < COPY_MS);
     if (fresh) fresh.copied = true;
     const copy = Boolean(fresh) || (text !== null && heard.some((m) => same(m) && (m.id === id || text.length >= 200)));
     // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
-    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, at, turn: heard.turn ?? 0, ...(text === null && { mixed: true }) });
+    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, at, ...(text === null && { mixed: true }) });
     if (heard.length > 20) heard.shift();
     return copy;
   };
@@ -542,11 +542,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const effort = data.pickers?.find?.((o) => o.category === 'thought_level');
       if (effort) kept.effort = effort.current;
     } else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
-    if (type === 'turn-end' || type === 'user') { // repeated(), below
-      const heard = live.get(conversation)?.heard;
-      if (heard?.length) heard.at(-1).over = true;
-      if (heard && type === 'user') heard.turn = (heard.turn ?? 0) + 1; // a message sent: what follows is another turn's
-    }
+    if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
     // O109: a prompt's user event is written before the agent has it, so drain settles those once the prompt was taken.
