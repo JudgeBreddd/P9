@@ -287,6 +287,7 @@ test('O269: a failed first read of the chats says why and tries again until the 
   await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, (route) => (reads.push(Date.now()), reads.length < 2) ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) }) : route.continue());
   await page.click(`[data-chat="${id}"]`);
   await page.locator('#events .empty', { hasText: 'Chat is unavailable (daemon-unavailable). Trying again' }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('[data-bar="chat"] [data-back]').isVisible(), true, 'O267b: a chat whose read failed has its Back button');
   // A chat made elsewhere redraws the open pane: the failure stays on screen and no read starts before the retry is due.
   await page.evaluate(() => fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf'), 'x-p9-op': crypto.randomUUID() }, body: JSON.stringify({ provider: 'claude' }) }));
   await page.waitForFunction(() => document.querySelectorAll('#conversation option').length >= 3, null, { timeout: 10000 });
@@ -319,14 +320,63 @@ test('O269: a chat reopened while its failed read waits for its retry reads agai
   });
   await page.click(`[data-chat="${id}"]`);
   while (!reads.length) await new Promise((resolve) => setTimeout(resolve, 50));
-  // Left while its read is on its way: the system Back (a chat still loading draws no Back button of its own).
-  await page.goBack(); await page.waitForSelector('#chatList', { state: 'visible' });
-  release();
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  await page.click(`[data-chat="${id}"]`); // reopened inside the retry's 5 s
-  await page.locator('#events .empty', { hasText: 'Chat is unavailable (daemon-unavailable). Trying again' }).waitFor({ timeout: 5000 });
+  // Left while its read is on its way, by its own Back (O267b: a chat still loading draws its bar).
+  await page.click('[data-bar="chat"] [data-back]'); await page.waitForSelector('#chatList', { state: 'visible' });
+  const refusedRead = page.waitForResponse((r) => new URL(r.url()).pathname === '/chat/events' && new URL(r.url()).searchParams.get('only') === id && r.status() === 503);
+  release(); await refusedRead;
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100))); // the page's own turn to take the answer
+  // O267b: the failure was taken while the list was open: reopened, the chat draws it at once (a failure not taken yet
+  // would draw Loading… and join the read still on its way, so the test would not be about a waiting retry).
+  const drawn = await page.evaluate((id) => { document.querySelector(`[data-chat="${id}"]`).click(); return document.querySelector('#events .empty')?.textContent; }, id); // reopened inside the retry's 5 s
+  assert.match(drawn ?? '', /Chat is unavailable \(daemon-unavailable\)\. Trying again/, 'the reopen drew the failure taken while the list was open');
   await page.waitForSelector('#events article:has-text("echo:hello reopen")', { timeout: 15000 });
   assert.equal(reads.length, 2, 'one refused read, then one retry');
+});
+
+// O267b (#543 round 4): a chat's read refused with a 401 arms no retry, but a redraw 5 s later read it again and said
+// "Trying again…" while the move to sign-in was slow. Signed out, it neither says that nor reads again.
+test('O267b: a chat whose read was refused as signed out does not read again on a later redraw', { timeout: 120000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const send = async (text) => { await page.fill('#prompt', text); await page.click('#composer button'); };
+  const id = await newChat(page, 'claude');
+  await send('hello signed out'); await page.waitForSelector('#events article:has-text("echo:hello signed out")', { timeout: 10000 });
+  await newChat(page, 'claude');
+  await send('other'); await page.waitForSelector('#events article:has-text("echo:other")', { timeout: 10000 });
+  await toList(page);
+  await page.reload();
+  await page.waitForFunction((id) => [...document.querySelectorAll('#conversation option')].some((o) => o.value === id), id, { timeout: 20000 });
+  await page.route((url) => url.pathname === '/login', (route) => route.fulfill({ status: 204 })); // the move to sign-in goes nowhere (a 204 keeps the page): as slow as can be
+  const reads = [];
+  await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, (route) => { reads.push(Date.now()); return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'signed-out' }) }); });
+  await page.click(`[data-chat="${id}"]`);
+  const line = () => page.evaluate(() => document.querySelector('#events .empty')?.textContent ?? '');
+  await until(async () => (await line()).startsWith('Chat is unavailable (signed-out).'), 'the signed-out line');
+  await new Promise((resolve) => setTimeout(resolve, 5500)); // past the retry's 5 s
+  const options = () => page.evaluate(() => document.querySelectorAll('#conversation option').length), before = await options();
+  await call(server, '/chat', { provider: 'claude' }); // a chat made elsewhere redraws the open pane
+  await until(async () => await options() > before, 'the list read again after the new chat');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(reads.length, 1, 'no second read after a 401');
+  assert.equal(await line(), 'Chat is unavailable (signed-out).', 'the failure line stays, with no "Trying again…"');
+});
+
+// O267b (CAT-2 round 13): the first read waited on GET /agents, so one that never answered held the chat list on Loading.
+// The list draws without it; when it lands, the open chat's Mode list is drawn again with the agent's modes.
+test('O267b: a GET /agents that never answers does not hold the chat list', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await page.fill('#prompt', 'hello agents'); await page.click('#composer button');
+  await page.waitForSelector('#events article:has-text("echo:hello agents")', { timeout: 10000 });
+  await toList(page);
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  await page.route((url) => url.pathname === '/agents', async (route) => { await held; return route.continue(); });
+  await page.reload();
+  await page.locator(`#chatList [data-chat="${id}"]`).first().waitFor({ timeout: 15000 });
+  await page.click(`#chatList [data-chat="${id}"]`);
+  await page.waitForSelector('#events article:has-text("echo:hello agents")', { timeout: 15000 });
+  assert.equal(await page.locator('#mode option').count(), 1, 'no modes before GET /agents answers');
+  release();
+  await page.waitForFunction(() => document.querySelectorAll('#mode option').length > 1, null, { timeout: 15000 });
 });
 
 for (const agent of ['claude', 'codex']) {

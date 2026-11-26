@@ -547,6 +547,22 @@ test('P18: a message held for the turn comes back to the box when the turn is st
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'keep me' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
   await shot(page, 'p18-kept');
 });
+// O267b (#540 review 16): a held message's files came back without it: the phone put back only its words.
+test('O267b: a message held for the turn comes back with its file when the turn is stopped', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await page.fill('#prompt', 'keep my file');
+  await page.setInputFiles('#attachInput', { name: 'dot.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') });
+  await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 10000 });
+  await page.click('#midTurn [data-when="queue"]');
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("keep my file")', { state: 'attached', timeout: 15000 });
+  assert.equal(await page.locator('#attached img').count(), 0, 'the file went with the held message');
+  await page.click('#composer button[type="submit"]'); // the empty box's Stop
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'keep my file' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
+  await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 5000 });
+});
 test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');

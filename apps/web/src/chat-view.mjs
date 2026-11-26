@@ -1191,6 +1191,12 @@ async function earlier(s) {
   if (r.status !== 200 || s.more !== from) return;
   const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
   for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
+  // O267b: updates whose call was not loaded yet (s.loose, oldest first: this page's, then the newer ones) go on the
+  // call's row here, before the repeat's below, so they apply in the order they came; the rest wait for an older page.
+  const loose = new Map(old.loose ?? []);
+  for (const [id, l] of s.loose ?? []) loose.set(id, [...(loose.get(id) ?? []), ...l]);
+  for (const e of old.events) { const l = e.t === 'tool' && loose.get(e.id); if (!l) continue; loose.delete(e.id); for (const d of l) toolUpdate(e, d); e.ups = [...(e.ups ?? []), ...l]; }
+  s.loose = loose;
   // O266: a call sent again after a compaction can have its first on this page and its second below: one row, where it
   // first ran. The newer row came from the repeated call, which the live rules skip, so only its own updates (ups) go on
   // the older row, by the live rule (toolUpdate); what the repeated call alone carried is not added.
@@ -1278,8 +1284,13 @@ function applyChat(ev, into) {
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
         else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
       } else if (d.sessionUpdate === 'tool_call' && d.toolCallId != null && s.events.some(e => e.t === 'tool' && e.id === d.toolCallId)) { /* O266: after a compaction the adapter sends earlier calls again, pending, each followed by its update: the row it has is kept, not drawn twice and left pending */ }
-      else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } } // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag
+      else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool);
+        const l = s.loose?.get(d.toolCallId); if (l) { s.loose.delete(d.toolCallId); for (const u of l) toolUpdate(tool, u); tool.ups = l; } }
+      // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag. O267b: one whose
+      // call is not loaded (above the chat's newest blocks, or not drawn yet) is kept (s.loose) for when its row is drawn:
+      // the row's own tool_call (a repeat after a compaction too, whose updates Show earlier carries up) or Show earlier.
+      // ponytail: kept while the chat is open, as a row's ups are; a call that never loads keeps its updates in memory.
+      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } else if (d.toolCallId != null) { const l = s.loose ??= new Map(); if (!l.has(d.toolCallId)) l.set(d.toolCallId, []); upKept(l.get(d.toolCallId), d); } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       // O126: the agent's own title only on a chat the user never named. O172: nor on a sprint chat's role name (the list's named, sprintFields).
       else if (d.sessionUpdate === 'session_info_update') { if (!s.named && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
