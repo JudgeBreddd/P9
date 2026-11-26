@@ -1031,7 +1031,11 @@ async function listen() {
       await fetchEvents(8000);
       if (state.events.length === held) continue;
       // O267 round 4: a chat whose turn ended can take its queued message now, not after the refusal's wait.
-      for (const event of state.events.slice(held)) if (['turn-end', 'interrupted', 'exited', 'stopped'].includes(String(event.type))) retryAt.delete(String(event.conversation));
+      // Review 5: it wakes the queue itself (a redraw on the list or a loading chat does not), and counts the end (ends), so
+      // a refusal answered after it does not wait out a new backoff.
+      let woke = false;
+      for (const event of state.events.slice(held)) if (['turn-end', 'interrupted', 'exited', 'stopped'].includes(String(event.type))) { const c = String(event.conversation); retryAt.delete(c); ends.set(c, (ends.get(c) ?? 0) + 1); woke = true; }
+      if (woke) void drain();
       // A chat made, used, stopped or closed anywhere moves in the picker.
       // A stub's row reads its state from the list, so a turn's end or a question asked or answered lists again too.
       if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered', 'project', 'renamed', 'archived', 'deleted'].includes(String(event.type)))) { const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; await loadPhoneProjects(request); fillPicker(); }
@@ -1167,11 +1171,13 @@ function tickQueue(on: boolean) {
 // Back from a hidden tab the age is current at once, not up to a tick late.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && queueTick) renderQueue(); });
 one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
-let draining = false;
+let draining = false, rerun = false; // rerun: a wake while a drain ran (a turn's end) runs it once more after
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
 const backoff = new Map<string, number>(); // per chat: the last wait after a refusal; cleared by an answer that is final
+const ends = new Map<string, number>(); // per chat: turn ends seen (listen()), so drain() knows one came during its request
 async function drain() {
-  if (draining || !navigator.onLine) return;
+  if (draining) { rerun = true; return; }
+  if (!navigator.onLine) return;
   draining = true;
   let sent = false;
   try {
@@ -1179,7 +1185,7 @@ async function drain() {
       const id = String(chat.id);
       if (Date.now() < (retryAt.get(id) ?? 0)) continue;
       for (let next = queued(id)[0]; next && !asking(id); next = queued(id)[0]) {
-        const { qid, pick, spends, ...body } = next;
+        const { qid, pick, spends, ...body } = next, seen = ends.get(id);
         const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' }, 0, qid); // O267: its qid is its operation, across reloads
         // O62: refused because the turn is still ending (a Stop just pressed: the daemon holds nothing for a turn that is
         // stopping). The message stays queued and goes a moment later; it used to come back into the box as "Not sent".
@@ -1189,6 +1195,7 @@ async function drain() {
           // Round 4: the new ID is used only once storage holds it (must), so a reload never sends under one it lost; refused,
           // the message keeps its old ID, whose retry is the daemon's stored refusal again, sending nothing.
           if (result.body.error === 'turn-running' && !keepQueue(id, queued(id).map((item) => item.qid === qid ? { ...item, qid: crypto.randomUUID() } : item), true) && id === openId) note('Still queued: this phone\'s storage is full, so it cannot try again yet.');
+          if (ends.get(id) !== seen) continue; // the turn ended while this was asked: try again now, not after a wait
           // Each fresh ID is one more of the phone's operations per hour: waits double from 2 s to 60 s while the turn runs.
           const wait = Math.min(60000, (backoff.get(id) ?? 1000) * 2);
           backoff.set(id, wait); retryAt.set(id, Date.now() + wait); setTimeout(() => void drain(), wait + 100); break;
@@ -1203,6 +1210,7 @@ async function drain() {
   } catch { /* a lost request keeps its message and its ID; the next drain sends it again */ }
   finally { draining = false; }
   if (sent) { await fetchEvents(); render(); } else renderQueue();
+  if (rerun) { rerun = false; void drain(); }
 }
 one<HTMLElement>('#queued').onclick = async (event) => {
   const hold = (event.target as Element).closest<HTMLButtonElement>('button[data-unhold]');
