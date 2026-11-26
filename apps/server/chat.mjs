@@ -459,6 +459,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // under that reply's id after the reply was over, or opens a new id and is 200 characters or more (no first piece
   // of a stream is a whole long reply; a short one may be a new reply that says the same). A reply is over at its
   // turn's end, at the next message sent, at a compaction, or when another reply starts.
+  // DUP-1 (a)/(b), claude-agent-acp 0.106.0 (v1/acp-agent.js, shouldForwardResult): when a turn's result reports no
+  // output tokens and the adapter thinks the turn showed no text, it forwards the result text, the reply already
+  // streamed, under the result's own id. So the first new piece after a turn-end with no output tokens is a copy at any
+  // length (empty, cleared by the next message or the next new piece).
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
   // reply, or of a short reply under a new id is recorded.
   const repeated = (session, update) => {
@@ -470,7 +474,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const id = update.messageId, text = typeof update.content?.text === 'string' ? update.content.text : null;
     if (typeof id !== 'string') { if (open) open.over = true; return false; }
     if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; } return false; }
-    const copy = text !== null && heard.some((m) => !m.mixed && m.parts > 1 && m.text === text && (m.id === id || text.length >= 200));
+    const copy = text !== null && heard.some((m) => !m.mixed && m.parts > 1 && m.text === text && (m.id === id || text.length >= 200 || heard.empty));
+    heard.empty = false;
     // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
     if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, ...(text === null && { mixed: true }) });
     if (heard.length > 20) heard.shift();
@@ -532,7 +537,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const effort = data.pickers?.find?.((o) => o.category === 'thought_level');
       if (effort) kept.effort = effort.current;
     } else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
-    if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
+    if (type === 'turn-end' || type === 'user') { // repeated(), below
+      const heard = live.get(conversation)?.heard;
+      if (heard?.length) { heard.at(-1).over = true; heard.empty = type === 'turn-end' && data.usage?.outputTokens === 0; }
+    }
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
     // O109: a prompt's user event is written before the agent has it, so drain settles those once the prompt was taken.
