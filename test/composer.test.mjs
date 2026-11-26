@@ -759,6 +759,8 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
       const n = globalThis.o267.filter(([x]) => x === text).length;
       if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
       if (text === 'landed' && n >= 3) return h(e, ...args);
+      // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at 60 s.
+      if (text === 'lost') { globalThis.o267lost ??= Date.now(); if (Date.now() - globalThis.o267lost > 50000) await new Promise(() => {}); }
       return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
   const rows = pane.locator('.queue [data-held]');
   await send('tools 2');
@@ -790,6 +792,7 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   await page.waitForTimeout(5000);
   assert.equal(await composer.inputValue(), '', 'not back in the box while P9 may still be running it');
   await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once P9 never answered', 75000);
+  assert.ok(Date.now() - (await app.evaluate(() => globalThis.o267lost)) < 66000, 'by the 60 s deadline, though its last try stalled');
   await page.locator('#toasts .toast', { hasText: 'Still not sure your message arrived' }).waitFor({ timeout: 5000 });
   assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'lost').map(([, op]) => op))).size, 1, 'one operation throughout');
   assert.equal((await users(instance, id)).filter((u) => u === 'lost').length, 0);

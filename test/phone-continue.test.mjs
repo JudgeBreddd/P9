@@ -348,6 +348,28 @@ for (const agent of ['claude', 'codex']) {
 // O37 (threat model row 18): the phone colours a reply's complete code blocks too, and leaves an unknown language plain.
 // phone-2 (the plan itself never showed, only the approval buttons): Claude's plan call arrives
 // empty and its plan comes after it, in the update and in the approval. The phone shows the plan before any choice is tapped.
+// O267 round 4: the daemon keeps an operation's answer and replays it to a retry under the same ID, so a queued message
+// refused with turn-running takes a new ID for its next try; under the old one it would get the refusal back for ever.
+test('O267: a queued message refused with turn-running tries again under a new operation ID, and goes', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.fill('#prompt', 'after the turn'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  const ops = [];
+  await page.route('**/chat/*/prompt', async (route) => {
+    ops.push(route.request().headers()['x-p9-op']);
+    if (ops.length === 1) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    else await route.continue();
+  });
+  await setOnline(page, true);
+  await page.waitForFunction((key) => !localStorage.getItem(key) || localStorage.getItem(key) === '[]', 'p9-queue:' + id, { timeout: 15000 });
+  assert.equal(ops.length, 2, 'one refused try, then one that went: ' + JSON.stringify(ops));
+  assert.ok(ops[0] && ops[1] && ops[0] !== ops[1], 'the second try has its own operation ID: ' + JSON.stringify(ops));
+  await page.unroute('**/chat/*/prompt');
+});
+
 test('phone-2: the plan approval shows the plan above its choices, and the tool row opens it after', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
