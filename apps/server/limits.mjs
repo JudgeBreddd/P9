@@ -6,6 +6,7 @@
 import { open, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { CATALOG } from './agents.mjs';
+import { paceOf } from '../../packages/protocol/index.mjs';
 
 const TAIL = 512 * 1024; // token_count events come every turn, so the last one is near the end of a rollout file
 const seconds = (value) => typeof value === 'string' ? Date.parse(value) / 1000 : value > 1e12 ? value / 1000 : value;
@@ -140,14 +141,9 @@ export async function planLimits({ home, polled = {}, live = {}, catalog = CATAL
   return Object.fromEntries(await Promise.all(catalog.map(async (agent) => [agent.id, await one(agent)])));
 }
 
-// USE-1: the pace mark of one window, as the Usage page words it (apps/web/src/helpers.mjs paceOf; a test keeps the two
-// equal): 'ahead' over 5 points past even use, 'headroom' under 5 below it, else 'on'; null with no reset ahead.
-export function paceState(w, now = Date.now()) {
-  const len = w?.windowMins * 60000;
-  if (!w || !Number.isFinite(w.usedPercent) || !w.resetsAt || w.resetsAt <= now || !(len > 0)) return null;
-  const gap = w.usedPercent - Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)) * 100;
-  return gap > 5 ? 'ahead' : gap < -5 ? 'headroom' : 'on';
-}
+// USE-1: the pace mark of one window, the Usage page's own (packages/protocol paceOf, CAT-2) on the window's own length;
+// null with no reset ahead or no length.
+export const paceState = (w, now = Date.now()) => paceOf(w, 0, now)?.state ?? null;
 
 // USE-1: the plan_usage tool's answer from /usage's limits: one key per catalog agent (null when nothing is recorded or it
 // is signed out), each window with its pace, and ageMs, how old the reading is. Numbers and P9's own words only.

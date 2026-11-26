@@ -4,7 +4,7 @@ import { esc, limitItems, profileLines, FILE_IMAGE, copy, fileImageSrc, fileImag
 import { editItems } from './mission-files.mjs';
 import { freeName, templateWords } from './onboarding.mjs';
 import { checklistHtml, checklistAnswer, checklistAction } from './checklist.mjs';
-import { partOrder, PARTS } from '../../../packages/protocol/index.mjs';
+import { partOrder, PARTS, WIDGETS } from '../../../packages/protocol/index.mjs';
 import { mountCard } from './artifact.mjs';
 
 export function installMission(outer) {
@@ -212,7 +212,7 @@ async function runLive(m, id) {
 // written. A fresh install has neither, so it gets none.
 // A section names a panel with widget (the section is the panel) or widgets (the panel sits inside the section, W-I).
 // idea, sprint and edit are P9's built-in tiles (W-D), not panels: naming one decides the top row's tiles, not the panels.
-const TILE_WIDGETS = ['idea', 'sprint', 'edit'], panelW = w => !TILE_WIDGETS.includes(w);
+const TILE_WIDGETS = WIDGETS.filter(w => w.tile).map(w => w.id), panelW = w => !TILE_WIDGETS.includes(w);
 const namesPanel = s => (s.widget && panelW(s.widget)) || s.widgets?.some(panelW);
 const namesTile = () => (outer.M.space || []).some(s => TILE_WIDGETS.includes(s.widget) || s.widgets?.some(w => !panelW(w)));
 const widgetOn = w => outer.sampleView || outer.M.space.some(s => s.widget === w || s.widgets?.includes(w)) || (outer.M.icmFiles && !outer.M.space.some(namesPanel));
@@ -298,7 +298,8 @@ const placedHtml = s => s.widget === 'waiting' ? NEEDS : s.widget === 'usage' ||
   : `<section class="mpanel" data-sec="${esc(s.title)}" data-key="${esc(s.id)}"><button class="phead" data-group="${esc(s.title)}" data-key="${esc(s.id)}"><h4>${esc(s.title)}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 // P9's built-in tiles (W-D). Named by a section (s), each draws there under the section's title; idea shows because the file asks for it,
 // sprint only while there is a sprint status file or a folder sprint's change waiting (O233). Unnamed, the three keep their own titles and today's rules.
-const BUILTIN = { idea: '+ New idea', sprint: 'Sprint status', edit: 'Edit names and icons' };
+const BUILTIN = Object.fromEntries(WIDGETS.filter(w => w.tile).map(w => [w.id, w.label])); // packages/protocol WIDGETS (CAT-2)
+const WIDGET_LABEL = Object.fromEntries(WIDGETS.map(w => [w.id, w.label])); // review 13: every widget's heading
 const builtinTile = (w, s) => !outer.live.on || (w === 'idea' && !s && !icmSpace()) || (w === 'sprint' && !outer.SP.on && !outer.SP.waiting) ? ''
   : w === 'idea' ? `<button class="tile" data-idea><span></span><b>${esc(s?.title ?? BUILTIN.idea)}</b></button>`
   : w === 'sprint' ? `<button class="tile" data-sprint="${esc(s?.id ?? '')}"><span class="lvl" data-l="${outer.SP.data || !outer.SP.on ? 'ok' : 'bad'}"></span><b>${esc(s?.title ?? BUILTIN.sprint)}</b><span class="n">${outer.SP.data ? outer.SP.data.chunks.filter(c => c.state === 'merged').length + '/' + outer.SP.data.chunks.length : outer.SP.on ? '!' : outer.SP.waiting + ' to apply'}</span></button>`
@@ -766,7 +767,7 @@ function sectionBody(m, body, g, o) {
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
     checklists: (sp?.checklists || []).map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join(''),
     // P9's own panels inside the section (W-I), filled by fillWidgets below.
-    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}" data-wkey="${esc(g)}"><h3>${esc(w === 'waiting' ? 'Waiting on you' : BUILTIN[w] ?? outer.wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
+    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}" data-wkey="${esc(g)}"><h3>${esc(WIDGET_LABEL[w] ?? w)}</h3><div class="wbody"></div></section>`).join(''),
   };
   // An empty part draws nothing and does not split its neighbours; the list of rows is still drawn once, empty, when no part has a row (as before).
   const boxes = [], rows = Object.keys(part).some(k => SECTION_BOX[k] === 'mlist' && part[k]);

@@ -1,6 +1,7 @@
 import { Marked } from 'marked';
 import { artifactInfo, artifactChip } from './artifact.mjs';
 import { codePieces } from './code-colours.mjs';
+import { paceOf } from '../../../packages/protocol/index.mjs';
 /* Popover helper: toggles [hidden] on a panel anchored under a button; closes on outside click / Esc. */
 export const popover = (btn, panel, onOpen, signal) => {
   const open = () => { document.querySelectorAll('.pop').forEach(p => { if (p !== panel) p.hidden = true; }); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); onOpen && onOpen(); };
@@ -106,18 +107,9 @@ export const warnHtml = (raw, attrs = '') => {
   const [, line, say] = WARNINGS.find(([re]) => re.test(raw)) ?? [null, 'Warning: ' + raw, "The agent's program printed this warning. Your reply is not affected unless the reply itself says so."];
   return `<details class="agent-warn"${attrs}><summary><span>${esc(line)}</span><span class="i" title="What this means">i</span></summary><p>${esc(say)}</p>${line.startsWith('Warning: ') ? `<code>${esc(raw)}</code>` : ''}</details>`;
 };
-// The pace mark (A3). A plan window that is used evenly reaches 100% exactly when it resets, so "how far through the window
-// is the clock" is also "how much should be used by now". elapsed: that share, 0 to 1. gap: used % minus that, in points.
-// More than 5 points over is 'ahead', more than 5 under is 'headroom' (the share used against the share of time gone;
-// whether it runs out is the daemon's projection).
-// null with no reset time or one already passed: there is no window to measure against.
+// The pace mark (A3): paceOf is packages/protocol's, the same function the plan_usage tool and the usage history use (CAT-2).
+export { paceOf };
 export const WINDOWS = [['fiveHour', 'Session', 300], ['sevenDay', 'Weekly', 10080]];
-export function paceOf(w, mins, now = Date.now()) {
-  const len = (w?.windowMins || mins) * 60000;
-  if (!w || !Number.isFinite(w.usedPercent) || !w.resetsAt || w.resetsAt <= now || !(len > 0)) return null;
-  const elapsed = Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)), gap = w.usedPercent - elapsed * 100;
-  return { elapsed, gap, state: gap > 5 ? 'ahead' : gap < -5 ? 'headroom' : 'on' };
-}
 export const PACE = { ahead: ['Over pace', 'Using it faster than the window passes'], on: ['On pace', 'Using it about as fast as the window passes'], headroom: ['Under pace', 'Using it slower than the window passes'] };
 // "1h 42m", "3d 4h", "12m": the time left to a reset.
 export const countdown = (ms) => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m % 60 + 'm' : m + 'm'; };
@@ -176,10 +168,13 @@ export const mdReply = new Marked({ gfm: true, breaks: true, async: false, rende
 // P19: a reply's code blocks get a Copy button (desktop and phone); copy() says Copied or why not on the button.
 export const copyCode = html => html.replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code');
 export const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copied', e => { btn.title = String(e?.message || e); return 'Copy failed'; }).then(said => { const was = btn.textContent; btn.textContent = said; btn.dataset.said = said; setTimeout(() => { btn.textContent = was; delete btn.dataset.said; }, 2000); });
-// Each agent's own mode names (the daemon's allowlist, chat.mjs MODES) and the two loosened ones, which ask first in red
-// (threat model row 25). Desktop and phone (P6).
-export const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
-export const LOOSE = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
+// CAT-2: each agent's mode names in the catalog's order (the daemon's allowlist, chat.mjs MODES), its loosened ones, which ask
+// first in red (threat model row 25, tier 4), and the mode a new chat starts in at first (auto). All three come from GET /agents
+// (security.mjs fillAgents); the desktop starts from its own catalog over the preload, the phone's are empty until it answers.
+// Desktop and phone (P6).
+export const modes = {}, LOOSE = {}, AUTO = {};
+// The red warning's words for the two built-in loosened modes, by name; any other tier-4 mode gets a line naming its agent.
+export const LOOSE_SAID = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
   'Full access': 'Codex runs without a sandbox: it can read and change any file on this computer and use the network, without asking first.' };
 // Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
 // built here; a block's uri is never used. Desktop and phone (P9). ponytail: data: strings are re-diffed each render;

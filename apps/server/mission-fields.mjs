@@ -6,7 +6,7 @@ import obsidian from './templates/obsidian.json' with { type: 'json' };
 import homelab from './templates/homelab.json' with { type: 'json' };
 import blank from './templates/blank.json' with { type: 'json' };
 // A section's parts, in the order they draw when its order field names none; the page and the phone read the same list.
-import { PARTS } from '../../packages/protocol/index.mjs';
+import { PARTS, WIDGETS as WIDGET_LIST } from '../../packages/protocol/index.mjs';
 
 export const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export function relativePath(value) {
@@ -201,8 +201,8 @@ export function dataShape(value) {
 }
 // A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
-// The last three are P9's built-in tiles (W-D): + New idea, Sprint status, Edit names and icons.
-export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications', 'primary', 'idea', 'sprint', 'edit'];
+// The widget ids, from packages/protocol's WIDGETS (CAT-2); its tile ones are P9's built-in tiles (W-D).
+export const WIDGETS = WIDGET_LIST.map((w) => w.id);
 // Where a section draws on the desktop page: a top-row tile that opens its window, or open in one of up to six columns (W-G).
 export const PLACES = ['tile', 'col1', 'col2', 'col3', 'col4', 'col5', 'col6'];
 export const SECTION = {

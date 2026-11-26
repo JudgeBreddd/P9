@@ -7,12 +7,12 @@ import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs'; import { shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
-import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillLoose } from './security.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents, freeLocked, modesKnown, modesNote, changeFree } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords, previewCard, freeName } from './onboarding.mjs';
-import { FILE_PROTECTION_RISK, partOrder } from '../../../packages/protocol/index.mjs';
+import { FILE_PROTECTION_RISK, partOrder, WIDGETS } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 import { pressHold } from './press-hold.mjs';
@@ -135,10 +135,11 @@ function csrfToken() {
   } catch {}
   return null;
 }
-// CAT-1f: each agent's name and modes (helpers modes), from GET /agents once it answers; until then the two built in.
+// CAT-1f: each agent's name, from GET /agents once it answers; until then the two built in. Its modes are the answer's alone
+// (fillAgents, CAT-2).
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
-const loadAgents = () => request('/agents').then(({ agents }) => { for (const t of [names, modes]) for (const k in t) delete (t as Json)[k];
-  for (const a of agents) names[a.id] = a.short || a.name, (modes as Json)[a.id] = a.modes.map((m: Json) => m.name); fillLoose(agents); }, () => {});
+const loadAgents = () => request('/agents').then(({ agents }) => { for (const k in names) delete names[k];
+  for (const a of agents) names[a.id] = a.short || a.name; fillAgents(agents); }, () => {});
 // A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
 const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
@@ -995,7 +996,8 @@ async function madeChat(agent: string, extra: Json) {
   if (result.status !== 201) return null;
   // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
   const last = localStorage.getItem('p9-mode:' + agent);
-  if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
+  // A mode the catalog does not list (or not read yet) is not carried: it cannot be checked for a warning (CAT-2).
+  if (last && (modes as Record<string, string[]>)[agent]?.includes(last) && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
   await loadChat();
   return String(result.body.conversation);
 }
@@ -1747,7 +1749,7 @@ const queueBy = () => { try { return localStorage.getItem('p9-queue-sort') === '
 const sortQueue = (items: Waiting[]) => items.sort(queueBy() === 'project' ? (a, b) => a.name.localeCompare(b.name) : (a, b) => (b.updated || 0) - (a.updated || 0));
 let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: string[]; space?: { id: string; widget?: string; widgets?: string[]; refs?: { id: string; kind?: string }[] }[] } = { queue: [], scripts: [] };
 // P9's built-in tiles a section may name (W-D); naming any decides which show. The phone has no editor, so edit is the desktop's alone.
-const TILE_WIDGETS = ['idea', 'sprint', 'edit'];
+const TILE_WIDGETS = WIDGETS.filter((w) => w.tile).map((w) => w.id); // packages/protocol WIDGETS (CAT-2)
 const naming = (s: { widget?: string; widgets?: string[] }, w: string) => s.widget === w || !!s.widgets?.includes(w);
 const checklists: Record<string, unknown> = {};
 // O67: the closed row's line, as a folder row has its count: what the list holds, once it was read.
@@ -1876,8 +1878,10 @@ async function loadMission(cached = false) {
     // The phone's own order of a section's parts (information first, its buttons last). A widget is a row opening the phone's own window
     // for it (W-I on the phone); one the phone has none for says where it is.
     const PHONE_PARTS = ['text', 'quick_note', 'notes', 'logs', 'data', 'cards', 'links', 'folders', 'checklists', 'refs', 'widgets', 'buttons'];
-    const PHONE_WIDGET: Record<string, [string, string]> = { waiting: ['queue', 'Waiting on you'], primary: ['primary', 'Main project'], idea: ['idea', '+ New idea'], sprint: ['sprint', 'Sprint status'], apps: ['pages', 'Apps and pages'] };
-    const widgetRow = (w: string) => PHONE_WIDGET[w] ? `<p class="tile-row" data-widget="${escape(w)}"><button type="button" class="link" data-open="${PHONE_WIDGET[w][0]}">${escape(PHONE_WIDGET[w][1])}</button></p>`
+    // The phone window each widget opens; its words are packages/protocol WIDGETS' labels (CAT-2).
+    const PHONE_WIDGET: Record<string, string> = { waiting: 'queue', primary: 'primary', idea: 'idea', sprint: 'sprint', apps: 'pages' };
+    const widgetLabel = (w: string) => WIDGETS.find((x) => x.id === w)?.label ?? w;
+    const widgetRow = (w: string) => PHONE_WIDGET[w] ? `<p class="tile-row" data-widget="${escape(w)}"><button type="button" class="link" data-open="${PHONE_WIDGET[w]}">${escape(widgetLabel(w))}</button></p>`
       : `<p class="muted tile-row" data-widget="${escape(w)}">${w === 'usage' ? 'Usage has its own tab.' : w === 'notifications' ? 'Notifications show on the desktop.' : 'Edit names and icons on the desktop.'}</p>`;
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
     for (const space of (data.space ?? []) as { id: string; title: string; text: string; widget?: string; widgets?: string[]; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
@@ -2587,6 +2591,11 @@ type Build = { available: boolean; running: boolean } | null;
 const sec: { lock: boolean | null; protect: boolean | null; settings: Record<string, unknown> | null; build: Build } = { lock: null, protect: null, settings: null, build: null };
 async function openSettings() {
   openSheet('Settings', '<div id="phoneSettings" class="stack"><p class="muted">Loading…</p></div>');
+  // Review 12: the agents' modes are read again too, so a failed first read does not leave Unrestricted waiting for good.
+  // Review 13: on their own, so a hung read leaves only the switches that need them disabled; when they land the sheet is
+  // drawn again, unless something in it has focus (a Mission row being typed in; the next draw then shows them).
+  void loadAgents().then(() => { const box = document.getElementById('phoneSettings');
+    if (box?.querySelector('#setFree') && !box.contains(document.activeElement)) drawSettings(box.querySelector('#secNote')?.textContent ?? ''); });
   const [build, lock, protect, files] = await Promise.all(['/rebuild', '/agent-lock', '/file-protection', '/setup/settings'].map((path) => request(path).catch(() => null)));
   Object.assign(sec, { build, lock: lock?.on ?? null, protect: protect?.on ?? null, settings: files?.settings ?? null });
   drawSettings();
@@ -2598,8 +2607,9 @@ function drawSettings(note = '') {
   box.innerHTML = '<h2 class="eyebrow">Security settings</h2>'
     + toggle('setLock', lock === null ? [SECURITY.lock[0], SECURITY.unknown] : SECURITY.lock, lock === true, lock === null)
     + toggle('setProtect', protect === null ? [SECURITY.protect[0], SECURITY.unknown] : protect ? SECURITY.protect : [SECURITY.protect[0], SECURITY.protectOff], protect !== false, protect === null)
-    + toggle('setWarn', SECURITY.warn, warnsLoose())
-    + toggle('setFree', SECURITY.unrestricted, unrestricted(lock, protect, START), lock === null || protect === null)
+    // Review 13: with no loosened mode known, the warnings have nothing to change: disabled, as Unrestricted.
+    + toggle('setWarn', modesKnown() ? SECURITY.warn : [SECURITY.warn[0], modesNote()], warnsLoose(), !modesKnown())
+    + toggle('setFree', modesKnown() ? SECURITY.unrestricted : [SECURITY.unrestricted[0], modesNote()], unrestricted(lock, protect, START), freeLocked(lock, protect))
     + `<p class="muted" id="secNote" role="status">${escape(note)}</p>`
     + (settings ? '<h2 class="eyebrow">Mission Control files</h2>' + missionKeys().map(([k, name]) => `<label class="mission-file"><strong>${escape(name)}</strong>`
       + (k === 'notes_roots' ? `<textarea class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${escape(missionShown(k, settings[k]))}</textarea>`
@@ -2630,13 +2640,15 @@ async function setSecurity(change: { lock?: boolean; protect?: boolean }) {
 }
 // Unrestricted mode: one confirm, then every restriction off; off puts the defaults back (the lock stays off).
 async function setFree(on: boolean) {
+  if (on && freeLocked(sec.lock, sec.protect)) return drawSettings(); // review 12: no loosest mode known, nothing changes
   if (on && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + '\n\n' + FILE_PROTECTION_RISK)) return drawSettings();
-  for (const [path, key, want] of [['/file-protection', 'protect', !on], ['/agent-lock', 'lock', false]] as const) {
-    if (sec[key] === want || (key === 'lock' && !on)) continue;
-    const result = await sent(path, { on: want });
-    if (result.status !== 200) return drawSettings('Not changed: ' + said(result));
-    sec[key] = result.body.on as boolean;
-  }
+  // Review 14: the daemon's two settings change as one (security.mjs changeFree): anything refused, or the modes gone once
+  // they are written, puts both back first and says so.
+  const write = (key: string, want: boolean) => sent(key === 'protect' ? '/file-protection' : '/agent-lock', { on: want })
+    .then((result) => result.status === 200 ? result.body : { error: said(result) });
+  const { ok, state: now, note } = await changeFree(on, { lock: sec.lock, protect: sec.protect }, write);
+  Object.assign(sec, { lock: now.lock, protect: now.protect });
+  if (!ok) return drawSettings(note);
   setWarnsLoose(!on); setStarts(on, START);
   drawSettings();
 }

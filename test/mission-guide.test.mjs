@@ -5,7 +5,7 @@ import { GUIDE } from '../apps/server/templates/guide.mjs';
 import { CARD, SECTION, describeMission } from '../apps/server/mission-fields.mjs';
 
 test('Mission guide: built-in panels, registry refs, the card file step, and ask instead of skip', { timeout: 5000 }, () => {
-  assert.match(GUIDE, /Waiting on you, Usage, Apps and pages or Notifications\), give add_section's set a widget\. For a section already there, call update_section with widget/);
+  assert.match(GUIDE, /built-in panels or tiles, give add_section's set a widget: waiting \(Waiting on you\), usage \(Usage\), apps \(Apps and pages\), notifications \(Notifications\)[^.]*\. For a section already there, call update_section with widget/);
   assert.match(GUIDE, /folders, links and checklists with set_section_items/);
   assert.match(GUIDE, /call update_section with refs and the button's ID\. Never copy its command/);
   assert.match(GUIDE, /write a workspace \.html file with its own file tool \(you approve the write\)\. Then add it with set_section_items cards\. The \.html file stays in the workspace even if a scratch space is dropped/);
