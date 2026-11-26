@@ -492,13 +492,13 @@ const connection = acp.connectAgent(stream, {
     // DUP-1 (a)/(b): claude-agent-acp's result fallback. A turn's result that reports no output tokens ends it, and the
     // adapter forwards the result text, the reply the agent already streamed, whole under a new id: after the turn-end
     // (twice short, as the server's ledger shows it) or before it (twice early, as the adapter's source orders it). Then
-    // the same words once more under S2, a reply of their own, and the marker 'twice: end'. say done: a turn whose whole
-    // reply is one short piece that an earlier turn also said.
-    if (text === 'twice short' || text === 'twice early' || text === 'say done') {
+    // the same words once more under S2, a reply of their own, and the marker 'twice: end'. said again: the agent says its
+    // streamed words again at once as a new reply of its own (the API's own kind of id, not the result's uuid).
+    if (text === 'twice short' || text === 'twice early' || text === 'said again') {
       const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
       const copy = () => piece('5b0e5d55-ffc2-4f6b-9a39-2d0c0f3c6b11', 'Done, merged.');
       const rest = async () => { await piece('S2', 'Done, merged.'); await piece('M', 'twice: end'); };
-      if (text === 'say done') { await piece('D1', 'Done, merged.'); await piece('M2', 'twice: end'); }
+      if (text === 'said again') { await piece('S1', 'Done, '); await piece('S1', 'merged.'); await piece('R1', 'Done, merged.'); await piece('M2', 'twice: end'); }
       else {
         await piece('S1', 'Done, '); await piece('S1', 'merged.');
         if (text === 'twice early') { await copy(); setTimeout(rest, 300); } else setTimeout(async () => { await copy(); await rest(); }, 300);

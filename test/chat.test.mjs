@@ -99,9 +99,10 @@ test('a reply the agent sends again after its turn ended is recorded once', asyn
 });
 
 // DUP-1 (a)/(b): a reply sent again whole under a new id, however short, right after it streamed in the same turn, is
-// recorded once, whether it comes after the turn-end or before it. Only that first piece is the copy: the same words once
-// more under S2 are a reply of their own. A short reply of a later turn that an earlier one also said is kept.
-test('a short reply sent again in its own turn is recorded once; the same words in a later turn are kept', async (t) => {
+// recorded once, whether it comes after the turn-end or before it. Only the adapter's copy (the result's uuid) is taken:
+// the same words once more under S2 are a reply of their own, and so are words said again at once under a new id of the
+// reply's own kind (review 2: "All checks passed." streamed, then a final reply that opens with it).
+test('a short reply the adapter sends again is recorded once; the same words said again as a reply are kept', async (t) => {
   const instance = await start(t);
   const id = await create(instance);
   const ids = (events) => events.filter(said(id, '')).map((event) => [event.data.messageId, event.data.content.text]);
@@ -112,9 +113,9 @@ test('a short reply sent again in its own turn is recorded once; the same words 
     assert.deepEqual(ids(end.seen), [['S1', 'Done, '], ['S1', 'merged.'], ['S2', 'Done, merged.'], ['M', 'twice: end']], mode + ': the copy was recorded, or S2 was not');
     from = end.cursor;
   }
-  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'say done' });
-  const later = await until(instance, said(id, 'twice: end'), from);
-  assert.deepEqual(ids(later.seen), [['D1', 'Done, merged.'], ['M2', 'twice: end']], 'a later turn\'s short reply was taken for a copy');
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'said again' });
+  const again = await until(instance, said(id, 'twice: end'), from);
+  assert.deepEqual(ids(again.seen), [['S1', 'Done, '], ['S1', 'merged.'], ['R1', 'Done, merged.'], ['M2', 'twice: end']], 'a reply that said the same words at once was taken for a copy');
 });
 
 // phone-1: "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
