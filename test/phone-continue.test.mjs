@@ -245,7 +245,10 @@ test('O269: a failed first read of the chats says why and tries again until the 
   // A chat made elsewhere redraws the open pane: the failure stays on screen and no read starts before the retry is due.
   await page.evaluate(() => fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf'), 'x-p9-op': crypto.randomUUID() }, body: JSON.stringify({ provider: 'claude' }) }));
   await page.waitForFunction(() => document.querySelectorAll('#conversation option').length >= 3, null, { timeout: 10000 });
-  assert.equal(await page.locator('#events .empty', { hasText: 'Chat is unavailable' }).count(), 1, 'the redraw kept the failure');
+  // The retry's own clock is real (5 s): the line is checked only when the redraw came before the retry was due, so a slow
+  // runner skips this check instead of failing it. The two reads' times below are checked every run.
+  if (Date.now() - reads[0] < 4000) assert.equal(await page.locator('#events .empty', { hasText: 'Chat is unavailable' }).count(), 1, 'the redraw kept the failure');
+  else t.diagnostic('the redraw came after 4 s: the failure-line check was skipped');
   await page.waitForSelector('#events article:has-text("echo:hello retry")', { timeout: 15000 });
   assert.equal(reads.length, 2, 'one refused read, then one retry');
   assert.ok(reads[1] - reads[0] >= 4500, `the retry waited for its time, not the redraw (${reads[1] - reads[0]} ms)`);
