@@ -14,12 +14,15 @@
 // the box again with its comment (comment: the text it starts with).
 const MAX = 8000;
 let shut = null, n = 0, pop = null;
-// at(): where the selection is now (the chat may scroll under it while a reply streams); the button follows it. raw: the
-// selected text it is for (review: a selection changed or cleared since, say with Shift+arrow or while this file loaded, gets
-// no button, and closes it). view: the scrolling history; the button goes once the text scrolls out of it.
-export function commentButton({ at, raw, view, host = document.body, pick, alive = () => true }) {
+// range: a copy of the selection it is for (cloneRange, taken when it was made), raw its text. A selection changed or
+// cleared since (Shift+arrow, the same words in another reply, or while this file loaded) gets no button, and closes it.
+// at(): where that text is now (the chat may scroll under it while a reply streams); the button follows it. view: the
+// scrolling history; the button goes once the text scrolls out of it.
+export function commentButton({ range, raw, view, host = document.body, pick, alive = () => true }) {
   pop?.();
-  const same = () => getSelection().toString() === raw;
+  const at = () => range.getBoundingClientRect();
+  const same = () => { const s = getSelection(), r = s.rangeCount && s.getRangeAt(0);
+    return !!r && s.toString() === raw && r.startContainer === range.startContainer && r.startOffset === range.startOffset && r.endContainer === range.endContainer && r.endOffset === range.endOffset; };
   if (!same()) return;
   const b = Object.assign(document.createElement('button'), { type: 'button', className: 'comment-pop', textContent: 'Comment' });
   b.title = 'Comment on the selected text';

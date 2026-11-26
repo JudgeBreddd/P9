@@ -759,7 +759,7 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   assert.equal(await composer.inputValue(), '\nblank first', 'the leading blank line survived the repaint');
   // Review #536: two quote-only drafts saved in the same millisecond are two drafts, each labelled by its comment or words;
   // a quote saved from another chat finds no reply here, even one with the same words.
-  await seed([{ id: 'a', text: '', at: 5, quotes: [{ text: 'echo:hello', comment: 'other chat', chat: 'not-this-chat', cur: 1 }] }, { id: 'b', text: '', at: 5, quotes: [{ text: 'more words', comment: '' }] }]);
+  await seed([{ id: 'a', text: '', at: 5, quotes: [{ text: 'echo:hello', comment: 'other chat', chat: 'not-this-chat', cur: 1, head: 'echo:hello' }] }, { id: 'b', text: '', at: 5, quotes: [{ text: 'more words', comment: '' }] }]);
   await btn.click(); await menu.waitFor({ timeout: 5000 });
   assert.deepEqual(await menu.locator('.draft-take .truncate').allTextContents(), ['1 quote · other chat', '1 quote · “more words”'], 'quote-only drafts say which');
   await menu.locator('.draft-del').nth(1).click();
@@ -771,4 +771,29 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   assert.equal(await pane.locator('.msg.quote-src').count(), 0, 'no reply here marked as its source');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
+});
+
+// Review #536 round 2: a quote whose reply is above the drawn window (more than TAIL steps later) jumps there: the window
+// widens, the reply is marked and in view, and a saved draft finds it by its chat, cursor and first words.
+test('A2 step 6 review: a chip whose reply is above the drawn steps widens the window and shows it', { timeout: 120000 }, async (t) => {
+  const { page, pane, send, errors } = await setup(t, 'a2-quote-far');
+  const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea');
+  const hello = pane.locator('.msg.agent', { hasText: 'echo:hello' });
+  await hello.hover(); await hello.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 });
+  await page.keyboard.type('far up'); await page.keyboard.press('Enter');
+  await until(async () => await chips.count() === 1, 'a chip', 5000);
+  await composer.click(); await page.keyboard.press('Control+s'); // aside, so the long turn's message does not carry it
+  await until(async () => await chips.count() === 0, 'saved aside', 5000);
+  await send('stream 150'); // 300 steps, more than the 200 drawn
+  await until(async () => await pane.locator('.hist').getByText('step 150 done.').count() > 0 && await pane.locator('.working').count() === 0, 'the long turn ended', 60000);
+  assert.equal(await hello.count(), 0, 'the quoted reply is above the drawn steps');
+  await pane.locator('[data-drafts]').click(); await page.locator('.drafts-menu .draft-take').first().click();
+  await until(async () => await chips.count() === 1, 'the chip is back from the draft', 5000);
+  await chips.first().locator('[data-quote-go]').click();
+  await until(async () => await hello.count() === 1 && await hello.evaluate((m) => { const r = m.getBoundingClientRect(), b = m.closest('.hist').getBoundingClientRect();
+    return m.classList.contains('quote-src') && r.bottom > b.top && r.top < b.bottom; }), 'the window widened to the reply, marked and in view', 5000);
+  await page.waitForTimeout(500); // a repaint or two later it is still drawn and in view
+  assert.ok(await hello.evaluate((m) => { const r = m.getBoundingClientRect(), b = m.closest('.hist').getBoundingClientRect(); return r.bottom > b.top && r.top < b.bottom; }), 'still in view');
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS A2 step 6 review: a far quote widens the window and shows its reply');
 });
