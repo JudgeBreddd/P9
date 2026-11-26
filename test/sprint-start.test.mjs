@@ -158,7 +158,7 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   // ...and they reach the lead with its first message, as approved, with the check it schedules for itself.
   // (the fake agent logs P9's start block to start.log in the folder the chat runs in)
   const opening = fs.readdirSync(ws, { recursive: true }).filter((f) => path.basename(f) === 'start.log').map((f) => fs.readFileSync(path.join(ws, f), 'utf8')).join('\n');
-  for (const said of ['your instructions, approved by the user', 'call schedule_prompt to yourself every 10 minutes', 'Usage watch: call plan_usage', 'hold your least-advanced running worker not held yet', 'just before you send it, read_chat on the worker and keep that answer\'s next cursor', 'following next while more is true, and keep the last next', 'resume every worker you held'])
+  for (const said of ['your instructions, approved by the user', 'call schedule_prompt to yourself every 10 minutes', 'Usage watch: call plan_usage', 'least-advanced running worker not held yet', 'just before you send it, read_chat on the worker and keep that answer\'s next cursor', 'whose provider draws on that window', 'keep that cursor until you have read the whole reply', 'Usage is back: carry on, with replaces set to its held ID', 'resume every worker you held'])
     assert.ok(opening.includes(said), 'the lead\'s first message lacks: ' + said + '\n' + opening.slice(0, 600));
   assert.deepEqual(press.body.started, listed.started);
 

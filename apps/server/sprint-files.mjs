@@ -87,17 +87,23 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // part of leading. The check rides in the scheduled prompt's own text, so it survives a compaction; the thresholds are this
 // text, which the owner edits or deletes in Setup, not code. Close pauses the schedule (delegate.mjs closeSprint).
 // Review 6: the cursor is read before the hold is sent (a held steer has none yet), so the reply cannot fall before it.
-// Review 7: read_chat pages (more, next), so each watch reads on from where the last one stopped, not the first page again.
+// Review 7: read_chat pages (more, next), so each watch follows them.
+// Review 8: the worker held is one on the window that is running hot (holding a worker on another plan saves nothing); each
+// watch reads from the cursor taken before the hold, so a reply split across two watches is still read whole; and a hold
+// still waiting when use recovers is replaced by a carry-on, so it never lands after the resume.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
-  + '"Usage watch: call plan_usage. If a window your workers use has pace ahead and projected over 100 (its reading not stale), hold your '
-  + 'least-advanced running worker not held yet: send it, as steer, Finish the step you are on, write a Next line in your notes, reply '
-  + 'Holding for usage, end your turn, and wait until I resume you. A steer can wait in its queue until that turn ends, or be dropped with '
-  + 'it, so it is held only once the worker replies Holding for usage after it: just before you send it, read_chat on the worker and '
-  + 'keep that answer\'s next cursor with the held chat id, and on each watch read_chat from it (after) for the reply, following next while more is true, and keep the last next with the held chat id, so a busy worker\'s pages never hide it. Idle, working or a '
-  + 'timeout is not yet: send the hold again to one idle without that reply, the same way (read_chat first, keep its next). When every window is back to on or headroom, resume every '
-  + 'worker you held, not only the last. Keep each held chat id, with the numbers, under ## Usage watch in sprint.md: a line when you hold '
-  + 'it, its confirmation, and its resume."\n'
+  + '"Usage watch: call plan_usage. If a window your workers use has pace ahead and projected over 100 (its reading not stale), hold the '
+  + 'least-advanced running worker not held yet whose provider draws on that window (that provider, or one on its pool; list_chats gives each '
+  + 'worker\'s provider): send it, as steer, Finish the step you are on, write a Next line in your notes, reply Holding for usage, end your '
+  + 'turn, and wait until I resume you. A steer can wait in its queue until that turn ends, or be dropped with it, so it is held only once '
+  + 'the worker replies Holding for usage after it: just before you send it, read_chat on the worker and keep that answer\'s next cursor '
+  + 'with the held chat id, and keep the held ID send_chat returns if the steer waits. On each watch, read_chat from that cursor (after), '
+  + 'following next while more is true, for the reply; keep that cursor until you have read the whole reply. Idle, working or a timeout is '
+  + 'not yet: send the hold again to one idle without that reply, the same way (read_chat first, keep its next). When every window is back '
+  + 'to on or headroom, first send each worker whose hold has no reply yet, as steer, Usage is back: carry on, with replaces set to its held '
+  + 'ID (a hold already delivered gets it as a new message, which resumes it); then resume every worker you held, not only the last. Keep '
+  + 'each held chat id, with the numbers, under ## Usage watch in sprint.md: a line when you hold it, its confirmation, and its resume."\n'
   + '- A stale reading is no reason to hold: note it and wait for the next one.\n';
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
