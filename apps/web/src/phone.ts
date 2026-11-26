@@ -479,6 +479,7 @@ function foldBlocks(now: Folded, events: Json[]) {
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
         const image = type === 'agent' && imgSrc(data.content); if (image) { const block = own(blocks.length - 1); block.images = [...block.images ?? [], image]; }
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
+      else if (update === 'tool_call' && data.toolCallId != null && blocks.some((block) => block.kind === 'tool' && block.id === data.toolCallId)) { /* O266: a call sent again after a compaction keeps its row (chat-view.mjs) */ }
       else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) ?? (data.kind === 'switch_mode' ? '' : undefined) });
       else if (update === 'tool_call_update') {
         const index = blocks.findIndex((block) => block.kind === 'tool' && block.id === data.toolCallId);

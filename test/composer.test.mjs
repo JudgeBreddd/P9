@@ -871,3 +871,65 @@ test('A2 step 6 review: a chip whose reply is above the drawn steps widens the w
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 6 review: a far quote widens the window and shows its reply');
 });
+
+// O266: after an automatic compaction the adapter sends the calls from before it again, same ids, pending, then each one's
+// finish. The chat keeps the one row it has, finished; it drew a second one that stayed pending.
+test('O266: a tool call sent again after a compaction keeps its one finished row', { timeout: 90000 }, async (t) => {
+  const { pane, send, errors } = await setup(t, 'o266-repeat');
+  await send('toolrepeat');
+  await pane.locator('.msg.agent', { hasText: 'after repeat' }).waitFor({ timeout: 15000 });
+  const rows = pane.locator('details.tool', { hasText: 'repeat me' });
+  assert.equal(await rows.count(), 1, 'one row for the call');
+  assert.equal((await rows.locator('[data-slot=badge]').first().textContent()).trim(), 'completed');
+  assert.deepEqual(errors, [], 'no page errors');
+});
+
+// O266 review: the first call outside the newest 200 blocks a reloaded window loads, its second inside them. Show earlier
+// brings the first's page: still one row, where the call first ran, finished.
+test('O266 review 3: Show earlier keeps the first run\'s diff for a file the repeat names without one, and adds a streamed piece to its output', { timeout: 120000 }, async (t) => {
+  const { page, pane, send, errors } = await setup(t, 'o266-files');
+  await send('toolrepeat files');
+  await pane.locator('.msg.agent', { hasText: 'after repeat files' }).waitFor({ timeout: 30000 });
+  await page.reload();
+  const fresh = page.locator('.pane .hist').filter({ hasText: 'after repeat files' }).first();
+  await fresh.waitFor({ timeout: 30000 });
+  await fresh.locator('[data-earlier]').click();
+  await fresh.locator('details.tool', { hasText: 'step 0' }).waitFor({ timeout: 15000 });
+  const rows = fresh.locator('details.tool', { hasText: 'repeat edit' });
+  assert.equal(await rows.count(), 1, 'one row for the call');
+  assert.match(await rows.first().textContent(), /first run output and a streamed piece/, 'the streamed piece is added to the first run\'s output, not put in its place');
+  const diffRows = fresh.locator('details.tool', { hasText: 'diff replay' });
+  assert.equal(await diffRows.count(), 1, 'one row for the call repeated with its diff');
+  assert.match(await diffRows.first().textContent(), /diff tool output/, 'a repeat that carries only its diff keeps the first run\'s output');
+  await page.locator('.pane [data-chat-files]').first().click();
+  await page.locator('#side .cf-tabs [role=tab]').nth(1).dispatchEvent('click'); // a card in this window's corner covers the tab
+  const item = page.locator('#side .cf-item[data-cf-file]', { hasText: 'kept.md' });
+  await item.waitFor({ timeout: 8000 });
+  assert.match(await item.textContent(), /\+1 −1/, 'the file keeps the first run\'s diff: ' + await item.textContent());
+  // Review 5: other.md came only with the repeated call, which the live view skips, so Show earlier does not add it either.
+  assert.doesNotMatch(await diffRows.first().textContent(), /other\.md/, 'the repeat\'s own diff is not put on the first run');
+  assert.equal(await page.locator('#side .cf-item[data-cf-file]', { hasText: 'other.md' }).count(), 0, 'no change for a file only the repeat named');
+  // Review 8: a diff-only update after the repeat, then a whole snapshot: the snapshot does not take the update that brought the file.
+  await page.locator('#side .cf-item[data-cf-file]', { hasText: 'edited.md' }).waitFor({ timeout: 8000 });
+  assert.match(await fresh.locator('details.tool', { hasText: 'snapshot edit' }).first().textContent(), /third snapshot/, 'the snapshot is the row\'s output');
+  assert.deepEqual(errors, [], 'no page errors');
+});
+
+test('O266: Show earlier across a compaction still draws the call once, finished, where it first ran', { timeout: 120000 }, async (t) => {
+  const { page, pane, send, errors } = await setup(t, 'o266-earlier');
+  await send('toolrepeat far');
+  await pane.locator('.msg.agent', { hasText: 'after repeat' }).waitFor({ timeout: 30000 });
+  await page.reload();
+  const fresh = page.locator('.pane .hist').filter({ hasText: 'after repeat' }).first();
+  await fresh.waitFor({ timeout: 30000 });
+  const rows = fresh.locator('details.tool', { hasText: 'repeat me' });
+  assert.equal(await rows.count(), 1, 'the newest blocks hold the second call');
+  assert.equal(await fresh.locator('details.tool', { hasText: 'step 0' }).count(), 0, 'and not the first: it is on the earlier page');
+  await fresh.locator('[data-earlier]').click();
+  await fresh.locator('details.tool', { hasText: 'step 0' }).waitFor({ timeout: 15000 });
+  assert.equal(await rows.count(), 1, 'one row for the call after Show earlier');
+  assert.equal((await rows.locator('[data-slot=badge]').first().textContent()).trim(), 'completed');
+  assert.match(await rows.first().textContent(), /first run output/, 'the first run\'s output is kept, not replaced by the status-only repeat');
+  assert.equal(await fresh.evaluate((h) => { const all = [...h.querySelectorAll('details.tool')], at = (w) => all.findIndex((d) => d.textContent.includes(w)); return at('repeat me') < at('step 0'); }), true, 'where it first ran, above the calls after it');
+  assert.deepEqual(errors, [], 'no page errors');
+});
