@@ -102,7 +102,8 @@ test('a reply the agent sends again after its turn ended is recorded once', asyn
 // recorded once, whether it comes after the turn-end or before it. Only the adapter's copy (the result's uuid) is taken:
 // the same words once more under S2 are a reply of their own, and so are words said again at once under a new id of the
 // reply's own kind (review 2: "All checks passed." streamed, then a final reply that opens with it), and so is the
-// next prompt's output under a uuid saying the same at once (review 3: a command's own result, after its reply quoted it).
+// next prompt's output under a uuid saying the same at once (review 3: a command's own result, after its reply quoted it),
+// and so is another agent's reply under a uuid (review 7: the rule is the Claude adapter's).
 test('a short reply the adapter sends again is recorded once; the same words said again as a reply are kept', async (t) => {
   const instance = await start(t);
   const id = await create(instance);
@@ -120,6 +121,11 @@ test('a short reply the adapter sends again is recorded once; the same words sai
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'command result' });
   const result = await until(instance, said(id, 'twice: end'), again.cursor);
   assert.deepEqual(ids(result.seen).map(([, text]) => text), ['Done, merged.', 'twice: end'], 'the next prompt\'s own output was taken for a copy of the reply before it');
+  // Review 7: the uuid rule is only the Claude adapter's; another agent's reply under a uuid with the same words is kept.
+  const codex = await create(instance, 'codex');
+  await call(instance, `/chat/${codex}/prompt`, 'POST', { text: 'twice short' });
+  const other = await until(instance, said(codex, 'twice: end'));
+  assert.deepEqual(other.seen.filter(said(codex, '')).map((event) => event.data.content.text), ['Done, ', 'merged.', 'Done, merged.', 'Done, merged.', 'twice: end'], 'another agent\'s uuid reply was taken for a copy');
 });
 
 // phone-1: "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the

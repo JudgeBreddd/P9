@@ -469,6 +469,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // fallback copies the reply of its own prompt. So a prompt sent to the agent ends every earlier reply's chance of a copy
   // (copied, at the send below): output that matches a reply from before that prompt is kept. A steer goes through
   // _session/steering, not a prompt, so the turn it joins keeps its copy rule.
+  // Review 7: the uuid rule is claude-agent-acp's (its fallback is where the copies come from); another agent's uuid reply
+  // that opens with the same words is its own.
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
   // reply, or of a short reply under an id that is not a uuid or more than COPY_MS later is recorded.
   const COPY_MS = 5000, UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -482,7 +484,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (typeof id !== 'string') { if (open) open.over = true; return false; }
     if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; open.at = at; } return false; }
     const same = (m) => !m.mixed && m.parts > 1 && m.text === text;
-    const fresh = text !== null && UUID.test(id) && heard.find((m) => !m.mixed && m.text === text && !UUID.test(m.id) && !m.copied && at - m.at < COPY_MS);
+    const fresh = session.provider === 'claude' && text !== null && UUID.test(id) && heard.find((m) => !m.mixed && m.text === text && !UUID.test(m.id) && !m.copied && at - m.at < COPY_MS);
     if (fresh) fresh.copied = true;
     const copy = Boolean(fresh) || (text !== null && heard.some((m) => same(m) && (m.id === id || text.length >= 200)));
     // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
