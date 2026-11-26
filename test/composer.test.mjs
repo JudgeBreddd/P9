@@ -906,6 +906,9 @@ test('O266 review 3: Show earlier keeps the first run\'s diff for a file the rep
   const item = page.locator('#side .cf-item[data-cf-file]', { hasText: 'kept.md' });
   await item.waitFor({ timeout: 8000 });
   assert.match(await item.textContent(), /\+1 −1/, 'the file keeps the first run\'s diff: ' + await item.textContent());
+  // Review 5: other.md came only with the repeated call, which the live view skips, so Show earlier does not add it either.
+  assert.doesNotMatch(await diffRows.first().textContent(), /other\.md/, 'the repeat\'s own diff is not put on the first run');
+  assert.equal(await page.locator('#side .cf-item[data-cf-file]', { hasText: 'other.md' }).count(), 0, 'no change for a file only the repeat named');
   assert.deepEqual(errors, [], 'no page errors');
 });
 

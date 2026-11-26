@@ -397,7 +397,8 @@ const connection = acp.connectAgent(stream, {
       const between = Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' }));
       const again = { ...call, locations: [{ path: 'kept.md' }] };
       const more = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: ' and a streamed piece' } }], _meta: { 'p9/append': true } };
-      // Review 4: a second call whose repeat carries only its diff, then a status-only update: its output stays.
+      // Review 4: a second call whose repeat carries only its diff, then a status-only update: its output stays, and (review 5)
+      // that diff, which only the repeat carried, is not added.
       const call2 = { sessionUpdate: 'tool_call', toolCallId: 'repeat-d', title: 'diff replay', kind: 'edit', status: 'pending' };
       const first2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'diff tool output' } }] };
       const again2 = { ...call2, content: [{ type: 'diff', path: 'other.md', oldText: 'a\n', newText: 'b\n' }] };
