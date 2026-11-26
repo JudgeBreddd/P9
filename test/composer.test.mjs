@@ -871,3 +871,15 @@ test('A2 step 6 review: a chip whose reply is above the drawn steps widens the w
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 6 review: a far quote widens the window and shows its reply');
 });
+
+// O266: after an automatic compaction the adapter sends the calls from before it again, same ids, pending, then each one's
+// finish. The chat keeps the one row it has, finished; it drew a second one that stayed pending.
+test('O266: a tool call sent again after a compaction keeps its one finished row', { timeout: 90000 }, async (t) => {
+  const { pane, send, errors } = await setup(t, 'o266-repeat');
+  await send('toolrepeat');
+  await pane.locator('.msg.agent', { hasText: 'after repeat' }).waitFor({ timeout: 15000 });
+  const rows = pane.locator('details.tool', { hasText: 'repeat me' });
+  assert.equal(await rows.count(), 1, 'one row for the call');
+  assert.equal((await rows.locator('[data-slot=badge]').first().textContent()).trim(), 'completed');
+  assert.deepEqual(errors, [], 'no page errors');
+});

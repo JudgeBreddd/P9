@@ -375,6 +375,14 @@ const connection = acp.connectAgent(stream, {
     if (/^fill \d+$/.test(text)) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: Number(text.slice(5)), size: 1000 } }); await say('filled'); return { stopReason: 'end_turn' }; }
     // Claude Code after a compaction: the prompt ends, then the agent works on with no prompt open, and only that turn's
     // usage_update with a cost says it stopped.
+    // O266, as Claude's adapter does after an automatic compaction: the calls from before it come again with their own ids,
+    // pending, each followed by its finish.
+    if (text === 'toolrepeat') {
+      const call = { sessionUpdate: 'tool_call', toolCallId: 'repeat-1', title: 'repeat me', kind: 'execute', status: 'pending' }, done = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-1', status: 'completed' };
+      for (const update of [call, done, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, call, done]) await connection.sessionUpdate({ sessionId, update });
+      await say('after repeat');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'compact') {
       setTimeout(async () => {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-1', title: 'Compact conversation', kind: 'think', status: 'completed' } });
