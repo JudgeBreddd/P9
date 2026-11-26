@@ -1844,7 +1844,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // Resume. The owner's own message goes through (holding it would look like a dead chat),
       // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
       // O141: a worker its lead holds (paused:<worker>, pause_sprint with chat) keeps them the same way; its sprint's pause first.
-      const pausedAt = (from || mixed.has(body)) && !notes.has(body) ? [conversation.parent, id].find((k) => pausedOf(k)) : undefined;
+      // A lead's own id is its sprint's key, so it is checked only for a chat that leads no sprint.
+      const pausedAt = (from || mixed.has(body)) && !notes.has(body) ? [conversation.parent, !sprintFiles.exists(id) && id].find((k) => k && pausedOf(k)) : undefined;
       const pausing = pausedAt && pausedOf(pausedAt);
       const bare = commands.has(body);
       if (pausing) {
