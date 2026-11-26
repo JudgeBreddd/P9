@@ -17,3 +17,16 @@ export function pressHold(el, redraw, signal) {
   on('blur', end);
   return () => id !== null && (owed = true);
 }
+// The same end for one press already down (e: its pointerdown), for something that must wait until that press's click has
+// run: done runs once, after it. The quote box keeps a typed comment as a chip only then (adding it on the press redrew
+// the button pressed, so Stop became Steer, or a chip's pencil or ✕ did nothing).
+export function afterPress(e, done) {
+  const ac = new AbortController(), signal = ac.signal;
+  let up = false, t = setTimeout(end, 1e4);
+  function end() { if (signal.aborted) return; ac.abort(); clearTimeout(t); setTimeout(done); }
+  const on = (type, f) => window.addEventListener(type, f, { signal });
+  on('pointerup', u => { if (u.pointerId === e.pointerId) { up = true; clearTimeout(t); t = setTimeout(end, 500); } });
+  on('pointercancel', c => c.pointerId === e.pointerId && end());
+  on('click', c => up && c.pointerId === e.pointerId && end());
+  on('blur', end);
+}

@@ -1266,3 +1266,113 @@ test('O59: back on a chat, its header names its own model, never the model of th
   await page.click('#modelBtn');
   assert.equal(await page.locator('#sheet[open] [data-model][aria-checked="true"]').innerText(), 'Default (recommended)');
 });
+// A2 step 6b: quote a reply on the phone. Quote under a reply, or a selection in one with its Comment button (the box does
+// not open by itself, so Copy works), opens the comment box; Comment adds a small chip (the comment, else the quote's start);
+// the pencil edits it, a tap on it shows the reply, a comment typed and not added is kept when the box is left, Cancel
+// drops it, ✕ removes a chip; the next message carries the quotes first, each with its comment, and the chips go.
+const until = async (check, what, ms = 15000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 200))) if (await check()) return;
+  assert.fail('timed out: ' + what);
+};
+test('A2 step 6b: quote a whole reply or a selection on the phone, as a chip with its comment, sent first in the next message', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const posts = [];
+  page.on('request', (request) => { if (request.method() === 'POST' && /\/chat\/[^/]+\/prompt$/.test(new URL(request.url()).pathname)) posts.push(request.postDataJSON()?.text); });
+  await newChat(page, 'claude');
+  await send(page, 'The first sentence. The second sentence.'); await said(page, 'echo:The first sentence.');
+  for (const n of [1, 2]) { await send(page, `filler ${n}\n` + 'line\n'.repeat(30)); await said(page, `echo:filler ${n}`); } // so the chat scrolls
+  const box = page.locator('.quote-box'), pop = page.locator('.comment-pop'), chips = page.locator('#attached .chip-quote');
+  const labels = () => chips.locator('.quote-go').allTextContents();
+  const reply = page.locator('#events article[data-kind="agent"]', { hasText: 'echo:The first sentence' });
+  await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 });
+  assert.equal(await box.locator('blockquote').textContent(), 'echo:The first sentence. The second sentence.', 'Quote takes the whole reply');
+  await page.keyboard.type('why this?'); await page.keyboard.press('Enter');
+  await chips.first().waitFor({ timeout: 5000 }); assert.equal(await box.count(), 0, 'Comment closes the box');
+  assert.deepEqual(await labels(), ['why this?'], 'the chip shows the comment');
+  // A selection: the Comment button, no box, and the text stays selected.
+  const select = () => page.evaluate(() => { const p = [...document.querySelectorAll('#events article[data-kind="agent"]')].find((a) => a.textContent.includes('echo:The first sentence')).querySelector('p'), node = p.firstChild, r = document.createRange();
+    r.setStart(node, 9); r.setEnd(node, 28); getSelection().removeAllRanges(); getSelection().addRange(r); });
+  await select(); await pop.waitFor({ timeout: 5000 });
+  assert.equal(await box.count(), 0, 'a selection does not open the box by itself');
+  assert.equal(await page.evaluate(() => getSelection().toString()), 'first sentence. The', 'and stays selected (Copy works)');
+  await shot(page, 'a2-phone-comment-button');
+  // A selection changed after the button showed takes it away (it never quotes the old words); selected again, it is back.
+  await page.evaluate(() => getSelection().modify('extend', 'backward', 'character'));
+  await until(async () => await pop.count() === 0, 'a changed selection takes the Comment button away', 5000);
+  await select(); await pop.waitFor({ timeout: 5000 });
+  await pop.click(); await box.waitFor({ timeout: 5000 });
+  assert.equal(await box.locator('blockquote').textContent(), 'first sentence. The', 'Comment quotes the selection');
+  await box.locator('[type=submit]').click(); await until(async () => await chips.count() === 2, 'no comment: a second chip', 5000);
+  assert.deepEqual(await labels(), ['why this?', '“first sentence. The”'], 'a chip without a comment shows the quote\'s start');
+  // The pencil edits the comment where it is.
+  await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 });
+  assert.equal(await box.locator('textarea').inputValue(), 'why this?');
+  await page.keyboard.type(' really'); await page.keyboard.press('Enter');
+  await until(async () => (await labels())[0] === 'why this? really', 'the pencil changed the comment in place', 5000);
+  assert.equal(await chips.count(), 2);
+  // Left with a comment typed: kept as a chip; Cancel drops what was typed; ✕ removes a chip.
+  await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('keep me');
+  await page.mouse.click(195, 120); await until(async () => await box.count() === 0, 'a tap outside closes the box', 5000);
+  await until(async () => await chips.count() === 3, 'the typed comment is kept as a chip', 5000);
+  // The pencil, its comment cleared, then a tap outside: the chip goes back to the quote's start.
+  await chips.nth(2).locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 });
+  await page.keyboard.press('Control+A'); await page.keyboard.press('Backspace');
+  await page.mouse.click(195, 120); await until(async () => await box.count() === 0, 'a tap outside closes the edit', 5000);
+  await until(async () => (await labels())[2]?.startsWith('“echo:The first'), 'a cleared comment shows the quote\'s start', 5000);
+  // A tap on a chip's ✕ while a comment is typed: the ✕ removes that chip, and the typed comment is still kept.
+  await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('late');
+  await chips.nth(2).locator('[data-unquote]').click(); await until(async () => await box.count() === 0, 'the ✕ tap closes the box', 5000);
+  await until(async () => (await labels()).join('|') === 'why this? really|“first sentence. The”|late', 'the ✕ removed its chip and the typed one was kept', 5000);
+  await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('dropped');
+  await box.getByRole('button', { name: 'Cancel' }).click(); await until(async () => await box.count() === 0, 'Cancel closes it', 5000);
+  assert.equal(await chips.count(), 3, 'Cancel adds nothing');
+  await chips.nth(2).locator('[data-unquote]').click(); await until(async () => await chips.count() === 2, '✕ removes a chip', 5000);
+  await shot(page, 'a2-phone-chips');
+  // A tap on a chip scrolls its reply into the chat's view and marks it.
+  const marked = () => page.evaluate(() => { const el = [...document.querySelectorAll('#events article[data-kind="agent"]')].find((a) => a.textContent.includes('echo:The first sentence')), r = el.getBoundingClientRect(), view = document.querySelector('#chatBody').getBoundingClientRect();
+    return el.classList.contains('quote-src') && r.bottom > view.top && r.top < view.bottom; });
+  await page.evaluate(() => { const c = document.querySelector('#chatBody'); c.scrollTo({ top: c.scrollHeight, behavior: 'instant' }); });
+  await chips.first().locator('.quote-go').click();
+  await until(marked, 'the chip shows its reply, marked', 5000);
+  // The next message carries both quotes first, each with its comment; the chips go. The mark, taken off by hand just
+  // before, is put back by the redraw the send brings. Its 1.6 s end is held for this, so a slow run cannot outlast it.
+  posts.length = 0;
+  await page.evaluate(() => { const set = window.p9SetTimeout = window.setTimeout; window.p9HeldMark = []; window.setTimeout = (f, ms, ...rest) => ms === 1600 ? (window.p9HeldMark.push(f), 0) : set(f, ms, ...rest); });
+  await chips.first().locator('.quote-go').click(); await until(marked, 'a second tap marks it again', 5000);
+  await page.evaluate(() => document.querySelector('#events .quote-src').classList.remove('quote-src'));
+  await send(page, 'and this');
+  await until(() => page.evaluate(() => !!document.querySelector('#events .quote-src')), 'a redraw keeps the mark', 5000);
+  await said(page, 'echo:> echo:The first sentence.');
+  await page.evaluate(() => { window.setTimeout = window.p9SetTimeout; window.p9HeldMark.forEach((f) => f()); }); // the mark's end, let go: it goes
+  assert.equal(await page.locator('#events .quote-src').count(), 0, 'the mark goes when its time is up');
+  assert.equal(posts.at(-1), '> echo:The first sentence. The second sentence.\n\nwhy this? really\n\n> first sentence. The\n\nand this');
+  await until(async () => await chips.count() === 0, 'the sent quotes leave the box', 5000);
+  assert.equal(await page.inputValue('#prompt'), '');
+  // Send tapped while the pencil is open: the send carries the chip as it was, and the edit comes back as a chip, not lost.
+  await reply.first().locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('x'); await page.keyboard.press('Enter'); // the first: the echo above also has its words
+  await chips.first().waitFor({ timeout: 5000 });
+  await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type(' more');
+  // The send's answer is held, so the edit lands while it waits; the 202 then drops only the chip sent.
+  let release; const held = new Promise((r) => { release = r; }), isPrompt = (url) => /\/chat\/[^/]+\/prompt$/.test(new URL(url).pathname);
+  await page.route(isPrompt, async (route) => { await held; await route.continue(); });
+  posts.length = 0; await page.click('#composer button[type="submit"]');
+  await until(async () => posts.length === 1, 'Send sent the chip', 5000);
+  assert.equal(posts[0], '> echo:The first sentence. The second sentence.\n\nx');
+  await until(async () => (await labels()).join('|') === 'x more', 'the edit comes back as a chip while the send waits', 5000);
+  const echoes = () => page.locator('#events article[data-kind="agent"]', { hasText: 'echo:> echo:The first sentence' }).count(), before = await echoes();
+  const answered = page.waitForResponse((r) => isPrompt(r.url())); release(); assert.equal((await answered).status(), 202);
+  await page.unroute(isPrompt);
+  await until(async () => await echoes() > before, 'the held send was answered', 15000);
+  await page.waitForTimeout(500); // ponytail: a short settle; the 202's handling has no mark of its own to wait on
+  assert.deepEqual(await labels(), ['x more'], 'after the 202 the edit is the only chip');
+  // The pencil tapped again before the last edit's save has run: the new box starts from that edit, not the one before.
+  await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type(' again');
+  await chips.first().locator('[data-quote-edit]').click();
+  await until(async () => (await box.count()) === 1 && (await box.locator('textarea').inputValue()) === 'x more again', 'the new box starts from the edit just left', 5000);
+  await page.keyboard.press('Escape'); await until(async () => await box.count() === 0, 'Esc closes it', 5000);
+  assert.deepEqual(await labels(), ['x more again'], 'one chip, with the edit');
+  // A redraw that leaves the chips as they were keeps their buttons (a tap between press and release is not lost).
+  await chips.first().locator('[data-quote-edit]').evaluate((b) => { b.p9same = true; });
+  await send(page, '/ping'); await said(page, 'echo:/ping'); // a command goes alone; the chip stays
+  assert.equal(await chips.first().locator('[data-quote-edit]').evaluate((b) => b.p9same), true, 'the same button after the redraw');
+});

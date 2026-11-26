@@ -677,6 +677,72 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   console.log('PASS A2 step 6 round 2: box kept, Esc from a button, command alone, refusal keeps chips, the dialog');
 });
 
+// A2 step 6, review round 3: Send pressed while the pencil is open sends the chip as it was and the edit comes back as a
+// chip. A refusal then gives back each chip as it is now: the edit once (not beside the version sent), and one whose x was
+// pressed meanwhile stays gone.
+test('A2 step 6: a refused send made with the pencil open gives back the edited chip once, and a removed one stays gone', { timeout: 90000 }, async (t) => {
+  const { app, page, pane, errors, instance, id } = await setup(t, 'a2-quote-3');
+  const ends = (await said(instance, id, 'turn-end')).length;
+  const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea'), reply = pane.locator('.msg.agent').last();
+  const titles = async () => (await chips.evaluateAll((els) => els.map((el) => el.title.split('\n\n').slice(1).at(-1) ?? ''))); // the comment: a later reply quoted holds blank lines of its own
+  await reply.hover(); await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 });
+  await page.keyboard.type('a'); await page.keyboard.press('Enter'); await until(async () => await chips.count() === 1, 'a chip', 5000);
+  // Every prompt waits for p9release, then is refused.
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt') return h(e, ...args);
+      await new Promise((r) => { globalThis.p9release = r; }); globalThis.p9release = null; return globalThis.p9pass ? h(e, ...args) : { status: 409, body: { error: 'not-ready' } }; }); });
+  const sendWithPencil = async (more) => {
+    await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type(more);
+    await pane.locator('[data-send]').click();
+    await until(async () => await app.evaluate(() => !!globalThis.p9release), 'the send waits at the daemon', 10000);
+  };
+  await composer.click(); await page.keyboard.type('words');
+  await sendWithPencil(' b');
+  await until(async () => (await titles()).join('|') === 'a b', 'the edit came back as a chip while the send waits', 5000);
+  await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await composer.inputValue()) === 'words', 'refused: its words back in the box', 10000);
+  assert.deepEqual(await titles(), ['a b'], 'the edited chip once, not beside the one sent');
+  // Again, and the edit's x pressed while the send waits: the refusal does not bring the chip back.
+  await sendWithPencil(' c');
+  await until(async () => (await titles()).join('|') === 'a b c', 'the second edit came back as a chip', 5000);
+  await chips.first().locator('[data-unquote]').click(); await until(async () => await chips.count() === 0, 'x removed it', 5000);
+  await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await composer.inputValue()) === 'words', 'refused again: the words back', 10000);
+  assert.equal(await chips.count(), 0, 'the removed chip stays gone');
+  const add = async (comment) => { const n = await chips.count(); await reply.hover(); await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 });
+    await page.keyboard.type(comment); await page.keyboard.press('Enter'); await until(async () => await chips.count() === n + 1, 'chip ' + comment, 5000); };
+  // Review round 4: two chips, the first's pencil open at Send; the refusal gives them back in the order sent.
+  await add('p'); await add('r');
+  await sendWithPencil(' 2');
+  await until(async () => (await titles()).join('|') === 'p 2', 'the edit came back while the send waits', 5000);
+  await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await titles()).join('|') === 'p 2|r', 'refused: both back, in the order sent', 10000);
+  for (let n = 2; n; n--) { await chips.first().locator('[data-unquote]').click(); await until(async () => await chips.count() === n - 1, 'cleared', 5000); }
+  // Review round 4: the edit that came back is sent again before the first send is refused; that refusal does not give it
+  // back (the second send has it), and the second send, taken, leaves no chip behind.
+  await add('q'); await sendWithPencil(' z');
+  await until(async () => (await titles()).join('|') === 'q z', 'the edit came back while the first send waits', 5000);
+  await pane.locator('[data-send]').click(); await until(async () => await chips.count() === 0, 'the second send took the edit', 5000);
+  await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await composer.inputValue()) === 'words', 'the first refused: its words back', 10000);
+  assert.equal(await chips.count(), 0, 'and not the chip the second send took');
+  await until(async () => await app.evaluate(() => !!globalThis.p9release), 'the second send waits at the daemon', 10000);
+  await app.evaluate(() => { globalThis.p9pass = true; globalThis.p9release(); });
+  await until(async () => (await said(instance, id, 'turn-end')).length > ends, 'the second send was taken and answered', 20000);
+  assert.equal(await chips.count(), 0, 'no chip left behind');
+  // Review round 5: the edit that came back is saved to Drafts (Ctrl+S) before the refusal; the refusal does not bring it back.
+  await app.evaluate(() => { globalThis.p9pass = false; });
+  await add('d'); await composer.fill('words'); await sendWithPencil(' s'); // fill: the refusal above left its words in the box
+  await until(async () => (await titles()).join('|') === 'd s', 'the edit came back while the send waits', 5000);
+  await composer.click(); await page.keyboard.type('later'); await page.keyboard.press('Control+s');
+  await until(async () => await chips.count() === 0 && (await composer.inputValue()) === '', 'Ctrl+S put the box and its chip aside', 5000);
+  await app.evaluate(() => globalThis.p9release());
+  await until(async () => (await composer.inputValue()) === 'words', 'refused: its words back', 10000);
+  assert.equal(await chips.count(), 0, 'and not the chip the draft took');
+  assert.deepEqual(errors.filter((e) => !/not-ready|409/.test(e)), [], 'no page errors');
+  console.log('PASS A2 step 6 round 3: a refusal gives back the edit once, in the order sent; a removed edit, or one a later send or a draft took, stays gone');
+});
+
 // A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,
 // lists them, newest first; one picked goes back in the box and leaves the list; its x deletes it; Esc closes the list.
 test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked comes back, x deletes, Esc closes', { timeout: 90000 }, async (t) => {

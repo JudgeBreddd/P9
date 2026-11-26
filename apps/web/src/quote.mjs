@@ -1,3 +1,4 @@
+import { afterPress } from './press-hold.mjs';
 // A2 step 6: quote a reply, or the part of it selected, with a comment. Loads on first use (chat-view.mjs quote, the
 // phone's too). The box opens just under the selection, or above it when the window has no room below, inside host (the
 // chat's dialog when the chat is in one, so it is not behind it). Enter adds the quote, with what was typed as its comment,
@@ -14,6 +15,10 @@
 // the box again with its comment (comment: the text it starts with).
 const MAX = 8000;
 let shut = null, n = 0, pop = null;
+const owed = new Map(); // each comment still to be added -> the chip its box edits
+// Comments kept by presses outside wait for each press's click (afterPress); settle(chip) adds that chip's at once, so a box
+// opened meanwhile for it (its pencil tapped again) starts from it, not from the comment before it. Others wait for their press.
+export const settle = (chip) => chip && [...owed].forEach(([f, of]) => of === chip && f());
 // range: a copy of the selection it is for (cloneRange, taken when it was made), raw its text. A selection changed or
 // cleared since (Shift+arrow, the same words in another reply, or while this file loaded) gets no button, and closes it.
 // at(): where that text is now (the chat may scroll under it while a reply streams); the button follows it. view: the
@@ -43,8 +48,8 @@ export function commentButton({ range, raw, view, host = document.body, pick, al
   place(); // after the cleanup is in place: a first place() that closes stops the timer too
   return b;
 }
-// edit: the box is a chip's pencil; leaving it saves any change to the comment, a cleared one too.
-export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = false, add, host = document.body, back, alive = () => true }) {
+// edit: the chip whose pencil this box is; leaving it saves any change to the comment, a cleared one too.
+export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = null, add, host = document.body, back, alive = () => true }) {
   pop?.();
   shut?.();
   const text = whole.length > MAX ? whole.slice(0, MAX) + '…' : whole, id = 'quote-' + ++n;
@@ -55,13 +60,26 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = 
   const ta = box.querySelector('textarea'), ac = new AbortController();
   ta.value = comment;
   host.append(box);
-  const h = box.offsetHeight, w = box.offsetWidth;
-  box.style.left = Math.max(8, Math.min(rect.left, innerWidth - w - 8)) + 'px';
-  box.style.top = (rect.bottom + 4 + h <= innerHeight - 8 ? rect.bottom + 4 : Math.max(8, rect.top - 4 - h)) + 'px';
+  // Against the visible part of the page: a phone's keyboard shrinks it, so the box moves up with it (review: Comment and
+  // Cancel could end below the keyboard).
+  // It is fitted to that part in both directions and scrolls inside when it is taller (a keyboard open in landscape) or
+  // wider (pinch zoom).
+  const place = () => { const v = window.visualViewport, left = v ? v.offsetLeft : 0, top = v ? v.offsetTop : 0, width = v ? v.width : innerWidth, height = v ? v.height : innerHeight;
+    Object.assign(box.style, { maxWidth: width - 16 + 'px', maxHeight: height - 16 + 'px', overflow: 'auto' });
+    const h = box.offsetHeight, w = box.offsetWidth, bottom = top + height;
+    box.style.left = Math.max(left + 8, Math.min(rect.left, left + width - w - 8)) + 'px';
+    box.style.top = Math.max(top + 8, Math.min(rect.bottom + 4 + h <= bottom - 8 ? rect.bottom + 4 : rect.top - 4 - h, bottom - 8 - h)) + 'px'; };
+  place();
   const close = (refocus) => { ac.abort(); box.remove(); if (shut === leave) shut = null; if (refocus) back?.(); };
+  window.visualViewport?.addEventListener('resize', place, { signal: ac.signal }); window.visualViewport?.addEventListener('scroll', place, { signal: ac.signal });
   // Leaving without Comment (another focus mode or chat, a click outside, another box): a comment typed is kept, as the chip
   // (the owner, 2026-11-25: keep it as the chip, to finish with the pencil). away: the reader went elsewhere, so the message box does not take the focus. Cancel and Esc drop it.
-  const leave = shut = () => { const c = ta.value.trim(); close(); if (edit ? c !== comment.trim() : c) add({ text, comment: c }, true); };
+  // press: left by pressing outside (its pointerdown); the chip is added once that press's click has run (afterPress).
+  const leave = shut = (press) => { const c = ta.value.trim(); close(); if (!(edit ? c !== comment.trim() : c)) return;
+    const go = () => add({ text, comment: c }, true);
+    if (!(press instanceof PointerEvent)) return go();
+    const once = () => owed.delete(once) && go(); owed.set(once, edit);
+    afterPress(press, once); };
   box.onsubmit = e => { e.preventDefault(); close(); if (alive()) add({ text, comment: ta.value.trim() }); };
   box.querySelector('[type=button]').onclick = () => close(true);
   box.onkeydown = e => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(true); } };
@@ -72,7 +90,7 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = 
   // Tab or a shortcut taking the focus out (to another chat, say) closes it as a click outside does.
   box.addEventListener('focusout', e => { if (e.relatedTarget && !box.contains(e.relatedTarget)) leave(); }, { signal: ac.signal });
   const watch = setInterval(() => alive() || leave(), 200); ac.signal.addEventListener('abort', () => clearInterval(watch));
-  document.addEventListener('pointerdown', e => { if (!box.contains(e.target)) leave(); }, { capture: true, signal: ac.signal });
+  document.addEventListener('pointerdown', e => { if (!box.contains(e.target)) leave(e); }, { capture: true, signal: ac.signal });
   ta.focus(); ta.setSelectionRange(comment.length, comment.length);
   return box;
 }

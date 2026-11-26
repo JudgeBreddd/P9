@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { pastedFiles, quoted, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, quoteFate, quoteNow, quoteSent, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -753,7 +753,7 @@ function paint(root, ss, only) {
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
     // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
-    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; const from = !cmd && s.quotes?.length ? { draft: typed, quotes: s.quotes } : undefined; if (from) s.quotes = []; sendText(s, t, now, when, from); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
+    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; const from = !cmd && s.quotes?.length ? { draft: typed, quotes: s.quotes } : undefined; if (from) { from.quotes.forEach(q => quoteSent.set(q, from)); s.quotes = []; } sendText(s, t, now, when, from); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       plainPaste = !e.isComposing && e.shiftKey && (e.ctrlKey || e.metaKey) && e.code === 'KeyV' ? ta : null;
@@ -866,7 +866,7 @@ function paint(root, ss, only) {
     p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
     // A2 step 6: Quote on a reply quotes all of it; a selection inside one reply quotes that part. Either opens the box.
-    p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { s.quotes.splice(+b.dataset.unquote, 1); renderChats(); });
+    p.querySelectorAll('[data-unquote]').forEach(b => b.onclick = () => { const [q] = s.quotes.splice(+b.dataset.unquote, 1); if (q) quoteFate.set(q, null); renderChats(); });
     p.querySelectorAll('[data-quote-reply]').forEach(b => b.onclick = () => { const e = s.events[b.closest('[data-at]')?.dataset.at]; if (e?.text) quote(s, p, b.getBoundingClientRect(), e.text, e.text, src(s, e)); });
     // Follow-up: the chip's pencil opens the box with its comment; the chip itself shows the reply it came from.
     p.querySelectorAll('[data-quote-edit]').forEach(b => b.onclick = () => { const q = s.quotes?.[+b.dataset.quoteEdit]; if (q) quote(s, p, b.getBoundingClientRect(), q.text, q.text, q, q); });
@@ -915,9 +915,15 @@ const aliveIn = (s, p) => () => p.isConnected && p.dataset.id === s.id && p.chec
 const src = (s, ev) => ({ ev, chat: s.id });
 const quote = (s, p, rect, text, raw, from, was) => { import('./quote.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
-  if (alive()) m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
+  if (!alive()) return;
+  m.settle(was); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
+  m.quoteBox({ rect, text, raw, comment: was?.comment, edit: was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: (q, away) => { if (!outer.S.sessions.includes(s)) return; // the chat was deleted meanwhile
-      const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat }; if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
+      const qs = s.quotes ||= [], n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat };
+      const now = quoteNow(was); if (was && !now) return; // its × was clicked meanwhile: it stays gone (another edit may have replaced it)
+      const i = now ? qs.indexOf(now) : -1; if (now) quoteFate.set(now, n);
+      if (i >= 0) qs[i] = n; else qs.push(n); // gone without its × (a send took it): the edit comes back as a chip
+      renderChats(); if (!away) ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
 // A selection in a reply shows a small Comment button beside it (the selection stays, so Copy works); the button opens the box.
 const commentOn = (s, p, view, range, text, raw, from) => import('./quote.mjs').then(m => {
@@ -967,12 +973,15 @@ const draftLinks = new Map();
 const linksOf = (s, d) => s.quotes?.length ? { id: d.id, links: s.quotes.map(({ ev, chat }) => ({ ref: ev && new WeakRef(ev), chat })) } : null;
 const keepLinks = ids => { for (const id of draftLinks.keys()) if (!ids.has(id)) draftLinks.delete(id); };
 const storedIds = () => { try { return new Set(JSON.parse(localStorage.getItem(DRAFTS) || '[]').map(x => x?.id)); } catch { return new Set(); } };
+// The box's chips now belong to the draft d (a refused send made before does not give them back, quoteSent).
+const moved = (s, d) => s.quotes?.forEach(q => quoteSent.set(q, d));
 const boxDraft = (s, ta) => { const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
   return { id, text: ta.value, at: Date.now(), ...(s.quotes?.length ? { quotes: s.quotes.map(({ text, comment }) => ({ text, comment })) } : {}) }; };
 function putAside(s, ta) {
   let d; try { d = JSON.parse(localStorage.getItem(DRAFTS) || '[]'); if (!Array.isArray(d)) d = []; } catch { d = []; }
   const nd = boxDraft(s, ta);
   if (!putDrafts([nd, ...d], linksOf(s, nd))) return storeFull('the draft stays in the box');
+  moved(s, nd);
   const p = ta.closest('.pane'), note = withChips(s);
   ta.value = s.draft = ''; s.quotes = []; s.recall = null; renderChats(); p?.querySelector('.composer textarea')?.focus();
   if (note) outer.toast({ kind: 'draft saved', txt: note }, true);
@@ -987,6 +996,7 @@ const draftsOf = (s, p) => import('./drafts.mjs').then(m => {
       const links = draftLinks.get(id) || []; // before the write prunes it
       const cur = ta().value.trim() || s.quotes?.length ? [boxDraft(s, ta())] : [], note = cur.length && withChips(s);
       if (!putDrafts([...cur, ...rest], cur[0] && linksOf(s, cur[0]))) return storeFull('nothing changed: the box and the drafts are as they were'), false;
+      if (cur[0]) moved(s, cur[0]);
       s.draft = text; s.quotes = (quotes || []).map(({ text, comment }, i) => ({ text, comment, ev: links[i]?.ref?.deref(), chat: links[i]?.chat })); s.recall = null; renderChats();
       const b = ta(); if (b) { b.value = text; b.focus(); b.setSelectionRange(text.length, text.length); }
       if (note) outer.toast({ kind: 'draft saved', txt: note }, true);

@@ -1,4 +1,4 @@
-import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { quoteNow, quoteSent, chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitCard, profileLines, md, mdReply, info, imgSrc, toolImages, agentImgs, modes, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -1310,7 +1310,9 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
     const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
   keep(); // all of them: a box over the limit is refused when sent, and keeps its files
   // A2 step 6: a refused message sent with quotes gets its chips back, and only what was typed goes back in the box.
-  if (from) s.quotes = [...from.quotes, ...(s.quotes || [])];
+  // Each as it is now (quoteNow), in the order sent, before the chips added since: one edited meanwhile comes back once, as
+  // edited; one removed meanwhile stays gone; one a later send took (quoteSent) is that send's to give back.
+  if (from) { const now = s.quotes || [], back = from.quotes.map(quoteNow).filter((q) => q && (now.includes(q) || (quoteSent.get(q) ?? from) === from)); s.quotes = [...new Set([...back, ...now])]; }
   const back = from ? from.draft : text; s.draft = back + (s.draft && back ? '\n' : '') + (s.draft || ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
