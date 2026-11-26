@@ -20,6 +20,7 @@ export const SECURITY = {
     'On: a link in an agent reply asks first, showing its whole address. Off: it opens on a click. Turning Unrestricted mode off turns this back on.'],
   unknown: 'Unknown: the daemon did not answer.',
   noModes: 'Waiting for the agents\' modes from P9; open Settings again in a moment.',
+  noLoose: 'Unavailable: no agent P9 lists has a mode that acts without asking.', // review 14: the catalog answered with none
 };
 // The mode Unrestricted mode starts new chats in, per agent: its tier-4 mode (fillAgents).
 export const LOOSEST = {};
@@ -55,6 +56,34 @@ export const setStarts = (on, startKey) => Object.entries(LOOSEST).forEach(([a, 
 // Desktop (settings-view.mjs) and phone (phone.ts); each checks freeLocked again before every change it commits.
 export const modesKnown = () => CATALOG.ours && Object.keys(LOOSEST).length > 0;
 export const freeLocked = (lock, protect) => lock === null || protect === null || !modesKnown();
+// Why the warnings and Unrestricted are disabled with no loosened mode known: still loading, or (the daemon in use answered)
+// none listed. Review 14.
+export const modesNote = () => CATALOG.ours ? SECURITY.noLoose : SECURITY.noModes;
+// Review 14: Unrestricted mode as one change of the daemon's two settings, File protection then the agent lock (desktop
+// settings-view.mjs, phone phone.ts). write(key, on) makes one change and answers the daemon's { on } (the setting as it
+// now is), or { error } when it was refused or not answered. A refusal, a "keep it" answer (on comes back unchanged), or
+// (turning on) no loosened mode known once the writes are done (the catalog can land meanwhile) puts back every setting
+// this changed, newest first, and names any it could not put back. ok: both are as asked, so the device may set its own part.
+export async function changeFree(on, state, write) {
+  const now = { ...state }, done = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
+  let note = null;
+  for (const [key, want] of [['protect', !on], ...(on ? [['lock', false]] : [])]) {
+    if (now[key] === want) continue;
+    const r = await write(key, want);
+    if (typeof r?.on === 'boolean') now[key] = r.on;
+    if (now[key] !== want) { note = typeof r?.on === 'boolean' ? '' : 'Not changed: ' + (r?.error || 'P9 did not answer') + '.'; break; }
+    done.push(key);
+  }
+  if (note === null && on && !modesKnown()) note = 'Not changed: the agents\' modes changed meanwhile.';
+  if (note === null) return { ok: true, state: now, note: '' };
+  const lost = [];
+  for (const key of done.reverse()) {
+    const r = await write(key, state[key]);
+    if (r?.on === state[key]) now[key] = state[key]; else { if (typeof r?.on === 'boolean') now[key] = r.on; lost.push(names[key]); }
+  }
+  if (lost.length) note = (note ? note + ' ' : '') + 'Could not put back ' + lost.join(' and ') + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.';
+  return { ok: false, state: now, note };
+}
 // Before GET /agents answers there are no loosened modes to check, so it reads off.
 export const unrestricted = (lock, protect, startKey) => lock === false && protect === false && modesKnown() && !warnsLoose()
   && Object.entries(LOOSEST).every(([a, m]) => localStorage.getItem(startKey + a) === m);

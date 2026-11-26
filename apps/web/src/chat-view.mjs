@@ -1091,7 +1091,7 @@ const loadAgents = async () => { const r = await window.p9.chat('agents', {}).ca
   if (r?.status !== 200) return outer.setTimeout(() => loadAgents().then(() => (refreshPill(), renderChats(), outer.$('#setDlg')?.open && outer.refreshDefaults())), 1e4);
   const agents = r.body.agents.filter(a => /^[a-z0-9-]+$/.test(a.id));
   for (const a of agents) outer.names[a.id] = a.short || a.name, chatModel[a.id] = a.name + ' · ACP';
-  fillAgents(agents); };
+  fillAgents(agents); if (outer.$('#setDlg')?.open) outer.refreshDefaults(); }; // review 14: Settings open follows at once
 const toolDiff = content => { const rows = diffRows(content, 200); return rows.length ? rows : null; };
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {

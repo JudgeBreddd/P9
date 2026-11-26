@@ -139,7 +139,7 @@ test('CAT-2 review 12: the desktop starts from its own catalog over the preload;
   assert.deepEqual([security.freeLocked(false, true), security.freeLocked(null, true), security.freeLocked(false, null)], [false, true, true], 'the catalog read: only an unknown lock or protection locks it');
   // Both pages draw the switch with it and check it again before changing anything.
   assert.match(settings, /box\('setFree', [^\n]*, freeLocked\(outer\.agentLock, outer\.fileProtect\), /, 'desktop: the switch is disabled by freeLocked');
-  assert.match(settings, /async function setUnrestricted\(on\) \{\n(  \/\/[^\n]*\n)*  const locked = \(\) => on && freeLocked\(outer\.agentLock, outer\.fileProtect\);\n  if \(locked\(\)\) return renderSettings\(\);/, 'desktop: and refuses before any change');
+  assert.match(settings, /async function setUnrestricted\(on\) \{\n(  \/\/[^\n]*\n)*  if \(on && freeLocked\(outer\.agentLock, outer\.fileProtect\)\) return renderSettings\(\);/, 'desktop: and refuses before any change');
   assert.match(phone, /toggle\('setFree', [^\n]*, freeLocked\(lock, protect\)\)/, 'phone: the switch is disabled by freeLocked');
   assert.match(phone, /async function setFree\(on: boolean\) \{\n  if \(on && freeLocked\(sec\.lock, sec\.protect\)\) return drawSettings\(\);/, 'phone: and refuses before any change');
   console.log('PASS CAT-2 review 12: the desktop has its catalog from the start; Unrestricted is locked with no loosest mode, on both pages');
@@ -158,15 +158,66 @@ test('CAT-2 review 13: only the daemon in use\'s catalog unlocks Unrestricted an
   assert.deepEqual([security.modesKnown(), security.freeLocked(false, true)], [true, false], 'the daemon in use answered: unlocked');
   const [settings, phone, chat] = await Promise.all(['apps/web/src/settings-view.mjs', 'apps/web/src/phone.ts', 'apps/web/src/chat-view.mjs'].map((f) => readFile(path.join(root, f), 'utf8')));
   // The warning switch is disabled by the same test as Unrestricted, on both pages.
-  assert.match(settings, /box\('setWarn', warn\[0\], warnsLoose\(\), modesKnown\(\) \? warn\[1\] : SECURITY\.noModes, !modesKnown\(\),/, 'desktop: the warnings wait for the modes');
+  assert.match(settings, /box\('setWarn', warn\[0\], warnsLoose\(\), modesKnown\(\) \? warn\[1\] : modesNote\(\), !modesKnown\(\),/, 'desktop: the warnings wait for the modes');
   assert.match(phone, /toggle\('setWarn', [^\n]*, warnsLoose\(\), !modesKnown\(\)\)/, 'phone: the warnings wait for the modes');
-  // Checked again after the awaits, before this device's part; protection it turned off goes back on.
-  assert.match(settings, /  if \(locked\(\)\) \{ if \(r\) \{ const b = await window\.p9\.fileProtection\(true\)[^\n]*\n  setWarnsLoose\(!on\); setStarts\(on, START\);/, 'desktop: checked again before committing');
-  assert.match(phone, /  if \(on && freeLocked\(sec\.lock, sec\.protect\)\) \{\n    if \(was && sec\.protect === false\) \{ const back = await sent\('\/file-protection', \{ on: true \}\);[^\n]*\n    return drawSettings\(\);\n  \}\n  setWarnsLoose\(!on\); setStarts\(on, START\);/, 'phone: checked again before committing');
+  // Checked again after the daemon's writes, before this device's part (review 14: in security.mjs changeFree, on both pages).
+  assert.match(settings, /await changeFree\(on, [^\n]*\n(  [^\n]*\n)*  if \(!ok\) return renderSettings\(\);\n  setWarnsLoose\(!on\); setStarts\(on, START\);/, 'desktop: checked again before committing');
+  assert.match(phone, /await changeFree\(on, [^\n]*\n(  [^\n]*\n)*  if \(!ok\) return drawSettings\(note\);\n  setWarnsLoose\(!on\); setStarts\(on, START\);/, 'phone: checked again before committing');
   // The phone's Settings does not wait on GET /agents.
   assert.doesNotMatch(phone.slice(phone.indexOf('async function openSettings'), phone.indexOf('const toggle =')), /Promise\.all\([^\n]*loadAgents\(\)/, 'phone: the sheet draws without the catalog');
   // Replay takes the daemon's mode as given; the catalog filters only the menu.
   const line = chat.split('\n').find((l) => l.includes("case 'mode':"));
   assert.ok(line && !/modes\[/.test(line), 'replay keeps a mode the catalog does not know yet');
   console.log('PASS CAT-2 review 13: the catalog unlocks only from the daemon in use; both pages recheck; replay keeps the daemon\'s mode');
+});
+
+// Review 14: Unrestricted is two daemon writes (File protection, then the agent lock), changed as one: a refusal, or the modes
+// gone once both are written, puts back every setting it changed and names any it could not. A chat never sends a mode the
+// catalog in use does not list; Settings open redraws when the catalog lands and says "unavailable" when it has no loosest mode.
+test('CAT-2 review 14: Unrestricted changes both daemon settings or neither, and says which it could not put back; a retired mode is never sent; Settings follows the catalog', async (t) => {
+  const agents = publicAgents().agents, kept = new Map();
+  globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
+  t.after(() => { delete globalThis.localStorage; });
+  security.fillAgents(agents);
+  const daemon = (lock, protect, answer = () => null) => { const d = { lock, protect, calls: [] };
+    d.write = async (key, want) => { d.calls.push(key + ':' + want); const r = answer(key, want, d); if (r) return r; d[key] = want; return { on: want }; }; return d; };
+  const start = { lock: true, protect: true };
+  // Both writes go through: on.
+  let d = daemon(true, true), r = await security.changeFree(true, start, d.write);
+  assert.deepEqual([r.ok, r.state, r.note, d.calls], [true, { lock: false, protect: false }, '', ['protect:false', 'lock:false']], 'both off, in order');
+  // The lock refused after protection went off: protection goes back on, nothing is reported as changed.
+  d = daemon(true, true, (key) => key === 'lock' ? { error: 'refused' } : null);
+  r = await security.changeFree(true, start, d.write);
+  assert.deepEqual([r.ok, r.state, d.protect, d.calls], [false, { lock: true, protect: true }, true, ['protect:false', 'lock:false', 'protect:true']], 'lock refused: protection put back');
+  assert.match(r.note, /^Not changed: refused\.$/);
+  // "Keep protection on" (200, still on): nothing else is written.
+  d = daemon(true, true, (key) => key === 'protect' ? { on: true } : null);
+  r = await security.changeFree(true, start, d.write);
+  assert.deepEqual([r.ok, r.state, r.note, d.calls], [false, start, '', ['protect:false']], 'kept on: no further write, no note');
+  // The modes go while the writes run (a daemon whose catalog has no loosest mode): both go back, newest first.
+  d = daemon(true, true, (key) => { if (key === 'lock') security.fillAgents([]); return null; });
+  r = await security.changeFree(true, start, d.write);
+  assert.deepEqual([r.ok, r.state, d.lock, d.protect, d.calls], [false, start, true, true, ['protect:false', 'lock:false', 'lock:true', 'protect:true']], 'modes gone: both put back');
+  assert.match(r.note, /modes changed meanwhile/);
+  // A put-back that fails is named.
+  security.fillAgents(agents);
+  d = daemon(true, true, (key, want) => { if (key === 'lock' && want === false) security.fillAgents([]); return key === 'lock' && want === true ? { error: 'down' } : null; });
+  r = await security.changeFree(true, start, d.write);
+  assert.deepEqual([r.ok, r.state], [false, { lock: false, protect: true }], 'the lock could not go back: shown as it is');
+  assert.match(r.note, /Could not put back Agent lock: set it again above\./i);
+  // Off turns protection back on only; the lock stays off.
+  security.fillAgents(agents);
+  d = daemon(false, false); r = await security.changeFree(false, { lock: false, protect: false }, d.write);
+  assert.deepEqual([r.ok, d.calls], [true, ['protect:true']], 'off: protection only');
+  // "Unavailable" once the daemon's catalog came back with no loosest mode; "waiting" before.
+  security.fillAgents([{ id: 'claude', name: 'Claude', modes: [{ name: 'Default' }] }]);
+  assert.equal(security.modesNote(), security.SECURITY.noLoose, 'the catalog read, nothing loose: unavailable');
+  security.fillAgents(agents, false);
+  assert.equal(security.modesNote(), security.SECURITY.noModes, 'not the daemon\'s own yet: waiting');
+  security.fillAgents(agents);
+  const [controller, chat, settings] = await Promise.all(['apps/web/src/controller.mjs', 'apps/web/src/chat-view.mjs', 'apps/web/src/settings-view.mjs'].map((f) => readFile(path.join(root, f), 'utf8')));
+  assert.match(controller, /body = \{ id: s\.id, text, mode: modes\[s\.agent\]\?\.includes\(n\.mode\) \? n\.mode : undefined,/, 'a chat sends only a mode the catalog lists');
+  assert.match(chat, /  fillAgents\(agents\); if \(outer\.\$\('#setDlg'\)\?\.open\) outer\.refreshDefaults\(\);/, 'the catalog landing redraws Settings open');
+  assert.match(settings, /if \(outer\.\$\('#setSecurity'\) && !outer\.\$\('#setBody'\)\.contains\(document\.activeElement\)\) return renderSettings\(\);/, 'and the redraw covers the security rows');
+  console.log('PASS CAT-2 review 14: both settings or neither, failed put-backs named; only catalog modes sent; Settings follows the catalog');
 });
