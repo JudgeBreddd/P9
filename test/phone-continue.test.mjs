@@ -529,17 +529,22 @@ test('O267: a chat whose turn ends during another chat\'s send gets its queued m
   });
   await page.route('**/chat/events*', async (route) => { if (armed) { reads++; await holdReads; } return route.continue().catch(() => {}); });
   const forB = () => tries.filter(([x]) => x === 'for b');
+  // A storage event only makes the phone read its queues again; coming back online is what starts a drain.
+  await setOnline(page, false);
   await page.evaluate((b) => {
     localStorage.setItem('p9-queue:' + b, JSON.stringify([{ qid: crypto.randomUUID(), text: 'for b' }]));
     dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + b })); // the phone reads its queues from storage again
   }, b);
+  await setOnline(page, true);
   await until(async () => forB().length >= 2, 'B refused twice (2 s wait)');
   await until(async () => forB().length >= 3, 'B refused three times (4 s wait), so its next wait is 8 s');
   const refused = forB()[2][1];
+  await setOnline(page, false);
   await page.evaluate((a) => {
     localStorage.setItem('p9-queue:' + a, JSON.stringify([{ qid: crypto.randomUUID(), text: 'slow' }]));
     dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + a }));
   }, a);
+  await setOnline(page, true); // B's wait (8 s) is not over, so this drain sends only A's
   await until(async () => tries.some(([x]) => x === 'slow'), 'A asked (and held)');
   await call(server, '/chat/' + b + '/cancel', {});
   const userOf = async (id, text) => (await server.desk('/chat/events?after=0&only=' + id)).body.events.some((e) => e.type === 'user' && e.data?.text === text);
