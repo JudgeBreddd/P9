@@ -1,7 +1,7 @@
 {
  "provider": "claude",
  "package": "@agentclientprotocol/claude-agent-acp",
- "version": "0.109.1",
+ "version": "0.112.0",
  "lines": [
   {
    "dir": "in",
@@ -47,7 +47,7 @@
      "info": {
       "name": "@agentclientprotocol/claude-agent-acp",
       "title": "Claude Agent",
-      "version": "0.109.1"
+      "version": "0.112.0"
      },
      "capabilities": {
       "session": {
@@ -103,14 +103,14 @@
         },
         {
          "name": "P9_MCP_TOKEN",
-         "value": "8c772c1e919ecec41d3dd3e3885aa897352e4117a12738d3b72abd8a671e18fe"
+         "value": "03c6976d84aa7455ddd4991bb43e31f196caf0075bc693ad69bdd7dba16b78b6"
         }
        ],
        "type": "stdio"
       }
      ],
      "additionalDirectories": [
-      "/scratch/.local/state/p9-foundation/attachments/7c5618d6-42eb-4954-9f93-f45448c99b08"
+      "/scratch/.local/state/p9-foundation/attachments/c34c817f-2dd1-4108-a455-aac68cfbf4a7"
      ]
     }
    }
@@ -121,7 +121,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "configOptions": [
       {
        "name": "Model",
@@ -306,7 +306,7 @@
     "id": 2,
     "method": "session/set_config_option",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "configId": "mode",
      "value": "default",
      "type": "id"
@@ -319,7 +319,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "config_option_update",
       "configOptions": [
@@ -676,7 +676,7 @@
     "id": 3,
     "method": "session/prompt",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "prompt": [
       {
        "type": "text",
@@ -692,10 +692,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "user_message",
-      "messageId": "dfb4235d-91be-494c-be72-b58d343c2bdf",
+      "messageId": "bd196bba-51ed-4d53-9a41-45eebbbd650b",
       "content": [
        {
         "text": "Create a file named hello.txt in the current directory containing exactly one line: hello from P9. Use your Write tool, then reply with one short sentence.",
@@ -712,7 +712,7 @@
     "jsonrpc": "2.0",
     "id": 3,
     "result": {
-     "messageId": "dfb4235d-91be-494c-be72-b58d343c2bdf"
+     "messageId": "bd196bba-51ed-4d53-9a41-45eebbbd650b"
     }
    }
   },
@@ -722,7 +722,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "state_update",
       "state": "running",
@@ -737,7 +737,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "available_commands_update",
       "availableCommands": [
@@ -757,11 +757,11 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "session_info_update",
       "title": "Hello.txt file creation",
-      "updatedAt": "2026-11-23T00:00:49.892Z"
+      "updatedAt": "2026-11-26T04:19:19.023Z"
      }
     }
    }
@@ -772,10 +772,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 36581,
+      "used": 36639,
       "size": 200000
      }
     }
@@ -787,9 +787,9 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
-      "toolCallId": "toolu_01PcgvopP2665fpPTRjfvv9a",
+      "toolCallId": "toolu_01Lo7fPNWADnXVwh5QDc1He5",
       "name": "Write",
       "rawInput": {},
       "status": "pending",
@@ -808,9 +808,9 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
-      "toolCallId": "toolu_01PcgvopP2665fpPTRjfvv9a",
+      "toolCallId": "toolu_01Lo7fPNWADnXVwh5QDc1He5",
       "rawInput": {
        "file_path": "/workspace/hello.txt"
       },
@@ -831,9 +831,9 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
-      "toolCallId": "toolu_01PcgvopP2665fpPTRjfvv9a",
+      "toolCallId": "toolu_01Lo7fPNWADnXVwh5QDc1He5",
       "rawInput": {
        "file_path": "/workspace/hello.txt",
        "content": "hello from P9\n"
@@ -849,10 +849,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 36664,
+      "used": 36721,
       "size": 200000
      }
     }
@@ -864,10 +864,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 36664,
+      "used": 36721,
       "size": 200000
      }
     }
@@ -879,9 +879,9 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
-      "toolCallId": "toolu_01PcgvopP2665fpPTRjfvv9a",
+      "toolCallId": "toolu_01Lo7fPNWADnXVwh5QDc1He5",
       "content": [
        {
         "type": "diff",
@@ -909,7 +909,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "state_update",
       "state": "requires_action",
@@ -925,12 +925,12 @@
     "id": 0,
     "method": "session/request_permission",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "title": "Write hello.txt",
      "subject": {
       "type": "tool_call",
       "toolCall": {
-       "toolCallId": "toolu_01PcgvopP2665fpPTRjfvv9a",
+       "toolCallId": "toolu_01Lo7fPNWADnXVwh5QDc1He5",
        "name": "Write",
        "rawInput": {
         "file_path": "/workspace/hello.txt",
@@ -1000,7 +1000,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "state_update",
       "state": "running",
@@ -1015,9 +1015,9 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
-      "toolCallId": "toolu_01PcgvopP2665fpPTRjfvv9a",
+      "toolCallId": "toolu_01Lo7fPNWADnXVwh5QDc1He5",
       "status": "completed",
       "rawOutput": "File created successfully at: /workspace/hello.txt (file state is current in your context — no need to Read it back)",
       "sessionUpdate": "tool_call_update"
@@ -1031,10 +1031,10 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 36741,
+      "used": 36820,
       "size": 200000
      }
     }
@@ -1046,14 +1046,14 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "agent_message_chunk",
       "content": {
        "type": "text",
        "text": "I created `hello.txt"
       },
-      "messageId": "msg_011ChJspX3nKmt78bPHtppbm"
+      "messageId": "msg_011ChQtxTSbVT7RNhhDrP1Cq"
      }
     }
    }
@@ -1064,14 +1064,14 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "agent_message_chunk",
       "content": {
        "type": "text",
-       "text": "` with the single line \""
+       "text": "` in `"
       },
-      "messageId": "msg_011ChJspX3nKmt78bPHtppbm"
+      "messageId": "msg_011ChQtxTSbVT7RNhhDrP1Cq"
      }
     }
    }
@@ -1082,14 +1082,14 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "agent_message_chunk",
       "content": {
        "type": "text",
-       "text": "hello from P9\"."
+       "text": "/tmp/p9-"
       },
-      "messageId": "msg_011ChJspX3nKmt78bPHtppbm"
+      "messageId": "msg_011ChQtxTSbVT7RNhhDrP1Cq"
      }
     }
    }
@@ -1100,10 +1100,64 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "test-7L40lE/"
+      },
+      "messageId": "msg_011ChQtxTSbVT7RNhhDrP1Cq"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "workspace` with the single line"
+      },
+      "messageId": "msg_011ChQtxTSbVT7RNhhDrP1Cq"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": " `hello from P9`."
+      },
+      "messageId": "msg_011ChQtxTSbVT7RNhhDrP1Cq"
+     }
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "msg": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "usage_update",
-      "used": 36741,
+      "used": 36820,
       "size": 1000000
      }
     }
@@ -1115,7 +1169,7 @@
     "jsonrpc": "2.0",
     "method": "session/update",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd",
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362",
      "update": {
       "sessionUpdate": "state_update",
       "state": "idle",
@@ -1132,7 +1186,7 @@
     "id": 4,
     "method": "session/close",
     "params": {
-     "sessionId": "fd6912fe-e6ae-4eeb-bdb3-d25e82a76ccd"
+     "sessionId": "497ab22d-433d-476e-bce7-0a053a292362"
     }
    }
   },

@@ -1,6 +1,6 @@
 [
   {
-    "name": "@agentclientprotocol/claude-agent-acp@0.109.1",
+    "name": "@agentclientprotocol/claude-agent-acp@0.112.0",
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a"
@@ -11,6 +11,13 @@
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "72ea310b40e1ee2c4aa61935d22065155c50bfde288b114c9cfd3e1fa34f8049"
+    }
+  },
+  {
+    "name": "@agentclientprotocol/sdk@2.12.0",
+    "license": "Apache-2.0",
+    "files": {
+      "LICENSE": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a"
     }
   },
   {
@@ -35,42 +42,42 @@
     }
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.331",
     "license": "SEE LICENSE IN LICENSE.md",
     "files": {
       "LICENSE.md": "8ce94b9478bb9868f9641f818e06cd722fbe55d4c22e2d2ed11971b20146173a"
     }
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk-win32-x64@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk-win32-x64@0.3.331",
     "installed": false
   },
   {
-    "name": "@anthropic-ai/claude-agent-sdk@0.3.330",
+    "name": "@anthropic-ai/claude-agent-sdk@0.3.331",
     "license": "SEE LICENSE IN README.md",
     "files": {
       "LICENSE.md": "8ce94b9478bb9868f9641f818e06cd722fbe55d4c22e2d2ed11971b20146173a"
