@@ -1030,6 +1030,8 @@ async function listen() {
     try {
       await fetchEvents(8000);
       if (state.events.length === held) continue;
+      // O267 round 4: a chat whose turn ended can take its queued message now, not after the refusal's wait.
+      for (const event of state.events.slice(held)) if (['turn-end', 'interrupted', 'exited', 'stopped'].includes(String(event.type))) retryAt.delete(String(event.conversation));
       // A chat made, used, stopped or closed anywhere moves in the picker.
       // A stub's row reads its state from the list, so a turn's end or a question asked or answered lists again too.
       if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered', 'project', 'renamed', 'archived', 'deleted'].includes(String(event.type)))) { const relisted = await request('/chat'); state.conversations = relisted.conversations ?? []; agentLists = relisted.lists ?? agentLists; await loadPhoneProjects(request); fillPicker(); }
@@ -1167,6 +1169,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && qu
 one<HTMLElement>('#queued').addEventListener('toggle', (event) => { queueOpen = (event.target as HTMLDetailsElement).open; queueSig = ''; }, true);
 let draining = false;
 const retryAt = new Map<string, number>(); // per chat: no queued send before this time (drain())
+const backoff = new Map<string, number>(); // per chat: the last wait after a refusal; cleared by an answer that is final
 async function drain() {
   if (draining || !navigator.onLine) return;
   draining = true;
@@ -1183,11 +1186,15 @@ async function drain() {
         if (result.status === 409 && (result.body.error === 'turn-running' || result.body.error === 'outcome-unknown')) {
           // O267: turn-running is the daemon's answer, final for that operation ID (a retry under it gets the same refusal back),
           // so the message takes a new one. outcome-unknown is no answer: it keeps its ID, and the daemon replays what happened.
-          if (result.body.error === 'turn-running') keepQueue(id, queued(id).map((item) => item.qid === qid ? { ...item, qid: crypto.randomUUID() } : item));
-          retryAt.set(id, Date.now() + 2000); setTimeout(() => void drain(), 2100); break;
+          // Round 4: the new ID is used only once storage holds it (must), so a reload never sends under one it lost; refused,
+          // the message keeps its old ID, whose retry is the daemon's stored refusal again, sending nothing.
+          if (result.body.error === 'turn-running' && !keepQueue(id, queued(id).map((item) => item.qid === qid ? { ...item, qid: crypto.randomUUID() } : item), true) && id === openId) note('Still queued: this phone\'s storage is full, so it cannot try again yet.');
+          // Each fresh ID is one more of the phone's operations per hour: waits double from 2 s to 60 s while the turn runs.
+          const wait = Math.min(60000, (backoff.get(id) ?? 1000) * 2);
+          backoff.set(id, wait); retryAt.set(id, Date.now() + wait); setTimeout(() => void drain(), wait + 100); break;
         }
         // Any other answer is final for this message: it went, or the daemon refused it and says why (the text goes back in its chat's box).
-        keepQueue(id, queued(id).filter((item) => item.qid !== qid));
+        keepQueue(id, queued(id).filter((item) => item.qid !== qid)); backoff.delete(id);
         // O209: taken from the queue, the picks it carried are in effect, so a newer pick of the same value is spent now (as a send taken at once).
         if (result.status === 202) { sent = true; if (spends) spend(id, new Map(Object.entries(spends))); }
         else { putBack(id, next.text); dropRefused(id, (body as { model?: string }).model, pick); if (id === openId) { note(`Not sent: ${result.body.error ?? result.status}`); render(); } }
