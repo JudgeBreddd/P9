@@ -7,7 +7,7 @@ import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { acpAsk } from '../apps/server/chat.mjs';
 import { diffs, v1Stream } from '../apps/server/acp-v2.mjs';
-import { agentWarning } from '../apps/web/src/helpers.mjs';
+import { agentWarning, upKept } from '../apps/web/src/helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-v2-agent.mjs');
 const start = (t, env = {}) => daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake], env }));
@@ -266,4 +266,32 @@ test('O221: a Codex notice reaches the window and phone as the warning line, nev
   const texts = said.map((m) => m.params?.update?.content?.text);
   assert.deepEqual(texts.map(agentWarning), ['A setting was ignored.', 'Model changed\nUsing a smaller model.', 'Error: The sandbox failed.'], JSON.stringify(texts));
   assert.ok(said.every((m) => m.params.update.sessionUpdate === 'agent_message_chunk' && m.params.update.messageId === undefined));
+});
+
+// O266 review 6: a tool row keeps a run of streamed pieces as one update, its last 4,000 characters, so a command that
+// streams thousands of pieces keeps one; any other update ends the run and is kept as it came.
+test('O266: a tool row keeps a run of streamed output pieces as one update', () => {
+  const bit = (text) => ({ sessionUpdate: 'tool_call_update', toolCallId: 't', content: [{ type: 'content', content: { type: 'text', text } }], _meta: { 'p9/append': true } });
+  const ups = [], status = { sessionUpdate: 'tool_call_update', toolCallId: 't', status: 'completed' };
+  for (let i = 0; i < 3000; i++) upKept(ups, bit(i + ' '));
+  upKept(ups, status); upKept(ups, bit('a')); upKept(ups, bit('b'));
+  assert.equal(ups.length, 3, 'one update per run, and the update between them');
+  const text = (d) => d.content[0].content.text, all = Array.from({ length: 3000 }, (_, i) => i + ' ').join('');
+  assert.equal(text(ups[0]), all.slice(-4000), 'the run keeps its last 4,000 characters');
+  assert.deepEqual(ups[0]._meta, { 'p9/append': true }, 'and is still a piece to add');
+  assert.equal(ups[1], status);
+  assert.equal(text(ups[2]), 'ab');
+  // Review 7: a whole snapshot (a terminal_update's output, no p9/append) replaces the content before it: the snapshots and
+  // pieces just before it go, an update with a status or an exit stays.
+  const whole = (text) => ({ sessionUpdate: 'tool_call_update', toolCallId: 't', content: [{ type: 'content', content: { type: 'text', text } }] });
+  const exit = { ...bit('x'), _meta: { 'p9/exit': { exitCode: 1 } } }, snaps = [];
+  for (let i = 0; i < 3000; i++) upKept(snaps, whole('out ' + i));
+  assert.equal(snaps.length, 1, 'thousands of snapshots kept as the newest');
+  upKept(snaps, bit('a')); upKept(snaps, status); upKept(snaps, whole('w1')); upKept(snaps, bit('b')); upKept(snaps, exit); upKept(snaps, bit('c')); upKept(snaps, whole('w2'));
+  assert.deepEqual(snaps.map((d) => d.status ?? (d._meta?.['p9/exit'] ? 'exit' : text(d))), ['out 2999', 'a', 'completed', 'w1', 'b', 'exit', 'w2'], 'only content before a snapshot goes, back to the last other update');
+  // Review 8: an update whose content carries a diff is not output: a snapshot after it leaves it, so its file stays.
+  const edit = { sessionUpdate: 'tool_call_update', toolCallId: 't', content: [{ type: 'diff', path: 'edited.md', oldText: 'a\n', newText: 'b\n' }] }, kept = [];
+  upKept(kept, whole('w0')); upKept(kept, edit); upKept(kept, whole('w1'));
+  assert.deepEqual(kept.map((d) => d.content[0].path ?? text(d)), ['w0', 'edited.md', 'w1'], 'a diff update stays before a snapshot');
+  console.log('PASS O266 review 6/7/8: 3,000 streamed pieces kept as one update; 3,000 snapshots as the newest; a diff update kept');
 });

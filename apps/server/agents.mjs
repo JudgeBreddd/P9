@@ -11,6 +11,8 @@
 // sets on a new or resumed session is shown at once; false, it is set quietly and the window's mode comes with the first
 // prompt (Claude's, as its adapter's own start was).
 // native: the agent's binary package name before its platform (linux-x64, win32-arm64, ...), as agents.json names it.
+// resultCopy (optional): its adapter may send a streamed reply again under the result's uuid (claude-agent-acp's result
+// fallback), so chat.mjs also drops a short copy under a uuid (DUP-1); without it only the same-id and 200-character rules apply.
 const STALE = 15 * 60 * 1000;
 const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes), usage: Object.freeze(agent.usage) });
 export const CATALOG = Object.freeze([
@@ -19,7 +21,7 @@ export const CATALOG = Object.freeze([
     signIn: { kind: 'browser', dir: 'claudeDir', file: '.credentials.json' },
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
       'Accept edits': { value: 'acceptEdits', tier: 2 }, 'Bypass permissions': { value: 'bypassPermissions', tier: 4 } },
-    acp: 1, tellStart: false,
+    acp: 1, tellStart: false, resultCopy: true,
     start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', poll: 'claude-sdk', staleMs: STALE, pool: 'claude', hideSignedOut: false, apiPrice: true },
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
     why: 'Claude Code, for Claude chats and a terminal.',
@@ -60,6 +62,7 @@ export const SIGN_IN_KIND = each((a) => a.signIn.kind);
 export const SIGN_IN_FLAG = each((a) => a.signIn.flag ?? null);
 export const ACP = each((a) => a.acp);
 export const TELL_START = each((a) => a.tellStart);
+export const RESULT_COPY = each((a) => a.resultCopy === true);
 // CAT-1i: the agent a binary package belongs to (scripts/agents.mjs fetches only the picked agents'), or null.
 export const agentOfPackage = (folder) => CATALOG.find((a) => folder.startsWith(a.native))?.id ?? null;
 // GET /agents: what a window may know about each agent. No paths, no commands, no adapter package. CAT-1e: short, pick and

@@ -375,6 +375,45 @@ const connection = acp.connectAgent(stream, {
     if (/^fill \d+$/.test(text)) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: Number(text.slice(5)), size: 1000 } }); await say('filled'); return { stopReason: 'end_turn' }; }
     // Claude Code after a compaction: the prompt ends, then the agent works on with no prompt open, and only that turn's
     // usage_update with a cost says it stopped.
+    // O266, as Claude's adapter does after an automatic compaction: the calls from before it come again with their own ids,
+    // pending, each followed by its finish.
+    // 'toolrepeat far': 210 calls between them, so a window's newest 200 blocks hold the second and not the first.
+    if (text === 'toolrepeat' || text === 'toolrepeat far') {
+      const call = { sessionUpdate: 'tool_call', toolCallId: 'repeat-1', title: 'repeat me', kind: 'execute', status: 'pending' }, done = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-1', status: 'completed' };
+      const between = text === 'toolrepeat far' ? Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' })) : [];
+      // far: the first run's output comes with its update; the run sent again after the compaction is status only.
+      const first = text === 'toolrepeat far' ? { ...done, content: [{ type: 'content', content: { type: 'text', text: 'first run output' } }] } : done;
+      for (const update of [call, first, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, call, done]) await connection.sessionUpdate({ sessionId, update });
+      await say('after repeat');
+      return { stopReason: 'end_turn' };
+    }
+    // O266 review 3: an edit sent again after a compaction whose repeat names its file with no diff of its own (a location),
+    // then streams one more output piece (p9/append), as a running command's output comes. Show earlier must keep the
+    // first run's diff for that file and add the piece to the first run's output.
+    if (text === 'toolrepeat files') {
+      const call = { sessionUpdate: 'tool_call', toolCallId: 'repeat-f', title: 'repeat edit', kind: 'edit', status: 'pending' };
+      const first = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', status: 'completed', content: [
+        { type: 'diff', path: 'kept.md', oldText: 'old line\n', newText: 'new line\n' }, { type: 'content', content: { type: 'text', text: 'first run output' } }] };
+      const between = Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' }));
+      const again = { ...call, locations: [{ path: 'kept.md' }] };
+      // Review 6: as two pieces, the shape acp-v2.mjs streams, which the window keeps as one update.
+      const bit = (text) => ({ sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', content: [{ type: 'content', content: { type: 'text', text } }], _meta: { 'p9/append': true } });
+      const more = [bit(' and a streamed'), bit(' piece'), { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', status: 'completed' }];
+      // Review 4: a second call whose repeat carries only its diff, then a status-only update: its output stays, and (review 5)
+      // that diff, which only the repeat carried, is not added.
+      const call2 = { sessionUpdate: 'tool_call', toolCallId: 'repeat-d', title: 'diff replay', kind: 'edit', status: 'pending' };
+      const first2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'diff tool output' } }] };
+      const again2 = { ...call2, content: [{ type: 'diff', path: 'other.md', oldText: 'a\n', newText: 'b\n' }] };
+      const status2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed' };
+      // Review 8: a third call whose update after the repeat carries only a diff (edited.md), then a whole output snapshot.
+      const call3 = { sessionUpdate: 'tool_call', toolCallId: 'repeat-s', title: 'snapshot edit', kind: 'edit', status: 'pending' };
+      const first3 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-s', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'third output' } }] };
+      const tail3 = [{ ...call3 }, { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-s', content: [{ type: 'diff', path: 'edited.md', oldText: 'x\n', newText: 'y\n' }] },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-s', content: [{ type: 'content', content: { type: 'text', text: 'third snapshot' } }] }];
+      for (const update of [call, first, call2, first2, call3, first3, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, again, ...more, again2, status2, ...tail3]) await connection.sessionUpdate({ sessionId, update });
+      await say('after repeat files');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'compact') {
       setTimeout(async () => {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-1', title: 'Compact conversation', kind: 'think', status: 'completed' } });
@@ -487,6 +526,28 @@ const connection = acp.connectAgent(stream, {
       const long = 'p'.repeat(150), tail = 'q'.repeat(150);
       await piece('L1', long); await piece('L1', tail);
       setTimeout(async () => { await piece('L1', long + tail); await piece('L2', long + tail); }, 300);
+      return { stopReason: 'end_turn' };
+    }
+    // DUP-1 (a)/(b): claude-agent-acp's result fallback. A turn's result that reports no output tokens ends it, and the
+    // adapter forwards the result text, the reply the agent already streamed, whole under a new id: after the turn-end
+    // (twice short, as the server's ledger shows it) or before it (twice early, as the adapter's source orders it). Then
+    // the same words once more under S2, a reply of their own, and the marker 'twice: end'. said again: the agent says its
+    // streamed words again at once as a new reply of its own (the API's own kind of id, not the result's uuid).
+    if (text === 'twice short' || text === 'twice early' || text === 'said again') {
+      const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
+      const copy = () => piece('5b0e5d55-ffc2-4f6b-9a39-2d0c0f3c6b11', 'Done, merged.');
+      const rest = async () => { await piece('S2', 'Done, merged.'); await piece('M', 'twice: end'); };
+      if (text === 'said again') { await piece('S1', 'Done, '); await piece('S1', 'merged.'); await piece('R1', 'Done, merged.'); await piece('M2', 'twice: end'); }
+      else {
+        await piece('S1', 'Done, '); await piece('S1', 'merged.');
+        if (text === 'twice early') { await copy(); setTimeout(rest, 300); } else setTimeout(async () => { await copy(); await rest(); }, 300);
+      }
+      return { stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 } };
+    }
+    // DUP-1 review 3: a command's own output, which the adapter sends under a uuid too, saying what the last reply said.
+    if (text === 'command result') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: '0c6a4f0e-3d4b-4b8e-9a51-7c2e1f9d3a20', content: { type: 'text', text: 'Done, merged.' } } });
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'M3', content: { type: 'text', text: 'twice: end' } } });
       return { stopReason: 'end_turn' };
     }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }

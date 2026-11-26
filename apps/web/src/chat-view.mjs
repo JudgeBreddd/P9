@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { pastedFiles, quoted, quoteFate, quoteNow, quoteSent, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, quoteFate, quoteNow, quoteSent, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag, upKept } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -1179,12 +1179,27 @@ function tailed(s, body) {
   s.more = from;
   s.early = new Set([...(s.early ?? []), ...(from === undefined ? [] : body.events.filter(e => e.conversation === s.id && e.cursor < from).map(e => e.cursor))]);
 }
+// One tool_call_update on its row, the live rule. ups: the row's own updates, so Show earlier can put them on the row where
+// the call first ran (O266). Review 6: a run of streamed pieces is kept as one (its last 4,000 characters, all the row
+// shows), so a noisy command keeps one update, not thousands. ponytail: other updates are kept whole while the chat is open.
+function toolUpdate(tool, d) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d._meta?.['p9/append'] === true) { const piece = toolText(d.content); tool.output = ((tool.output ?? '') + piece).slice(-4000); } else if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } const exit = exitTag(d._meta?.['p9/exit']); if (exit) tool.exit = exit; }
 async function earlier(s) {
   const from = s.more, r = await window.p9.chat('events', { after: 0, only: [s.id], until: from - 1, tail: TAIL });
   // O251: a jump meanwhile made the chat a stub and read it again from its newest blocks; this page would skip what lies between.
   if (r.status !== 200 || s.more !== from) return;
   const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
   for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
+  // O266: a call sent again after a compaction can have its first on this page and its second below: one row, where it
+  // first ran. The newer row came from the repeated call, which the live rules skip, so only its own updates (ups) go on
+  // the older row, by the live rule (toolUpdate); what the repeated call alone carried is not added.
+  const below = new Map(s.events.filter(e => e.t === 'tool' && e.id != null).map(e => [e.id, e]));
+  old.events = old.events.map(e => {
+    const n = e.t === 'tool' && below.get(e.id); if (!n) return e;
+    s.events.splice(s.events.indexOf(n), 1);
+    const row = { ...e, ups: [...(e.ups ?? []), ...(n.ups ?? [])] };
+    for (const d of n.ups ?? []) toolUpdate(row, d);
+    return row;
+  });
   s.events = [...old.events, ...s.events];
   tailed(s, r.body);
 }
@@ -1255,8 +1270,9 @@ function applyChat(ev, into) {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
         else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
-      } else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d._meta?.['p9/append'] === true) tool.output = ((tool.output ?? '') + toolText(d.content)).slice(-4000); else if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } const exit = exitTag(d._meta?.['p9/exit']); if (exit) tool.exit = exit; } } // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag
+      } else if (d.sessionUpdate === 'tool_call' && d.toolCallId != null && s.events.some(e => e.t === 'tool' && e.id === d.toolCallId)) { /* O266: after a compaction the adapter sends earlier calls again, pending, each followed by its update: the row it has is kept, not drawn twice and left pending */ }
+      else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
+      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } } // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       // O126: the agent's own title only on a chat the user never named. O172: nor on a sprint chat's role name (the list's named, sprintFields).
       else if (d.sessionUpdate === 'session_info_update') { if (!s.named && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);

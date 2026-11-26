@@ -1376,3 +1376,14 @@ test('A2 step 6b: quote a whole reply or a selection on the phone, as a chip wit
   await send(page, '/ping'); await said(page, 'echo:/ping'); // a command goes alone; the chip stays
   assert.equal(await chips.first().locator('[data-quote-edit]').evaluate((b) => b.p9same), true, 'the same button after the redraw');
 });
+
+// O266: after an automatic compaction the adapter sends the calls from before it again, same ids, pending, then each one's
+// finish. The phone keeps the one row it has; it drew a second one, left pending (ended at the turn's end).
+test('O266: a tool call sent again after a compaction keeps its one row on the phone', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'toolrepeat'); await said(page, 'after repeat');
+  assert.equal(await page.$eval('#events', (el) => el.textContent.split('repeat me').length - 1), 1, 'one row for the call');
+  // Finished by its own update, not marked ended at the turn's end.
+  assert.equal(await page.locator('#events article[data-kind="tool"][data-status="completed"]', { hasText: 'repeat me' }).count(), 1, 'its one row, completed');
+});
