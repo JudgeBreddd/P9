@@ -397,7 +397,12 @@ const connection = acp.connectAgent(stream, {
       const between = Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' }));
       const again = { ...call, locations: [{ path: 'kept.md' }] };
       const more = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: ' and a streamed piece' } }], _meta: { 'p9/append': true } };
-      for (const update of [call, first, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, again, more]) await connection.sessionUpdate({ sessionId, update });
+      // Review 4: a second call whose repeat carries only its diff, then a status-only update: its output stays.
+      const call2 = { sessionUpdate: 'tool_call', toolCallId: 'repeat-d', title: 'diff replay', kind: 'edit', status: 'pending' };
+      const first2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'diff tool output' } }] };
+      const again2 = { ...call2, content: [{ type: 'diff', path: 'other.md', oldText: 'a\n', newText: 'b\n' }] };
+      const status2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed' };
+      for (const update of [call, first, call2, first2, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, again, more, again2, status2]) await connection.sessionUpdate({ sessionId, update });
       await say('after repeat files');
       return { stopReason: 'end_turn' };
     }

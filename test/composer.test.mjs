@@ -898,6 +898,9 @@ test('O266 review 3: Show earlier keeps the first run\'s diff for a file the rep
   const rows = fresh.locator('details.tool', { hasText: 'repeat edit' });
   assert.equal(await rows.count(), 1, 'one row for the call');
   assert.match(await rows.first().textContent(), /first run output and a streamed piece/, 'the streamed piece is added to the first run\'s output, not put in its place');
+  const diffRows = fresh.locator('details.tool', { hasText: 'diff replay' });
+  assert.equal(await diffRows.count(), 1, 'one row for the call repeated with its diff');
+  assert.match(await diffRows.first().textContent(), /diff tool output/, 'a repeat that carries only its diff keeps the first run\'s output');
   await page.locator('.pane [data-chat-files]').first().click();
   await page.locator('#side .cf-tabs [role=tab]').nth(1).dispatchEvent('click'); // a card in this window's corner covers the tab
   const item = page.locator('#side .cf-item[data-cf-file]', { hasText: 'kept.md' });
