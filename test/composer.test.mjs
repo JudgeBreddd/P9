@@ -744,29 +744,36 @@ test('A2 step 6: a refused send made with the pencil open gives back the edited 
   console.log('PASS A2 step 6 round 3: a refusal gives back the edit once, in the order sent; a removed edit, or one a later send or a draft took, stays gone');
 });
 
-// O267: a send whose retry gets outcome-unknown (a remote's first try still in flight) stays out of the box while it may
-// arrive: one that shows in the chat stays sent; one that does not comes back after 30 seconds.
-test('O267: a send with an unknown outcome waits for the chat before going back in the box', { timeout: 120000 }, async (t) => {
+// O267: a send whose retry gets outcome-unknown (a remote's first try still in flight) asks again with the same operation
+// ID until the daemon answers, so its own answer settles it (a held one keeps its files the normal way); an identical
+// message from elsewhere does not count as it. Never answered: back in the box, saying it may still have arrived.
+test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 120000 }, async (t) => {
   const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown');
   const composer = pane.locator('.composer textarea');
-  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+  // 'landed': the daemon's first two answers are lost in flight, the third try is the one it runs. 'lost': never answered.
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o267 = [];
     ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (text !== 'landed' && text !== 'lost') return h(e, ...args);
-      if (text === 'landed') await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
-  await send('stream 20'); await until(async () => (await pane.locator('.working').count()) > 0, 'a turn runs', 10000);
-  await send('landed'); // mid-turn: held for the turn's end or steered into it; either counts as arrived
-  await page.locator('#toasts .toast', { hasText: 'Not sure your message arrived' }).first().waitFor({ timeout: 10000 });
-  await until(async () => (await users(instance, id)).includes('landed'), 'it reached the agent', 40000);
-  await page.waitForTimeout(3000);
+      globalThis.o267.push([text, args[1].op]);
+      if (text === 'landed' && globalThis.o267.filter(([x]) => x === 'landed').length >= 3) return h(e, ...args);
+      return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
+  await send('landed');
+  // The same words from another device while this one waits: a message of its own, not this send's answer.
+  const other = await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'landed' }); assert.equal(other.status, 202, JSON.stringify(other.body));
+  await until(async () => (await users(instance, id)).filter((u) => u === 'landed').length === 2, 'both arrived, once each', 20000);
+  const ops = await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'landed').map(([, op]) => op));
+  assert.equal(ops.length, 3); assert.equal(new Set(ops).size, 1, 'each try is the same operation');
   assert.equal(await composer.inputValue(), '', 'a message that arrived does not come back');
-  await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
+  assert.equal(await page.locator('#toasts .toast', { hasText: 'not sure' }).count(), 0, 'its own answer settled it, with no unsure line');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'those turns ended', 20000);
   await send('lost');
   await page.waitForTimeout(5000);
-  assert.equal(await composer.inputValue(), '', 'not back in the box while it may still arrive');
-  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once it did not arrive', 40000);
-  await page.locator('#toasts .toast', { hasText: 'did not arrive' }).waitFor({ timeout: 5000 });
+  assert.equal(await composer.inputValue(), '', 'not back in the box while P9 may still be running it');
+  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once P9 never answered', 45000);
+  await page.locator('#toasts .toast', { hasText: 'Still not sure your message arrived' }).waitFor({ timeout: 5000 });
+  assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'lost').map(([, op]) => op))).size, 1, 'one operation throughout');
   assert.equal((await users(instance, id)).filter((u) => u === 'lost').length, 0);
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('PASS O267: an unknown outcome waits for the chat');
+  console.log('PASS O267: an unknown outcome asks again with its own ID; identical words elsewhere do not settle it; never answered, back in the box unsure');
 });
 
 // A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,

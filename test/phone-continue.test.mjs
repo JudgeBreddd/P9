@@ -221,12 +221,12 @@ for (const agent of ['claude', 'codex']) {
   });
 }
 
-test('O267: a message the phone\'s full storage refuses is not queued and stays in the box', { timeout: 120000 }, async (t) => {
+test('O267: a message the phone\'s full storage refuses is not queued and stays in the box; Take back refused by storage keeps it queued', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
   const id = await newChat(page, 'claude');
   await setOnline(page, false);
   await page.waitForSelector('#stale:not([hidden])');
-  await page.evaluate(() => { const set = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.evaluate(() => { const set = window.o267set = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
   await page.fill('#prompt', 'no room'); await page.click('#composer button');
   await page.waitForSelector('#composerNote:not([hidden])');
   assert.match(await page.textContent('#composerNote'), /storage is full/);
@@ -235,13 +235,31 @@ test('O267: a message the phone\'s full storage refuses is not queued and stays 
   assert.equal(await page.evaluate((key) => localStorage.getItem(key), 'p9-queue:' + id), null);
   // Online, the daemon answering turn-running (the phone queues it for the turn's end): the same refusal.
   await page.fill('#prompt', ''); await setOnline(page, true); await page.waitForSelector('#stale', { state: 'hidden' });
-  await page.route('**/chat/*/prompt', (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }));
+  // The answer comes after the box was changed to other words: both are in the box, the sent one first.
+  let answer; const answered = new Promise((done) => { answer = done; });
+  await page.route('**/chat/*/prompt', async (route) => { await answered; await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }); });
   await page.evaluate(() => { document.querySelector('#composerNote').hidden = true; });
   await page.fill('#prompt', 'busy'); await page.click('#composer button');
+  await page.fill('#prompt', 'typed meanwhile'); answer();
   await page.waitForSelector('#composerNote:not([hidden])');
-  assert.match(await page.textContent('#composerNote'), /storage is full/);
-  assert.equal(await page.inputValue('#prompt'), 'busy', 'still in the box');
+  assert.match(await page.textContent('#composerNote'), /storage is full\. Your message is back in the box/);
+  assert.equal(await page.inputValue('#prompt'), 'busy\ntyped meanwhile', 'the sent words came back above the new ones');
   assert.equal(await page.locator('#queued').isHidden(), true, 'not queued');
+  await page.unroute('**/chat/*/prompt');
+  // Take back that storage refuses to record: the message stays queued (a reopened app would send it), not also in the box.
+  await page.evaluate(() => { Storage.prototype.setItem = window.o267set; });
+  await page.fill('#prompt', ''); await setOnline(page, false); await page.waitForSelector('#stale:not([hidden])');
+  await page.evaluate(() => { document.querySelector('#composerNote').hidden = true; });
+  await page.fill('#prompt', 'keep me'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  await page.evaluate(() => { const set = Storage.prototype.setItem, rm = Storage.prototype.removeItem, no = (key) => { if (String(key).startsWith('p9-queue:')) throw new DOMException('denied', 'QuotaExceededError'); };
+    Storage.prototype.setItem = function (key, value) { no(key); return set.call(this, key, value); }; Storage.prototype.removeItem = function (key) { no(key); return rm.call(this, key); }; });
+  await page.locator('[data-unqueue]').dispatchEvent('click');
+  await page.waitForSelector('#composerNote:not([hidden])');
+  assert.match(await page.textContent('#composerNote'), /Not taken back: this phone's storage refused the change/);
+  assert.equal(await page.inputValue('#prompt'), '', 'not back in the box while it is still queued');
+  assert.match(await page.evaluate((key) => localStorage.getItem(key), 'p9-queue:' + id), /keep me/);
+  assert.equal(await page.locator('#queued [data-unqueue]').count(), 1, 'still listed');
 });
 
 for (const agent of ['claude', 'codex']) {
