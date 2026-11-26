@@ -250,7 +250,7 @@ export function createDelegate({ chat, allowed, usage }) {
   // provider profile the role names.
   // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
   // O141 review 2: what a scheduled prompt may not wake or be set from: a chat of a sprint closed, or being closed (marked
-  // before Close waits on any Stop, so a schedule due meanwhile cannot restart a worker Close already stopped).
+  // once the owner allowed Close, before it waits on any Stop, so a schedule due meanwhile cannot restart a stopped worker).
   const closing = new Set();
   const asleep = (id) => { for (let at = id, n = 0; at && n < 8; at = chat.info(at)?.parent, n += 1) if (closing.has(at) || chat.projects.closed(at)) return { error: 'sprint-closed', detail: 'That chat is in a closed sprint: nothing scheduled wakes it.' }; return null; };
   const shutFor = (caller) => { for (let id = caller, n = 0; id && n < 8; id = chat.info(id)?.parent, n += 1) if (chat.projects.closed(id)) return { error: 'sprint-closed', detail: 'This sprint is closed: it starts no more chats.' }; return null; };
@@ -702,7 +702,7 @@ export function createDelegate({ chat, allowed, usage }) {
     };
     if (no()) return no();
     if (starting.has(sprint)) return { error: 'sprint-starting', detail: 'This sprint is being started or closed now.' };
-    starting.add(sprint); closing.add(sprint);
+    starting.add(sprint);
     // A sprint never ends (the owner, 2026-11-22): Close cleans its worker folders by Clean up's own rules (worker-folders.mjs:
     // only a folder with nothing unsaved whose work is in the main line goes; the rest stays as folder and branch; the
     // sprint's files are never touched; a saved branch not merged goes into bundles/, the owner's "Bundle"). Not when a chat of this sprint closes it: it is still running, as the clean
@@ -716,6 +716,9 @@ export function createDelegate({ chat, allowed, usage }) {
         if (chat.lock(caller).on) return { error: 'agent-lock-on' };
         if (no()) return no();
       }
+      // Closing from here, after the owner's yes: a schedule due while Close was only asked keeps going (declining Close
+      // must not lose one); from now on none is sent (fire) and Stop wins over a prompt already starting (chat.mjs).
+      closing.add(sprint);
       const scripts = hooks.standing(sprint).running;
       const refused = await hooks.fire(sprint, 'before-close', null, scripts);
       if (refused) return refused;

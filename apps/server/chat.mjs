@@ -808,6 +808,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // holds the run, so a silent gap that long means the mark was lost; it caps a lost mark at 5 min instead of until the
   // next prompt. The fallback drops the mark, so a late end mark ends nothing a second time.
   // O252's test widens the turn start snapshot's window (test homes only).
+  const NOTE_MS = process.env.P9_TEST_HOME && Number(process.env.P9_NOTE_MS) > 0 ? Number(process.env.P9_NOTE_MS) : 0; // tests: widen the note read
   const SHELL_START_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SHELL_START_MS) > 0 ? Number(process.env.P9_SHELL_START_MS) : 0;
   const UNPROMPTED_MARK_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_MARK_MS) > 0 ? Number(process.env.P9_UNPROMPTED_MARK_MS) : 300000;
   const quiet = (session, id) => {
@@ -1903,6 +1904,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // message named a project note (first message, moved in, or changed). projectNote names what was current. A steered
       // message (steer) carries none and is skipped, or one steer would resend the whole note (step 1c).
       const project = bare ? null : await projects.note(conversation).catch(() => null);
+      if (NOTE_MS) await wait(NOTE_MS);
+      // O141 review 3: a Stop (Close stops every chat of its sprint) that came while the note was read wins: nothing starts.
+      if (stops.has(id) || ['stopping', 'stopped'].includes(row(id)?.state)) { release(); return refused(409, 'stopping'); }
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
