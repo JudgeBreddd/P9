@@ -750,11 +750,12 @@ test('O267: a send with an unknown outcome waits for the chat before going back 
   const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown');
   const composer = pane.locator('.composer textarea');
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
-    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] !== 'prompt') return h(e, ...args);
-      if (args[1]?.text === 'landed') await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
-  await send('landed');
+    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (text !== 'landed' && text !== 'lost') return h(e, ...args);
+      if (text === 'landed') await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
+  await send('stream 20'); await until(async () => (await pane.locator('.working').count()) > 0, 'a turn runs', 10000);
+  await send('landed'); // mid-turn: held for the turn's end or steered into it; either counts as arrived
   await page.locator('#toasts .toast', { hasText: 'Not sure your message arrived' }).first().waitFor({ timeout: 10000 });
-  await until(async () => (await users(instance, id)).includes('landed'), 'it reached the daemon', 15000);
+  await until(async () => (await users(instance, id)).includes('landed'), 'it reached the agent', 40000);
   await page.waitForTimeout(3000);
   assert.equal(await composer.inputValue(), '', 'a message that arrived does not come back');
   await until(async () => (await pane.locator('.working').count()) === 0, 'that turn ended', 15000);
