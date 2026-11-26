@@ -107,7 +107,7 @@ export const DELEGATE_TOOLS = (input) => {
       input({ chat }, ['chat'])],
     ['rename_chat', 'Rename a chat you started, or your own chat (no chat), so the list and the sprint card name the work it does now. The user can rename it again; P9 no longer names it from its first message.',
       input({ chat, title: { type: 'string', maxLength: 120, description: 'The new name: 1 to 120 characters, one line.' } }, ['title'])],
-    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview, and goal ({ objective, status }) when its agent keeps one.', input({})],
+    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, plan (the pool in plan_usage it spends; null when it spends none P9 reads, as a provider-profile chat), context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview, and goal ({ objective, status }) when its agent keeps one.', input({})],
     ['list_providers', 'What can be named as provider, in open_chat and in a sprint\'s roles.json: ' + AGENT_IDS.join(', ') + ' with the models and efforts each offers (null until P9 has read that agent\'s list), and each provider profile the user made in Settings as profile:<id> with its name and models. '
       + 'A profile takes Claude\'s efforts. It says what exists, not what you may start: open_chat still starts only what a free Settings > Delegation row starts.', input({})],
     ['plan_usage', 'Every provider\'s plan use, from the same source as the user\'s Usage page: providers has one key per provider P9 runs, null when nothing is recorded or it is signed out (signedOut lists those). '
@@ -1281,11 +1281,14 @@ export function createDelegate({ chat, allowed, usage }) {
       ...chat.profiles.list().profiles.map((p) => ({ provider: 'profile:' + p.id, name: p.name, models: p.models.map((m) => ({ value: m, name: m })), efforts: efforts('claude') })),
     ] };
   }
+  // O141 review 9: the plan a chat spends, as plan_usage's pool names it, so a usage watch holds only a worker on the window
+  // running hot. A profile chat spends its profile's service, not its agent's plan (SECURITY.md § Provider profiles): null.
+  const planOf = (c) => chat.profileOf?.(c.id) ? null : CATALOG.find((a) => a.id === c.provider)?.usage.pool ?? null;
   function listChats(caller) {
     const family = chat.family(), me = family.find((c) => c.id === caller), mine = below(family, caller);
     const rows = chat.list().filter((c) => c.id !== caller && !c.archived && (mine.includes(c.id) || (me?.project && c.project === me.project)));
     return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
-      ...chat.gauge(c.id), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
+      ...chat.gauge(c.id), plan: planOf(c), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
       askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
   }

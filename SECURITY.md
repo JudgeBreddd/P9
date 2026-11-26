@@ -679,7 +679,8 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
   encrypted", since the key then crosses that network in the clear.
 - **Signed in to Claude as well.** A profile chat uses the profile, not your Claude sign-in
   (seen once, 2026-11-11, bundled adapter 0.106.0). Your other Claude chats are unaffected.
-  A profile chat is left out of the Claude usage rows: it does not spend that plan.
+  A profile chat is left out of the Claude usage rows: it does not spend that plan. list_chats
+  gives it no plan either, so a sprint lead's usage watch never holds it for the Claude plan.
 - **What the agent can do with it.** Read it and use it, as above: it is in the agent's
   environment for the whole chat. The agent's own setting that strips such keys from the
   commands it runs was tried (2026-11-11) and not used: it needs extra programs installed,

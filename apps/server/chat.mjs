@@ -2320,6 +2320,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     agentOf,
     startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
+    profileOf,
     startFolder: (id) => startOf(row(id)).catch(() => null),
     // A folder a chat asked for, as its full path once it passes the "Start in" check (row 24), else null.
     checkedFolder: (folder) => folderCheck(folder).then(() => folderPath(folder), () => null),
