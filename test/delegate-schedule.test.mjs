@@ -3,6 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import path from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { restart } from './helpers.mjs';
 import { start, call, pause, until, events, agent, connect, rows } from './delegate-helpers.mjs';
 
@@ -106,3 +110,102 @@ test('O140 other chat: a once prompt scheduled to a busy chat waits for its turn
   console.log('PASS O140 other chat: held while busy (when ' + held.hit.data.when + '), sent after its turn end, once, from its owner; list empty');
 });
 
+
+// O141: a started sprint (Start refuses a model P9 has not seen, so one chat reads the model list first), its lead on 'mcp',
+// and one worker w1; hook is the blocking before-close script's code.
+async function watchSprint(t, hook) {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const warm = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${warm}/prompt`, 'POST', { text: 'config' });
+  await until(instance, (e) => e.conversation === warm && e.data?.content?.text?.startsWith('config:'));
+  const repo = path.join(instance.workspace, 'repo'); mkdirSync(repo);
+  execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']); writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  execFileSync('git', ['-C', repo, 'add', '-A']); execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'a']);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Watch', work: { kind: 'new', parent: '', name: 'watch' } })).body.project.id;
+  const sp = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Watch' })).body, sprint = sp.sprint;
+  const role = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  writeFileSync(path.join(sp.folder, 'sprint.md'), '# Plan\n\n- [ ] a1: the piece. Role: w1.\n');
+  writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
+  writeFileSync(path.join(sp.folder, 'roles/lead.work.md'), 'mcp');
+  const wait = path.join(instance.workspace, 'wait.mjs'); writeFileSync(wait, hook);
+  writeFileSync(path.join(sp.folder, 'hooks.json'), JSON.stringify({ scripts: [{ name: 'wait', command: process.execPath + ' ' + wait, point: 'before-close', blocking: true }] }));
+  const hooks = (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks }); assert.equal(started.status, 200, JSON.stringify(started));
+  writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: ['lead', 'w1'].map(role) }));
+  const L = await connect(t, instance, sprint);
+  const made = await L.tool('open_chat', { text: 'mcp', key: 'w1' }); assert.ok(made.chat && !made.error, JSON.stringify(made));
+  await L.done(made.chat);
+  const w = await connect(t, instance, made.chat);
+  return { instance, project, sprint, made, L, w };
+}
+
+// O141: the lead's usage watch is its own scheduled prompt (sprint-files.mjs LEAD). Closing the sprint pauses every schedule
+// its chats own, so a closed sprint's lead or worker is never woken by one; the schedules stay listed, paused.
+// Review 2: a schedule due while Close is under way (here a blocking before-close script holds it 7 s, under the test's 10 s request limit), the worker's own or
+// one a chat elsewhere in the project set for it, is not sent; nor can that chat set or turn one back on for it afterwards.
+test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed lead and worker are not woken', { timeout: 180000 }, async (t) => {
+  const { instance, project, sprint, made, L, w } = await watchSprint(t, 'setTimeout(() => {}, 7000);');
+  const soon = (s) => new Date(Date.now() + s * 1000).toISOString();
+  const o = await agent(t, instance, { project }); // a chat elsewhere in the same project
+  const watch = await L.tool('schedule_prompt', { text: 'watch', at: soon(30), every: 10 });
+  const wake = await w.tool('schedule_prompt', { text: 'wake', at: soon(30) });
+  const later = await o.tool('schedule_prompt', { chat: made.chat, text: 'later', at: soon(300), paused: true });
+  const began = Date.now();
+  const early = await w.tool('schedule_prompt', { text: 'early', at: soon(3) }), nudge = await o.tool('schedule_prompt', { chat: made.chat, text: 'nudge', at: soon(3), every: 1 });
+  assert.deepEqual([watch, wake, later, early, nudge].map((x) => x.action), Array(5).fill('scheduled'), JSON.stringify([watch, wake, later, early, nudge]));
+  const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  assert.equal(closed.status, 200, JSON.stringify(closed));
+  assert.ok(Date.now() - began > 6000 && Date.now() < Date.parse(watch.nextRun), 'Close did not span the early schedules\' time, or ran past the others\'');
+  await pause(Math.max(0, Date.parse(watch.nextRun) + 8000 - Date.now()));
+  const got = async (id, word) => (await events(instance, id)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\n' + word));
+  assert.deepEqual(await got(sprint, 'watch'), [], 'a closed sprint\'s lead was woken by its schedule');
+  assert.deepEqual(await got(made.chat, 'wake'), [], 'a closed sprint\'s worker was woken by its schedule');
+  assert.deepEqual(await got(made.chat, 'early'), [], 'a schedule due during Close woke the worker');
+  assert.deepEqual(await got(made.chat, 'nudge'), [], 'another chat\'s schedule woke a closed sprint\'s worker');
+  assert.equal((await o.tool('schedule_prompt', { chat: made.chat, text: 'again', at: soon(60) })).error, 'sprint-closed', 'a new schedule for a closed sprint\'s worker was taken');
+  assert.equal((await o.tool('schedule_prompt', { id: later.id, paused: false })).error, 'sprint-closed', 'a schedule for a closed sprint\'s worker was turned back on');
+  assert.match((await o.tool('list_schedules')).schedules.find((x) => x.id === nudge.id).last, /not sent: sprint-closed/);
+  // Kept, paused (read from the store: a closed chat's own tools are refused).
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 }); t.after(() => db.close());
+  assert.deepEqual(db.prepare("SELECT owner, paused FROM schedules WHERE text IN ('watch', 'wake') ORDER BY owner = ? DESC").all(sprint).map((r) => [r.owner, r.paused]), [[sprint, 1], [made.chat, 1]]);
+  console.log('PASS O141: close paused the lead\'s and the worker\'s schedules; neither woke');
+});
+
+// O141 review 4: a once prompt due while Close is under way is not sent then; a Close that fails (its blocking before-close
+// script exits 1 once the test has seen the prompt waiting, review 6: not after a fixed time) keeps it, and it goes shortly after.
+test('O141: a once prompt due during a Close that fails is kept and goes after', { timeout: 120000 }, async (t) => {
+  const { instance, sprint, made, w } = await watchSprint(t, "import { existsSync } from 'node:fs'; setInterval(() => existsSync(new URL('./go', import.meta.url)) && process.exit(1), 100); setTimeout(() => process.exit(1), 9000);");
+  const early = await w.tool('schedule_prompt', { text: 'early', at: new Date(Date.now() + 3000).toISOString() });
+  assert.equal(early.action, 'scheduled', JSON.stringify(early));
+  const closing = call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  // Review 5: due while Close runs, it stays listed (waiting), so a crash or a Close that succeeds cannot lose it unpaused.
+  let listed;
+  for (let i = 0; i < 16 && !/waiting/.test(listed?.last ?? ''); i++) { await pause(500); listed = (await w.tool('list_schedules')).schedules.find((x) => x.id === early.id); }
+  assert.match(listed?.last ?? '', /waiting/, 'still listed and waiting while Close runs: ' + JSON.stringify(listed));
+  writeFileSync(path.join(instance.workspace, 'go'), ''); // now the before-close script refuses Close
+  const closed = await closing;
+  assert.notEqual(closed.status, 200, 'the failing before-close script refused Close: ' + JSON.stringify(closed));
+  const got = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\nearly'));
+  assert.deepEqual(await got(), [], 'not sent while Close was under way');
+  for (let i = 0; i < 40 && !(await got()).length; i++) await pause(500);
+  assert.equal((await got()).length, 1, 'sent once after the Close failed');
+  console.log('PASS O141 review 4: a once prompt due during a failed Close was kept and sent after');
+});
+
+// O141 review 3: Close stops every chat of its sprint, but a prompt already on its way (a schedule sent just before Close)
+// reads the project note before it connects an agent. A Stop during that read wins: nothing starts. The read is slowed
+// (P9_NOTE_MS) so the Stop lands inside it every time.
+test('O141: a Stop while a prompt reads its project note wins, so a prompt already on its way does not start after Close', { timeout: 120000 }, async (t) => {
+  const instance = await start(t, { P9_NOTE_MS: '2500' });
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Stopped while starting' })).body.conversation;
+  const prompting = call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'hello' });
+  await pause(800);
+  const stopped = await call(instance, `/chat/${chat}/stop`, 'POST', {});
+  assert.equal(stopped.status, 200, JSON.stringify(stopped));
+  const sent = await prompting;
+  assert.equal(sent.body?.error ?? sent.body?.reason, 'stopping', 'a prompt starting through a Stop was taken: ' + JSON.stringify(sent));
+  await pause(1500);
+  const types = (await events(instance, chat)).map((e) => e.type);
+  assert.ok(!types.includes('user') && !types.includes('turn-end'), 'the prompt ran after Stop: ' + JSON.stringify(types));
+});

@@ -824,6 +824,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // holds the run, so a silent gap that long means the mark was lost; it caps a lost mark at 5 min instead of until the
   // next prompt. The fallback drops the mark, so a late end mark ends nothing a second time.
   // O252's test widens the turn start snapshot's window (test homes only).
+  const NOTE_MS = process.env.P9_TEST_HOME && Number(process.env.P9_NOTE_MS) > 0 ? Number(process.env.P9_NOTE_MS) : 0; // tests: widen the note read
   const SHELL_START_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SHELL_START_MS) > 0 ? Number(process.env.P9_SHELL_START_MS) : 0;
   const UNPROMPTED_MARK_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_MARK_MS) > 0 ? Number(process.env.P9_UNPROMPTED_MARK_MS) : 300000;
   const quiet = (session, id) => {
@@ -1842,7 +1843,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // (a lead's send_chat, a reviewer wake, the messages that waited for a turn's end): each is kept, in order, for
       // Resume. The owner's own message goes through (holding it would look like a dead chat),
       // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
-      const pausing = (from || mixed.has(body)) && !notes.has(body) && pausedOf(conversation.parent);
+      // O141: a worker its lead holds (paused:<worker>, pause_sprint with chat) keeps them the same way; its sprint's pause first.
+      // A lead's own id is its sprint's key, so it is checked only for a chat that leads no sprint.
+      const pausedAt = (from || mixed.has(body)) && !notes.has(body) ? [conversation.parent, !sprintFiles.exists(id) && id].find((k) => k && pausedOf(k)) : undefined;
+      const pausing = pausedAt && pausedOf(pausedAt);
       const bare = commands.has(body);
       if (pausing) {
         release();
@@ -1858,7 +1862,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try {
           if (origin) setResuming(origin.lead, resumingOf(origin.lead).filter((i) => i.id !== origin.id));
           if (held?.length) settleResumed(held);
-          setPaused(conversation.parent, [...pausing, item]);
+          setPaused(pausedAt, [...pausing, item]);
           db.exec('COMMIT');
         } catch (error) { db.exec('ROLLBACK'); throw error; }
         crashAt('pause-write');
@@ -1919,6 +1923,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // message named a project note (first message, moved in, or changed). projectNote names what was current. A steered
       // message (steer) carries none and is skipped, or one steer would resend the whole note (step 1c).
       const project = bare ? null : await projects.note(conversation).catch(() => null);
+      if (NOTE_MS) await wait(NOTE_MS);
+      // O141 review 3: a Stop (Close stops every chat of its sprint) that came while the note was read wins: nothing starts.
+      if (stops.has(id) || ['stopping', 'stopped'].includes(row(id)?.state)) { release(); return refused(409, 'stopping'); }
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
@@ -2200,6 +2207,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lastMode,
     lastPicks, // O207 FIX1 (delegate.mjs startSprint): what carry sets a stopped chat back to
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
+    // O141: Close lets go of a worker its lead held. What it kept joins its sprint's own list while the sprint is paused (the
+    // owner's Resume sends it with the rest); otherwise it goes, as Stop drops what waits in a turn's queue.
+    release(worker, lead) {
+      const list = pausedOf(worker), into = pausedOf(lead);
+      if (!list) return;
+      db.exec('BEGIN');
+      // The worker's go first: they are older, since a worker keeps its own only while its sprint is not paused.
+      try { if (into) setPaused(lead, [...list, ...into]); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
+      if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped' });
+      wakeAll('resumed');
+    },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
     // end. Returns how many were held, or null when the sprint was not paused. resumed(count) is called once the pause is
     // cleared and before anything is sent (delegate.mjs queues the resume scripts there, in the order of the presses).
@@ -2332,6 +2350,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     agentOf,
     startNote: (id, text) => { if (text) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('start:' + id, text); },
     gauge,
+    profileOf,
     startFolder: (id) => startOf(row(id)).catch(() => null),
     // A folder a chat asked for, as its full path once it passes the "Start in" check (row 24), else null.
     checkedFolder: (folder) => folderCheck(folder).then(() => folderPath(folder), () => null),

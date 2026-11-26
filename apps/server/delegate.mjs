@@ -107,7 +107,7 @@ export const DELEGATE_TOOLS = (input) => {
       input({ chat }, ['chat'])],
     ['rename_chat', 'Rename a chat you started, or your own chat (no chat), so the list and the sprint card name the work it does now. The user can rename it again; P9 no longer names it from its first message.',
       input({ chat, title: { type: 'string', maxLength: 120, description: 'The new name: 1 to 120 characters, one line.' } }, ['title'])],
-    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview, and goal ({ objective, status }) when its agent keeps one.', input({})],
+    ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, askable (ask_chat may ask it), model, plan (the pool in plan_usage it spends; null when it spends none P9 reads, as a provider-profile chat), context (tokens used and the window\'s size, or null), spent (what it has used so far: inputTokens, outputTokens and cachedTokens of its prompted turns and of the runs Claude Code started itself, costUsd of every run, and turns, or null until it reports any), active (when it was last used), parent, key and preview, paused: true while its sprint is paused, held: true while its lead holds it (pause_sprint with chat), and goal ({ objective, status }) when its agent keeps one.', input({})],
     ['list_providers', 'What can be named as provider, in open_chat and in a sprint\'s roles.json: ' + AGENT_IDS.join(', ') + ' with the models and efforts each offers (null until P9 has read that agent\'s list), and each provider profile the user made in Settings as profile:<id> with its name and models. '
       + 'A profile takes Claude\'s efforts. It says what exists, not what you may start: open_chat still starts only what a free Settings > Delegation row starts.', input({})],
     ['plan_usage', 'Every provider\'s plan use, from the same source as the user\'s Usage page: providers has one key per provider P9 runs, null when nothing is recorded or it is signed out (signedOut lists those). '
@@ -137,7 +137,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'standing_merge: the user\'s switch (true: you may merge what passed review, after before-merge allows it; false: merge is the user\'s). A sprint not yet started answers with started null; a closed one answers with its record (as it stood at Close) and closed { at, by }. This tool changes nothing.',
     input({ sprint: sprintArg })],
     ['close_sprint', 'Close a started sprint on the user\'s word, as the Close sprint button on the user\'s Sprint View does: P9 asks the user first, in every mode. It runs the before-close scripts (a blocking one that fails refuses the close), '
-      + 'stops every chat of the sprint (the chats under the lead, then the lead; the chat that calls this is left to end its own turn), keeps the record (sprint_status as it stood), turns the sprint\'s scripts off and runs the after-close scripts. '
+      + 'stops every chat of the sprint (the chats under the lead, then the lead; the chat that calls this is left to end its own turn), keeps the record (sprint_status as it stood), pauses the scheduled prompts of its chats, turns the sprint\'s scripts off and runs the after-close scripts. '
       + 'Then it removes each worker folder with nothing unsaved whose work is in the main line, with its branch (the answer\'s cleaned lists what went and what stayed, and why); every other folder and branch, the sprint\'s files and its chats stay. '
       + 'Called from a chat of the sprint, no folder is removed. A closed sprint is not started again.',
     input({ sprint: sprintArg })],
@@ -168,9 +168,10 @@ export const DELEGATE_TOOLS = (input) => {
       + 'Nothing to ask when additional.allowed is true (the user\'s "Allow additional scripts" switch: rows added after Start run with no question; no tool changes it) or when nothing waits. Before Start nothing is asked: Start approves the file. Refused while the agent lock is on.',
     input({ sprint: sprintArg })],
     ['pause_sprint', 'Pause your sprint (you are its lead): no chat you started starts a turn for what you, the reviewer or P9 send it. Each such message is kept, in order, and sent on resume_sprint; '
-      + 'a note still arrives, ask_chat to one of them is refused, a turn already running finishes, and you can open no new worker. What the user types into a worker still goes through. Survives a P9 restart.',
-    input({})],
-    ['resume_sprint', 'Resume your paused sprint: every message kept while it was paused goes out in the order it was sent. Returns how many.', input({})],
+      + 'a note still arrives, ask_chat to one of them is refused, a turn already running finishes, and you can open no new worker. What the user types into a worker still goes through. Survives a P9 restart. '
+      + 'With chat (a worker you started, not a lead itself): hold only that worker, the same way (list_chats gives it held: true); no pause scripts run and no notice is sent.',
+    input({ chat: { type: 'string', description: 'A worker you started: hold only it.' } })],
+    ['resume_sprint', 'Resume your paused sprint: every message kept while it was paused goes out in the order it was sent. Returns how many. With chat: release only that held worker, sending what was kept for it.', input({ chat: { type: 'string', description: 'A worker you hold: release only it.' } })],
     ['sprint_event', 'Run your sprint\'s scripts at a point P9 cannot see happen (you are its lead): before-merge right before you merge a PR (its blocking scripts may refuse: then do not merge; '
       + 'the answer is merge: "allowed", error merge-is-the-owners while the user\'s standing-merge switch is off (new sprints start with it off; then the merge is the user\'s, and no script runs), or error script-refused with the script\'s last line), ci-red when a CI run went red, gate-passed when a gate passed. Only the scripts approved at Start (or allowed after it) run, '
       + 'each given the sprint\'s state with subject (the fields you pass, by: "lead"). Refused before Start, after Close, while the agent lock is on, and while that point\'s scripts from your last call still run (point-busy).',
@@ -249,6 +250,11 @@ export function createDelegate({ chat, allowed, usage }) {
   // opts (Start sprint only, never from a tool's arguments): approved, the press already was the user's yes; profile, the
   // provider profile the role names.
   // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
+  // O141 review 2: what a scheduled prompt may not wake or be set from: a chat of a sprint closed, or being closed (marked
+  // once the owner allowed Close, before it waits on any Stop, so a schedule due meanwhile cannot restart a stopped worker).
+  // Review 4: only being closed is again: a once prompt due then waits in place (schedules.mjs wait), so a Close that fails keeps it.
+  const closing = new Set();
+  const asleep = (id) => { for (let at = id, n = 0; at && n < 8; at = chat.info(at)?.parent, n += 1) if (closing.has(at) || chat.projects.closed(at)) return { error: 'sprint-closed', detail: 'That chat is in a closed sprint: nothing scheduled wakes it.', ...(!chat.projects.closed(at) && { again: true }) }; return null; };
   const shutFor = (caller) => { for (let id = caller, n = 0; id && n < 8; id = chat.info(id)?.parent, n += 1) if (chat.projects.closed(id)) return { error: 'sprint-closed', detail: 'This sprint is closed: it starts no more chats.' }; return null; };
   async function openChat(caller, args, signal, opts = {}) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -483,9 +489,15 @@ export function createDelegate({ chat, allowed, usage }) {
   // and the lead's own tool pause or resume its workers. Only the press sends the lead a notice (a note by default, O197): the lead knows what it did.
   const PAUSED = { error: 'sprint-paused', detail: 'Your sprint is paused: resume_sprint first, or wait for the user to resume it.' };
   const isLead = (id) => ID.test(id ?? '') && !!chat.info(id) && chat.sprintFiles.exists(id);
-  function pauseSprint(lead, owner) {
+  // O141: a lead holds one worker it started (chat): the same kept list, under the worker's ID. A worker that leads a sprint
+  // of its own is refused (its ID already names that sprint's pause).
+  const holdable = (lead, worker) => (!ID.test(worker ?? '') || chat.info(worker)?.parent !== lead ? { error: 'chat-not-found', detail: 'chat: a worker you started.' }
+    : isLead(worker) ? { error: 'request-refused', detail: 'That worker leads a sprint of its own.' } : null);
+  function pauseSprint(lead, owner, worker) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
+    if (worker !== undefined && (closing.has(lead) || chat.projects.closed(lead))) return { error: 'sprint-closed', detail: 'This sprint is closed: it holds no worker.' };
+    if (worker !== undefined) return holdable(lead, worker) ?? (chat.pause(worker) ? { held: true } : { held: true, already: true });
     if (!chat.pause(lead)) return { paused: true, already: true };
     hooks.ordered(lead, 'pause', { by: owner ? 'owner' : 'lead' }); // O202: the pause scripts, after any resume ones still running
     if (owner) notify(lead, 'sprint', '[p9] The user paused this sprint. Your workers start no new turn; what you, the reviewer or P9 send them is kept and sent when the user resumes it. Turns already running finish.', 'sprint');
@@ -506,9 +518,15 @@ export function createDelegate({ chat, allowed, usage }) {
     return { mode };
   }
   chat.resumeLeft?.(narrow)?.catch(() => {});
-  async function resumeSprint(lead, owner) {
+  async function resumeSprint(lead, owner, worker) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
+    if (worker !== undefined) {
+      const no = holdable(lead, worker);
+      if (no) return no;
+      const sent = await chat.resume(worker, narrow);
+      return sent === null ? { held: false, already: true } : { held: false, sent };
+    }
     // O202: the resume scripts are queued the moment the pause is cleared, before the kept messages are sent (which waits),
     // so a Pause pressed while they go is queued after this Resume, not before it.
     const sent = await chat.resume(lead, narrow, (n) => hooks.ordered(lead, 'resume', { by: owner ? 'owner' : 'lead', sent: n }));
@@ -712,6 +730,9 @@ export function createDelegate({ chat, allowed, usage }) {
         if (chat.lock(caller).on) return { error: 'agent-lock-on' };
         if (no()) return no();
       }
+      // Closing from here, after the owner's yes: a schedule due while Close was only asked keeps going (declining Close
+      // must not lose one); from now on none is sent (fire) and Stop wins over a prompt already starting (chat.mjs).
+      closing.add(sprint);
       const scripts = hooks.standing(sprint).running;
       const refused = await hooks.fire(sprint, 'before-close', null, scripts);
       if (refused) return refused;
@@ -731,6 +752,8 @@ export function createDelegate({ chat, allowed, usage }) {
       record.workers = record.workers.map((w) => (w.chat === caller ? w : { ...w, state: 'stopped', waiting: false }));
       const end = { at: Date.now(), by: caller ?? 'owner', record };
       chat.projects.recordClose(sprint, end);
+      schedules?.pause([...below(chat.family(), sprint), sprint]); // O141: nothing of a closed sprint wakes on its own
+      for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) chat.release(c.id, sprint); // O141: no worker stays held
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint, { bundle: true }).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
@@ -738,7 +761,7 @@ export function createDelegate({ chat, allowed, usage }) {
         cleaned: swept && !swept.error ? { removed: swept.removed, kept: swept.kept.map(({ item, branch, why, bytes }) => ({ item, branch, why, bytes })), bundled: swept.bundled ?? [] }
           : { skipped: inside ? 'A chat of this sprint closed it, so its worker folders were not cleaned up: press Clean up worker folders on its page.' : 'Clean up failed: ' + (swept.detail ?? swept.error) + '. Nothing more was removed; press Clean up worker folders on its page.' },
         ...(own && { note: 'Your own chat was not stopped: end your turn now. The sprint is closed.' }) };
-    } finally { starting.delete(sprint); }
+    } finally { starting.delete(sprint); closing.delete(sprint); }
   }
   function newSprint(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -961,7 +984,10 @@ export function createDelegate({ chat, allowed, usage }) {
   // not the user's words), so a paused sprint keeps it for Resume (S13) and a stopped worker takes a place under Workers
   // per chat as send_chat's start does. To another chat it goes as that chat's send_chat with when: queue, checked then.
   // No database (a test's chat without the ledger): no schedules, and the three tools say so.
-  const schedules = chat.db ? createSchedules({ db: chat.db, fire: async (s) => {
+  // O141 review 5: a one-shot due while its sprint is being closed waits in place (schedules.mjs), checked before it is taken.
+  const schedules = chat.db ? createSchedules({ db: chat.db, wait: (s) => Boolean(asleep(s.owner)?.again || asleep(s.chat)?.again), fire: async (s) => {
+    const shut = asleep(s.owner) ?? asleep(s.chat); // the owner, or a chat elsewhere whose schedule names a sprint's worker
+    if (shut) return shut;
     if (s.chat !== s.owner) return sendChat(s.owner, { chat: s.chat, text: s.text, when: 'queue' });
     if (chat.lock(s.owner).on) return { error: 'agent-lock-on' };
     if (shelved(s.owner)) return SHELVED;
@@ -977,6 +1003,10 @@ export function createDelegate({ chat, allowed, usage }) {
     const target = args.chat ?? caller;
     if (args.id === undefined && target !== caller && !reach(caller, target)) return { error: 'chat-not-found' };
     if (args.id !== undefined && args.chat !== undefined) return { error: 'request-refused', detail: 'A schedule keeps its chat: remove it and schedule a new one.' };
+    // A closed sprint's chat sets none, and none is set or turned back on to wake one (pausing or removing stays allowed).
+    const names = args.id === undefined ? target : schedules?.list(caller).find((x) => x.id === args.id)?.chat;
+    const shut = args.paused === true && args.id !== undefined ? null : asleep(caller) ?? (names && asleep(names));
+    if (shut) return shut;
     return schedules ? schedules.save(caller, args, target) : NO_SCHEDULES;
   }
 
@@ -1065,7 +1095,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
     if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'It cannot take a message now: a run it started itself, or a Stop ending its turn. Send it again once that ends.' }) };
-    return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn', ...(sent.held && { held: sent.held }), ...(args.replaces !== undefined && { replaced: sent.replaced ?? null }) };
+    return { chat: args.chat, sent: sent.held ? (sent.when === 'pause' ? 'kept until its sprint resumes or its lead releases it' : 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step')) : sent.steered ? 'into its running turn' : 'started a turn', ...(sent.held && { held: sent.held }), ...(args.replaces !== undefined && { replaced: sent.replaced ?? null }) };
   }
 
   async function waitChat(caller, args, signal) {
@@ -1265,13 +1295,16 @@ export function createDelegate({ chat, allowed, usage }) {
       ...chat.profiles.list().profiles.map((p) => ({ provider: 'profile:' + p.id, name: p.name, models: p.models.map((m) => ({ value: m, name: m })), efforts: efforts('claude') })),
     ] };
   }
+  // O141 review 9: the plan a chat spends, as plan_usage's pool names it, so a usage watch holds only a worker on the window
+  // running hot. A profile chat spends its profile's service, not its agent's plan (SECURITY.md § Provider profiles): null.
+  const planOf = (c) => chat.profileOf?.(c.id) ? null : CATALOG.find((a) => a.id === c.provider)?.usage.pool ?? null;
   function listChats(caller) {
     const family = chat.family(), me = family.find((c) => c.id === caller), mine = below(family, caller);
     const rows = chat.list().filter((c) => c.id !== caller && !c.archived && (mine.includes(c.id) || (me?.project && c.project === me.project)));
     return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
-      ...chat.gauge(c.id), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
+      ...chat.gauge(c.id), plan: planOf(c), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
-      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
+      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((chat.paused?.(c.parent) || (chat.paused?.(c.id) && isLead(c.id))) && { paused: true }), ...(chat.paused?.(c.id) && !isLead(c.id) && { held: true }), ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
   }
 
   async function answerChat(caller, args, signal) {
@@ -1545,8 +1578,8 @@ export function createDelegate({ chat, allowed, usage }) {
     request_sprint_scripts: (args, caller, signal) => hooks.request(caller, args, signal),
     // Not tools: the owner's own library and run (setup-routes.mjs, desktop only).
     ownerScripts: hooks.owner,
-    pause_sprint: (args, caller) => pauseSprint(caller, false),
-    resume_sprint: (args, caller) => resumeSprint(caller, false),
+    pause_sprint: (args, caller) => pauseSprint(caller, false, args.chat),
+    resume_sprint: (args, caller) => resumeSprint(caller, false, args.chat),
     sprint_event: (args, caller) => hooks.event(caller, args),
     // Not tools: the project page's Pause and Resume, the owner's press.
     ownerPause: (sprint) => pauseSprint(sprint, true),

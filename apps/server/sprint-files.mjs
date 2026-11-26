@@ -83,6 +83,37 @@ export function phasesOf(plan) {
 }
 // A Role: owner line is never a worker's queue, even a worker keyed 'owner' (O164 part (3)).
 export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.role !== 'owner' && i.role === key).map(({ id, text }) => ({ id, text }));
+// O141: the lead's default instructions (Start sprint sends them once, as the owner's, like any Setup text): watching plan use is
+// part of leading. The check rides in the scheduled prompt's own text, so it survives a compaction; the thresholds are this
+// text, which the owner edits or deletes in Setup, not code. Close pauses the schedule (delegate.mjs closeSprint).
+// Review 14b: the hold is P9's own flag (pause_sprint with chat; list_chats held: true), not a message the lead tracks:
+// no cursor, reply or delivery rule, since reading chat text and states drifted from what was delivered (reviews 12 to 14).
+// Only the lead's own workers (yours, parent not yours: the chats it started, as pause_sprint takes); the held-for window
+// must be read; a window with no projected decides nothing. Review 15: a held worker with no record is released (a watch
+// stopped between the hold and its record), and a record goes only when list_chats gives the worker not held. Review 16: a
+// carry-on refused for a full held list releases first (that refusal would repeat every watch).
+// ponytail: a turn that ends between list_chats and the note gets the note with its next message, the carry-on at release
+// (seconds wide, at a turn's end); the carry-on says an earlier note no longer applies, so the worker carries on.
+const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
+  + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
+  + '"Usage watch: call plan_usage and list_chats. A window calls for a hold when its reading is not stale, its pace is ahead and its '
+  + 'projected is over 100; a window whose reading has no projected neither calls for a hold nor clears one. A worker (a chat list_chats '
+  + 'marks yours whose parent is no chat it marks yours) draws on a window when list_chats gives its plan as that reading\'s pool and, for a window under '
+  + 'models, its model names that family; a plan of null, or a model that does not name the family (default included), draws on none, '
+  + 'and if you cannot tell, it does not. A worker is held when list_chats gives it held: true: P9 starts no turn for it until you '
+  + 'release it. Under ## Usage watch in sprint.md, keep each worker you hold with its chat id and the window it was held for. '
+  + 'While list_chats gives your workers paused, your sprint is paused: do nothing this watch. '
+  + '1. Each worker kept there that list_chats gives and not held: forget it; one it does not give, keep. A worker list_chats gives held '
+  + 'that is not kept there is back now (a watch stopped before keeping it). One kept and still held is back when its plan\'s reading is there, '
+  + 'not stale, the window it was held for is in it, and every window it draws on has a projected and does not call for a hold. '
+  + 'For every one back, send it Usage is back: carry on (any note before this to end your turn for usage no longer applies). If '
+  + 'send_chat answers sprint-paused-full (its held list is full), call resume_sprint with its chat, then send it the carry-on and forget it. If '
+  + 'send_chat answers with another error, leave it held for the next watch; otherwise call resume_sprint with its chat and forget it. '
+  + '2. For each window that calls for a hold, take the least-advanced worker that draws on it, that list_chats gives working and not '
+  + 'held, and call pause_sprint with its chat. If that answers with an error, keep nothing. Otherwise keep it, and send it as a note: '
+  + 'Usage is running high: finish the step you are on, write a Next line in your notes and end your turn; I will tell you when to carry on. '
+  + 'Log each hold and each release under ## Usage watch."\n'
+  + '- A stale reading is no reason to hold or to release: note it and wait for the next one.\n';
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {
@@ -196,7 +227,7 @@ export function createSprintFiles({ home }) {
     prep(lead, roles) {
       start(lead, 'sprint.md', PLAN);
       start(lead, 'roles.json', JSON.stringify(roles, null, 2) + '\n');
-      for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, '');
+      for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, key === 'lead' && kind === 'instructions' ? LEAD : '');
       return folderOf(lead);
     },
     // Every file of a sprint with its text, in a fixed order: plan, rules, roles.json, review trail, then roles and notes by name.

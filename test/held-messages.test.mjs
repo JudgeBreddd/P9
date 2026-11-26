@@ -424,3 +424,37 @@ test('O255: in a Codex chat, a message sent after a Plan pick was taken back doe
   assert.deepEqual(said, ['plan', 'default'], 'the two were joined, or the second ran in Plan');
   console.log('PASS O255 codex plan taken back: the message sent with Plan ran in Plan, the one sent after it was taken back ran with Plan off, as two turns');
 });
+
+// O141 review 9: the tools a sprint lead's usage watch leans on (sprint-files.mjs LEAD). list_chats names the plan a worker
+// spends; a hold sent as steer to a worker deep in a turn waits with a held ID, and the carry-on sent with replaces takes
+// its place, so only the carry-on reaches the worker; read_chat from the cursor kept just before the hold, asked again on a
+// later watch, has the worker's whole reply, though the first read came before any of it.
+// Review 12: the watch no longer sends replaces (one hold a worker, settled once it is idle); the replace part here is
+// send_chat's own rule (O125), kept.
+test('O141 review 9: a worker\'s plan in list_chats; a hold still waiting is replaced by the carry-on; a reply is read whole from the kept cursor', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const folder = path.join(instance.workspace, 'fresh');
+  for (const dir of [instance.workspace, folder]) fs.writeFileSync(path.join(dir, 'no-steering'), '');
+  const lead = await agent(t, instance, { project });
+  const made = await lead.tool('open_chat', { text: 'gate', title: 'Worker' });
+  await until(instance, (e) => e.conversation === made.chat && e.data?.content?.text === 'gating');
+  assert.equal((await lead.tool('list_chats')).chats.find((c) => c.id === made.chat)?.plan, 'claude', 'a Claude worker does not name the plan it spends');
+  const kept = (await lead.tool('read_chat', { chat: made.chat })).next;
+  const hold = await lead.tool('send_chat', { chat: made.chat, text: 'Finish the step you are on, reply Holding for usage', when: 'steer' });
+  assert.ok(hold.held, 'the hold did not wait: ' + JSON.stringify(hold));
+  const back = await lead.tool('send_chat', { chat: made.chat, text: 'Usage is back: carry on', when: 'steer', replaces: hold.held });
+  assert.equal(back.replaced, hold.held, JSON.stringify(back));
+  const read = async () => JSON.stringify(await lead.tool('read_chat', { chat: made.chat, after: kept }));
+  assert.doesNotMatch(await read(), /carry on/, 'the first watch: no reply yet');
+  for (const dir of [instance.workspace, folder]) fs.writeFileSync(path.join(dir, 'go'), '');
+  for (let n = 0; (await events(instance, made.chat)).filter((e) => e.type === 'turn-end').length < 2 && n < 600; n += 1) await pause(100);
+  const late = await read();
+  assert.match(late, /gated/, 'the later watch from the kept cursor lost the end of the turn: ' + late);
+  // Review 10: the worker's own reply to the carry-on, not the message sent to it.
+  const replies = (await lead.tool('read_chat', { chat: made.chat, after: kept })).messages.filter((m) => m.role === 'assistant').map((m) => m.text).join('\n');
+  assert.match(replies, /echo:Usage is back: carry on/, 'the worker never answered the carry-on: ' + replies);
+  assert.doesNotMatch(late, /Holding for usage/, 'the replaced hold still reached the worker: ' + late);
+  console.log('PASS O141 review 9: list_chats named the plan; the waiting hold was replaced by the carry-on; the later watch read the whole reply from the kept cursor');
+});

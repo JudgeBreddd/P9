@@ -679,7 +679,8 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
   encrypted", since the key then crosses that network in the clear.
 - **Signed in to Claude as well.** A profile chat uses the profile, not your Claude sign-in
   (seen once, 2026-11-11, bundled adapter 0.106.0). Your other Claude chats are unaffected.
-  A profile chat is left out of the Claude usage rows: it does not spend that plan.
+  A profile chat is left out of the Claude usage rows: it does not spend that plan. list_chats
+  gives it no plan either, so a sprint lead's usage watch never holds it for the Claude plan.
 - **What the agent can do with it.** Read it and use it, as above: it is in the agent's
   environment for the whole chat. The agent's own setting that strips such keys from the
   commands it runs was tried (2026-11-11) and not used: it needs extra programs installed,
@@ -1482,6 +1483,15 @@ migration spec S13).
   phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
   Pause and Resume each send the lead one notice: a note by default, a message when Settings > Notices sets that kind
   to message (O197).
+- **Holding one worker (O141).** The lead may hold one worker it started, alone: `pause_sprint` with `chat`. P9 keeps
+  that worker's messages the same way (the same kept list, under the worker's ID, in the ledger, at most 100) and
+  `list_chats` gives it `held: true`. `resume_sprint` with `chat` releases it and sends what was kept, as Resume does.
+  Only the worker's own lead can hold or release it, never while the agent lock is on, and never a worker that leads a
+  sprint of its own. No pause or resume script runs and no notice is sent. A paused sprint keeps its messages first; on
+  its Resume a held worker's messages wait on for its release. The lead's usage watch holds a worker this way when plan
+  use runs high. A message you type into a held worker still goes through. Only its lead releases it, except Close,
+  which lets go of every held worker: what one kept joins the sprint's own kept list if the sprint is paused, and is
+  otherwise dropped, as Stop drops what waits in a turn's queue.
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Standing merge

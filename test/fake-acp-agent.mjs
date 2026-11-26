@@ -61,7 +61,7 @@ const take = async (sessionId, say) => { for (const m of inbox.get(sessionId)?.s
 const SPRINT = '[P9: sprint rules';
 const FROM = '[P9: from another chat';
 const NOTE = '[P9: a note from another chat'; // P9's parked end notes (O188) arrive as '[p9] <title> ended its turn: ...\n\n' blocks and are not the message either; // a note's sender line; a note that waited is one block, line and text // the sender label, to from.log the same way
-const sprintRules = (prompt) => { for (const block of prompt) if (block.type === 'text') { if (block.text.startsWith(SPRINT)) appendFileSync('rules.log', JSON.stringify(block.text) + '\n'); if (block.text.startsWith(FROM)) appendFileSync('from.log', JSON.stringify(block.text) + '\n'); if (CUTS.some((c) => block.text.startsWith(c))) appendFileSync('cut.log', JSON.stringify(block.text) + '\n'); } };
+const sprintRules = (prompt) => { for (const block of prompt) if (block.type === 'text') { if (block.text.startsWith(SPRINT)) appendFileSync('rules.log', JSON.stringify(block.text) + '\n'); if (block.text.startsWith(FROM)) appendFileSync('from.log', JSON.stringify(block.text) + '\n'); if (START.some((s) => block.text.startsWith(s))) appendFileSync('start.log', JSON.stringify(block.text) + '\n'); if (CUTS.some((c) => block.text.startsWith(c))) appendFileSync('cut.log', JSON.stringify(block.text) + '\n'); } };
 // O171: a start block with no rules block before it (a lead started from the Setup page gets it with P9's message).
 const START = ['[P9: your instructions', '[P9: you lead this sprint', '[P9: your notes file'];
 const LINES = ['[P9: from the user, in this chat.]\n\n', '[P9: a line from P9 itself, not from the user.]\n\n']; // a sender line as its own block (O109)

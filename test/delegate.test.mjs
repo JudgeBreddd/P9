@@ -643,6 +643,9 @@ test('Delegate: a provider-profile chat\'s worker stays on that profile and its 
   assert.deepEqual(listed.providers.map((p) => p.provider), ['claude', 'codex', 'profile:' + profile.id], JSON.stringify(listed));
   assert.deepEqual(listed.providers[2], { provider: 'profile:' + profile.id, name: 'Far Cloud', models: [{ value: 'glm-5.3', name: 'glm-5.3' }, { value: 'kimi-k3:cloud', name: 'kimi-k3:cloud' }], efforts: listed.providers[0].efforts });
   assert.doesNotMatch(JSON.stringify(listed), /example\.test|sk-profile|baseUrl|secret/, 'list_providers told an agent a profile\'s address or key');
+  // O141 review 9: a profile chat spends its service, not the Claude plan, so list_chats gives its workers no plan.
+  const plans = (await a.tool('list_chats')).chats.map((c) => c.plan);
+  assert.ok(plans.length && plans.every((p) => p === null), 'a profile chat named a plan: ' + JSON.stringify(plans));
   // The id it gave names the profile in open_chat: the row that starts on it opens; a profile no row starts, and a word that is no provider, do not.
   assert.deepEqual(await started({ provider: 'profile:' + profile.id }), ['new', 'glm-5.3', 'https://models.example.test/api', hash, false], 'profile:<id> from list_providers did not open the row on that profile');
   const none = await a.tool('open_chat', { text: 'hello', provider: 'profile:no-such-profile' });

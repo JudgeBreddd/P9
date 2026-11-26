@@ -151,7 +151,50 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   // O171 (framing): and the hash of each Setup file whose text reaches chats (here the role files, made empty).
   const { files, ...record } = listed.started, EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
   assert.deepEqual({ ...record, at: typeof record.at }, { at: 'number', plan, by: 'owner', scripts: [] });
-  assert.deepEqual(files, Object.fromEntries(['roles/lead.instructions.md', 'roles/lead.rules.md', 'roles/review.instructions.md', 'roles/review.rules.md'].map((n) => [n, EMPTY])));
+  // O141: the lead's instructions are P9's default usage watch (the owner's text from New sprint), the rest made empty.
+  const leadText = fs.readFileSync(path.join(prep.body.folder, 'roles', 'lead.instructions.md'), 'utf8');
+  assert.deepEqual(files, { 'roles/lead.instructions.md': createHash('sha256').update(leadText).digest('hex'),
+    ...Object.fromEntries(['roles/lead.rules.md', 'roles/review.instructions.md', 'roles/review.rules.md'].map((n) => [n, EMPTY])) });
+  // ...and they reach the lead with its first message, as approved, with the check it schedules for itself.
+  // (the fake agent logs P9's start block to start.log in the folder the chat runs in)
+  const opening = fs.readdirSync(ws, { recursive: true }).filter((f) => path.basename(f) === 'start.log').map((f) => fs.readFileSync(path.join(ws, f), 'utf8')).join('\n');
+  // Review 12 (13, 14b): one phrase a rule, so taking any rule out of LEAD fails here by name.
+  const rules = {
+    'the text is the owner\'s, approved': 'your instructions, approved by the user',
+    'one watch, looked for first': 'At your first turn, call list_schedules. With no usage watch there',
+    'the watch schedules itself': 'call schedule_prompt to yourself every 10 minutes',
+    'it reads plan use and the workers': 'Usage watch: call plan_usage and list_chats',
+    'one test for hot, stale excluded': 'A window calls for a hold when its reading is not stale, its pace is ahead and its projected is over 100',
+    'no projected decides nothing': 'a window whose reading has no projected neither calls for a hold nor clears one',
+    'only the workers it started': 'A worker (a chat list_chats marks yours whose parent is no chat it marks yours)',
+    'a worker draws on its plan\'s windows': 'draws on a window when list_chats gives its plan as that reading\'s pool',
+    'a model window needs the model': 'for a window under models, its model names that family',
+    'no plan or another model: never held': 'a plan of null, or a model that does not name the family (default included), draws on none',
+    'unsure: never held': 'and if you cannot tell, it does not',
+    'held is P9\'s flag': 'A worker is held when list_chats gives it held: true: P9 starts no turn for it until you release it',
+    'each hold kept with its window': 'keep each worker you hold with its chat id and the window it was held for',
+    'paused: do nothing': 'While list_chats gives your workers paused, your sprint is paused: do nothing this watch',
+    'not held any more: forget': 'Each worker kept there that list_chats gives and not held: forget it',
+    'missing from list_chats: keep': 'one it does not give, keep',
+    'held with no record: release': 'A worker list_chats gives held that is not kept there is back now',
+    'release checks its reading': 'One kept and still held is back when its plan\'s reading is there, not stale,',
+    'the held-for window decides': 'the window it was held for is in it, and every window it draws on',
+    'release needs a projected': 'has a projected and does not call for a hold',
+    'carry-on first, release every one back': 'For every one back, send it Usage is back: carry on',
+    'the carry-on voids a raced note': 'any note before this to end your turn for usage no longer applies',
+    'a refused carry-on keeps the hold': 'If send_chat answers with another error, leave it held for the next watch',
+    'a full held list is released first': 'answers sprint-paused-full (its held list is full), call resume_sprint with its chat, then send it the carry-on',
+    'release is resume_sprint with chat': 'otherwise call resume_sprint with its chat and forget it',
+    'hold the least-advanced working one, not held': 'take the least-advanced worker that draws on it, that list_chats gives working and not held',
+    'the hold is pause_sprint with chat': 'and call pause_sprint with its chat',
+    'a refused hold is no hold': 'If that answers with an error, keep nothing',
+    'then a note asks it to stop': 'Otherwise keep it, and send it as a note',
+    'the note: finish the step and end the turn': 'finish the step you are on, write a Next line in your notes and end your turn',
+    'every step logged': 'Log each hold and each release under ## Usage watch',
+    'stale is no reason either way': 'A stale reading is no reason to hold or to release',
+  };
+  for (const [rule, said] of Object.entries(rules))
+    assert.ok(opening.includes(said), 'the lead\'s first message lacks the rule "' + rule + '": ' + said + '\n' + opening.slice(0, 600));
   assert.deepEqual(press.body.started, listed.started);
 
   // Pressing again: everything is kept, nothing is made or sent again.
