@@ -1861,7 +1861,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         release();
         if (solo || bare) return refused(409, 'sprint-paused');
         if (pausing.length >= 100) return refused(409, 'sprint-paused-full'); // SECURITY.md § Pause sprint
-        const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, fromTitle: titles.get(body) ?? null, mixed: mixed.get(body) ?? null,
+        // O267b: at, when it was kept, so Close's merge of two kept lists (release) keeps the order they were sent in.
+        const item = { id: randomUUID(), at: Date.now(), chat: id, held: held ?? null, from: from ?? null, fromTitle: titles.get(body) ?? null, mixed: mixed.get(body) ?? null,
           body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }), ...(repeats.has(body) && { repeat: true }) } };
         // O109 FIX2 (Reviewer): a message that may be a repeat keeps saying so through the pause (repeat: true, as hold() does).
         // Kept in the same write that takes it off Resume's list (deliver's entry, or what a turn's end drained): a crash after
@@ -2243,22 +2244,30 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lastPicks, // O207 FIX1 (delegate.mjs startSprint): what carry sets a stopped chat back to
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
     // O141: Close lets go of a worker its lead held. What it kept joins its sprint's own list while the sprint is paused (the
-    // owner's Resume sends it with the rest); otherwise it goes, as Stop drops what waits in a turn's queue.
+    // owner's Resume sends it with the rest); otherwise it goes, as Stop drops what waits in a turn's queue, and is returned
+    // (delegate.mjs closeSprint tells each sender what of theirs was dropped, O267b).
+    // O267b: the merge is in the order each was kept (at; one kept before at existed counts as oldest, as a worker's own
+    // list is older than its paused sprint's), so a second held worker's list never goes ahead of the first's.
+    // ponytail: the merge is not cut to the 100 a kept list takes at intake (SECURITY.md § Pause sprint): Close is the one
+    // way past it, at most 100 more per held worker, and cutting it would drop messages nobody was told about.
     release(worker, lead) {
       const list = pausedOf(worker), into = pausedOf(lead);
-      if (!list) return;
+      if (!list) return [];
       db.exec('BEGIN');
-      // The worker's go first: they are older, since a worker keeps its own only while its sprint is not paused.
-      try { if (into) setPaused(lead, [...list, ...into]); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
+      try { if (into) setPaused(lead, [...list, ...into].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped' });
       wakeAll('resumed');
+      return into ? [] : list;
     },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
     // end. Returns how many were held, or null when the sprint was not paused. resumed(count) is called once the pause is
     // cleared and before anything is sent (delegate.mjs queues the resume scripts there, in the order of the presses).
-    async resume(lead, narrow, resumed) {
-      const list = pausedOf(lead);
-      if (!list) return null;
+    // O267b: last ({ text, from, mode }), a message for a held worker kept last in the same write that releases it (the
+    // usage watch's carry-on), so a retry after a failed release never sends it twice: not held, nothing is sent.
+    async resume(lead, narrow, resumed, last) {
+      const held = pausedOf(lead);
+      if (!held) return null;
+      const list = last ? [...held, { id: randomUUID(), at: Date.now(), chat: lead, held: null, from: last.from, mixed: null, body: { text: last.text, ...(last.mode !== undefined && { mode: last.mode }) } }] : held;
       for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
       db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
       try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }

@@ -171,7 +171,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'a note still arrives, ask_chat to one of them is refused, a turn already running finishes, and you can open no new worker. What the user types into a worker still goes through. Survives a P9 restart. '
       + 'With chat (a worker you started, not a lead itself): hold only that worker, the same way (list_chats gives it held: true); no pause scripts run and no notice is sent.',
     input({ chat: { type: 'string', description: 'A worker you started: hold only it.' } })],
-    ['resume_sprint', 'Resume your paused sprint: every message kept while it was paused goes out in the order it was sent. Returns how many. With chat: release only that held worker, sending what was kept for it.', input({ chat: { type: 'string', description: 'A worker you hold: release only it.' } })],
+    ['resume_sprint', 'Resume your paused sprint: every message kept while it was paused goes out in the order it was sent. Returns how many. With chat: release only that held worker, sending what was kept for it; carryOn is a message sent it last, in the same step, and a worker no longer held gets nothing, so calling again is safe.', input({ chat: { type: 'string', description: 'A worker you hold: release only it.' }, carryOn: { type: 'string', description: 'With chat: a message sent it after what was kept.' } })],
     ['sprint_event', 'Run your sprint\'s scripts at a point P9 cannot see happen (you are its lead): before-merge right before you merge a PR (its blocking scripts may refuse: then do not merge; '
       + 'the answer is merge: "allowed", error merge-is-the-owners while the user\'s standing-merge switch is off (new sprints start with it off; then the merge is the user\'s, and no script runs), or error script-refused with the script\'s last line), ci-red when a CI run went red, gate-passed when a gate passed. Only the scripts approved at Start (or allowed after it) run, '
       + 'each given the sprint\'s state with subject (the fields you pass, by: "lead"). Refused before Start, after Close, while the agent lock is on, and while that point\'s scripts from your last call still run (point-busy).',
@@ -518,13 +518,17 @@ export function createDelegate({ chat, allowed, usage }) {
     return { mode };
   }
   chat.resumeLeft?.(narrow)?.catch(() => {});
-  async function resumeSprint(lead, owner, worker) {
+  async function resumeSprint(lead, owner, worker, carryOn) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
+    if (carryOn !== undefined && (worker === undefined || !text(carryOn, 100_000))) return { error: 'request-refused', detail: 'carryOn: a message, only with chat.' };
     if (worker !== undefined) {
       const no = holdable(lead, worker);
       if (no) return no;
-      const sent = await chat.resume(worker, narrow);
+      // O267b: carryOn goes to the worker last, in the release's own write (chat.resume), in the mode the lead's send_chat would pick.
+      const picked = carryOn === undefined ? null : modeFor(lead, chat.info(worker));
+      if (picked?.error) return picked;
+      const sent = await chat.resume(worker, narrow, undefined, picked && { text: carryOn, from: lead, mode: picked.mode });
       return sent === null ? { held: false, already: true } : { held: false, sent };
     }
     // O202: the resume scripts are queued the moment the pause is cleared, before the kept messages are sent (which waits),
@@ -753,7 +757,11 @@ export function createDelegate({ chat, allowed, usage }) {
       const end = { at: Date.now(), by: caller ?? 'owner', record };
       chat.projects.recordClose(sprint, end);
       schedules?.pause([...below(chat.family(), sprint), sprint]); // O141: nothing of a closed sprint wakes on its own
-      for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) chat.release(c.id, sprint); // O141: no worker stays held
+      // O141: no worker stays held. O267b: each chat whose messages a release dropped is told which, in one note.
+      const dropped = new Map(), clip = (t, n) => (t.length > n ? t.slice(0, n) + '…' : t);
+      for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) for (const item of chat.release(c.id, sprint) ?? [])
+        for (const from of new Set(item.mixed ?? [item.from])) if (ID.test(from ?? '')) dropped.set(from, [...(dropped.get(from) ?? []), '- to ' + (c.title || c.id) + ': ' + clip(item.body.text, 200)]);
+      for (const [from, lines] of dropped) notify(from, 'sprint', '[p9] The sprint closed while it held a worker, so ' + (lines.length === 1 ? 'this message you sent was' : 'these ' + lines.length + ' messages you sent were') + ' not delivered:\n' + lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n- and ' + (lines.length - 10) + ' more' : ''), 'sprint-dropped');
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint, { bundle: true }).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
@@ -1301,7 +1309,10 @@ export function createDelegate({ chat, allowed, usage }) {
   function listChats(caller) {
     const family = chat.family(), me = family.find((c) => c.id === caller), mine = below(family, caller);
     const rows = chat.list().filter((c) => c.id !== caller && !c.archived && (mine.includes(c.id) || (me?.project && c.project === me.project)));
-    return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
+    // O267b: a worker the caller holds is given past the first 200 too, so its usage watch can release it. An archived one
+    // is not: it starts no turn, so release waits until it is brought back (then it is listed held, and the watch sees it).
+    const held = (c) => c.parent === caller && chat.paused?.(c.id) && !isLead(c.id);
+    return { guidance: CROSS_CHAT, chats: [...rows.slice(0, 200), ...rows.slice(200).filter(held)].map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
       ...chat.gauge(c.id), plan: planOf(c), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
       askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((chat.paused?.(c.parent) || (chat.paused?.(c.id) && isLead(c.id))) && { paused: true }), ...(chat.paused?.(c.id) && !isLead(c.id) && { held: true }), ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
@@ -1579,7 +1590,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // Not tools: the owner's own library and run (setup-routes.mjs, desktop only).
     ownerScripts: hooks.owner,
     pause_sprint: (args, caller) => pauseSprint(caller, false, args.chat),
-    resume_sprint: (args, caller) => resumeSprint(caller, false, args.chat),
+    resume_sprint: (args, caller) => resumeSprint(caller, false, args.chat, args.carryOn),
     sprint_event: (args, caller) => hooks.event(caller, args),
     // Not tools: the project page's Pause and Resume, the owner's press.
     ownerPause: (sprint) => pauseSprint(sprint, true),
