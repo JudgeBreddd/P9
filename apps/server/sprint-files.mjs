@@ -89,9 +89,11 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
   + '"Usage watch: call plan_usage. If a window your workers use has pace ahead and projected over 100 (its reading not stale), hold your '
-  + 'least-advanced running worker: send it, as steer, Finish the step you are on, write a Next line in your notes, end your turn, and wait '
-  + 'until I resume you. When every window is back to on or headroom, resume the worker you held last. Write each hold and resume, with the '
-  + 'numbers, under ## Usage watch in sprint.md."\n'
+  + 'least-advanced running worker not held yet: send it, as steer, Finish the step you are on, write a Next line in your notes, end your '
+  + 'turn, and wait until I resume you. A steer can wait in its queue until that turn ends, so it is held only once read_chat shows its turn '
+  + 'ended after your message; on each watch, check every hold not yet confirmed. When every window is back to on or headroom, resume every '
+  + 'worker you held, not only the last. Keep each held chat id, with the numbers, under ## Usage watch in sprint.md: a line when you hold '
+  + 'it, its confirmation, and its resume."\n'
   + '- A stale reading is no reason to hold: note it and wait for the next one.\n';
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 

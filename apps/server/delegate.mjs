@@ -249,6 +249,10 @@ export function createDelegate({ chat, allowed, usage }) {
   // opts (Start sprint only, never from a tool's arguments): approved, the press already was the user's yes; profile, the
   // provider profile the role names.
   // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
+  // O141 review 2: what a scheduled prompt may not wake or be set from: a chat of a sprint closed, or being closed (marked
+  // before Close waits on any Stop, so a schedule due meanwhile cannot restart a worker Close already stopped).
+  const closing = new Set();
+  const asleep = (id) => { for (let at = id, n = 0; at && n < 8; at = chat.info(at)?.parent, n += 1) if (closing.has(at) || chat.projects.closed(at)) return { error: 'sprint-closed', detail: 'That chat is in a closed sprint: nothing scheduled wakes it.' }; return null; };
   const shutFor = (caller) => { for (let id = caller, n = 0; id && n < 8; id = chat.info(id)?.parent, n += 1) if (chat.projects.closed(id)) return { error: 'sprint-closed', detail: 'This sprint is closed: it starts no more chats.' }; return null; };
   async function openChat(caller, args, signal, opts = {}) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -698,7 +702,7 @@ export function createDelegate({ chat, allowed, usage }) {
     };
     if (no()) return no();
     if (starting.has(sprint)) return { error: 'sprint-starting', detail: 'This sprint is being started or closed now.' };
-    starting.add(sprint);
+    starting.add(sprint); closing.add(sprint);
     // A sprint never ends (the owner, 2026-11-22): Close cleans its worker folders by Clean up's own rules (worker-folders.mjs:
     // only a folder with nothing unsaved whose work is in the main line goes; the rest stays as folder and branch; the
     // sprint's files are never touched; a saved branch not merged goes into bundles/, the owner's "Bundle"). Not when a chat of this sprint closes it: it is still running, as the clean
@@ -739,7 +743,7 @@ export function createDelegate({ chat, allowed, usage }) {
         cleaned: swept && !swept.error ? { removed: swept.removed, kept: swept.kept.map(({ item, branch, why, bytes }) => ({ item, branch, why, bytes })), bundled: swept.bundled ?? [] }
           : { skipped: inside ? 'A chat of this sprint closed it, so its worker folders were not cleaned up: press Clean up worker folders on its page.' : 'Clean up failed: ' + (swept.detail ?? swept.error) + '. Nothing more was removed; press Clean up worker folders on its page.' },
         ...(own && { note: 'Your own chat was not stopped: end your turn now. The sprint is closed.' }) };
-    } finally { starting.delete(sprint); }
+    } finally { starting.delete(sprint); closing.delete(sprint); }
   }
   function newSprint(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
@@ -963,6 +967,8 @@ export function createDelegate({ chat, allowed, usage }) {
   // per chat as send_chat's start does. To another chat it goes as that chat's send_chat with when: queue, checked then.
   // No database (a test's chat without the ledger): no schedules, and the three tools say so.
   const schedules = chat.db ? createSchedules({ db: chat.db, fire: async (s) => {
+    const shut = asleep(s.owner) ?? asleep(s.chat); // the owner, or a chat elsewhere whose schedule names a sprint's worker
+    if (shut) return shut;
     if (s.chat !== s.owner) return sendChat(s.owner, { chat: s.chat, text: s.text, when: 'queue' });
     if (chat.lock(s.owner).on) return { error: 'agent-lock-on' };
     if (shelved(s.owner)) return SHELVED;
@@ -978,6 +984,10 @@ export function createDelegate({ chat, allowed, usage }) {
     const target = args.chat ?? caller;
     if (args.id === undefined && target !== caller && !reach(caller, target)) return { error: 'chat-not-found' };
     if (args.id !== undefined && args.chat !== undefined) return { error: 'request-refused', detail: 'A schedule keeps its chat: remove it and schedule a new one.' };
+    // A closed sprint's chat sets none, and none is set or turned back on to wake one (pausing or removing stays allowed).
+    const names = args.id === undefined ? target : schedules?.list(caller).find((x) => x.id === args.id)?.chat;
+    const shut = args.paused === true && args.id !== undefined ? null : asleep(caller) ?? (names && asleep(names));
+    if (shut) return shut;
     return schedules ? schedules.save(caller, args, target) : NO_SCHEDULES;
   }
 
