@@ -507,6 +507,9 @@ test('A2 step 6: a selection in a reply, or its Quote button, opens a box under 
   await send(said_); await until(async () => (await reply.textContent()).includes('The second sentence.'), 'the reply is drawn');
   // The turn's end redraws the reply (CI run 45732957543: a selection made before it was gone); select after it.
   await until(async () => (await pane.locator('.working').count()) === 0, 'the turn ended', 15000);
+  // CI run 45737907047: still lost after that on a slow runner, so also wait until the reply has not changed for 800 ms.
+  await reply.evaluate((m) => new Promise((done) => { let t = setTimeout(fin, 800); const o = new MutationObserver(() => { clearTimeout(t); t = setTimeout(fin, 800); });
+    function fin() { o.disconnect(); done(); } o.observe(m.closest('.hist'), { subtree: true, childList: true, characterData: true, attributes: true }); }));
   const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea');
   // As a drag over "The second sentence." leaves it: the words selected, then the pointer let go over the history.
   const select = () => reply.evaluate((m) => { const w = document.createTreeWalker(m, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode()) && !n.data.includes('The second'));
