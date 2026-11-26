@@ -289,5 +289,9 @@ test('O266: a tool row keeps a run of streamed output pieces as one update', () 
   assert.equal(snaps.length, 1, 'thousands of snapshots kept as the newest');
   upKept(snaps, bit('a')); upKept(snaps, status); upKept(snaps, whole('w1')); upKept(snaps, bit('b')); upKept(snaps, exit); upKept(snaps, bit('c')); upKept(snaps, whole('w2'));
   assert.deepEqual(snaps.map((d) => d.status ?? (d._meta?.['p9/exit'] ? 'exit' : text(d))), ['out 2999', 'a', 'completed', 'w1', 'b', 'exit', 'w2'], 'only content before a snapshot goes, back to the last other update');
-  console.log('PASS O266 review 6/7: 3,000 streamed pieces kept as one update; 3,000 snapshots as the newest');
+  // Review 8: an update whose content carries a diff is not output: a snapshot after it leaves it, so its file stays.
+  const edit = { sessionUpdate: 'tool_call_update', toolCallId: 't', content: [{ type: 'diff', path: 'edited.md', oldText: 'a\n', newText: 'b\n' }] }, kept = [];
+  upKept(kept, whole('w0')); upKept(kept, edit); upKept(kept, whole('w1'));
+  assert.deepEqual(kept.map((d) => d.content[0].path ?? text(d)), ['w0', 'edited.md', 'w1'], 'a diff update stays before a snapshot');
+  console.log('PASS O266 review 6/7/8: 3,000 streamed pieces kept as one update; 3,000 snapshots as the newest; a diff update kept');
 });

@@ -405,7 +405,12 @@ const connection = acp.connectAgent(stream, {
       const first2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'diff tool output' } }] };
       const again2 = { ...call2, content: [{ type: 'diff', path: 'other.md', oldText: 'a\n', newText: 'b\n' }] };
       const status2 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-d', status: 'completed' };
-      for (const update of [call, first, call2, first2, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, again, ...more, again2, status2]) await connection.sessionUpdate({ sessionId, update });
+      // Review 8: a third call whose update after the repeat carries only a diff (edited.md), then a whole output snapshot.
+      const call3 = { sessionUpdate: 'tool_call', toolCallId: 'repeat-s', title: 'snapshot edit', kind: 'edit', status: 'pending' };
+      const first3 = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-s', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'third output' } }] };
+      const tail3 = [{ ...call3 }, { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-s', content: [{ type: 'diff', path: 'edited.md', oldText: 'x\n', newText: 'y\n' }] },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-s', content: [{ type: 'content', content: { type: 'text', text: 'third snapshot' } }] }];
+      for (const update of [call, first, call2, first2, call3, first3, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, again, ...more, again2, status2, ...tail3]) await connection.sessionUpdate({ sessionId, update });
       await say('after repeat files');
       return { stopReason: 'end_turn' };
     }

@@ -205,9 +205,11 @@ export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) &&
 // marked p9/append) kept as one piece of their last 4,000 characters, all a row shows, so a noisy command keeps one update.
 const piece = d => d._meta?.['p9/append'] === true && Object.keys(d._meta).length === 1 && Object.keys(d).every(k => ['sessionUpdate', 'toolCallId', 'content', '_meta'].includes(k));
 const textOf = d => (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n');
-// Review 7: an update of only content that is not a piece replaces the row's whole content (toolUpdate), so the
-// content-only updates just before it (terminal snapshots, pieces) are dropped; status, file and exit updates stay.
-const only = d => Object.keys(d).every(k => ['sessionUpdate', 'toolCallId', 'content', '_meta'].includes(k)) && (d._meta === undefined || piece(d));
+// Review 7: an update of only output text that is not a piece replaces the row's whole content (toolUpdate), so the
+// output-only updates just before it (terminal snapshots, pieces) are dropped; status, exit and (review 8) any update
+// whose content carries a diff or anything but text stay, so a file it brought is still there when Show earlier merges.
+const only = d => Object.keys(d).every(k => ['sessionUpdate', 'toolCallId', 'content', '_meta'].includes(k)) && (d._meta === undefined || piece(d))
+  && (d.content || []).every(c => c.type === 'content' && c.content?.type === 'text');
 export function upKept(ups, d) {
   const last = ups.at(-1);
   if (piece(d) && last && piece(last)) ups[ups.length - 1] = { ...d, content: [{ type: 'content', content: { type: 'text', text: (textOf(last) + textOf(d)).slice(-4000) } }] };
