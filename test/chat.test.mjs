@@ -98,6 +98,20 @@ test('a reply the agent sends again after its turn ended is recorded once', asyn
   assert.deepEqual(next.seen.filter(said(id, '')).map((event) => event.data.content.text).filter((text) => !text.startsWith('mode:')), [], 'a copy after the turn-end was recorded');
 });
 
+// DUP-1 (a)/(b): a turn that ends with no output tokens, then its reply again whole under a new id, however short. Only
+// that first piece is the copy: the same words once more after it are a reply of their own.
+test('a short reply sent again after a turn that ended with no output tokens is recorded once', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'twice short' });
+  const end = await until(instance, (event) => event.conversation === id && event.type === 'turn-end');
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
+  const next = await until(instance, said(id, 'mode:'), end.cursor);
+  assert.deepEqual(end.seen.filter(said(id, '')).map((event) => event.data.content.text), ['Done, ', 'merged.']);
+  assert.deepEqual(next.seen.filter(said(id, '')).map((event) => event.data.content.text).filter((text) => !text.startsWith('mode:')), ['Done, merged.'], 'the copy was recorded, or the reply after it was not');
+});
+
 // phone-1: "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
 // desktop. The decline ends the turn as cancelled; an approve followed by the same failure still shows it.
 test('declining the plan ends the turn as cancelled, not as an error', async (t) => {

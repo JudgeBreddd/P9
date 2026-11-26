@@ -489,6 +489,14 @@ const connection = acp.connectAgent(stream, {
       setTimeout(async () => { await piece('L1', long + tail); await piece('L2', long + tail); }, 300);
       return { stopReason: 'end_turn' };
     }
+    // DUP-1 (a)/(b): claude-agent-acp's result fallback. A turn's result that reports no output tokens ends it, then the
+    // adapter forwards the result text, the reply the agent already streamed, whole under the result's own id.
+    if (text === 'twice short') {
+      const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
+      await piece('S1', 'Done, '); await piece('S1', 'merged.');
+      setTimeout(async () => { await piece('5b0e5d55-ffc2-4f6b-9a39-2d0c0f3c6b11', 'Done, merged.'); await piece('S2', 'Done, merged.'); }, 300);
+      return { stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 } };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }
