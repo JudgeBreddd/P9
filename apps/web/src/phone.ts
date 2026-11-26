@@ -138,8 +138,16 @@ function csrfToken() {
 // CAT-1f: each agent's name, from GET /agents once it answers; until then the two built in. Its modes are the answer's alone
 // (fillAgents, CAT-2).
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
-const loadAgents = () => request('/agents').then(({ agents }) => { for (const k in names) delete names[k];
-  for (const a of agents) names[a.id] = a.short || a.name; fillAgents(agents); }, () => {});
+// #547 review: one read at a time (a slower, older answer cannot replace a newer one), and an answer is checked before it
+// replaces anything, so a malformed one keeps the names and modes there are. It never rejects.
+type Agent = { id: string; name?: string; short?: string; modes?: { name: string }[] };
+const agentsOk = (agents: unknown): agents is Agent[] => Array.isArray(agents) && agents.every((a: Json | null) => !!a && typeof a.id === 'string'
+  && (a.modes === undefined || (Array.isArray(a.modes) && a.modes.every((m: Json | null) => !!m && typeof m.name === 'string'))));
+let agentsRead: Promise<void> | undefined;
+const loadAgents = () => agentsRead ??= request('/agents').then(({ agents }) => { if (!agentsOk(agents)) return;
+  fillAgents(agents); for (const k in names) delete names[k]; for (const a of agents) names[a.id] = a.short || a.name || a.id;
+  if (document.body.dataset.view === 'usage') void loadUsage(); }) // its plan cards are named from these (USE-1); the list no longer waits for them
+  .catch(() => {}).finally(() => { agentsRead = undefined; });
 // A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
 const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
@@ -218,16 +226,18 @@ async function readChat() {
   clearTimeout(retryChat);
   try {
     // O267b: GET /agents is not waited for (a hung read held the list); once it lands after the list is drawn, it draws again
-    // with the agents' names and modes (picksFor: the Mode list is drawn again too).
-    let drawn = false; void loadAgents().then(() => { if (drawn) { picksFor = ''; fillPicker(); render(); } });
+    // with the agents' names and modes. The Mode list is drawn again too (picksFor changed), as the same chat's, so the pick
+    // on it (a new chat's start pick, already drawn) stays (#547 review).
+    let drawn = false; void loadAgents().then(() => { if (drawn) { if (picksFor) picksFor += ':agents'; fillPicker(); render(); } });
     const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request)]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
     drawn = true; retryWait = 0;
   } catch (error) {
-    one('#events').innerHTML = one('#chatList').innerHTML = `<div class="empty">Chat is unavailable (${escape((error as Error)?.message || 'no answer')}). Trying again…</div>`;
-    if ((error as { status?: number })?.status === 401) return; // signed out: the login page takes over
+    const out = (error as { status?: number })?.status === 401; // signed out: the login page takes over, nothing is tried again
+    one('#events').innerHTML = one('#chatList').innerHTML = `<div class="empty">Chat is unavailable (${escape((error as Error)?.message || 'no answer')}).${out ? '' : ' Trying again…'}</div>`;
+    if (out) return;
     retryWait = Math.min(retryWait * 2 || 2000, 30000);
     retryChat = window.setTimeout(function again() { if (awake()) void loadChat(); else retryChat = window.setTimeout(again, 2000); }, retryWait);
   }
@@ -340,11 +350,12 @@ async function fetchEvents(wait = 0) {
       if (Number(event.cursor) <= state.seen) continue;
       const data = event.data as Json, held = String(data?.id);
       if (event.type === 'unheld' && ['cancelled', 'stopped'].includes(String(data?.why))) putBack(String(event.conversation), String(data.text), held); // O61: into its own chat's text, open or not
-      else if (event.type === 'unheld' && data?.id != null && !(data.why === 'removed' && unholding.has(held))) heldGone(held);
+      else if (event.type === 'unheld' && data?.why === 'removed' && taking.has(held)) tookBack(held, typeof data.text === 'string' ? data.text : undefined);
+      else if (event.type === 'unheld' && data?.id != null) heldGone(held);
       else if (event.type === 'user' && Array.isArray(data?.held)) for (const h of data.held as unknown[]) heldGone(String(h));
     }
   }
-  state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
+  retireHeld(); state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
 }
 // O251: behind, the held events go and the first read runs again: the shown chat's newest blocks, the others stubs. The
 // gap's ends are not played one by one; the list's states say which chats moved. No stub starts a load from here
@@ -770,7 +781,9 @@ function render() {
     // O267b: signed out (out), the login page takes over: no "Trying again…" and no read, however late it opens.
     const fail = failed.get(picked), left = fail ? fail.at + HISTORY_RETRY - Date.now() : 0, due = !fail || (!fail.out && left <= 0 && awake('chat'));
     one('#events').innerHTML = due ? '<div class="empty">Loading…</div>' : `<div class="empty">Chat is unavailable (${escape(fail!.why)}).${fail!.out ? '' : ' Trying again…'}</div>`;
-    renderPicks(picked); chatBar(picked, digest().get(picked)?.run ?? 'idle'); // O267b: its bar, so Back is there while it loads or failed
+    // O267b: its bar, so Back is there while it loads or failed; #547 review: and its own queue and attachments, not the last
+    // chat's (whose chip's ✕ would remove a file from this chat's list).
+    renderPicks(picked); chatBar(picked, digest().get(picked)?.run ?? 'idle'); renderQueue(); renderAttached(); label();
     const redraw = () => { if (openId === picked) render(); };
     if (due) history(picked).then(redraw, redraw);
     else if (!fail!.out) { clearTimeout(retryHistory); retryHistory = window.setTimeout(() => { if (openId === picked && state.stubs.has(picked)) render(); }, left > 0 ? left : 2000); }
@@ -1156,16 +1169,23 @@ function editDraft(id: string, change: (text: string) => string) {
 }
 // #540 review 16: a held message's files by its held id (the 202's held), kept until it is sent or handed back, so a hand-back
 // (Take back, a Stop's cancel, stopped) puts them back with its words, as the window does (chat-view.mjs sentImgs). handed:
-// an id handed back (true) or sent (false) before its 202 came. unholding: a Take back on its way, whose answer puts them back.
-// ponytail: in memory only, as the window: a reload loses them (attach again); handed keeps other devices' ids for the page's life.
-const heldFiles = new Map<string, Attached[]>(), handed = new Map<string, boolean>(), unholding = new Set<string>();
+// an id handed back (true) or sent (false) before its 202 came, noted only while a send with files waits for its 202
+// (filesSending) and cleared once none does (#547 review). taking: a Take back started here, settled once, by its answer or
+// by its removed event, whichever comes first (#547 review: an answer lost after the daemon let it go lost the message).
+// ponytail: in memory only, as the window: a reload loses them (attach again).
+const heldFiles = new Map<string, { chat: string; files: Attached[] }>(), handed = new Map<string, boolean>(), taking = new Map<string, { chat: string; text: string }>();
+let filesSending = 0;
 const filesBack = (id: string, files?: Attached[]) => { if (!files?.length) return; attached.set(id, [...files, ...attached.get(id) ?? []]); keepAttached(); if (id === openId) renderAttached(); };
 const putBack = (id: string, text: string, held?: string) => {
   editDraft(id, (now) => text + (now ? '\n' + now : ''));
-  if (held) { filesBack(id, heldFiles.get(held)); if (!heldFiles.delete(held)) handed.set(held, true); }
+  if (held) { taking.delete(held); filesBack(id, heldFiles.get(held)?.files); if (!heldFiles.delete(held) && filesSending) handed.set(held, true); }
 };
+const tookBack = (held: string, text?: string) => { const take = taking.get(held); if (take) putBack(take.chat, text ?? take.text, held); };
 // A held message that left any other way (sent, or let go unsent) takes its files with it.
-const heldGone = (held: string) => { if (!heldFiles.delete(held)) handed.set(held, false); };
+const heldGone = (held: string) => { taking.delete(held); if (!heldFiles.delete(held) && filesSending) handed.set(held, false); };
+// #547 review: a read that skipped how a held message ended (a jump) still lets its files go: its held event is read and it
+// is held no longer. ponytail: one whose held event is never read (a chat left a stub) keeps them until the page closes.
+const retireHeld = () => { for (const [held, { chat }] of heldFiles) if (!turn(chat).held.has(held) && eventsOf(chat).some((event) => event.type === 'held' && String((event.data as Json)?.id) === held)) heldFiles.delete(held); };
 addEventListener('pagehide', keepDraft); document.addEventListener('visibilitychange', () => { if (document.hidden) keepDraft(); });
 function label() {
   const id = openId, send = one<HTMLButtonElement>('#composer button[type="submit"]');
@@ -1268,12 +1288,13 @@ one<HTMLElement>('#queued').onclick = async (event) => {
     const id = openId, item = turn(id).held.get(hold.dataset.unhold!);
     // O62: with a deadline, and a line when it did not work: the tap used to wait for good on a request that never answered.
     hold.disabled = true;
+    const key = hold.dataset.unhold!;
+    if (item) taking.set(key, { chat: id, text: item.text });
     try {
-      unholding.add(hold.dataset.unhold!);
-      const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: hold.dataset.unhold }, SEND_DEADLINE).finally(() => unholding.delete(hold.dataset.unhold!));
-      if (result.status === 200 && item) putBack(id, typeof result.body.text === 'string' ? result.body.text : item.text, hold.dataset.unhold); // the daemon's words: an edit may be newer than this copy
-      else if (result.status !== 200 && result.status !== 409) note(`Not taken back: ${result.body.error ?? result.status}`); // 409: it was sent already, and the events show it
-    } catch (error) { hold.disabled = false; note(`Not taken back: ${(error as Error).message === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : 'P9 could not be reached'}. It is still waiting; tap Take back to try again.`); return; }
+      const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: key }, SEND_DEADLINE);
+      if (result.status === 200) tookBack(key, typeof result.body.text === 'string' ? result.body.text : undefined); // the daemon's words: an edit may be newer than this copy
+      else { taking.delete(key); if (result.status !== 409) note(`Not taken back: ${result.body.error ?? result.status}`); } // 409: it was sent already, and the events show it
+    } catch (error) { hold.disabled = false; note(`Not taken back: ${(error as Error).message === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : 'P9 could not be reached'}. It is still waiting; tap Take back to try again.`); return; } // taking stays: if the daemon let it go, its removed event puts it back
     await fetchEvents().catch(() => {}); render(); return;
   }
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
@@ -1345,7 +1366,11 @@ async function submitFromBox(event: Event) {
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
   const sent = { ...first, ...attachBody(images) };
   inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
-  const result = await mutate(prompt, sent, SEND_DEADLINE);
+  // handed is noted while this waits (heldFiles, above) and cleared after the answer has been taken (a microtask: the code
+  // below runs first, with no await before it takes the 202's held).
+  if (images.length) filesSending++;
+  const answered = () => { if (images.length && !--filesSending) queueMicrotask(() => { if (!filesSending) handed.clear(); }); };
+  const result = await mutate(prompt, sent, SEND_DEADLINE).catch((error) => { answered(); throw error; }); answered();
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
   inFlight.delete(id); keepInFlight();
@@ -1354,7 +1379,7 @@ async function submitFromBox(event: Event) {
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
   if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id);
-    const held = typeof result.body.held === 'string' ? result.body.held : ''; if (held && images.length) { const was = handed.get(held); handed.delete(held); if (was) filesBack(id, images); else if (was === undefined) heldFiles.set(held, images); } } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+    const held = typeof result.body.held === 'string' ? result.body.held : ''; if (held && images.length) { const was = handed.get(held); handed.delete(held); if (was) filesBack(id, images); else if (was === undefined) heldFiles.set(held, { chat: id, files: images }); } } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {

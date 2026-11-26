@@ -1185,6 +1185,11 @@ function tailed(s, body) {
 // the call first ran (O266). Review 6: a run of streamed pieces is kept as one (its last 4,000 characters, all the row
 // shows), so a noisy command keeps one update, not thousands. ponytail: other updates are kept whole while the chat is open.
 function toolUpdate(tool, d) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d._meta?.['p9/append'] === true) { const piece = toolText(d.content); tool.output = ((tool.output ?? '') + piece).slice(-4000); } else if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } const exit = exitTag(d._meta?.['p9/exit']); if (exit) tool.exit = exit; }
+// O267b, #547 review: updates kept for a row not drawn yet (s.loose) go on it one by one, each under the guard every event
+// has (applyChat's try), so a malformed one is skipped and the rest still apply, on this Show earlier and every later one.
+// Only one a row could take is kept (tried on a blank row), as a drawn row keeps only those (its ups, after toolUpdate).
+function putLoose(tool, list) { for (const d of list) try { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } catch {} }
+const rowTakes = d => { try { toolUpdate({ t: 'tool' }, d); return true; } catch { return false; } };
 async function earlier(s) {
   const from = s.more, r = await window.p9.chat('events', { after: 0, only: [s.id], until: from - 1, tail: TAIL });
   // O251: a jump meanwhile made the chat a stub and read it again from its newest blocks; this page would skip what lies between.
@@ -1195,7 +1200,7 @@ async function earlier(s) {
   // call's row here, before the repeat's below, so they apply in the order they came; the rest wait for an older page.
   const loose = new Map(old.loose ?? []);
   for (const [id, l] of s.loose ?? []) loose.set(id, [...(loose.get(id) ?? []), ...l]);
-  for (const e of old.events) { const l = e.t === 'tool' && loose.get(e.id); if (!l) continue; loose.delete(e.id); for (const d of l) toolUpdate(e, d); e.ups = [...(e.ups ?? []), ...l]; }
+  for (const e of old.events) { const l = e.t === 'tool' && loose.get(e.id); if (!l) continue; loose.delete(e.id); putLoose(e, l); }
   s.loose = loose;
   // O266: a call sent again after a compaction can have its first on this page and its second below: one row, where it
   // first ran. The newer row came from the repeated call, which the live rules skip, so only its own updates (ups) go on
@@ -1285,12 +1290,12 @@ function applyChat(ev, into) {
         else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
       } else if (d.sessionUpdate === 'tool_call' && d.toolCallId != null && s.events.some(e => e.t === 'tool' && e.id === d.toolCallId)) { /* O266: after a compaction the adapter sends earlier calls again, pending, each followed by its update: the row it has is kept, not drawn twice and left pending */ }
       else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool);
-        const l = s.loose?.get(d.toolCallId); if (l) { s.loose.delete(d.toolCallId); for (const u of l) toolUpdate(tool, u); tool.ups = l; } }
+        const l = s.loose?.get(d.toolCallId); if (l) { s.loose.delete(d.toolCallId); putLoose(tool, l); } }
       // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag. O267b: one whose
       // call is not loaded (above the chat's newest blocks, or not drawn yet) is kept (s.loose) for when its row is drawn:
       // the row's own tool_call (a repeat after a compaction too, whose updates Show earlier carries up) or Show earlier.
       // ponytail: kept while the chat is open, as a row's ups are; a call that never loads keeps its updates in memory.
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } else if (d.toolCallId != null) { const l = s.loose ??= new Map(); if (!l.has(d.toolCallId)) l.set(d.toolCallId, []); upKept(l.get(d.toolCallId), d); } }
+      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } else if (d.toolCallId != null && rowTakes(d)) { const l = s.loose ??= new Map(); if (!l.has(d.toolCallId)) l.set(d.toolCallId, []); upKept(l.get(d.toolCallId), d); } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       // O126: the agent's own title only on a chat the user never named. O172: nor on a sprint chat's role name (the list's named, sprintFields).
       else if (d.sessionUpdate === 'session_info_update') { if (!s.named && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);

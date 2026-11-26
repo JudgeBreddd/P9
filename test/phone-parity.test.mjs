@@ -563,6 +563,60 @@ test('O267b: a message held for the turn comes back with its file when the turn 
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'keep my file' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
   await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 5000 });
 });
+// #547 review: a Take back whose answer was lost after the daemon let the message go lost its words (and its file): the
+// removed event was taken as the message leaving some other way.
+test('O267b: a Take back whose answer is lost still puts the message and its file back, once', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await page.fill('#prompt', 'take me back');
+  await page.setInputFiles('#attachInput', { name: 'dot.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') });
+  await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 10000 });
+  await page.click('#midTurn [data-when="queue"]');
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("take me back")', { state: 'attached', timeout: 15000 });
+  let reached = 0;
+  // The daemon lets it go (the same Take back, made here for the page); the page's own request and its answer are lost.
+  await page.route((url) => url.pathname.endsWith('/unhold'), async (route) => {
+    if ((await server.desk(new URL(route.request().url()).pathname, 'POST', route.request().postDataJSON())).status === 200) reached++;
+    await route.abort();
+  });
+  await page.evaluate(() => { const strip = document.querySelector('#queued details'); if (!strip.open) strip.querySelector('summary').click(); }); // O109: the queue is one folded line until opened
+  await page.click('#queued [data-unhold]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'take me back' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
+  await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 5000 });
+  assert.equal(reached, 1, 'the Take back reached the daemon');
+  assert.equal(await page.locator('#attached img').count(), 1, 'its file, once');
+  assert.equal(await page.inputValue('#prompt'), 'take me back', 'its words, once');
+});
+// #547 review: a GET /agents that landed after a new chat's start pick was drawn drew the Mode list again as "as set", so
+// the next prompt went without the pick.
+test('O267b: a late GET /agents keeps a new chat\'s start pick, and its prompt goes in it', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  let reads = 0, release; const held = new Promise((resolve) => { release = resolve; });
+  await page.route((url) => url.pathname === '/agents', async (route) => { if (++reads > 1) await held; return route.continue(); }); // the page's first read answers; the next ones wait
+  await page.evaluate(() => localStorage.setItem('p9-mode:claude', 'Plan'));
+  const first = page.waitForResponse((r) => new URL(r.url()).pathname === '/agents');
+  await page.reload(); await first;
+  await newChat(page, 'claude');
+  assert.equal(await page.inputValue('#mode'), 'Plan', 'the new chat starts in the last pick');
+  assert.ok(reads > 1, 'a GET /agents is still on its way');
+  await page.evaluate(() => { window.modeDraws = 0; new MutationObserver(() => window.modeDraws++).observe(document.querySelector('#mode'), { childList: true }); });
+  release();
+  await page.waitForFunction(() => window.modeDraws > 0, null, { timeout: 10000 }); // the late answer drew the Mode list again
+  assert.equal(await page.inputValue('#mode'), 'Plan', 'still the pick after the redraw');
+  await send(page, 'mode');
+  await said(page, 'mode:plan');
+});
+// #547 review: a malformed GET /agents answer replaced the agents' names before it was found malformed.
+test('O267b: a malformed GET /agents answer keeps the names there are', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await page.route((url) => url.pathname === '/agents', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ agents: [{ id: 'claude', name: 'Broken', modes: 'not a list' }] }) }));
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/agents');
+  await page.reload(); await answered;
+  await newChat(page, 'claude');
+  assert.equal(await page.getAttribute('#prompt', 'placeholder'), 'Message Claude');
+});
 test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
