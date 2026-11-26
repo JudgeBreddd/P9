@@ -370,7 +370,7 @@ function take(result: Json, ids: string[]) {
 // A stub chat's newest events, up to where the first read stopped; live events for it come after, so none repeat.
 const loading = new Map<string, Promise<void>>();
 // O269: a chat whose history read failed, and when; it reads again after HISTORY_RETRY, only while it is on screen (awake).
-const failed = new Map<string, { why: string; at: number }>(), HISTORY_RETRY = 5000;
+const failed = new Map<string, { why: string; at: number; out: boolean }>(), HISTORY_RETRY = 5000;
 let retryHistory = 0;
 function history(id: string) {
   if (!state.stubs.has(id)) return Promise.resolve();
@@ -379,14 +379,9 @@ function history(id: string) {
       take(await request('/chat/events?shots=1&after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
     } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
     state.stubs.delete(id);
-  })().then(() => { failed.delete(id); }, (error) => { // O269: one failure state and one retry per chat, however often it redraws
-    failed.set(id, { why: (error as Error)?.message || 'no answer', at: Date.now() });
-    // The timer is the shown chat's: a late failure of a chat left meanwhile keeps it, and reads again when reopened (render).
-    // Signed out (401): the login page takes over.
-    if (openId === id && (error as { status?: number })?.status !== 401) {
-      clearTimeout(retryHistory);
-      retryHistory = window.setTimeout(function again() { if (openId === id && state.stubs.has(id)) { if (awake('chat')) render(); else retryHistory = window.setTimeout(again, 2000); } }, HISTORY_RETRY);
-    }
+  })().then(() => { failed.delete(id); }, (error) => { // O269: one failure state per chat, however often it redraws
+    // Signed out (401): the login page takes over, so no retry (out).
+    failed.set(id, { why: (error as Error)?.message || 'no answer', at: Date.now(), out: (error as { status?: number })?.status === 401 });
     throw error; // still a failure to its callers: catch-up (jump) keeps a chat whose read failed a stub
   }).finally(() => loading.delete(id)));
   return loading.get(id)!;
@@ -758,11 +753,13 @@ function render() {
   const picked = openId;
   if (state.stubs.has(picked)) {
     phoneFolderLine.hidden = true;
-    // O269: a redraw shows the failure until its retry is due (history() keeps the one timer); only then does it read again.
-    const fail = failed.get(picked), due = !fail || (Date.now() - fail.at >= HISTORY_RETRY && awake('chat'));
+    // O269: a redraw shows the failure until its retry is due, and only then reads again. Whatever drew the line (the
+    // failure itself, a reopen, a live redraw) arms the one timer for the time left, so a shown failure always retries.
+    const fail = failed.get(picked), left = fail ? fail.at + HISTORY_RETRY - Date.now() : 0, due = !fail || (left <= 0 && awake('chat'));
     one('#events').innerHTML = due ? '<div class="empty">Loading…</div>' : `<div class="empty">Chat is unavailable (${escape(fail!.why)}). Trying again…</div>`;
     const redraw = () => { if (openId === picked) render(); };
     if (due) history(picked).then(redraw, redraw);
+    else if (!fail!.out) { clearTimeout(retryHistory); retryHistory = window.setTimeout(() => { if (openId === picked && state.stubs.has(picked)) render(); }, left > 0 ? left : 2000); }
     return;
   }
   const { blocks, strip } = build(picked), events = one<HTMLElement>('#events');
