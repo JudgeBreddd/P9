@@ -675,13 +675,13 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await menu.locator('.draft-take', { hasText: 'saved one' }).click();
   await until(async () => await menu.locator('.draft-take', { hasText: 'saved one' }).count() === 0, 'the stale row redrawn away', 5000);
   assert.equal(await composer.inputValue(), 'typed now', 'nothing restored from the stale row');
-  // The pane now shows another chat: the open menu takes nothing and closes.
-  const id = await pane.evaluate((p) => p.dataset.id);
-  await pane.evaluate((p) => { p.dataset.id = 'another-chat'; });
+  // The pane is no longer shown (as when another focus mode hides it): the open menu takes nothing and closes. A style rule,
+  // not the pane's own attributes, which the next redraw puts back (CI: a redraw between the change and the click).
+  const hide = await page.addStyleTag({ content: '.pane { visibility: hidden !important }' });
   await menu.locator('.draft-take').first().click();
   await until(async () => await menu.count() === 0, 'the menu closed', 5000);
-  await pane.evaluate((p, id) => { p.dataset.id = id; }, id);
-  assert.equal(await composer.inputValue(), 'typed now', 'nothing taken into a pane showing another chat');
+  await hide.evaluate((el) => el.remove());
+  assert.equal(await composer.inputValue(), 'typed now', 'nothing taken into a pane no longer shown');
   assert.deepEqual(await store(), ['\nblank first'], 'the draft is still saved');
   // Taken for real: the box text is saved in the same write, and the leading blank line is kept through a repaint.
   await btn.click(); await menu.waitFor({ timeout: 5000 }); await menu.locator('.draft-take').first().click();
