@@ -403,7 +403,7 @@ test('O267b: held workers past 200 rows are listed; a paused Close keeps the kep
   const page = await lead.tool('list_chats'), listed = page.chats;
   assert.equal(listed.find((c) => c.id === id.w1)?.held, true, 'a held worker past the first 200 rows was not listed');
   assert.equal(listed.find((c) => c.id === id.w2), undefined, 'a worker not held past the first 200 was listed');
-  assert.equal(page.more, 1, 'more counted the held worker it listed');
+  assert.equal(page.more, 2, 'more counted the held worker it listed'); // left out: w2 and the project's first chat
   for (const f of fillers) ledger.prepare('DELETE FROM conversations WHERE id = ?').run(f);
   assert.deepEqual(await lead.tool('resume_sprint', { chat: id.w1 }), { held: false, sent: 0 });
 
