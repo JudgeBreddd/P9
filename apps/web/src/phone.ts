@@ -1282,7 +1282,8 @@ async function submitFromBox(event: Event) {
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
+    else { if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }])) { note('Not queued: this phone\'s storage is full. Your message is still in the box.'); return; }
+      spend(id, picked, sentPids); if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
