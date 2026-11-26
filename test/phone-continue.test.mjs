@@ -233,6 +233,13 @@ test('O269: a failed first read of the chats says why and tries again until the 
   await page.waitForFunction((id) => [...document.querySelectorAll('#conversation option')].some((o) => o.value === id), id, { timeout: 20000 });
   assert.equal(refused, 2, 'refused twice, then read');
   assert.equal(await page.locator('#chatList .empty', { hasText: 'unavailable' }).count(), 0, 'the list replaced the line');
+  // The same for one chat's history: refused once, it says why, then reads again while the chat stays open.
+  let once = 0;
+  await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, (route) => once < 1 ? (once++, route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) })) : route.continue());
+  await page.click(`[data-chat="${id}"]`);
+  await page.locator('#events .empty', { hasText: 'Chat is unavailable (daemon-unavailable). Trying again' }).waitFor({ timeout: 10000 });
+  await page.locator('#events .empty', { hasText: 'unavailable' }).waitFor({ state: 'detached', timeout: 15000 });
+  assert.equal(once, 1, 'the history read was refused once, then read');
 });
 
 for (const agent of ['claude', 'codex']) {
