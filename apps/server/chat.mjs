@@ -1887,8 +1887,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
             || (!locked && !body.next && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
           // #540 review 10: also while the previous prompt is still starting (its mode or model being set: the chat reads as in a turn,
           // but none runs yet), when steer() would refuse it: sendNow puts it first in line for that turn's end.
-          // ponytail: no turn to stop yet, so it waits for that turn's end; a start that fails leaves it in the window's queue
-          // until the chat's next turn ends. While the adapter itself is still starting (no session yet) it is still refused.
+          // ponytail: no turn to stop yet, so it waits for that turn's end (or goes when that start fails: startFailed). While the
+          // adapter itself is still starting (no session yet) it is still refused.
           if (session && (session.turn || !notes.has(body)) && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks, held ?? []);
           if (solo) return refused(409, 'turn-running');
@@ -1932,6 +1932,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
       release();
+      // #540 review 11: a start that fails before its turn is that turn's end for an Interrupt held meanwhile (sendNow): it goes then,
+      // not after the chat's next turn. The authorization failures below keep their plain state change: nothing is sent for them.
+      const startFailed = () => { if (live.get(id) !== session) return; setState(id, 'running'); if (session.queued.some((x) => nows.has(x.body))) queueMicrotask(() => drain(id, session)); }; // after this start's own error event
       if (session.stopping) return refused(409, 'stopping');
       try { stillAuthorized(); } catch (error) { setState(id, 'running'); throw error; }
       setState(id, 'turn');
@@ -1943,34 +1946,34 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (want && (want !== session.mode || session.modeWaits)) {
         // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
         try { await Promise.race([setMode(session, conversation.provider, want, !solo), wait(5000).then(() => { throw new Error('timeout'); })]); }
-        catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
+        catch { startFailed(); emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
       }
       if (!solo) session.back = undefined;
       // MC-3: a prompt with no mode, or with the one the session is already in, set none; the pill learns it here once.
       if (!solo && !session.told && session.mode) tellMode(session, conversation.provider);
       if (body.model && body.model !== session.models?.current) {
         if (!session.models?.options.some((o) => o.value === body.model)) {
-          if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.', ends: true }); return refused(400, 'model-unknown');
+          startFailed(); emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.', ends: true }); return refused(400, 'model-unknown');
         }
         try {
           const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'model', value: body.model }), wait(5000).then(() => { throw new Error('timeout'); })]);
           if (!models(session, id, result?.configOptions)) { session.models.current = body.model; emit(id, 'config', configOf(session)); }
-        } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'The model could not be set; nothing was sent.', ends: true }); return refused(500, 'model-failed'); }
+        } catch { startFailed(); emit(id, 'error', { message: 'The model could not be set; nothing was sent.', ends: true }); return refused(500, 'model-failed'); }
       }
       // After the model: a model switch can change the effort list. A refused or failed setting stops the turn, like Model.
       for (const [configId, value] of picks) {
         const o = session.pickers?.find((x) => x.id === configId);
         if (value === o?.current) continue;
         if (!o?.options.some((x) => x.value === value)) {
-          if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.', ends: true }); return refused(400, 'config-unknown');
+          startFailed(); emit(id, 'error', { message: 'This agent does not offer that setting; nothing was sent.', ends: true }); return refused(400, 'config-unknown');
         }
         try {
           const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }), wait(5000).then(() => { throw new Error('timeout'); })]);
           if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); }
-        } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
+        } catch { startFailed(); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
       }
       if (photos(images).length && !session.capabilities.promptCapabilities?.image) {
-        if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'This agent does not take images; nothing was sent.', ends: true }); return refused(400, 'images-unsupported');
+        startFailed(); emit(id, 'error', { message: 'This agent does not take images; nothing was sent.', ends: true }); return refused(400, 'images-unsupported');
       }
       // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }

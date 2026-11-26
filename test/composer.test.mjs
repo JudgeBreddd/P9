@@ -755,7 +755,7 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   // 'held': the daemon runs the first try (held mid-turn) but its answer is lost; the second meets a dropped link (503);
   // the third gets the daemon's own answer replayed (202 with its held ID).
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o267 = [];
-    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late', 'dropped', 'dropped once', 'long work'].includes(text)) return h(e, ...args);
+    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late', 'dropped', 'dropped once', 'long work', 'long again', 'slow cut'].includes(text)) return h(e, ...args);
       globalThis.o267.push([text, args[1].op, JSON.stringify(args[1])]);
       const n = globalThis.o267.filter(([x]) => x === text).length;
       if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
@@ -767,6 +767,9 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
       // 503, never sent); the third gets the first try's answer replayed.
       if (text === 'dropped once') { if (n === 1) { await h(e, ...args); return { status: 503, body: { error: 'daemon-unavailable', unsure: true } }; } return n === 2 ? { status: 503, body: { error: 'daemon-unavailable' } } : h(e, ...args); }
       if (text === 'long work') { if (n === 1) void h(e, ...args); if (globalThis.o267settle) return h(e, ...args); }
+      // Review 11: 'long again' is 'long work' again, answered once o267settle2; 'slow cut' (an Interrupt) waits on its link until o267cutgo.
+      if (text === 'long again') { if (n === 1) void h(e, ...args); if (globalThis.o267settle2) { globalThis.o267long2 = true; return h(e, ...args); } }
+      if (text === 'slow cut') { await new Promise((res) => { globalThis.o267cutgo = res; }); return h(e, ...args); }
       // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at the cap.
       // Round 5: 'stalled' never answers its first try: the cap counts from it too.
       // Review 7: 'late' lands at 62 s, past the old 60 s deadline and inside the cap.
@@ -859,6 +862,22 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   const after = await users(instance, id);
   assert.equal(after.filter((u) => u === 'wait behind').length, 1, 'the send behind it arrived once');
   assert.ok(after.indexOf('cut in') < after.indexOf('wait behind'), 'after the Interrupt: ' + JSON.stringify(after.slice(-4)));
+  // Review 11: the answer it waits for comes while the Interrupt is still on its way: it still goes after the Interrupt.
+  await send('long again');
+  await until(async () => (await users(instance, id)).includes('long again') && (await pane.locator('.working').count()) === 1, 'the second long turn runs', 20000);
+  await send('behind again');
+  await composer.fill('slow cut'); await composer.press('Control+Enter');
+  await until(async () => app.evaluate(() => !!globalThis.o267cutgo), 'the Interrupt is on its way', 10000);
+  await app.evaluate(() => { globalThis.o267settle2 = true; });
+  await until(async () => app.evaluate(() => !!globalThis.o267long2), 'the long send got its answer', 20000);
+  await page.waitForTimeout(3000);
+  assert.ok(!(await users(instance, id)).includes('behind again'), 'it waits for the Interrupt still on its way');
+  await app.evaluate(() => globalThis.o267cutgo());
+  await until(async () => (await users(instance, id)).includes('behind again'), 'it went after the Interrupt', 30000);
+  await until(async () => (await pane.locator('.working').count()) === 0, 'its turn ended', 30000);
+  const again = await users(instance, id);
+  assert.deepEqual(['slow cut', 'behind again'].map((u) => again.filter((x) => x === u).length), [1, 1], 'each once');
+  assert.ok(again.indexOf('slow cut') < again.indexOf('behind again'), 'after the Interrupt: ' + JSON.stringify(again.slice(-4)));
   assert.equal(await composer.inputValue(), '', 'and its late answer does not put it back in the box');
   assert.equal(await page.locator('#toasts .toast', { hasText: 'not sure' }).count(), 0, 'no unsure line');
   assert.deepEqual(errors, [], 'no page errors');

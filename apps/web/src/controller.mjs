@@ -1324,7 +1324,7 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
 // A refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
 // O255: one sent mid-turn the daemon could not put in the turn waits in its hold (202), so a refusal is final here too.
 // O255: a chat's prompts go one at a time (lines), so one slow to arrive (a big file, a slow link) is not passed by the next.
-const lines = {};
+const lines = {}, nowsOf = {};
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
@@ -1340,8 +1340,11 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // ponytail: an earlier send that has not reached the daemon yet (dropped links only, no outcome-unknown) may land after it.
   // Review 10: a send waiting here behind an unanswered one goes after the Interrupt, as the daemon sends an Interrupt
   // before what it holds (drain): the Interrupt is the message meant to go next. It still goes once.
-  const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) });
-  const mine = when === 'now' ? go() : prev.then(go); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
+  // Review 11: so a send whose turn comes while an Interrupt is still on its way (its files encoding, or its link waiting)
+  // waits for that Interrupt's answer too (nowsOf: every 'now' not answered yet), read when its turn comes.
+  const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async (first) => { await first; return s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }); };
+  const mine = when === 'now' ? go() : prev.then(() => go(nowsOf[s.id])); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
+  if (when === 'now') nowsOf[s.id] = Promise.allSettled([nowsOf[s.id], mine]);
   const r = await mine.finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
   if (r.status === 202) {
