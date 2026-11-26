@@ -239,11 +239,12 @@ test('O267: a message the phone\'s full storage refuses is not queued and stays 
   let answer; const answered = new Promise((done) => { answer = done; });
   await page.route('**/chat/*/prompt', async (route) => { await answered; await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }); });
   await page.evaluate(() => { document.querySelector('#composerNote').hidden = true; });
-  await page.fill('#prompt', 'busy'); await page.click('#composer button');
-  await page.fill('#prompt', 'typed meanwhile'); answer();
+  // Round 3: the new words start with the sent ones ("look" in "lookup failed"): they are not the sent message, so it still comes back.
+  await page.fill('#prompt', 'look'); await page.click('#composer button');
+  await page.fill('#prompt', 'lookup failed'); answer();
   await page.waitForSelector('#composerNote:not([hidden])');
   assert.match(await page.textContent('#composerNote'), /storage is full\. Your message is back in the box/);
-  assert.equal(await page.inputValue('#prompt'), 'busy\ntyped meanwhile', 'the sent words came back above the new ones');
+  assert.equal(await page.inputValue('#prompt'), 'look\nlookup failed', 'the sent words came back above the new ones');
   assert.equal(await page.locator('#queued').isHidden(), true, 'not queued');
   await page.unroute('**/chat/*/prompt');
   // Take back that storage refuses to record: the message stays queued (a reopened app would send it), not also in the box.

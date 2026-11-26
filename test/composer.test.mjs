@@ -747,15 +747,36 @@ test('A2 step 6: a refused send made with the pencil open gives back the edited 
 // O267: a send whose retry gets outcome-unknown (a remote's first try still in flight) asks again with the same operation
 // ID until the daemon answers, so its own answer settles it (a held one keeps its files the normal way); an identical
 // message from elsewhere does not count as it. Never answered: back in the box, saying it may still have arrived.
-test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 120000 }, async (t) => {
-  const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown');
+test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 180000 }, async (t) => {
+  const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown', { files: ['slow-tools'] });
   const composer = pane.locator('.composer textarea');
   // 'landed': the daemon's first two answers are lost in flight, the third try is the one it runs. 'lost': never answered.
+  // 'held': the daemon runs the first try (held mid-turn) but its answer is lost; the second meets a dropped link (503);
+  // the third gets the daemon's own answer replayed (202 with its held ID).
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o267 = [];
-    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (text !== 'landed' && text !== 'lost') return h(e, ...args);
+    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held'].includes(text)) return h(e, ...args);
       globalThis.o267.push([text, args[1].op]);
-      if (text === 'landed' && globalThis.o267.filter(([x]) => x === 'landed').length >= 3) return h(e, ...args);
+      const n = globalThis.o267.filter(([x]) => x === text).length;
+      if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
+      if (text === 'landed' && n >= 3) return h(e, ...args);
       return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
+  const rows = pane.locator('.queue [data-held]');
+  await send('tools 2');
+  await started(instance, id, 'tool-1');
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), pane.locator('[data-attach]').click()]);
+  await chooser.setFiles([{ name: 'held.txt', mimeType: 'text/plain', buffer: Buffer.from('held') }]);
+  await pane.locator('.attach .att-file', { hasText: 'held.txt' }).waitFor({ timeout: 10000 });
+  await send('held');
+  await until(async () => (await app.evaluate(() => globalThis.o267replayed?.status)) === 202, 'the third try got the daemon\'s own answer', 15000);
+  assert.ok((await app.evaluate(() => globalThis.o267replayed.body?.held)), 'a held ID in the replayed answer');
+  assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'held').map(([, op]) => op))).size, 1, 'one operation across the lost answer and the dropped link');
+  await until(async () => (await rows.filter({ hasText: 'held' }).count()) === 1, 'held once', 5000);
+  assert.equal(await pane.locator('.attach').count(), 0, 'its file went with it');
+  await rows.filter({ hasText: 'held' }).locator('[data-unhold]:not([data-now])').click();
+  await until(async () => (await composer.inputValue()) === 'held' && (await pane.locator('.attach .att-file', { hasText: 'held.txt' }).count()) === 1, 'Take back gives the message its file back', 10000);
+  await pane.locator('.attach [data-unattach]').click(); await composer.fill('');
+  await until(async () => (await pane.locator('.working').count()) === 0, 'the tool turn ended', 30000);
+  assert.equal((await users(instance, id)).filter((u) => u === 'held').length, 0, 'taken back, never sent');
   await send('landed');
   // The same words from another device while this one waits: a message of its own, not this send's answer.
   const other = await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'landed' }); assert.equal(other.status, 202, JSON.stringify(other.body));
@@ -768,7 +789,7 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   await send('lost');
   await page.waitForTimeout(5000);
   assert.equal(await composer.inputValue(), '', 'not back in the box while P9 may still be running it');
-  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once P9 never answered', 45000);
+  await until(async () => (await composer.inputValue()) === 'lost', 'back in the box once P9 never answered', 75000);
   await page.locator('#toasts .toast', { hasText: 'Still not sure your message arrived' }).waitFor({ timeout: 5000 });
   assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'lost').map(([, op]) => op))).size, 1, 'one operation throughout');
   assert.equal((await users(instance, id)).filter((u) => u === 'lost').length, 0);
