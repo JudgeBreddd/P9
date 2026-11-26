@@ -92,17 +92,18 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // sent again). Hold and resume read one test, a window that calls for a hold, over every window the worker draws on.
 // Review 13: held only on the worker's own Holding for usage reply (P9 shows a message it never ran); a paused sprint settles
 // no hold (what is sent waits for Resume); a refused carry-on keeps the hold; a window with no projected decides nothing.
+// Review 14: only the lead's own workers (yours: another sprint in the project is not its own); the held-for window must be read.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
   + '"Usage watch: call plan_usage and list_chats. A window calls for a hold when its reading is not stale, its pace is ahead and its '
-  + 'projected is over 100; a window whose reading has no projected neither calls for a hold nor clears one. A worker draws on a window when list_chats gives its plan as that reading\'s pool and, for a window under '
+  + 'projected is over 100; a window whose reading has no projected neither calls for a hold nor clears one. A worker (a chat list_chats marks yours) draws on a window when list_chats gives its plan as that reading\'s pool and, for a window under '
   + 'models, its model names that family; a plan of null, or a model that does not name the family (default included), draws on none, '
   + 'and if you cannot tell, it does not. Each worker has at most one hold of yours, kept under ## Usage watch in sprint.md with its chat '
   + 'id, the window, the cursor and whether it is sent or held. Never send a hold or a carry-on with replaces. '
   + '1. Each hold still sent: while list_chats gives its worker paused, its sprint is paused: leave the hold as sent. Else wait_chat on '
   + 'the worker with timeoutMs 0, and while it is working leave it (your hold may still be waiting for its turn). Once it is idle, read_chat from the cursor (after), following next while more is true: if a reply of the '
   + 'worker\'s own there says Holding for usage, it is held; if not (your text there alone is not enough), the hold was dropped: forget it. '
-  + '2. A held worker is back when its plan\'s reading is there, not stale, and every window it draws on has a projected and does not '
+  + '2. A held worker is back when its plan\'s reading is there, not stale, the window it was held for is in it, and every window it draws on has a projected and does not '
   + 'call for a hold. Send it, as steer, Usage is back: carry on. If send_chat answers with an error, keep the hold for the next watch; '
   + 'otherwise forget it. Do this for every held worker that is back. '
   + '3. For each window that calls for a hold, take the least-advanced running worker that draws on it and has no hold of yours. Just '
