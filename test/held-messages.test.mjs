@@ -429,6 +429,8 @@ test('O255: in a Codex chat, a message sent after a Plan pick was taken back doe
 // spends; a hold sent as steer to a worker deep in a turn waits with a held ID, and the carry-on sent with replaces takes
 // its place, so only the carry-on reaches the worker; read_chat from the cursor kept just before the hold, asked again on a
 // later watch, has the worker's whole reply, though the first read came before any of it.
+// Review 12: the watch no longer sends replaces (one hold a worker, settled once it is idle); the replace part here is
+// send_chat's own rule (O125), kept.
 test('O141 review 9: a worker\'s plan in list_chats; a hold still waiting is replaced by the carry-on; a reply is read whole from the kept cursor', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });

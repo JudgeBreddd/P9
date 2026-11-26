@@ -86,39 +86,28 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // O141: the lead's default instructions (Start sprint sends them once, as the owner's, like any Setup text): watching plan use is
 // part of leading. The check rides in the scheduled prompt's own text, so it survives a compaction; the thresholds are this
 // text, which the owner edits or deletes in Setup, not code. Close pauses the schedule (delegate.mjs closeSprint).
-// Review 6: the cursor is read before the hold is sent (a held steer has none yet), so the reply cannot fall before it.
-// Review 7: read_chat pages (more, next), so each watch follows them.
-// Review 8: the worker held is one on the window that is running hot (holding a worker on another plan saves nothing); each
-// watch reads from the cursor taken before the hold, so a reply split across two watches is still read whole; and a hold
-// still waiting when use recovers is replaced by a carry-on, so it never lands after the resume.
-// Review 9: a worker is held for a window only when list_chats shows it spends that plan (plan, null for a profile chat) and,
-// for a model's own window, runs that model; each hold keeps its window, and only a fresh reading of that window resumes it;
-// Review 10: a reset is a later resetsAt (a usedPercent can be corrected down inside one window), and a worker with a hold
-// still unanswered gets no second one (the lead keeps one held ID a worker).
-// Review 11: a hold is sent again only while its window still calls for one, replacing the one kept (so a hold still
-// queued at a turn's end is replaced, not doubled), and a new window that is already running hot resumes no one.
-// a hold that went straight into the turn has no held ID, so its carry-on goes without replaces.
+// Review 12: one hold a worker, never resent with replaces (a replace of a hold that left the queue meanwhile started a
+// turn, and each round's retry rule raced the last). A hold is settled only once wait_chat says the worker is idle, which
+// means nothing of it still waits: then read_chat shows whether the hold reached it (held) or not (dropped, so it may be
+// sent again). Hold and resume read one test, a window that calls for a hold, over every window the worker draws on.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
-  + '"Usage watch: call plan_usage. If a window has pace ahead and projected over 100 (its reading not stale), hold the '
-  + 'least-advanced running worker not held yet and with no hold of yours still waiting for its reply whose provider draws on that window: list_chats gives each worker\'s plan, which must be '
-  + 'that reading\'s pool, and for a window under models the worker\'s model must also name that family. A worker whose plan is null, or whose '
-  + 'model does not name the family (default included), is not held for it: if you cannot tell, do not hold. Send it, as steer, Finish the '
-  + 'step you are on, write a Next line in your notes, reply Holding for usage, end your turn, and wait until I resume you. A steer can wait '
-  + 'in its queue until that turn ends, or be dropped with it, so it is held only once the worker replies Holding for usage after it: just '
-  + 'before you send it, read_chat on the worker and keep that answer\'s next cursor with the held chat id, the window (provider and fiveHour, '
-  + 'sevenDay or the model name) and its usedPercent and resetsAt, and keep the held ID send_chat returns if the steer waits. On each watch, read_chat '
-  + 'from that cursor (after), following next while more is true, for the reply; keep that cursor until you have read the whole reply. Idle, '
-  + 'working or a timeout is not yet. Send the hold again only to one idle without that reply, and only while that window\'s latest reading still calls '
-  + 'for a hold, the same way (read_chat first, keep its next), with replaces set to its held ID when you kept one (a hold still waiting is then '
-  + 'replaced, not doubled); keep the held ID and cursor of the new one in place of the old. A '
-  + 'held worker\'s window is back when a reading of it taken after the hold (asOf later, not stale) has pace on or headroom, or a resetsAt later than the one you kept (the window reset; a lower usedPercent '
-  + 'alone is a corrected reading, not a reset) and that reading is not itself pace ahead with projected over 100; other windows do not matter to it, and a pace of null alone is not back. Then, if its hold has no reply '
-  + 'yet, send it, as steer, Usage is back: carry on, with replaces set to its held ID (without replaces when send_chat gave no held ID: the '
-  + 'steer went into its turn; a hold already delivered gets it as a new message, which resumes it); then resume every worker you held whose '
-  + 'window is back, not only the last. Keep each held chat id, with its window and the numbers, under ## Usage watch in sprint.md: a line '
-  + 'when you hold it, its confirmation, and its resume."\n'
-  + '- A stale reading is no reason to hold: note it and wait for the next one.\n';
+  + '"Usage watch: call plan_usage and list_chats. A window calls for a hold when its reading is not stale, its pace is ahead and its '
+  + 'projected is over 100. A worker draws on a window when list_chats gives its plan as that reading\'s pool and, for a window under '
+  + 'models, its model names that family; a plan of null, or a model that does not name the family (default included), draws on none, '
+  + 'and if you cannot tell, it does not. Each worker has at most one hold of yours, kept under ## Usage watch in sprint.md with its chat '
+  + 'id, the window, the cursor and whether it is sent or held. Never send a hold or a carry-on with replaces. '
+  + '1. Each hold still sent: wait_chat on the worker with timeoutMs 0, and while it is working leave it (your hold may still be waiting '
+  + 'for its turn). Once it is idle, read_chat from the cursor (after), following next while more is true: if your hold reached it (a '
+  + 'message there carries its text), it is held; if not, the hold was dropped: forget it. '
+  + '2. A held worker is back when its plan\'s reading is there, not stale, and no window it draws on calls for a hold. Send it, as steer, Usage is '
+  + 'back: carry on, and forget its hold. Do this for every held worker that is back. '
+  + '3. For each window that calls for a hold, take the least-advanced running worker that draws on it and has no hold of yours. Just '
+  + 'before you send, read_chat on it and keep that answer\'s next as the cursor. Send it, as steer, Finish the step you are on, write a '
+  + 'Next line in your notes, reply Holding for usage, end your turn, and wait until I resume you. If send_chat answers with an error, '
+  + 'nothing was sent: keep no hold. Otherwise keep it as sent. '
+  + 'Log each hold, each one held or dropped, and each resume under ## Usage watch."\n'
+  + '- A stale reading is no reason to hold or to resume: note it and wait for the next one.\n';
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {
