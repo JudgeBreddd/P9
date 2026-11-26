@@ -365,6 +365,9 @@ test('O267b: held workers past 200 rows are listed; release with carryOn is one 
   fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); // P9 reads claude's model list
+  await until(instance, (e) => e.conversation === first && e.data?.content?.text?.startsWith('config:'));
   const prep = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'P1' })).body, sprint = prep.sprint;
   const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
   fs.writeFileSync(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [row('lead'), row('w1'), row('w2')] }));
