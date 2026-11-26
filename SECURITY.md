@@ -1489,8 +1489,9 @@ migration spec S13).
   Only the worker's own lead can hold or release it, never while the agent lock is on, and never a worker that leads a
   sprint of its own. No pause or resume script runs and no notice is sent. A paused sprint keeps its messages first; on
   its Resume a held worker's messages wait on for its release. The lead's usage watch holds a worker this way when plan
-  use runs high. A message you type into a held worker still goes through. Nothing but its lead releases it, and Close
-  stops it either way.
+  use runs high. A message you type into a held worker still goes through. Only its lead releases it, except Close,
+  which lets go of every held worker: what one kept joins the sprint's own kept list if the sprint is paused, and is
+  otherwise dropped, as Stop drops what waits in a turn's queue.
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Standing merge
