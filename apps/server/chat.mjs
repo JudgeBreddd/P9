@@ -2213,7 +2213,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const list = pausedOf(worker), into = pausedOf(lead);
       if (!list) return;
       db.exec('BEGIN');
-      try { if (into) setPaused(lead, [...into, ...list]); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
+      // The worker's go first: they are older, since a worker keeps its own only while its sprint is not paused.
+      try { if (into) setPaused(lead, [...list, ...into]); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped' });
       wakeAll('resumed');
     },

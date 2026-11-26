@@ -496,6 +496,7 @@ export function createDelegate({ chat, allowed, usage }) {
   function pauseSprint(lead, owner, worker) {
     if (!owner && chat.lock(lead).on) return { error: 'agent-lock-on' };
     if (!isLead(lead)) return { error: owner ? 'unknown-sprint' : 'not-a-sprint-lead' };
+    if (worker !== undefined && (closing.has(lead) || chat.projects.closed(lead))) return { error: 'sprint-closed', detail: 'This sprint is closed: it holds no worker.' };
     if (worker !== undefined) return holdable(lead, worker) ?? (chat.pause(worker) ? { held: true } : { held: true, already: true });
     if (!chat.pause(lead)) return { paused: true, already: true };
     hooks.ordered(lead, 'pause', { by: owner ? 'owner' : 'lead' }); // O202: the pause scripts, after any resume ones still running

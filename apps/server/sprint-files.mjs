@@ -88,19 +88,22 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // text, which the owner edits or deletes in Setup, not code. Close pauses the schedule (delegate.mjs closeSprint).
 // Review 14b: the hold is P9's own flag (pause_sprint with chat; list_chats held: true), not a message the lead tracks:
 // no cursor, reply or delivery rule, since reading chat text and states drifted from what was delivered (reviews 12 to 14).
-// Only the lead's own workers (yours); the held-for window must be read; a window with no projected decides nothing.
+// Only the lead's own workers (yours, parent not yours: the chats it started, as pause_sprint takes); the held-for window
+// must be read; a window with no projected decides nothing. Review 15: a held worker with no record is released (a watch
+// stopped between the hold and its record), and a record goes only when list_chats gives the worker not held.
 // ponytail: a turn that ends between list_chats and the note gets the note with its next message, the carry-on at release
 // (seconds wide, at a turn's end); the carry-on says an earlier note no longer applies, so the worker carries on.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
   + '"Usage watch: call plan_usage and list_chats. A window calls for a hold when its reading is not stale, its pace is ahead and its '
   + 'projected is over 100; a window whose reading has no projected neither calls for a hold nor clears one. A worker (a chat list_chats '
-  + 'marks yours) draws on a window when list_chats gives its plan as that reading\'s pool and, for a window under '
+  + 'marks yours whose parent is no chat it marks yours) draws on a window when list_chats gives its plan as that reading\'s pool and, for a window under '
   + 'models, its model names that family; a plan of null, or a model that does not name the family (default included), draws on none, '
   + 'and if you cannot tell, it does not. A worker is held when list_chats gives it held: true: P9 starts no turn for it until you '
   + 'release it. Under ## Usage watch in sprint.md, keep each worker you hold with its chat id and the window it was held for. '
   + 'While list_chats gives your workers paused, your sprint is paused: do nothing this watch. '
-  + '1. Each worker kept there that list_chats no longer gives held: forget it. One still held is back when its plan\'s reading is there, '
+  + '1. Each worker kept there that list_chats gives and not held: forget it; one it does not give, keep. A worker list_chats gives held '
+  + 'that is not kept there is back now (a watch stopped before keeping it). One kept and still held is back when its plan\'s reading is there, '
   + 'not stale, the window it was held for is in it, and every window it draws on has a projected and does not call for a hold. '
   + 'For every one back, send it Usage is back: carry on (any note before this to end your turn for usage no longer applies). If '
   + 'send_chat answers with an error, leave it held for the next watch; otherwise call resume_sprint with its chat and forget it. '
