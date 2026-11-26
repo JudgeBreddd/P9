@@ -337,5 +337,12 @@ test('Hold one worker: a held worker starts no turn for the lead\'s message, lis
   seen = await listed();
   assert.deepEqual(seen[id.w1], [false, false], 'the released worker still says held');
   assert.deepEqual(await lead.tool('resume_sprint', { chat: id.w1 }), { held: false, already: true });
-  console.log('PASS O141 hold one worker: kept while held, peer ran, note passed, release delivered in order with its sender');
+
+  // Close lets go of a held worker: nothing is kept for it after, and what it kept goes as Stop drops a queue.
+  assert.deepEqual(await lead.tool('pause_sprint', { chat: id.w1 }), { held: true });
+  assert.ok((await lead.tool('send_chat', { chat: id.w1, text: 'hold-two' })).held, 'hold-two was not kept');
+  assert.equal((await call(instance, `/sprints/${sprint}/close`, 'POST', {})).status, 200);
+  assert.equal((await rows(instance)).find((c) => c.id === id.w1).paused, undefined, 'Close left the worker held');
+  assert.deepEqual((await events(instance, id.w1)).filter((e) => e.type === 'unheld' && e.data.text?.includes('hold-two')).map((e) => e.data.why), ['stopped']);
+  console.log('PASS O141 hold one worker: kept while held, peer ran, note passed, release delivered in order with its sender; Close let go of it');
 });

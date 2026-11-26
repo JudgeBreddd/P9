@@ -752,6 +752,7 @@ export function createDelegate({ chat, allowed, usage }) {
       const end = { at: Date.now(), by: caller ?? 'owner', record };
       chat.projects.recordClose(sprint, end);
       schedules?.pause([...below(chat.family(), sprint), sprint]); // O141: nothing of a closed sprint wakes on its own
+      for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) chat.release(c.id, sprint); // O141: no worker stays held
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint, { bundle: true }).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));

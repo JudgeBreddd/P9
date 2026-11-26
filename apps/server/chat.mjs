@@ -2207,6 +2207,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lastMode,
     lastPicks, // O207 FIX1 (delegate.mjs startSprint): what carry sets a stopped chat back to
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
+    // O141: Close lets go of a worker its lead held. What it kept joins its sprint's own list while the sprint is paused (the
+    // owner's Resume sends it with the rest); otherwise it goes, as Stop drops what waits in a turn's queue.
+    release(worker, lead) {
+      const list = pausedOf(worker), into = pausedOf(lead);
+      if (!list) return;
+      db.exec('BEGIN');
+      try { if (into) setPaused(lead, [...into, ...list]); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
+      if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped' });
+      wakeAll('resumed');
+    },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
     // end. Returns how many were held, or null when the sprint was not paused. resumed(count) is called once the pause is
     // cleared and before anything is sent (delegate.mjs queues the resume scripts there, in the order of the presses).
