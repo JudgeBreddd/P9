@@ -760,9 +760,9 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
       const n = globalThis.o267.filter(([x]) => x === text).length;
       if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
       if (text === 'landed' && n >= 3) return h(e, ...args);
-      // Review 9: 'dropped': the daemon takes the first try but the link drops before its answer (503), and drops again on
+      // Review 9: 'dropped': the daemon takes the first try but the link drops before its answer (503, unsure: it went out), and drops again on
       // the second; the third gets its own answer replayed. 'long work': its turn starts, its answer never comes until told.
-      if (text === 'dropped') { if (n === 1) await h(e, ...args); return n <= 2 ? { status: 503, body: { error: 'daemon-unavailable' } } : h(e, ...args); }
+      if (text === 'dropped') { if (n === 1) await h(e, ...args); return n <= 2 ? { status: 503, body: { error: 'daemon-unavailable', unsure: true } } : h(e, ...args); }
       if (text === 'long work') { if (n === 1) void h(e, ...args); if (globalThis.o267settle) return h(e, ...args); }
       // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at the cap.
       // Round 5: 'stalled' never answers its first try: the cap counts from it too.

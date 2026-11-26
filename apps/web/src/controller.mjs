@@ -1290,10 +1290,11 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
     r = await ask();
     // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
     if (r.status === 503 && body.op) { await pause(); if (Date.now() < end) r = await ask(); }
-    // Review 9: a prompt is unsure from its first dropped link too: the daemon may have taken it before the link went, so
-    // it keeps asking under its ID (one restarted daemon that never saw it runs it then) rather than coming back to be sent again.
-    for (let unsure = action === 'prompt'; body.op;) {
-      if (r.status === 409 && r.body?.error === 'outcome-unknown') unsure = true; else if (!(unsure && r.status === 503)) break;
+    // Review 9: a link that dropped after the request went out (main says unsure: teh.mjs failedReply) is unsure too, even
+    // before any outcome-unknown: the daemon may have taken it, so it keeps asking under its ID rather than coming back to be
+    // sent again. One that never went out (nothing listening) is not, and comes back at once.
+    for (let unsure = false; body.op;) {
+      if ((r.status === 409 && r.body?.error === 'outcome-unknown') || (r.status === 503 && r.body?.unsure)) unsure = true; else if (!(unsure && r.status === 503)) break;
       if (end - Date.now() <= 1000) { r = unknown; break; }
       await pause();
       if (Date.now() >= end) { r = unknown; break; } // a pause that woke late (a suspended timer) asks nothing more

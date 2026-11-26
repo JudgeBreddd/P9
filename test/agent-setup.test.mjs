@@ -584,5 +584,8 @@ test('D16: a plain-text 404 is daemon-outdated, no reply is daemon-unavailable, 
   assert.deepEqual(await failed('/setup/agents'), { status: 404, body: { error: 'daemon-outdated' } });
   assert.deepEqual(await daemonRequest(state, 'POST', '/json', {}), { status: 404, body: { error: 'not-found' } });
   server.close();
-  assert.deepEqual(await failed('/setup/agents'), { status: 503, body: { error: 'daemon-unavailable' } });
+  assert.deepEqual(await failed('/setup/agents'), { status: 503, body: { error: 'daemon-unavailable' } }, 'nothing listening: surely unsent');
+  // O267 review 9: an error after the request went out may have reached the daemon, so it is unsure.
+  for (const error of [new Error('timeout'), Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }), Object.assign(new Error('dropped'), { status: 200 })])
+    assert.deepEqual(failedReply(error), { status: 503, body: { error: 'daemon-unavailable', unsure: true } }, error.message);
 });
