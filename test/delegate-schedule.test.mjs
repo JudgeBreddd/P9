@@ -165,3 +165,20 @@ test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed l
   assert.deepEqual(db.prepare("SELECT owner, paused FROM schedules WHERE text IN ('watch', 'wake') ORDER BY owner = ? DESC").all(sprint).map((r) => [r.owner, r.paused]), [[sprint, 1], [made.chat, 1]]);
   console.log('PASS O141: close paused the lead\'s and the worker\'s schedules; neither woke');
 });
+
+// O141 review 3: Close stops every chat of its sprint, but a prompt already on its way (a schedule sent just before Close)
+// reads the project note before it connects an agent. A Stop during that read wins: nothing starts. The read is slowed
+// (P9_NOTE_MS) so the Stop lands inside it every time.
+test('O141: a Stop while a prompt reads its project note wins, so a prompt already on its way does not start after Close', { timeout: 120000 }, async (t) => {
+  const instance = await start(t, { P9_NOTE_MS: '2500' });
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'codex', title: 'Stopped while starting' })).body.conversation;
+  const prompting = call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'hello' });
+  await pause(800);
+  const stopped = await call(instance, `/chat/${chat}/stop`, 'POST', {});
+  assert.equal(stopped.status, 200, JSON.stringify(stopped));
+  const sent = await prompting;
+  assert.equal(sent.body?.error ?? sent.body?.reason, 'stopping', 'a prompt starting through a Stop was taken: ' + JSON.stringify(sent));
+  await pause(1500);
+  const types = (await events(instance, chat)).map((e) => e.type);
+  assert.ok(!types.includes('user') && !types.includes('turn-end'), 'the prompt ran after Stop: ' + JSON.stringify(types));
+});
