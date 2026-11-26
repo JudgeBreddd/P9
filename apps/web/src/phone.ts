@@ -744,7 +744,11 @@ function render() {
   if (state.stubs.has(picked)) {
     phoneFolderLine.hidden = true;
     one('#events').innerHTML = '<div class="empty">Loading…</div>';
-    history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
+    history(picked).then(render, (error) => { // O269: say why and read again while this chat stays open
+      if (openId !== picked) return;
+      one('#events').innerHTML = `<div class="empty">Chat is unavailable (${escape((error as Error)?.message || 'no answer')}). Trying again…</div>`;
+      if ((error as { status?: number })?.status !== 401) window.setTimeout(() => { if (openId === picked && state.stubs.has(picked)) render(); }, 5000);
+    });
     return;
   }
   const { blocks, strip } = build(picked), events = one<HTMLElement>('#events');
