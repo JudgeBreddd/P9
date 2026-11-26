@@ -83,6 +83,16 @@ export function phasesOf(plan) {
 }
 // A Role: owner line is never a worker's queue, even a worker keyed 'owner' (O164 part (3)).
 export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.role !== 'owner' && i.role === key).map(({ id, text }) => ({ id, text }));
+// O141: the lead's default instructions (Start sprint sends them once, as the owner's, like any Setup text): watching plan use is
+// part of leading. The check rides in the scheduled prompt's own text, so it survives a compaction; the thresholds are this
+// text, which the owner edits or deletes in Setup, not code. Close pauses the schedule (delegate.mjs closeSprint).
+const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
+  + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
+  + '"Usage watch: call plan_usage. If a window your workers use has pace ahead and projected over 100 (its reading not stale), hold your '
+  + 'least-advanced running worker: send it, as steer, Finish the step you are on, write a Next line in your notes, end your turn, and wait '
+  + 'until I resume you. When every window is back to on or headroom, resume the worker you held last. Write each hold and resume, with the '
+  + 'numbers, under ## Usage watch in sprint.md."\n'
+  + '- A stale reading is no reason to hold: note it and wait for the next one.\n';
 const NOTES = '## Now\nDoing:\nNext:\nBlocked on:\nNot yet checked:\n\n## Log\n';
 
 export function createSprintFiles({ home }) {
@@ -196,7 +206,7 @@ export function createSprintFiles({ home }) {
     prep(lead, roles) {
       start(lead, 'sprint.md', PLAN);
       start(lead, 'roles.json', JSON.stringify(roles, null, 2) + '\n');
-      for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, '');
+      for (const key of roles.roles.map((r) => r.key)) for (const kind of ['instructions', 'rules', 'work']) start(lead, `roles/${key}.${kind}.md`, key === 'lead' && kind === 'instructions' ? LEAD : '');
       return folderOf(lead);
     },
     // Every file of a sprint with its text, in a fixed order: plan, rules, roles.json, review trail, then roles and notes by name.

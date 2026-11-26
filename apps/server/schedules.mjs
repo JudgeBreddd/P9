@@ -80,6 +80,8 @@ export function createSchedules({ db, fire, now = () => Date.now() }) {
       arm();
       return { action: 'removed', id };
     },
+    // O141: a closed sprint's chats (owners): their schedules are paused, not removed, so a usage watch never wakes a closed lead.
+    pause: (owners) => owners.reduce((n, owner) => n + db.prepare('UPDATE schedules SET paused = 1 WHERE owner = ? AND paused = 0').run(owner).changes, 0),
     stop: () => clearTimeout(timer),
   };
 }

@@ -137,7 +137,7 @@ export const DELEGATE_TOOLS = (input) => {
       + 'standing_merge: the user\'s switch (true: you may merge what passed review, after before-merge allows it; false: merge is the user\'s). A sprint not yet started answers with started null; a closed one answers with its record (as it stood at Close) and closed { at, by }. This tool changes nothing.',
     input({ sprint: sprintArg })],
     ['close_sprint', 'Close a started sprint on the user\'s word, as the Close sprint button on the user\'s Sprint View does: P9 asks the user first, in every mode. It runs the before-close scripts (a blocking one that fails refuses the close), '
-      + 'stops every chat of the sprint (the chats under the lead, then the lead; the chat that calls this is left to end its own turn), keeps the record (sprint_status as it stood), turns the sprint\'s scripts off and runs the after-close scripts. '
+      + 'stops every chat of the sprint (the chats under the lead, then the lead; the chat that calls this is left to end its own turn), keeps the record (sprint_status as it stood), pauses the scheduled prompts of its chats, turns the sprint\'s scripts off and runs the after-close scripts. '
       + 'Then it removes each worker folder with nothing unsaved whose work is in the main line, with its branch (the answer\'s cleaned lists what went and what stayed, and why); every other folder and branch, the sprint\'s files and its chats stay. '
       + 'Called from a chat of the sprint, no folder is removed. A closed sprint is not started again.',
     input({ sprint: sprintArg })],
@@ -731,6 +731,7 @@ export function createDelegate({ chat, allowed, usage }) {
       record.workers = record.workers.map((w) => (w.chat === caller ? w : { ...w, state: 'stopped', waiting: false }));
       const end = { at: Date.now(), by: caller ?? 'owner', record };
       chat.projects.recordClose(sprint, end);
+      schedules?.pause([...below(chat.family(), sprint), sprint]); // O141: nothing of a closed sprint wakes on its own
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint, { bundle: true }).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
