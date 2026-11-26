@@ -1209,8 +1209,9 @@ async function drain() {
     }
   } catch { /* a lost request keeps its message and its ID; the next drain sends it again */ }
   finally { draining = false; }
-  if (sent) { await fetchEvents(); render(); } else renderQueue();
+  // O267 review 6: a wake that came during this drain runs first, so a refresh that fails or stalls cannot hold it back.
   if (rerun) { rerun = false; void drain(); }
+  if (sent) { await fetchEvents().catch(() => {}); render(); } else renderQueue();
 }
 one<HTMLElement>('#queued').onclick = async (event) => {
   const hold = (event.target as Element).closest<HTMLButtonElement>('button[data-unhold]');

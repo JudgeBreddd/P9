@@ -423,10 +423,11 @@ test('O267: a queued message goes as its chat\'s turn ends, also from the chat l
   await page.waitForSelector('#stale:not([hidden])');
   await page.fill('#prompt', 'wake me'); await page.click('#composer button');
   await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
-  const at = [];
+  const at = []; let release; const hold = new Promise((res) => { release = res; });
   await page.route('**/chat/*/prompt', async (route) => {
     if (route.request().postDataJSON()?.text !== 'wake me') return route.continue();
     at.push(Date.now());
+    if (at.length === 3) await hold; // review 6: this refusal comes back only after the turn has ended
     if (at.length <= 3) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
     else await route.continue();
   });
@@ -435,8 +436,11 @@ test('O267: a queued message goes as its chat\'s turn ends, also from the chat l
   await page.goBack();
   const ended = Date.now();
   await call(server, '/chat/' + id + '/cancel', {});
+  await new Promise((res) => setTimeout(res, 500)); release();
   await until(async () => at.length === 4, 'a try after the turn ended');
   assert.ok(at[3] - ended < 4000, `it went ${at[3] - ended} ms after the turn ended, not after its 8 s wait`);
+  await until(async () => (await server.desk('/chat/events?after=0&only=' + id)).body.events.filter((e) => e.type === 'user' && e.data?.text === 'wake me').length === 1, 'delivered, once');
+  await until(async () => (await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]').length, 'p9-queue:' + id)) === 0, 'and gone from the queue');
   await page.unroute('**/chat/*/prompt');
 });
 

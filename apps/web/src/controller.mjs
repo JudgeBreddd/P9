@@ -1312,20 +1312,26 @@ const lines = {};
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
-// O267 review 5: a send that ended unsure (no answer by the deadline) keeps its operation ID with its words and files, so
-// sending them again from the box is the same operation: if the first try still lands, the daemon answers both as one.
-// ponytail: one per chat, the last unsure send, kept only until the chat's next send; other words get a new ID.
+// O267 review 5: a send that ended unsure (no answer by the deadline) keeps its operation ID and the exact request it sent, so
+// sending the same words and files again from the box sends that request again: if the first try still lands, the daemon
+// answers both as one (review 6: the request as it was, so a mode or turn changed meanwhile is not a different operation).
+// Used once: the chat's next send takes it, so another send waiting in the line gets its own ID. And not once the chat
+// shows more user messages with those words than before the first try: it landed, so the same words again are a new message.
+// ponytail: one per chat, the last unsure send; counted by words, so an older same-words message loaded by Show earlier
+// meanwhile reads as landed (a new ID: a duplicate only if the first try is still running and lands after).
 const unsureOps = new Map();
 liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agent); const turns = turnsOf.get(s.id), was = s.working; s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
   // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
   // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
-  const u = unsureOps.get(s.id), op = u && u.text === text && u.images.length === images.length && u.images.every((x, n) => x === images[n]) ? u.op : crypto.randomUUID();
-  if (u && u.op !== op) unsureOps.delete(s.id); // only the very next send can be the same one: later, the same words are a new message
+  const said = () => s.events.filter(e => e.t === 'user' && e.text === text).length, u = unsureOps.get(s.id); unsureOps.delete(s.id);
+  const again = u && u.text === text && u.images.length === images.length && u.images.every((x, n) => x === images[n]) && said() === u.said ? u : null;
+  const op = again ? again.op : crypto.randomUUID(), before = again ? again.said : said();
   const stops = s.stops, body = { id: s.id, text, mode: n.mode, next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
-  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { op, ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
-  if (r.status === 409 && r.body?.error === 'outcome-unknown') unsureOps.set(s.id, { op, text, images }); else if (unsureOps.get(s.id)?.op === op) unsureOps.delete(s.id);
+  let sent;
+  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', sent = again?.sent ?? { op, ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
+  if (r.status === 409 && r.body?.error === 'outcome-unknown') unsureOps.set(s.id, { op, text, images, sent, said: before });
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
   if (r.status === 202) {
     const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
