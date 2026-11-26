@@ -136,10 +136,12 @@ export function installPanel(o, { focus, stopChat, busy }) {
     searchT = setTimeout(() => ask(q), 250); }
   function renderPanel() {
     if (P.q.length >= 2 && o.S.sessions.some(s => when(s) > searched)) research();
-    const known = new Set(o.S.sessions.map(s => s.id));
-    if (o.liveChat.on) for (const id of positions.keys()) if (!known.has(id)) positions.delete(id);
+    // O257: only once the live list is in (S.loaded). Live chat turns on with no chats yet, so pruning then dropped every
+    // saved place and wrote the empty list back: after a restart the open chats came back in activity order.
+    const known = new Set(o.S.sessions.map(s => s.id)), listed = o.liveChat.on && o.S.loaded;
+    if (listed) for (const id of positions.keys()) if (!known.has(id)) positions.delete(id);
     ordered(o.S.sessions);
-    if (o.liveChat.on) try { localStorage.setItem('p9-panel-open-order', JSON.stringify([...positions].filter(([, value]) => value.active))); } catch {}
+    if (listed) try { localStorage.setItem('p9-panel-open-order', JSON.stringify([...positions].filter(([, value]) => value.active))); } catch {}
     const shut = stripped();
     nav.toggleAttribute('data-collapsed', shut);
     nav.toggleAttribute('data-overlay', P.narrow && P.overlay && o.S.focus === 'chat');
