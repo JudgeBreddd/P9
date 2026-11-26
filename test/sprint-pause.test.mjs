@@ -344,8 +344,11 @@ test('Hold one worker: a held worker starts no turn for the lead\'s message, lis
   assert.equal((await call(instance, `/sprints/${sprint}/close`, 'POST', {})).status, 200);
   assert.equal((await rows(instance)).find((c) => c.id === id.w1).paused, undefined, 'Close left the worker held');
   assert.deepEqual((await events(instance, id.w1)).filter((e) => e.type === 'unheld' && e.data.text?.includes('hold-two')).map((e) => e.data.why), ['stopped']);
-  // Review 15: a closed sprint holds no worker again.
-  assert.equal((await lead.tool('pause_sprint', { chat: id.w1 })).error, 'sprint-closed', 'a worker was held after Close');
+  // Review 15: a closed sprint holds no worker again, even from its lead reopened by the owner.
+  const mark = await cursor(instance);
+  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  const reopened = await attach(t, instance, sprint, mark);
+  assert.equal((await reopened.tool('pause_sprint', { chat: id.w1 })).error, 'sprint-closed', 'a worker was held after Close');
   assert.equal((await rows(instance)).find((c) => c.id === id.w1).paused, undefined, 'a worker was held after Close');
   console.log('PASS O141 hold one worker: kept while held, peer ran, note passed, release delivered in order with its sender; Close let go of it');
 });
