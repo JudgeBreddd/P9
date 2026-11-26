@@ -2,16 +2,19 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.15',
+  version: '0.1.9-beta.16',
   changes: [
-    "Desktop chat: select part of a reply, or press its Quote button, to quote it with a comment in your next message.",
-    "Desktop chat box: Up in an empty box brings back the prompts you sent, and Down goes forward again.",
-    "Chat box: a big paste can attach as pasted.txt instead of filling the box; on desktop, Ctrl Shift V pastes it as text.",
-    "Desktop chat: a queued message can be edited in place before it goes.",
-    "Desktop chat: when the agent sets a goal, it shows as a line above the message box.",
-    "Desktop: queued messages are kept by P9's background service and keep their attachments until they send.",
-    "Usage: Tokens and Cost tabs on desktop and phone (Settings > General can hide them); the phone gets Limits too.",
-    "Usage: each limit shows its projected % at reset when available; P9 checks for new plan readings every 10 minutes.",
-    "The window starts with less code: the project page loads when the window is idle or when first opened.",
+    "Sprints: a new sprint's lead is told to watch plan usage and hold a worker near a cap; Close pauses its schedules.",
+    "Desktop, remote: if a send may have gone through, the app checks again with the same ID for up to 10 minutes.",
+    "Phone: a message the phone cannot store in its queue stays in the box with a note saying why.",
+    "Desktop chat box: Ctrl+S saves its text as a draft, quotes included; Drafts beside the paperclip brings one back.",
+    "Desktop chat: selected text shows a small Comment button, so Copy still works; a quote is a small chip you can edit.",
+    "Phone chat: quote part of a reply with a comment, as on desktop.",
+    "Phone: the chat list and an open chat try again after a failed load and say why.",
+    "Fixed a case where a short reply could show twice.",
+    "A tool call shown again after a compaction stays one row instead of coming back as pending.",
+    "Dev Focus: the editor's terminal draws its letters at full size (GPU drawing is now off by default).",
+    "Desktop: open chats keep their order in the panel after a restart.",
+    "Settings, desktop and phone: Unrestricted is offered only when the connected service lists an unrestricted mode.",
   ],
 };
