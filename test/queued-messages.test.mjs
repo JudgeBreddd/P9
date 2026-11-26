@@ -3,6 +3,7 @@
 // daemon and the fake agent.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -434,4 +435,29 @@ test('A2 step 5: the agent\'s goal shows above the box with its status, follows 
   const row = (await call(instance, '/chat')).conversations.find(c => c.id === id);
   assert.ok(Object.hasOwn(row, 'goal') && row.goal === null, 'the list gives a cleared goal as null, not a missing field');
   console.log('PASS A2 step 5: the goal line shows, follows, survives a reload past the tail, and a clear removes it');
+});
+
+// #540 review 15: an Interrupt with a file, sent from the window while the first prompt's start is still setting its model,
+// is held; Stop then ends that start before its turn. The daemon hands the Interrupt back as stopped, and the window puts
+// its words and its file back in the box, as it does for one a Stop cancels.
+test('O267 review 15: an Interrupt held while a start sets its model comes back into the box with its file when the chat is stopped', { timeout: 120000 }, async (t) => {
+  const { instance, id, launch, open, ends } = await setup(t, 'o267-stopped');
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(), chat = await open(page);
+  await writeFile(path.join(instance.workspace, 'slow-config'), '4000');
+  const first = call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'on haiku', model: 'haiku' });
+  await until(() => existsSync(path.join(instance.workspace, 'config-started')), 'the start is setting its model');
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), chat.pane.locator('[data-attach]').click()]);
+  await chooser.setFiles([{ name: 'keep.txt', mimeType: 'text/plain', buffer: Buffer.from('keep') }]);
+  await chat.pane.locator('.attach .att-file', { hasText: 'keep.txt' }).waitFor({ timeout: 10000 });
+  await chat.pane.locator('.composer textarea').fill('cut in');
+  await chat.pane.locator('.composer textarea').press('Control+Enter');
+  await until(async () => (await said(instance, id, 'held')).some((e) => e.data.text === 'cut in'), 'the Interrupt is held');
+  const box = async () => JSON.stringify([await chat.pane.locator('.composer textarea').inputValue(), (await chat.pane.locator('.attach .att-file').allInnerTexts()).map((x) => x.split('\n')[0])]);
+  await until(async () => await box() === JSON.stringify(['', []]), 'the box emptied as the Interrupt was taken');
+  await call(instance, '/chat/' + id + '/stop', 'POST');
+  await first;
+  assert.ok((await said(instance, id, 'unheld')).some((e) => e.data.text === 'cut in' && e.data.why === 'stopped'), 'handed back as stopped');
+  await until(async () => await box() === JSON.stringify(['cut in', ['keep.txt']]), 'the Interrupt and its file are back in the box');
+  console.log('PASS O267 review 15: the stopped Interrupt came back into the box as ' + await box());
 });

@@ -1207,13 +1207,16 @@ async function earlier(s) {
 // another window's moves an untouched editor along and leaves typing alone. Its message leaving closes it: words the daemon
 // does not have (text != base) go into the box, so none are lost, and a take-back brings those instead of the old words.
 // Returns the take-back's words for the box, or undefined.
+// Why a held message the daemon hands back unsent goes into the box with its files: taken back, cancelled by a Stop, or
+// #540 review 15: stopped (the chat closed, stopped or exited before its turn). Anything else is told as not sent.
+const BACK = ['removed', 'cancelled', 'stopped'];
 function editSeen(s, ev) {
   const ed = s.hedit, d = ev.data; if (!ed || !d) return;
   // Its own save, also after an answer that was unsure: saved, and words typed since stay open on top of it, not a conflict.
   if (ev.type === 'held-text' && d.id === ed.id && d.op && d.op === ed.op) { if (ed.lost != null) s.events.push({ t: 'notice', text: 'Your edit that got no sure answer was saved.' }); if (ed.saving != null || ed.text === d.text) s.hedit = null; else { ed.was = ed.base = d.text; ed.lost = null; } return; }
   if (ev.type === 'held-text' && d.id === ed.id) { if (ed.text === ed.was) ed.text = ed.was = d.text; ed.base = d.text; return; }
   if (!(ev.type === 'unheld' ? [d.id] : ev.type === 'user' ? d.held || [] : []).includes(ed.id)) return;
-  return editGone(s, ev.type === 'unheld' && ['removed', 'cancelled'].includes(d.why));
+  return editGone(s, ev.type === 'unheld' && BACK.includes(d.why));
 }
 // A take-back keeps any change, an emptied caption too.
 function editGone(s, back) {
@@ -1239,7 +1242,7 @@ function applyChat(ev, into) {
     case 'held-text': for (const h of s.held || []) if (h.id === d.id) h.text = d.text; break;
     // A note from another chat that waits for this chat's next message: shown where it arrived; it started nothing.
     case 'note': s.events.push({ t: 'user', text: d.text, when: new Date(ev.at).toTimeString().slice(0, 5), info: d.from ?? true, fromTitle: d.fromTitle }); break;
-    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled' && d.why !== 'noted') notice('Not sent (' + d.why + '): ' + d.text); break;
+    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (!BACK.includes(d.why) && d.why !== 'noted') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     // O32: the model the resumed session is really on, so a change shows (the Model pill follows the config event after it).
     case 'resumed': notice('Resumed natively (session/resume)' + (typeof d.model === 'string' ? ' on ' + d.model : '')); if (Array.isArray(d.restoreNotice) && d.restoreNotice.length) notice('Could not restore ' + d.restoreNotice.join(', ')); s.state = 'running'; s.session = d.session; break;
@@ -1422,7 +1425,7 @@ async function loadChat() {
     const s = sess(ev.conversation); if (!s) return;
     if (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code)) { s.failed = true; outer.keepUnseen(); }
     // A2 step 3: an edit open when its message leaves is kept (editSeen): taken back, the box gets the unsaved words.
-    const back = ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why), edited = editSeen(s, ev);
+    const back = ev.type === 'unheld' && BACK.includes(ev.data?.why), edited = editSeen(s, ev);
     if (back) { s.draft = [edited ?? ev.data.text, s.draft].filter(Boolean).join('\n'); s.recall = null; sentImgs.has(ev.data.id) || takenBack.set(ev.data.id, 1); s.images = [...sentImgs.get(ev.data.id) || [], ...s.images || []]; }
     if (ev.type === 'unheld' || ev.type === 'user') for (const h of ev.data?.held || [ev.data?.id]) if (h && !sentImgs.delete(h) && !takenBack.has(h)) takenBack.set(h, 0); // its 202 may come after
   };
