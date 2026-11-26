@@ -224,7 +224,11 @@ for (const agent of ['claude', 'codex']) {
 // O269: the first read failing (a busy host) said "Chat is unavailable." until a reload. It says why and reads again.
 test('O269: a failed first read of the chats says why and tries again until the list draws', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
+  const send = async (text) => { await page.fill('#prompt', text); await page.click('#composer button'); };
   const id = await newChat(page, 'claude');
+  await send('hello retry'); await page.waitForSelector('#events article:has-text("echo:hello retry")', { timeout: 10000 });
+  await newChat(page, 'claude'); // a newer chat after it, as on a phone with more than one
+  await send('other'); await page.waitForSelector('#events article:has-text("echo:other")', { timeout: 10000 });
   await toList(page);
   let refused = 0;
   await page.route((url) => url.pathname === '/chat' && url.searchParams.get('lists') === 'fresh', (route) => refused < 2 ? (refused++, route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) })) : route.continue());
@@ -233,13 +237,18 @@ test('O269: a failed first read of the chats says why and tries again until the 
   await page.waitForFunction((id) => [...document.querySelectorAll('#conversation option')].some((o) => o.value === id), id, { timeout: 20000 });
   assert.equal(refused, 2, 'refused twice, then read');
   assert.equal(await page.locator('#chatList .empty', { hasText: 'unavailable' }).count(), 0, 'the list replaced the line');
-  // The same for one chat's history: refused once, it says why, then reads again while the chat stays open.
-  let once = 0;
-  await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, (route) => once < 1 ? (once++, route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) })) : route.continue());
+  // The same for one chat's history: refused once, it says why, then reads again while the chat stays open, and the reply shows.
+  const reads = [];
+  await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, (route) => (reads.push(Date.now()), reads.length < 2) ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'daemon-unavailable' }) }) : route.continue());
   await page.click(`[data-chat="${id}"]`);
   await page.locator('#events .empty', { hasText: 'Chat is unavailable (daemon-unavailable). Trying again' }).waitFor({ timeout: 10000 });
-  await page.locator('#events .empty', { hasText: 'unavailable' }).waitFor({ state: 'detached', timeout: 15000 });
-  assert.equal(once, 1, 'the history read was refused once, then read');
+  // A chat made elsewhere redraws the open pane: the failure stays on screen and no read starts before the retry is due.
+  await page.evaluate(() => fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf'), 'x-p9-op': crypto.randomUUID() }, body: JSON.stringify({ provider: 'claude' }) }));
+  await page.waitForFunction(() => document.querySelectorAll('#conversation option').length >= 3, null, { timeout: 10000 });
+  assert.equal(await page.locator('#events .empty', { hasText: 'Chat is unavailable' }).count(), 1, 'the redraw kept the failure');
+  await page.waitForSelector('#events article:has-text("echo:hello retry")', { timeout: 15000 });
+  assert.equal(reads.length, 2, 'one refused read, then one retry');
+  assert.ok(reads[1] - reads[0] >= 4500, `the retry waited for its time, not the redraw (${reads[1] - reads[0]} ms)`);
 });
 
 for (const agent of ['claude', 'codex']) {
