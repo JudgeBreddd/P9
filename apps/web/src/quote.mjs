@@ -15,6 +15,10 @@ import { afterPress } from './press-hold.mjs';
 // the box again with its comment (comment: the text it starts with).
 const MAX = 8000;
 let shut = null, n = 0, pop = null;
+const owed = new Set();
+// Comments kept by presses outside wait for each press's click (afterPress); settle adds them at once, so a box opened
+// meanwhile for the same chip (its pencil tapped again) starts from it, not from the comment before it.
+export const settle = () => [...owed].forEach((f) => f());
 // range: a copy of the selection it is for (cloneRange, taken when it was made), raw its text. A selection changed or
 // cleared since (Shift+arrow, the same words in another reply, or while this file loaded) gets no button, and closes it.
 // at(): where that text is now (the chat may scroll under it while a reply streams); the button follows it. view: the
@@ -73,7 +77,9 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = 
   // press: left by pressing outside (its pointerdown); the chip is added once that press's click has run (afterPress).
   const leave = shut = (press) => { const c = ta.value.trim(); close(); if (!(edit ? c !== comment.trim() : c)) return;
     const go = () => add({ text, comment: c }, true);
-    if (press instanceof PointerEvent) afterPress(press, go); else go(); };
+    if (!(press instanceof PointerEvent)) return go();
+    const once = () => owed.delete(once) && go(); owed.add(once);
+    afterPress(press, once); };
   box.onsubmit = e => { e.preventDefault(); close(); if (alive()) add({ text, comment: ta.value.trim() }); };
   box.querySelector('[type=button]').onclick = () => close(true);
   box.onkeydown = e => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(true); } };

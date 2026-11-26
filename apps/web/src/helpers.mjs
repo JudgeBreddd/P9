@@ -189,6 +189,10 @@ export const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 // tags a taken name), so a long log or file does not fill the box. plain (desktop Ctrl Shift V) keeps it as text.
 // ponytail: one fixed size, 5000 characters (about 100 lines of code); a setting if it proves wrong.
 export const BIG_PASTE = 5000;
+// A2 step 6: what became of a quote chip, for an edit still open and a refused send's restore (desktop and phone): edited ->
+// the chip that replaced it; removed with its ✕ -> null. quoteNow: the chip as it is now, or null if removed.
+export const quoteFate = new WeakMap();
+export const quoteNow = (q) => { while (q && quoteFate.get(q)) q = quoteFate.get(q); return q && quoteFate.get(q) === null ? null : q; };
 // A2 step 6: the quotes in the box go first in the message sent, each as a Markdown quote with its comment under it.
 export const quoted = (quotes, text) => [...(quotes || []).map(q => q.text.replace(/^/gm, '> ') + (q.comment ? '\n\n' + q.comment : '')), text].filter(Boolean).join('\n\n');
 export const pastedFiles = (data, plain) => { const files = [...data.files], text = data.getData('text/plain'); return files.length || plain || text.length <= BIG_PASTE ? files : [new File([text], 'pasted.txt', { type: 'text/plain' })]; };

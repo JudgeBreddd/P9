@@ -1,6 +1,6 @@
 import './phone-errors';  // O128: first, so it hears errors from everything after it
 import type { EditorView } from 'codemirror';
-import { pastedFiles, quoted, limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, quoteFate, quoteNow, limitLines, profileLines, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, chatFailed, modes, LOOSE, ageOf, exitTag } from './helpers.mjs';
 import { attachFull, readAttachment, attachBody } from './attach.mjs';
 import { pinned, applyCard, isReport, openReport, reportKey, SHUT } from './pinned.mjs'; import { loadPhoneProjects, phoneSections, projectName, sprintAsk, askText, askingChat } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
@@ -1380,18 +1380,15 @@ function dropQuotes(id: string, sent: Quote[]) {
   if (left.length) quotes.set(id, left); else quotes.delete(id);
   if (id === openId) { renderAttached(); label(); }
 }
-// was: the chip being edited, replaced where it is. quoteFate: a chip edited -> the chip that replaced it; a chip whose ✕ was
-// tapped -> null. An edit still open follows it.
-const quoteFate = new WeakMap<Quote, Quote | null>();
-// was: the chip being edited, replaced where it is.
+// was: the chip being edited, replaced where it is; read as it is now (quoteNow), after a comment still being added (settle).
 function openQuote(id: string, rect: DOMRect, text: string, raw: string, key: string, was?: Quote) {
   import('./quote.mjs').then((m) => {
     const alive = quoteAlive(id); if (!alive()) return;
+    m.settle(); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
     m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, back: () => one<HTMLTextAreaElement>('#prompt').focus(),
       add: (q: { text: string; comment: string }, away?: boolean) => {
         const list = [...quotes.get(id) ?? []], n = { text: was?.text ?? q.text, comment: q.comment, key }; // a new list: a send on its way keeps its own
-        let now = was; while (now && quoteFate.get(now)) now = quoteFate.get(now); // the chip as it is now (another edit may have replaced it)
-        if (now && quoteFate.get(now) === null) return; // its ✕ was tapped meanwhile: it stays gone
+        const now = quoteNow(was); if (was && !now) return; // its ✕ was tapped meanwhile: it stays gone (another edit may have replaced it)
         const i = now ? list.indexOf(now) : -1; if (now) quoteFate.set(now, n);
         if (i >= 0) list[i] = n; else list.push(n); // gone without its ✕ (a send took it): the edit comes back as a chip
         quotes.set(id, list); if (id === openId) { renderAttached(); label(); if (!away) one<HTMLTextAreaElement>('#prompt').focus(); }

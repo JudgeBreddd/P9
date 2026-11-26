@@ -1352,8 +1352,23 @@ test('A2 step 6b: quote a whole reply or a selection on the phone, as a chip wit
   await reply.first().locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('x'); await page.keyboard.press('Enter'); // the first: the echo above also has its words
   await chips.first().waitFor({ timeout: 5000 });
   await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type(' more');
+  // The send's answer is held, so the edit lands while it waits; the 202 then drops only the chip sent.
+  let release; const held = new Promise((r) => { release = r; }), isPrompt = (url) => /\/chat\/[^/]+\/prompt$/.test(new URL(url).pathname);
+  await page.route(isPrompt, async (route) => { await held; await route.continue(); });
   posts.length = 0; await page.click('#composer button[type="submit"]');
   await until(async () => posts.length === 1, 'Send sent the chip', 5000);
   assert.equal(posts[0], '> echo:The first sentence. The second sentence.\n\nx');
-  await until(async () => (await labels()).join('|') === 'x more', 'the edit comes back as a chip after the send', 5000);
+  await until(async () => (await labels()).join('|') === 'x more', 'the edit comes back as a chip while the send waits', 5000);
+  const echoes = () => page.locator('#events article[data-kind="agent"]', { hasText: 'echo:> echo:The first sentence' }).count(), before = await echoes();
+  const answered = page.waitForResponse((r) => isPrompt(r.url())); release(); assert.equal((await answered).status(), 202);
+  await page.unroute(isPrompt);
+  await until(async () => await echoes() > before, 'the held send was answered', 15000);
+  await page.waitForTimeout(500); // ponytail: a short settle; the 202's handling has no mark of its own to wait on
+  assert.deepEqual(await labels(), ['x more'], 'after the 202 the edit is the only chip');
+  // The pencil tapped again before the last edit's save has run: the new box starts from that edit, not the one before.
+  await chips.first().locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type(' again');
+  await chips.first().locator('[data-quote-edit]').click();
+  await until(async () => (await box.count()) === 1 && (await box.locator('textarea').inputValue()) === 'x more again', 'the new box starts from the edit just left', 5000);
+  await page.keyboard.press('Escape'); await until(async () => await box.count() === 0, 'Esc closes it', 5000);
+  assert.deepEqual(await labels(), ['x more again'], 'one chip, with the edit');
 });

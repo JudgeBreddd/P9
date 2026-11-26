@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { pastedFiles, quoted, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, quoteFate, quoteNow, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -912,16 +912,15 @@ const aliveIn = (s, p) => () => p.isConnected && p.dataset.id === s.id && p.chec
 // from: the reply quoted, { ev, chat } (src): the event itself (loading earlier steps keeps it) and its chat. Never matched by
 // its words (review: they found another chat's or reply's), nor by a cursor (a moved chat is renumbered on its new machine).
 // was: the chip being edited, replaced in place; without it the quote is added.
-// quoteFate: a chip edited -> the chip that replaced it; a chip whose × was clicked -> null. An edit still open follows it.
-const quoteFate = new WeakMap();
 const src = (s, ev) => ({ ev, chat: s.id });
 const quote = (s, p, rect, text, raw, from, was) => { import('./quote.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
-  if (alive()) m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
+  if (!alive()) return;
+  m.settle(); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
+  m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: (q, away) => { if (!outer.S.sessions.includes(s)) return; // the chat was deleted meanwhile
       const qs = s.quotes ||= [], n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat };
-      let now = was; while (now && quoteFate.get(now)) now = quoteFate.get(now); // the chip as it is now (another edit may have replaced it)
-      if (now && quoteFate.get(now) === null) return; // its × was clicked meanwhile: it stays gone
+      const now = quoteNow(was); if (was && !now) return; // its × was clicked meanwhile: it stays gone (another edit may have replaced it)
       const i = now ? qs.indexOf(now) : -1; if (now) quoteFate.set(now, n);
       if (i >= 0) qs[i] = n; else qs.push(n); // gone without its × (a send took it): the edit comes back as a chip
       renderChats(); if (!away) ta()?.focus(); } });
