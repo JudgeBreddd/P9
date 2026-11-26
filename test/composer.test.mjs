@@ -710,7 +710,7 @@ test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked come
   await until(async () => (await composer.inputValue()) === 'first idea' && await chips.count() === 1, 'taken back: the text and the chip', 5000);
   assert.equal(await chips.first().getAttribute('title'), (await reply.locator('.md, p').first().textContent()).trim() + '\n\nkeep this', 'the chip has its quote and comment');
   await chips.first().locator('[data-quote-go]').click();
-  await until(async () => await reply.evaluate((m) => m.classList.contains('quote-src')), 'a quote back from a draft still finds its reply (by its chat and cursor)', 5000);
+  await until(async () => await reply.evaluate((m) => m.classList.contains('quote-src')), 'a quote back from a draft saved in this window still finds its reply', 5000);
   await btn.click(); await menu.locator('.draft-del').first().click();
   await until(async () => await menu.count() === 0 && await btn.count() === 0, 'x deleted the last draft; no list, no Drafts', 5000);
   assert.equal(await composer.inputValue(), 'first idea', 'the box kept its text');
@@ -758,8 +758,8 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await until(async () => (await btn.textContent())?.trim() === 'Drafts 1', 'repainted', 5000);
   assert.equal(await composer.inputValue(), '\nblank first', 'the leading blank line survived the repaint');
   // Review #536: two quote-only drafts saved in the same millisecond are two drafts, each labelled by its comment or words;
-  // a quote saved from another chat finds no reply here, even one with the same words.
-  await seed([{ id: 'a', text: '', at: 5, quotes: [{ text: 'echo:hello', comment: 'other chat', chat: 'not-this-chat', cur: 1, head: 'echo:hello' }] }, { id: 'b', text: '', at: 5, quotes: [{ text: 'more words', comment: '' }] }]);
+  // a quote from a draft another window saved finds no reply here, even one with the same words (no matching by words).
+  await seed([{ id: 'a', text: '', at: 5, quotes: [{ text: 'echo:hello', comment: 'other chat' }] }, { id: 'b', text: '', at: 5, quotes: [{ text: 'more words', comment: '' }] }]);
   await btn.click(); await menu.waitFor({ timeout: 5000 });
   assert.deepEqual(await menu.locator('.draft-take .truncate').allTextContents(), ['1 quote · other chat', '1 quote · “more words”'], 'quote-only drafts say which');
   await menu.locator('.draft-del').nth(1).click();
@@ -767,14 +767,14 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await menu.locator('.draft-take').first().click();
   const chip = pane.locator('.attach .att-quote'); await until(async () => await chip.count() === 1, 'its chip', 5000);
   await chip.first().locator('[data-quote-go]').click();
-  await page.locator('#toasts .toast', { hasText: 'is in another chat' }).waitFor({ timeout: 5000 });
+  await page.locator('#toasts .toast', { hasText: 'is not in this chat any more' }).waitFor({ timeout: 5000 });
   assert.equal(await pane.locator('.msg.quote-src').count(), 0, 'no reply here marked as its source');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
 });
 
 // Review #536 round 2: a quote whose reply is above the drawn window (more than TAIL steps later) jumps there: the window
-// widens, the reply is marked and in view, and a saved draft finds it by its chat, cursor and first words.
+// widens, the reply is marked and in view, and stays so through a repaint.
 test('A2 step 6 review: a chip whose reply is above the drawn steps widens the window and shows it', { timeout: 120000 }, async (t) => {
   const { page, pane, send, errors } = await setup(t, 'a2-quote-far');
   const box = page.locator('.quote-box'), chips = pane.locator('.attach .att-quote'), composer = pane.locator('.composer textarea');
@@ -792,7 +792,10 @@ test('A2 step 6 review: a chip whose reply is above the drawn steps widens the w
   await chips.first().locator('[data-quote-go]').click();
   await until(async () => await hello.count() === 1 && await hello.evaluate((m) => { const r = m.getBoundingClientRect(), b = m.closest('.hist').getBoundingClientRect();
     return m.classList.contains('quote-src') && r.bottom > b.top && r.top < b.bottom; }), 'the window widened to the reply, marked and in view', 5000);
-  await page.waitForTimeout(500); // a repaint or two later it is still drawn and in view
+  // A repaint after the jump (the drafts count read again redraws the chats) keeps it drawn and in view.
+  await page.evaluate(() => { window.__paints = 0; new MutationObserver(() => window.__paints++).observe(document.querySelector('.pane .hist'), { subtree: true, childList: true, attributes: true }); window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' })); });
+  await until(() => page.evaluate(() => window.__paints > 0), 'the history repainted', 5000);
+  assert.equal(await hello.count(), 1, 'still drawn after the repaint');
   assert.ok(await hello.evaluate((m) => { const r = m.getBoundingClientRect(), b = m.closest('.hist').getBoundingClientRect(); return r.bottom > b.top && r.top < b.bottom; }), 'still in view');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS A2 step 6 review: a far quote widens the window and shows its reply');

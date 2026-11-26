@@ -4,8 +4,7 @@
 import { ageOf } from './helpers.mjs';
 let shut = null;
 // Quotes a draft carries (step 6 follow-up): text and comment, anything else dropped.
-// chat, cur and head: the reply it came from (chat-view showSource), kept when they are a string, a number and a string.
-const okQuotes = q => Array.isArray(q) ? q.filter(x => typeof x?.text === 'string' && x.text).map(x => ({ text: x.text, comment: typeof x.comment === 'string' ? x.comment : '', ...(typeof x.chat === 'string' && Number.isFinite(x.cur) && typeof x.head === 'string' && { chat: x.chat, cur: x.cur, head: x.head }) })) : undefined;
+const okQuotes = q => Array.isArray(q) ? q.filter(x => typeof x?.text === 'string' && x.text).map(x => ({ text: x.text, comment: typeof x.comment === 'string' ? x.comment : '' })) : undefined;
 export const readDrafts = key => { try { const d = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(d) ? d.filter(x => typeof x?.text === 'string' && (x.text || okQuotes(x.quotes)?.length)).map(x => ({ ...x, quotes: okQuotes(x.quotes) })) : []; } catch { return []; } };
 export function draftsMenu({ rect, key, take, remove, alive, back, host = document.body }) {
   shut?.();

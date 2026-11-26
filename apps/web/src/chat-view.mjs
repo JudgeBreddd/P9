@@ -909,16 +909,15 @@ const adding = new Map(); // chat id -> its attach now
 // visibility), and in the top dialog when one is open (raiseToasts' rule: the last opened still modal). The quote box checks it
 // when it loads, while it is open, and on Comment; the drafts menu when it loads and when a draft is taken.
 const aliveIn = (s, p) => () => p.isConnected && p.dataset.id === s.id && p.checkVisibility({ visibilityProperty: true }) && (outer.modals.filter(d => d.matches(':modal')).pop()?.contains(p) ?? true);
-// from: the reply quoted, { ev, chat, cur, head } (src): ev the event itself (loading earlier steps keeps it); chat, cur and
-// head its chat, cursor and first 80 characters, which a saved draft keeps (review: no matching by quoted text, it found another
-// chat's or reply's words). head: a moved chat keeps its id and gets new cursors, so a cursor alone could name another reply.
+// from: the reply quoted, { ev, chat } (src): the event itself (loading earlier steps keeps it) and its chat. Never matched by
+// its words (review: they found another chat's or reply's), nor by a cursor (a moved chat is renumbered on its new machine).
 // was: the chip being edited, replaced in place; without it the quote is added.
-const src = (s, ev) => ({ ev, chat: s.id, ...(ev?.cur != null && { cur: ev.cur, head: ev.text.slice(0, 80) }) });
+const src = (s, ev) => ({ ev, chat: s.id });
 const quote = (s, p, rect, text, raw, from, was) => { import('./quote.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
   if (alive()) m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: (q, away) => { if (!outer.S.sessions.includes(s)) return; // the chat was deleted meanwhile
-      const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat, cur: from.cur, head: from.head }; if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
+      const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat }; if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
 // A selection in a reply shows a small Comment button beside it (the selection stays, so Copy works); the button opens the box.
 const commentOn = (s, p, view, range, text, raw, from) => import('./quote.mjs').then(m => {
@@ -926,14 +925,15 @@ const commentOn = (s, p, view, range, text, raw, from) => import('./quote.mjs').
   if (alive()) m.commentButton({ range, raw, view, alive, host: p.closest('dialog') || document.body, pick: rect => quote(s, p, rect, text, raw, from) });
 }, () => {});
 // A chip clicked: its reply scrolled to the middle of the chat and marked for a moment, earlier steps drawn first if it is
-// above the ones shown. Its reply is the event it was quoted from, else (the steps loaded again, or a saved draft) the one at
-// its cursor in its own chat. Not found, or further up than GROW_MAX steps: it says so. The wider window is keepIn's grown
+// above the ones shown. Its reply is the event it was quoted from (a draft taken back in the window that saved it keeps it,
+// draftLinks). Not found (the steps loaded again, another chat, a draft from another window or before a reload), or further
+// up than GROW_MAX steps: it says so. The wider window is keepIn's grown
 // one (review: it goes back to its size once the reader follows the bottom, so streaming does not redraw the whole span).
 // s.mark: the marked reply, drawn with quote-src from state so a redraw meanwhile keeps the mark.
 function showSource(s, p, q) {
   const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question');
-  let i = q?.ev ? list.indexOf(q.ev) : -1; if (i < 0 && q?.chat === s.id && q.cur != null) i = list.findIndex(e => e.cur === q.cur && e.text?.startsWith(q.head));
-  if (i < 0) return outer.toast({ kind: 'chat', txt: q?.chat && q.chat !== s.id ? 'The reply this quote came from is in another chat.' : 'The reply this quote came from is not loaded in this chat.' }, true);
+  const i = q?.ev ? list.indexOf(q.ev) : -1;
+  if (i < 0) return outer.toast({ kind: 'chat', txt: q?.chat && q.chat !== s.id ? 'The reply this quote came from is in another chat.' : 'The reply this quote came from is not in this chat any more.' }, true);
   const want = list.length - i;
   if (want > GROW_MAX) return outer.toast({ kind: 'chat', txt: 'The reply this quote came from is too far up to jump to. Scroll up with Show earlier.' }, true);
   const mark = s.mark = { ev: list[i] }; outer.setTimeout(() => { if (s.mark === mark) { s.mark = null; renderChats(); } }, 1600); // each jump its own
@@ -948,7 +948,8 @@ function showSource(s, p, q) {
 
 // A2 step 7: drafts saved aside with Ctrl+S in the box, newest first, in this machine's window storage, so any chat can take
 // one back. The menu (drafts.mjs) loads on first use. ponytail: text and quotes (with their comments), the last 20 kept; files
-// stay in the box. A quote taken back from a draft finds its reply by its text (showSource).
+// stay in the box. Only the quotes' words and comments are stored; which reply each came from is kept in this window
+// (draftLinks, by draft id), so a chip taken back here still shows its reply. ponytail: lost on a reload; then it says so.
 const DRAFTS = 'p9-drafts';
 let draftsCount = null; // review: the button's count, read again only after a write or another window's change
 window.addEventListener('storage', e => { if (e.key === DRAFTS) { draftsCount = null; renderChats(); } }); // another window saved or took one
@@ -957,7 +958,10 @@ const draftsN = () => draftsCount ??= (() => { try { return JSON.parse(localStor
 const putDrafts = d => { draftsCount = null; try { localStorage.setItem(DRAFTS, JSON.stringify(d.slice(0, 20))); return true; } catch { return false; } };
 const storeFull = what => outer.toast({ kind: 'draft not saved', txt: `The window storage is full, so ${what}.`, level: 'warn' }, true);
 const withChips = s => s.images?.length ? 'Saved as a draft; the attached files stay in the box.' : '';
-const boxDraft = (s, ta) => ({ id: Date.now().toString(36) + Math.random().toString(36).slice(2), text: ta.value, at: Date.now(), ...(s.quotes?.length ? { quotes: s.quotes.map(({ text, comment, chat, cur, head }) => ({ text, comment, chat, cur, head })) } : {}) });
+const draftLinks = new Map(); // draft id -> its quotes' { ev, chat }
+const boxDraft = (s, ta) => { const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  if (s.quotes?.length) draftLinks.set(id, s.quotes.map(({ ev, chat }) => ({ ev, chat })));
+  return { id, text: ta.value, at: Date.now(), ...(s.quotes?.length ? { quotes: s.quotes.map(({ text, comment }) => ({ text, comment })) } : {}) }; };
 function putAside(s, ta) {
   let d; try { d = JSON.parse(localStorage.getItem(DRAFTS) || '[]'); if (!Array.isArray(d)) d = []; } catch { d = []; }
   if (!putDrafts([boxDraft(s, ta), ...d])) return storeFull('the draft stays in the box');
@@ -971,10 +975,10 @@ function putAside(s, ta) {
 const draftsOf = (s, p) => import('./drafts.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), shown = aliveIn(s, p), alive = () => shown() && !!ta() && !ta().disabled;
   if (alive()) m.draftsMenu({ host: p.closest('dialog') || document.body, rect: (p.querySelector('[data-drafts]') || p.querySelector('[data-attach]')).getBoundingClientRect(), key: DRAFTS, alive,
-    take: ({ text, quotes }, rest) => {
+    take: ({ id, text, quotes }, rest) => {
       const cur = ta().value.trim() || s.quotes?.length ? [boxDraft(s, ta())] : [], note = cur.length && withChips(s);
       if (!putDrafts([...cur, ...rest])) return storeFull('nothing changed: the box and the drafts are as they were'), false;
-      s.draft = text; s.quotes = (quotes || []).map(({ text, comment, chat, cur, head }) => ({ text, comment, chat, cur, head })); s.recall = null; renderChats();
+      s.draft = text; const links = draftLinks.get(id) || []; draftLinks.delete(id); s.quotes = (quotes || []).map(({ text, comment }, i) => ({ text, comment, ...links[i] })); s.recall = null; renderChats();
       const b = ta(); if (b) { b.value = text; b.focus(); b.setSelectionRange(text.length, text.length); }
       if (note) outer.toast({ kind: 'draft saved', txt: note }, true);
       return true;
@@ -1231,7 +1235,7 @@ function applyChat(ev, into) {
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
-        else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }), ...(t === 'agent' && ev.cursor != null && { cur: ev.cursor }) });
+        else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
       } else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
       else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d._meta?.['p9/append'] === true) tool.output = ((tool.output ?? '') + toolText(d.content)).slice(-4000); else if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } const exit = exitTag(d._meta?.['p9/exit']); if (exit) tool.exit = exit; } } // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = outer.lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
