@@ -23,6 +23,7 @@
   "cli.test.mjs": 1,
   "close-window.test.mjs": 8,
   "compacting-notice.test.mjs": 97,
+  "composer-o267.test.mjs": 250,
   "composer.test.mjs": 321,
   "connecting-hole.test.mjs": 6,
   "daemon-version.test.mjs": 6,

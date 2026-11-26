@@ -18,7 +18,8 @@ export function draftsMenu({ rect, key, take, remove, alive, back, host = docume
   const same = x => y => x.id ? y.id === x.id : !y.id && y.at === x.at && y.text === x.text;
   const act = (x, fn) => { if (!alive()) return close(); const d = readDrafts(key); if (!d.some(same(x))) return draw(); fn(d.filter(y => !same(x)(y))); };
   const draw = () => {
-    const had = box.contains(document.activeElement), d = readDrafts(key);
+    // O267: another window's change keeps the focus on the same draft (and the same button), so Enter picks what was chosen.
+    const at = box.contains(document.activeElement) && document.activeElement, was = at && at.closest('.draft')?.p9draft, onDel = !!at?.classList?.contains('draft-del'), d = readDrafts(key);
     if (!d.length) return close(true);
     box.replaceChildren(...d.map(x => {
       const row = Object.assign(document.createElement('div'), { className: 'draft' });
@@ -30,16 +31,16 @@ export function draftsMenu({ rect, key, take, remove, alive, back, host = docume
       const del = Object.assign(document.createElement('button'), { className: 'draft-del', textContent: '×', title: 'Delete this draft' });
       del.setAttribute('aria-label', 'Delete this draft');
       del.onclick = () => act(x, rest => { if (remove(rest)) draw(); });
-      row.append(use, del); return row;
+      row.p9draft = x; row.append(use, del); return row;
     }));
-    if (had && !box.contains(document.activeElement)) box.querySelector('.draft-take')?.focus();
+    if (at && !box.contains(document.activeElement)) { const row = [...box.querySelectorAll('.draft')].find(r => was && same(was)(r.p9draft)); (row?.querySelector(onDel ? '.draft-del' : '.draft-take') ?? box.querySelector('.draft-take'))?.focus(); }
+    if (box.isConnected) place(); // its height changed: kept above Drafts and on screen
   };
+  const place = () => { const w = box.offsetWidth, h = box.offsetHeight;
+    box.style.left = Math.max(8, Math.min(rect.right - w, innerWidth - w - 8)) + 'px'; box.style.top = Math.max(8, rect.top - 4 - h) + 'px'; };
   draw();
   if (!box.childElementCount) return;
-  host.append(box);
-  const w = box.offsetWidth, h = box.offsetHeight;
-  box.style.left = Math.max(8, Math.min(rect.right - w, innerWidth - w - 8)) + 'px';
-  box.style.top = Math.max(8, rect.top - 4 - h) + 'px';
+  host.append(box); place();
   box.onkeydown = e => {
     if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(true); }
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { // between the drafts, the x buttons skipped

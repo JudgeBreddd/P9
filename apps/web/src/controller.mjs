@@ -80,7 +80,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, tokensSay, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, sentImgs, takenBack, loadChat, keepPlace } = installChat(outer);
+  const { noLoad, ART, keepBox, focus, show, stopChat, newSession, applyMode, setMode, modeShown, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, history, sentImgs, takenBack, turnsOf, loadChat, keepPlace } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
@@ -1279,11 +1279,41 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // load, then a long poll); the sample sessions go. Sends, answers and Stop go to window.p9.chat; what happened comes
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
+// A source checkout's test run can shorten it (P9_SEND_CAP_MS, main.mjs); a packaged build always waits 10 minutes.
+const SEND_CAP = window.p9?.sendCap || 600000;
 liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { op: crypto.randomUUID(), ...payload }, start = Date.now();
-  let r = await window.p9.chat(action, body);
-  // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
-  if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
+  // O267: outcome-unknown is the daemon still running the first try of this ID. The same ID again gets that try's own
+  // answer once it ends (a prompt answers when its turn starts), never a second copy. Once unsure, a dropped link (503)
+  // keeps it unsure and asks again too: the first try may still land. One deadline from the first try, for every try,
+  // checked again after each pause; then unsure. Review 7: a prompt keeps asking under its one ID for up to 10 minutes
+  // (SEND_CAP), showing Sending… while a later send waits behind it in its chat's line, so an answer that comes late is
+  // still its own and nothing is sent twice. The cap is for an ID the daemon never finishes: a daemon restarted mid-send
+  // answers outcome-unknown for it for good (ledger.mjs). ponytail: 60 s for every other action, as before.
+  const end = start + (action === 'prompt' ? SEND_CAP : 60000), unknown = { status: 409, body: { error: 'outcome-unknown', operation: body.op } };
+  // Review 9: one deadline for the whole call, cleared once it settles (it used to be one timer per try, each left running).
+  let timer; const cap = body.op && new Promise(res => { timer = setTimeout(() => res(unknown), end - start); });
+  const ask = () => body.op ? Promise.race([window.p9.chat(action, body), cap]) : window.p9.chat(action, body);
+  const pause = () => new Promise(res => setTimeout(res, 1000));
+  let r;
+  try {
+    r = await ask();
+    // Review 10: a first try that may have gone out (unsure) stays unsure whatever the next try meets, so it is read here,
+    // before any retry: a plain 503 after it used to send it back to the box though the daemon may have taken it.
+    let unsure = r.status === 503 && !!r.body?.unsure;
+    // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
+    if (r.status === 503 && body.op && !unsure) { await pause(); if (Date.now() < end) r = await ask(); }
+    // Review 9: a link that dropped after the request went out (main says unsure: teh.mjs failedReply) is unsure too, even
+    // before any outcome-unknown: the daemon may have taken it, so it keeps asking under its ID rather than coming back to be
+    // sent again. One that never went out (nothing listening) is not, and comes back at once.
+    while (body.op) {
+      if ((r.status === 409 && r.body?.error === 'outcome-unknown') || (r.status === 503 && r.body?.unsure)) unsure = true; else if (!(unsure && r.status === 503)) break;
+      if (end - Date.now() <= 1000) { r = unknown; break; }
+      await pause();
+      if (Date.now() >= end) { r = unknown; break; } // a pause that woke late (a suspended timer) asks nothing more
+      r = await ask();
+    }
+  } finally { clearTimeout(timer); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
   // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.
   if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
@@ -1304,17 +1334,29 @@ liveChat.create = async (agent, folder = '', project = null, model = '', profile
 // A refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
 // O255: one sent mid-turn the daemon could not put in the turn waits in its hold (202), so a refusal is final here too.
 // O255: a chat's prompts go one at a time (lines), so one slow to arrive (a big file, a slow link) is not passed by the next.
-const lines = {};
+const lines = {}, nowsOf = {};
 // D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
 // nothing else). Cleared on any answer.
 // ponytail: attach.mjs is loaded here only when there are attachments, which came through addImages, so it is loaded already.
-liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agent); s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
+// O267 review 7: every send is its own operation; one still unsure keeps asking (liveChat.call) rather than being sent again.
+liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agent); const turns = turnsOf.get(s.id), was = s.working; s.working = true; s.done = false; s.sending = (s.sending || 0) + 1; renderTabs(); renderChats();
   // Its mode and picks as they were when it was sent, not when its place in the line comes (a pick changed meanwhile is the next message's).
   // A mode picked mid-turn goes as the next turn will set it (setMode: Codex's Plan is a pick, and any other mode turns it off), marked next:
   // a steer still goes into the running turn, which keeps its mode; what waits runs in this one.
   const n = { ...s, pick: { ...s.pick } }, keep = () => s.images = [...images, ...(s.images || [])]; s.modeNext && setMode(n, s.modeNext);
   const stops = s.stops, body = { id: s.id, text, mode: sentMode(s.agent, n.mode), next: !!s.modeNext, ...(when && { when }), ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(n.pick).length && { config: n.pick }) };
-  const r = await (lines[s.id] = Promise.resolve(lines[s.id]).catch(() => {}).then(async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }))).finally(() => s.sending--);
+  // Review 9: Interrupt and send ('now') goes at once, not behind a send still waiting for its answer (up to SEND_CAP): the
+  // daemon holds it, stops the running turn and sends it at that end. A send made after it still waits for both.
+  // ponytail: an earlier send that has not reached the daemon yet (dropped links only, no outcome-unknown) may land after it.
+  // Review 10: a send waiting here behind an unanswered one goes after the Interrupt, as the daemon sends an Interrupt
+  // before what it holds (drain): the Interrupt is the message meant to go next. It still goes once.
+  // Review 11: so a send whose turn comes while an Interrupt is still on its way (its files encoding, or its link waiting)
+  // waits for that Interrupt's answer too (nowsOf: every 'now' not answered yet), read when its turn comes.
+  // Review 12: read again after each wait, so an Interrupt made while it waited (still unanswered) is waited for too.
+  const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async (barrier) => { for (let seen; barrier && seen !== nowsOf[s.id];) await (seen = nowsOf[s.id]); return s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) }); };
+  const mine = when === 'now' ? go() : prev.then(() => go(true)); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
+  if (when === 'now') nowsOf[s.id] = Promise.allSettled([nowsOf[s.id], mine]);
+  const r = await mine.finally(() => s.sending--);
   // Held: its files wait with it (carry); taken back before this answer came (takenBack), they go straight back into the box. Sent or replaced first (0): none kept.
   if (r.status === 202) {
     const held = r.body?.held; const back = takenBack.get(held); if (back) keep(); else back ?? (held && images.length && sentImgs.set(held, images)); takenBack.delete(held); return renderChats(); }
@@ -1323,7 +1365,7 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // Each as it is now (quoteNow), in the order sent, before the chips added since: one edited meanwhile comes back once, as
   // edited; one removed meanwhile stays gone; one a later send took (quoteSent) is that send's to give back.
   if (from) { const now = s.quotes || [], back = from.quotes.map(quoteNow).filter((q) => q && (now.includes(q) || (quoteSent.get(q) ?? from) === from)); s.quotes = [...new Set([...back, ...now])]; }
-  const back = from ? from.draft : text; s.draft = back + (s.draft && back ? '\n' : '') + (s.draft || ''); s.working = false; renderTabs(); renderChats(); };
+  const back = from ? from.draft : text; s.draft = back + (s.draft && back ? '\n' : '') + (s.draft || ''); if (!was && turnsOf.get(s.id) === turns) s.working = false; renderTabs(); renderChats(); }; // O267: a turn that ran, or started meanwhile, stays shown
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
   const q = s.events.find(e => e.t === 'question'); if (!q || q.unsupported) return;

@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   onTerminal: (callback) => { ipcRenderer.on('p9:terminal', (_event, serial, message) => callback(serial, message)); },
   firstRun: !process.argv.includes('--p9-first-run=off'), // the wizard and walkthrough on the first start (controller.mjs firstStart)
   version: (process.argv.find(arg => arg.startsWith('--p9-version=')) || '').slice('--p9-version='.length),
+  sendCap: Number((process.argv.find(arg => arg.startsWith('--p9-send-cap=')) || '').slice('--p9-send-cap='.length)) || 0, // a test's shorter send cap (controller.mjs SEND_CAP)
   defaults: JSON.parse((process.argv.find(arg => arg.startsWith('--p9-defaults=')) || '--p9-defaults=null').slice('--p9-defaults='.length)), // main.mjs DEFAULT_SETTINGS (CAT-2)
   // Review 12: this computer's agent catalog (main.mjs p9:agents, publicAgents: GET /agents' answer), so the window has every agent's modes
   // before the daemon answers; GET /agents still replaces it (a remote server's may differ). { agents, local }: local is true

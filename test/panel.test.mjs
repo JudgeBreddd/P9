@@ -150,6 +150,17 @@ test('open chats keep their place and Stop follows the row during a reorder', { 
   await app.close();
   ({ app, page, errors, profile } = await launch(t, instance, profile));
   await until(async () => (await rows()).slice(0, 3).join() === [a, b, c].join(), 'open order survives a window restart');
+  // O267: not by timing alone. The list is held after a reload and the panel redrawn meanwhile; the saved order is not pruned
+  // against the still-empty list.
+  const saved = () => page.evaluate(() => localStorage.getItem('p9-panel-open-order')), before = await saved();
+  await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat');
+    ipcMain.handle('p9:chat', async (e, ...args) => { if (args[0] === 'list' && !globalThis.p9listed) await new Promise((r) => { globalThis.p9list = r; }); return h(e, ...args); }); });
+  await page.reload();
+  await until(async () => await app.evaluate(() => !!globalThis.p9list), 'the chat list waits');
+  await page.keyboard.press('Control+b'); await page.keyboard.press('Control+b'); // two panel redraws while it waits
+  assert.equal(await saved(), before, 'the saved open order is kept while the list is out');
+  await app.evaluate(() => { globalThis.p9listed = true; globalThis.p9list(); });
+  await until(async () => (await rows()).slice(0, 3).join() === [a, b, c].join(), 'open order survives the held list');
   await page.keyboard.press('Control+b');
   await until(async () => (await page.locator('#rBots .bot').evaluateAll((els) => els.map((el) => el.dataset.chat))).slice(0, 3).join() === [a, b, c].join(), 'strip keeps the same open order');
   await call(instance, `/chat/${a}/stop`, 'POST', {});

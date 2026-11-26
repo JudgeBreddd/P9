@@ -179,6 +179,58 @@ test('O255: Interrupt during an unprompted run stops the run, then sends', async
   console.log('PASS O255 interrupt unprompted: the run ended cancelled before the message went');
 });
 
+// #540 review 10: Interrupt sent while the previous prompt is still starting (its model being set: the chat reads as in a
+// turn, but no turn runs yet) waits first in line and goes at that turn's end; it used to be refused turn-running and come back.
+test('O267: Interrupt while the previous prompt is still setting its model waits for that turn, then goes once', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  assert.equal((await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'warm up' }))).status, 202);
+  const warm = await until(instance, (e) => e.conversation === id && e.type === 'turn-end');
+  await writeFile(path.join(instance.workspace, 'slow-config'), '');
+  const first = json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'first, on opus', model: 'opus' }));
+  const started = Date.now();
+  while (!existsSync(path.join(instance.workspace, 'config-started'))) { assert.ok(Date.now() - started < 10000, 'the model set never started'); await new Promise((r) => setTimeout(r, 50)); }
+  const now = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'right after', when: 'now' }));
+  assert.equal(now.status, 202, now.text);
+  assert.ok(now.body.held, 'held for the starting turn\'s end: ' + now.text);
+  assert.equal((await first).status, 202, 'the first prompt still ran');
+  await unlink(path.join(instance.workspace, 'slow-config'));
+  const user = await until(instance, (e) => e.conversation === id && e.type === 'user' && e.data.text === 'right after', warm.cursor);
+  const texts = user.seen.filter((e) => e.conversation === id && e.type === 'user').map((e) => e.data.text);
+  assert.deepEqual(texts.slice(-2), ['first, on opus', 'right after'], 'after the turn it waited for: ' + JSON.stringify(texts));
+  // Review 11: its own turn, after the first one's end (not steered into it).
+  const mine = user.seen.filter((e) => e.conversation === id), at = (f) => mine.findIndex(f);
+  const firstEnd = at((e) => e.type === 'turn-end'), after = at((e) => e.type === 'user' && e.data.text === 'right after');
+  assert.ok(firstEnd >= 0 && firstEnd < after, 'the first turn ended before it: ' + JSON.stringify(mine.map((e) => e.type)));
+  assert.ok(!user.hit.data.steered, 'went as its own prompt, not steered');
+  const late = await json(call(instance, `/chat/events?after=${user.cursor}&wait=1500`));
+  assert.ok(!late.body.events.some((e) => e.conversation === id && e.type === 'user' && e.data.text === 'right after'), 'sent once');
+  const done = await until(instance, (e) => e.conversation === id && e.type === 'turn-end', user.cursor);
+
+  // Review 11: a start that then fails (the setting is refused) is that turn's end for the Interrupt: it goes at once,
+  // not after the chat's next turn, and before a later message.
+  await unlink(path.join(instance.workspace, 'config-started'));
+  await writeFile(path.join(instance.workspace, 'slow-config'), '');
+  await writeFile(path.join(instance.workspace, 'fail-config'), '');
+  const doomed = json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'second, on haiku', model: 'haiku' }));
+  const begun = Date.now();
+  while (!existsSync(path.join(instance.workspace, 'config-started'))) { assert.ok(Date.now() - begun < 10000, 'the second set never started'); await new Promise((r) => setTimeout(r, 50)); }
+  const cut = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cut in after a failed start', when: 'now' }));
+  assert.equal(cut.status, 202, cut.text);
+  assert.ok(cut.body.held, cut.text);
+  const failed = await doomed;
+  assert.equal(failed.status, 500, 'the second start failed: ' + failed.text);
+  await unlink(path.join(instance.workspace, 'fail-config'));
+  await unlink(path.join(instance.workspace, 'slow-config'));
+  const went = await until(instance, (e) => e.conversation === id && e.type === 'user' && e.data.text === 'cut in after a failed start', done.cursor);
+  const users = went.seen.filter((e) => e.conversation === id && e.type === 'user').map((e) => e.data.text);
+  assert.deepEqual(users, ['second, on haiku', 'cut in after a failed start'], 'the failed one (its user event comes before its settings), then the Interrupt: ' + JSON.stringify(users));
+  // Review 12: and it ran: the agent answered it and its turn ended (its user event is written before the adapter's settings).
+  const ran = await until(instance, (e) => e.conversation === id && e.type === 'turn-end', went.cursor);
+  assert.ok([...went.seen, ...ran.seen].some((e) => e.conversation === id && e.type === 'update' && String(e.data?.content?.text).startsWith('echo:') && e.data.content.text.includes('cut in after a failed start')), 'the agent answered the Interrupt');
+  console.log('PASS O267 interrupt while starting: held 202, sent once after the starting turn, and at once when that start fails');
+});
+
 // O183: a plan can also be declined by message (a message sent while the approval is open cancels it, chat.mjs
 // decline()); it must end the same way as the reject option, not as the raw plan diagnostic.
 // O185: which receipt the decline message gets is the agent's timing, not a promise: the fake ends its turn the moment

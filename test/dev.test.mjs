@@ -903,16 +903,18 @@ test('Dev Focus: a light look turns the editor light', { skip: process.platform 
 
 // O268: with a GPU there, the editor terminal used the GPU renderer, which drew every letter tiny and faded in its cell (reported
 // 2026-11-25). Software WebGL stands in for the GPU; the default must still draw the page renderer's rows at the terminal's size.
-test('O268: the editor terminal draws its text at full size when WebGL is there (the GPU renderer is off by default)', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
+test('O268: the editor terminal uses the page renderer at its font size when WebGL is there (the GPU renderer is off by default; a renderer test, not a check of painted letters)', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
   const { dev, errors } = await openDevFocus(t, editor, {}, ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist']);
   assert.equal(await dev.evaluate(() => !!document.createElement('canvas').getContext('webgl2')), true, 'WebGL is there, as with a GPU');
   assert.equal(await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('terminal.integrated').get('gpuAcceleration')), 'off');
   await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.terminal.new'));
-  const row = dev.locator('.terminal-wrapper .xterm-rows > div').first();
-  await dev.waitForFunction(() => /\$\s*$/.test(document.querySelector('.terminal-wrapper .xterm-rows > div')?.textContent ?? ''), null, { timeout: 60000 });
-  const drawn = await row.evaluate(el => ({ size: getComputedStyle(el).fontSize, family: getComputedStyle(el).fontFamily, webgl: !!document.querySelector('.terminal-wrapper canvas:not([class])') }));
+  // O267: a marker the shell prints (whatever its prompt looks like), found across the rows; the canvas checked in this terminal.
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.terminal.sendSequence', { text: 'echo p9-$((40+2))-ready\r' }));
+  const row = dev.locator('.terminal-wrapper .xterm-rows > div', { hasText: /^p9-42-ready/ }).first();
+  await row.waitFor({ timeout: 60000 });
+  const drawn = await row.evaluate(el => ({ size: getComputedStyle(el).fontSize, family: getComputedStyle(el).fontFamily, webgl: !!el.closest('.xterm-screen')?.querySelector('canvas:not([class])') }));
   assert.deepEqual(drawn, { size: '14px', family: '"Droid Sans Mono", monospace, monospace', webgl: false }, 'page renderer rows at the terminal font size');
   await shot(dev, 'o268-terminal');
   assert.deepEqual(online(errors), []);

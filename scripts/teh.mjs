@@ -80,7 +80,11 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
 
 // D16: a daemon older than the app answers a route it lacks with a plain-text 404: that is not "not answering", and
 // retrying never helps, so the page is told the daemon is out of date.
-export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } } : { status: 503, body: { error: 'daemon-unavailable' } };
+// O267 review 9: only an error before the request went out (nothing listening, no socket, no such host) is surely unsent.
+// Any other (a timeout, a reset, a link dropped mid-answer) may have reached the daemon, so the change it carried is unsure.
+const UNSENT = ['ECONNREFUSED', 'ENOENT', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN'];
+export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } }
+  : { status: 503, body: { error: 'daemon-unavailable', ...(!UNSENT.includes(error?.code) && { unsure: true }) } };
 
 // O22: the bundled daemon node links libatomic.so.1, which a minimal or server Ubuntu lacks (the desktop has it). The
 // loader's own error names the file; this turns it into the package to install, or null. Only names matching lib*.so*

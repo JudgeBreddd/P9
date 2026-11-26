@@ -12,7 +12,7 @@
 // prompt (Claude's, as its adapter's own start was).
 // native: the agent's binary package name before its platform (linux-x64, win32-arm64, ...), as agents.json names it.
 // resultCopy (optional): its adapter may send a streamed reply again under the result's uuid (claude-agent-acp's result
-// fallback), so chat.mjs drops that copy (DUP-1); without it a uuid reply is always its own.
+// fallback), so chat.mjs also drops a short copy under a uuid (DUP-1); without it only the same-id and 200-character rules apply.
 const STALE = 15 * 60 * 1000;
 const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes), usage: Object.freeze(agent.usage) });
 export const CATALOG = Object.freeze([

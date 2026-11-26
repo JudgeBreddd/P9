@@ -7,7 +7,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
+import { randomUUID } from 'node:crypto';
+import { remoteDaemon, passkeyDevice, enrollDevice, http, authenticated, root } from './helpers.mjs';
 import { phoneLink, qrSvg, phoneDialogBody } from '../apps/web/src/phone-link.mjs';
 
 // The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
@@ -41,6 +42,8 @@ const until = async (check, what) => {
   for (let i = 0; i < 100; i++) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 100)); }
   throw new Error('timed out: ' + what);
 };
+const call = (server, route, body) => http({ socketPath: server.credentials.socketPath, route, method: 'POST',
+  headers: { ...authenticated(server.credentials), 'content-type': 'application/json', 'x-p9-op': randomUUID() }, body: JSON.stringify(body) });
 const setOnline = (page, on) => page.evaluate((on) => { window.__on = on; dispatchEvent(new Event(on ? 'online' : 'offline')); }, on);
 // Back to the Chats list from a chat (the tab bar is gone inside one).
 async function toList(page) {
@@ -221,6 +224,48 @@ for (const agent of ['claude', 'codex']) {
   });
 }
 
+test('O267: a message the phone\'s full storage refuses is not queued and stays in the box; Take back refused by storage keeps it queued', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.evaluate(() => { const set = window.o267set = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
+  await page.fill('#prompt', 'no room'); await page.click('#composer button');
+  await page.waitForSelector('#composerNote:not([hidden])');
+  assert.match(await page.textContent('#composerNote'), /storage is full/);
+  assert.equal(await page.inputValue('#prompt'), 'no room', 'still in the box');
+  assert.equal(await page.locator('#queued').isHidden(), true, 'not queued');
+  assert.equal(await page.evaluate((key) => localStorage.getItem(key), 'p9-queue:' + id), null);
+  // Online, the daemon answering turn-running (the phone queues it for the turn's end): the same refusal.
+  await page.fill('#prompt', ''); await setOnline(page, true); await page.waitForSelector('#stale', { state: 'hidden' });
+  // The answer comes after the box was changed to other words: both are in the box, the sent one first.
+  let answer; const answered = new Promise((done) => { answer = done; });
+  await page.route('**/chat/*/prompt', async (route) => { await answered; await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }); });
+  await page.evaluate(() => { document.querySelector('#composerNote').hidden = true; });
+  // Round 3: the new words start with the sent ones ("look" in "lookup failed"): they are not the sent message, so it still comes back.
+  await page.fill('#prompt', 'look'); await page.click('#composer button');
+  await page.fill('#prompt', 'lookup failed'); answer();
+  await page.waitForSelector('#composerNote:not([hidden])');
+  assert.match(await page.textContent('#composerNote'), /storage is full\. Your message is back in the box/);
+  assert.equal(await page.inputValue('#prompt'), 'look\nlookup failed', 'the sent words came back above the new ones');
+  assert.equal(await page.locator('#queued').isHidden(), true, 'not queued');
+  await page.unroute('**/chat/*/prompt');
+  // Take back that storage refuses to record: the message stays queued (a reopened app would send it), not also in the box.
+  await page.evaluate(() => { Storage.prototype.setItem = window.o267set; });
+  await page.fill('#prompt', ''); await setOnline(page, false); await page.waitForSelector('#stale:not([hidden])');
+  await page.evaluate(() => { document.querySelector('#composerNote').hidden = true; });
+  await page.fill('#prompt', 'keep me'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  await page.evaluate(() => { const set = Storage.prototype.setItem, rm = Storage.prototype.removeItem, no = (key) => { if (String(key).startsWith('p9-queue:')) throw new DOMException('denied', 'QuotaExceededError'); };
+    Storage.prototype.setItem = function (key, value) { no(key); return set.call(this, key, value); }; Storage.prototype.removeItem = function (key) { no(key); return rm.call(this, key); }; });
+  await page.locator('[data-unqueue]').dispatchEvent('click');
+  await page.waitForSelector('#composerNote:not([hidden])');
+  assert.match(await page.textContent('#composerNote'), /Not taken back: this phone's storage refused the change/);
+  assert.equal(await page.inputValue('#prompt'), '', 'not back in the box while it is still queued');
+  assert.match(await page.evaluate((key) => localStorage.getItem(key), 'p9-queue:' + id), /keep me/);
+  assert.equal(await page.locator('#queued [data-unqueue]').count(), 1, 'still listed');
+});
+
 // O269: the first read failing (a busy host) said "Chat is unavailable." until a reload. It says why and reads again.
 test('O269: a failed first read of the chats says why and tries again until the list draws', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
@@ -369,6 +414,153 @@ for (const agent of ['claude', 'codex']) {
 // O37 (threat model row 18): the phone colours a reply's complete code blocks too, and leaves an unknown language plain.
 // phone-2 (the plan itself never showed, only the approval buttons): Claude's plan call arrives
 // empty and its plan comes after it, in the update and in the approval. The phone shows the plan before any choice is tapped.
+// O267 round 4: the daemon keeps an operation's answer and replays it to a retry under the same ID, so a queued message
+// refused with turn-running takes a new ID for its next try; under the old one it would get the refusal back for ever.
+test('O267: a queued message refused with turn-running tries again under a new operation ID, and goes', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.fill('#prompt', 'after the turn'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  const ops = [], at = [];
+  await page.route('**/chat/*/prompt', async (route) => {
+    ops.push(route.request().headers()['x-p9-op']); at.push(Date.now());
+    if (ops.length <= 2) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    else await route.continue();
+  });
+  await setOnline(page, true);
+  await page.waitForFunction((key) => !localStorage.getItem(key) || localStorage.getItem(key) === '[]', 'p9-queue:' + id, { timeout: 20000 });
+  assert.equal(ops.length, 3, 'two refused tries, then one that went: ' + JSON.stringify(ops));
+  assert.equal(new Set(ops).size, 3, 'each try after a refusal has its own operation ID: ' + JSON.stringify(ops));
+  // Round 4: each fresh ID spends one of the phone's operations, so the waits grow (2 s, then 4 s).
+  assert.ok(at[1] - at[0] >= 1900 && at[2] - at[1] >= 3900, `the waits grow: ${at[1] - at[0]} ms, ${at[2] - at[1]} ms`);
+  // Round 4: the daemon has the message once.
+  await page.waitForSelector('#events article:has-text("echo:after the turn")', { timeout: 10000 });
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('#events article', { hasText: 'echo:after the turn' }).count(), 1, 'one copy in the chat');
+  await page.unroute('**/chat/*/prompt');
+});
+
+// O267 round 4: storage that refuses the new ID keeps the stored one: the next try uses the ID a reload would use.
+// Review 5: as the daemon does, every try under the stored ID gets its recorded refusal back (no copy while storage is full);
+// once storage takes writes again, a fresh ID is stored before it is used, and the message goes once.
+test('O267: a new operation ID storage refuses is not used; the next try keeps the stored one', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.fill('#prompt', 'keep my id'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  const key = 'p9-queue:' + id, stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k))[0].qid, key);
+  await page.evaluate(() => { const set = window.o267set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, value) { if (String(k).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, k, value); }; });
+  const ops = [], kept = [];
+  await page.route('**/chat/*/prompt', async (route) => {
+    const op = route.request().headers()['x-p9-op']; ops.push(op);
+    if (op === stored) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    kept.push(await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]')[0]?.qid, key));
+    await route.continue();
+  });
+  await setOnline(page, true);
+  await until(async () => ops.length >= 2, 'two tries while storage is full');
+  assert.deepEqual(ops, [stored, stored], 'both tries under the stored ID, each refused as the daemon replays it');
+  assert.match(await page.textContent('#composerNote'), /storage is full/);
+  assert.equal(await page.locator('#events article', { hasText: 'echo:keep my id' }).count(), 0, 'nothing sent while storage is full');
+  await page.evaluate(() => { Storage.prototype.setItem = window.o267set; });
+  await page.waitForSelector('#events article:has-text("echo:keep my id")', { timeout: 40000 });
+  const fresh = ops.at(-1);
+  assert.notEqual(fresh, stored, 'the try that went has a new ID');
+  assert.deepEqual(kept, [fresh], 'that ID was in storage before it was used');
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('#events article', { hasText: 'echo:keep my id' }).count(), 1, 'one copy in the chat');
+  await page.unroute('**/chat/*/prompt');
+});
+
+// O267 review 5: a turn's end wakes the queue itself. On the chat list nothing redraws the chat, and a message refused
+// three times (waits 2, 4, then 8 s) goes within a moment of the turn ending, not when its wait runs out.
+test('O267: a queued message goes as its chat\'s turn ends, also from the chat list', { timeout: 120000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await call(server, '/chat/' + id + '/prompt', { text: 'slow' });
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.fill('#prompt', 'wake me'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  const at = []; let release; const hold = new Promise((res) => { release = res; });
+  await page.route('**/chat/*/prompt', async (route) => {
+    if (route.request().postDataJSON()?.text !== 'wake me') return route.continue();
+    at.push(Date.now());
+    if (at.length === 3) await hold; // review 6: this refusal comes back only after the turn has ended
+    if (at.length <= 3) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    else await route.continue();
+  });
+  await setOnline(page, true);
+  await until(async () => at.length === 3, 'three refused tries');
+  await page.goBack();
+  const ended = Date.now();
+  await call(server, '/chat/' + id + '/cancel', {});
+  await new Promise((res) => setTimeout(res, 500)); release();
+  await until(async () => at.length === 4, 'a try after the turn ended');
+  assert.ok(at[3] - ended < 4000, `it went ${at[3] - ended} ms after the turn ended, not after its 8 s wait`);
+  await until(async () => (await server.desk('/chat/events?after=0&only=' + id)).body.events.filter((e) => e.type === 'user' && e.data?.text === 'wake me').length === 1, 'delivered, once');
+  await until(async () => (await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]').length, 'p9-queue:' + id)) === 0, 'and gone from the queue');
+  await page.unroute('**/chat/*/prompt');
+});
+
+// O267 review 7: a wake that comes while a drain runs (another chat's turn ends) is not held behind that drain's refresh.
+// Review 9: chat B is refused three times first, so its own retry is 8 s away; then chat A's message goes out and is held,
+// B's turn ends meanwhile, and B's message must go before that 8 s retry could: only the turn end can have sent it. It goes
+// while the refresh after A's send has no answer (it used to wait for that refresh first). On the chat list, where no chat
+// redraw wakes the queue.
+test('O267: a chat whose turn ends during another chat\'s send gets its queued message before that send\'s refresh answers', { timeout: 120000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const a = await newChat(page, 'claude'), b = await newChat(page, 'claude');
+  await call(server, '/chat/' + b + '/prompt', { text: 'slow' });
+  await toList(page);
+  const tries = []; let releaseA, releaseReads, armed = false, reads = 0;
+  const holdA = new Promise((res) => { releaseA = res; }), holdReads = new Promise((res) => { releaseReads = res; });
+  await page.route('**/chat/*/prompt', async (route) => {
+    const text = route.request().postDataJSON()?.text;
+    if (!['slow', 'for b'].includes(text)) return route.continue();
+    tries.push([text, Date.now()]);
+    if (text === 'for b' && tries.filter(([x]) => x === 'for b').length <= 3) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    if (text === 'slow') await holdA; // A's message starts a turn that keeps running, so no turn end of A's wakes the queue
+    return route.continue().catch(() => {});
+  });
+  await page.route('**/chat/events*', async (route) => { if (armed) { reads++; await holdReads; } return route.continue().catch(() => {}); });
+  const forB = () => tries.filter(([x]) => x === 'for b');
+  // A storage event only makes the phone read its queues again; coming back online is what starts a drain.
+  await setOnline(page, false);
+  await page.evaluate((b) => {
+    localStorage.setItem('p9-queue:' + b, JSON.stringify([{ qid: crypto.randomUUID(), text: 'for b' }]));
+    dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + b })); // the phone reads its queues from storage again
+  }, b);
+  await setOnline(page, true);
+  await until(async () => forB().length >= 2, 'B refused twice (2 s wait)');
+  await until(async () => forB().length >= 3, 'B refused three times (4 s wait), so its next wait is 8 s');
+  const refused = forB()[2][1];
+  await setOnline(page, false);
+  await page.evaluate((a) => {
+    localStorage.setItem('p9-queue:' + a, JSON.stringify([{ qid: crypto.randomUUID(), text: 'slow' }]));
+    dispatchEvent(new StorageEvent('storage', { key: 'p9-queue:' + a }));
+  }, a);
+  await setOnline(page, true); // B's wait (8 s) is not over, so this drain sends only A's
+  await until(async () => tries.some(([x]) => x === 'slow'), 'A asked (and held)');
+  await call(server, '/chat/' + b + '/cancel', {});
+  const userOf = async (id, text) => (await server.desk('/chat/events?after=0&only=' + id)).body.events.some((e) => e.type === 'user' && e.data?.text === text);
+  await until(async () => (await server.desk('/chat/events?after=0&only=' + b)).body.events.some((e) => ['turn-end', 'interrupted', 'stopped'].includes(e.type)), 'B\'s turn ended');
+  await page.waitForTimeout(1000); // the phone sees it while A's send is still out
+  armed = true; releaseA();
+  await until(async () => await userOf(a, 'slow'), 'A sent');
+  await until(async () => await userOf(b, 'for b'), 'B sent while every events read after A\'s send has no answer');
+  assert.equal(forB().length, 4, 'B asked once more');
+  assert.ok(forB()[3][1] - refused < 8000, `B went ${forB()[3][1] - refused} ms after its last refusal, before its own 8 s retry: the turn end woke it`);
+  assert.ok(reads >= 1, 'a read was held meanwhile');
+  armed = false; releaseReads();
+  await until(async () => (await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]').length, 'p9-queue:' + b)) === 0, 'and gone from B\'s queue');
+  await page.unroute('**/chat/*/prompt'); await page.unroute('**/chat/events*');
+});
+
 test('phone-2: the plan approval shows the plan above its choices, and the tool row opens it after', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');

@@ -25,11 +25,11 @@ const until = async (check, what, ms = 15000) => {
 };
 
 // One chat with the given agent, answered "hello" once, and a window on it.
-async function setup(t, name, { provider = 'claude', files = [] } = {}) {
+async function setup(t, name, { provider = 'claude', files = [], env: extra = {} } = {}) {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   for (const file of files) await writeFile(path.join(instance.workspace, file), '');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-' + name + '-')), 'profile');
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
   const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   const agentSaid = async (text) => (await said(instance, id, 'update')).some((e) => e.data.content?.text === text);
@@ -652,6 +652,7 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   await until(async () => (await users(instance, id)).filter((u) => u.startsWith('> ') && u.endsWith('my words')).length === 1, 'the first send was taken', 15000);
   const refused = async () => await app.evaluate(() => globalThis.p9refused ?? '');
   await until(async () => /^> /.test(await refused()) && (await refused()).endsWith('my words'), 'the identical second send was refused', 15000);
+  assert.equal(await refused(), (await users(instance, id)).find((u) => u.startsWith('> ') && u.endsWith('my words')), 'the refused text is the taken one exactly'); // O267
   await until(async () => (await composer.inputValue()) === 'my words' && await chips.count() === 1, 'refused: its words in the box, its chip a chip', 10000);
   assert.equal(await chips.first().textContent(), chipText, 'the same chip came back');
   await until(async () => (await said(instance, id, 'turn-end')).length > ends, 'the taken send\'s turn ended', 15000);
@@ -743,8 +744,6 @@ test('A2 step 6: a refused send made with the pencil open gives back the edited 
   console.log('PASS A2 step 6 round 3: a refusal gives back the edit once, in the order sent; a removed edit, or one a later send or a draft took, stays gone');
 });
 
-// A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,
-// lists them, newest first; one picked goes back in the box and leaves the list; its x deletes it; Esc closes the list.
 test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked comes back, x deletes, Esc closes', { timeout: 90000 }, async (t) => {
   const { page, pane, errors } = await setup(t, 'a2-drafts');
   const composer = pane.locator('.composer textarea'), btn = pane.locator('[data-drafts]'), menu = page.locator('.drafts-menu');
@@ -838,8 +837,19 @@ test('A2 step 7 review: full store keeps the box, a taken row is not brought bac
   await chip.first().locator('[data-quote-go]').click();
   await page.locator('#toasts .toast', { hasText: 'is not available in this window' }).waitFor({ timeout: 5000 });
   assert.equal(await pane.locator('.msg.quote-src').count(), 0, 'no reply here marked as its source');
+  // O267 (#535 round 2): another window's draft redraws the open menu; the focus stays on the draft chosen, and the taller
+  // menu stays above Drafts.
+  await seed([{ id: 'f1', text: 'first', at: 6 }, { id: 'f2', text: 'second', at: 7 }]);
+  await btn.click(); await menu.waitFor({ timeout: 5000 }); await page.keyboard.press('ArrowDown');
+  const focused = () => page.evaluate(() => document.activeElement?.closest('.draft')?.querySelector('.truncate')?.textContent);
+  assert.equal(await focused(), 'second');
+  await seed([{ id: 'f0', text: 'newest', at: 8 }, { id: 'f1', text: 'first', at: 6 }, { id: 'f2', text: 'second', at: 7 }]);
+  await until(async () => await menu.locator('.draft-take').count() === 3, 'redrawn with the new draft', 5000);
+  assert.equal(await focused(), 'second', 'the focus stayed on the same draft');
+  assert.ok((await menu.boundingBox()).y + (await menu.boundingBox()).height <= (await btn.boundingBox()).y, 'the menu still sits above Drafts');
+  await page.keyboard.press('Escape');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
+  console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline, focus kept on a redraw');
 });
 
 // Review #536 round 2: a quote whose reply is above the drawn window (more than TAIL steps later) jumps there: the window
