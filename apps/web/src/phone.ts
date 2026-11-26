@@ -333,7 +333,8 @@ async function fetchEvents(wait = 0) {
     else gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box. So do
     // those of a start the chat's close, Stop or exit ended before its turn (stopped, #540 review 15).
-    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && ['cancelled', 'stopped'].includes(String((event.data as Json)?.why)))
+    // #540 review 16: the user's own only; one another chat or P9 sent (from) is not put in the user's box.
+    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && ['cancelled', 'stopped'].includes(String((event.data as Json)?.why)) && !(event.data as Json).from)
       putBack(String(event.conversation), String((event.data as Json).text)); // O61: into its own chat's text, open or not
   }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));

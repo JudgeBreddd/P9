@@ -1115,6 +1115,34 @@ test('a failed scope query makes Stop report cleanup-failed, never stopped', asy
   console.log('PASS scope query failure: Stop answered 500 cleanup-failed; row cleanup-failed; prompt 409 with no new adapter; retry still refused');
 });
 
+// #542 round 4 (O267b): a Stop that ends cleanup-failed while a prompt reads its project note leaves that prompt nothing to
+// start on: it is refused with the real outcome, and no second adapter starts beside the one P9 could not confirm ended.
+test('a Stop that ends cleanup-failed while a prompt reads its project note refuses that prompt', async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ directory }) => {
+    const bin = path.join(directory, 'bin'), runtime = path.join(directory, 'runtime');
+    await mkdir(bin);
+    await mkdir(runtime, { mode: 0o700 });
+    await writeFile(path.join(runtime, 'bus'), '');
+    await writeFile(path.join(bin, 'systemd-run'), '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n');
+    await writeFile(path.join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n');
+    await chmod(path.join(bin, 'systemd-run'), 0o755);
+    await chmod(path.join(bin, 'systemctl'), 0o755);
+    return { args: ['--acp-override', fake], path: `${bin}:${process.env.PATH}`, env: { XDG_RUNTIME_DIR: runtime, P9_NOTE_MS: '3000' } };
+  });
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' });
+  const { cursor } = await until(instance, (event) => event.type === 'turn-end');
+  const waiting = json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'during the stop' })); // reads its note for 3 s
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const stopped = await json(call(instance, `/chat/${id}/stop`, 'POST'));
+  assert.equal(stopped.body.result, 'cleanup-failed', JSON.stringify(stopped));
+  const late = await waiting;
+  assert.deepEqual([late.status, late.body.error], [409, 'cleanup-failed'], JSON.stringify(late));
+  const after = (await json(call(instance, `/chat/events?after=${cursor}`))).body.events.map((event) => event.type);
+  assert.ok(!after.includes('connected') && !after.includes('user'), after.join(','));
+  console.log('PASS #542 round 4: the prompt waiting on its note got 409 cleanup-failed; no new adapter, no user event');
+});
+
 test('operation IDs older than a week are refused after a restart, never run again', async (t) => {
   const instance = await start(t);
   const op = randomUUID();

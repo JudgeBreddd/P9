@@ -52,6 +52,8 @@ test('real claude adapter on ACP 2: steering is not offered yet (set ACP_ASK.cla
   const timeout = (what) => new Promise((resolve, reject) => setTimeout(() => reject(new Error(what + ' timed out; stderr: ' + stderr)), 30000));
   const init = await Promise.race([agent.initialize({ protocolVersion: 2, clientCapabilities }), timeout('initialize')]);
   console.log('REAL claude ACP 2 initialize: ' + JSON.stringify({ protocolVersion: init.protocolVersion, meta: init._meta }));
+  // #540 review: a reply that fell back to ACP 1 would make the steering check below say nothing about ACP 2.
+  assert.equal(init.protocolVersion, 2, 'the adapter answered on ACP 2, so the check below is about ACP 2');
   assert.equal(init._meta?.steering?.supported === true, false, 'steering not offered on ACP 2 (set ACP_ASK.claude back to 2, O121)');
   console.log('PASS real claude on ACP 2: steering not offered, so ACP_ASK.claude stays 1');
 });
