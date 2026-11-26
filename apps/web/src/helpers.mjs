@@ -201,6 +201,15 @@ export const quoted = (quotes, text) => [...(quotes || []).map(q => q.text.repla
 export const pastedFiles = (data, plain) => { const files = [...data.files], text = data.getData('text/plain'); return files.length || plain || text.length <= BIG_PASTE ? files : [new File([text], 'pasted.txt', { type: 'text/plain' })]; };
 export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && (typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}`
   : typeof b.shot === 'string' && /^\d{1,15}\/\d{1,2}$/.test(b.shot) ? 'shot:' + b.shot : null) || null; // O249: shot: a place, fetched when seen (agentImgs)
+// O266 review 6: a tool row's own updates (chat-view.mjs ups), with a run of streamed output pieces (acp-v2.mjs: only text,
+// marked p9/append) kept as one piece of their last 4,000 characters, all a row shows, so a noisy command keeps one update.
+const piece = d => d._meta?.['p9/append'] === true && Object.keys(d._meta).length === 1 && Object.keys(d).every(k => ['sessionUpdate', 'toolCallId', 'content', '_meta'].includes(k));
+const textOf = d => (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n');
+export function upKept(ups, d) {
+  const last = ups.at(-1);
+  if (piece(d) && last && piece(last)) ups[ups.length - 1] = { ...d, content: [{ type: 'content', content: { type: 'text', text: (textOf(last) + textOf(d)).slice(-4000) } }] };
+  else ups.push(d);
+}
 export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 // A place (shot:) draws as an empty img[data-shot] until the window fetches it (got: its data: address once fetched).
 /** @param {string[] | undefined} list @param {string} who @param {(src: string) => string} [got] */
