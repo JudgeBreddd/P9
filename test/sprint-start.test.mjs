@@ -151,7 +151,15 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   // O171 (framing): and the hash of each Setup file whose text reaches chats (here the role files, made empty).
   const { files, ...record } = listed.started, EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
   assert.deepEqual({ ...record, at: typeof record.at }, { at: 'number', plan, by: 'owner', scripts: [] });
-  assert.deepEqual(files, Object.fromEntries(['roles/lead.instructions.md', 'roles/lead.rules.md', 'roles/review.instructions.md', 'roles/review.rules.md'].map((n) => [n, EMPTY])));
+  // O141: the lead's instructions are P9's default usage watch (the owner's text from New sprint), the rest made empty.
+  const leadText = fs.readFileSync(path.join(prep.body.folder, 'roles', 'lead.instructions.md'), 'utf8');
+  assert.deepEqual(files, { 'roles/lead.instructions.md': createHash('sha256').update(leadText).digest('hex'),
+    ...Object.fromEntries(['roles/lead.rules.md', 'roles/review.instructions.md', 'roles/review.rules.md'].map((n) => [n, EMPTY])) });
+  // ...and they reach the lead with its first message, as approved, with the check it schedules for itself.
+  // (the fake agent logs P9's start block to start.log in the folder the chat runs in)
+  const opening = fs.readdirSync(ws, { recursive: true }).filter((f) => path.basename(f) === 'start.log').map((f) => fs.readFileSync(path.join(ws, f), 'utf8')).join('\n');
+  for (const said of ['your instructions, approved by the user', 'call schedule_prompt to yourself every 10 minutes', 'Usage watch: call plan_usage', 'hold your least-advanced running worker'])
+    assert.ok(opening.includes(said), 'the lead\'s first message lacks: ' + said + '\n' + opening.slice(0, 600));
   assert.deepEqual(press.body.started, listed.started);
 
   // Pressing again: everything is kept, nothing is made or sent again.

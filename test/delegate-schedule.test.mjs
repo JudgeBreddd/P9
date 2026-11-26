@@ -3,6 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import path from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { restart } from './helpers.mjs';
 import { start, call, pause, until, events, agent, connect, rows } from './delegate-helpers.mjs';
 
@@ -106,3 +110,46 @@ test('O140 other chat: a once prompt scheduled to a busy chat waits for its turn
   console.log('PASS O140 other chat: held while busy (when ' + held.hit.data.when + '), sent after its turn end, once, from its owner; list empty');
 });
 
+
+// O141: the lead's usage watch is its own scheduled prompt (sprint-files.mjs LEAD). Closing the sprint pauses every schedule
+// its chats own, so a closed sprint's lead or worker is never woken by one; the schedules stay listed, paused.
+test('O141: closing a sprint pauses its chats\' scheduled prompts, so a closed lead and worker are not woken', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  // A started sprint (Start refuses a model P9 has not seen, so one chat reads the model list first), its lead on 'mcp'.
+  const warm = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  await call(instance, `/chat/${warm}/prompt`, 'POST', { text: 'config' });
+  await until(instance, (e) => e.conversation === warm && e.data?.content?.text?.startsWith('config:'));
+  const repo = path.join(instance.workspace, 'repo'); mkdirSync(repo);
+  execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']); writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  execFileSync('git', ['-C', repo, 'add', '-A']); execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'a']);
+  const project = (await call(instance, '/projects', 'POST', { name: 'Watch', work: { kind: 'new', parent: '', name: 'watch' } })).body.project.id;
+  const sp = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'Watch' })).body, sprint = sp.sprint;
+  const role = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  writeFileSync(path.join(sp.folder, 'sprint.md'), '# Plan\n\n- [ ] a1: the piece. Role: w1.\n');
+  writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [role('lead')] }));
+  writeFileSync(path.join(sp.folder, 'roles/lead.work.md'), 'mcp');
+  writeFileSync(path.join(sp.folder, 'hooks.json'), JSON.stringify({ scripts: [] }));
+  const hooks = (await call(instance, '/projects/' + project)).body.project.sprints.find((x) => x.lead === sprint).files.find((f) => f.name === 'hooks.json').hash;
+  const started = await call(instance, `/sprints/${sprint}/start`, 'POST', { hooks }); assert.equal(started.status, 200, JSON.stringify(started));
+  writeFileSync(path.join(sp.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: ['lead', 'w1'].map(role) }));
+  const L = await connect(t, instance, sprint);
+  const made = await L.tool('open_chat', { text: 'mcp', key: 'w1' }); assert.ok(made.chat && !made.error, JSON.stringify(made));
+  await L.done(made.chat);
+  const w = await connect(t, instance, made.chat);
+  const soon = (s) => new Date(Date.now() + s * 1000).toISOString();
+  const watch = await L.tool('schedule_prompt', { text: 'watch', at: soon(10), every: 10 });
+  const wake = await w.tool('schedule_prompt', { text: 'wake', at: soon(10) });
+  assert.deepEqual([watch.action, wake.action], ['scheduled', 'scheduled'], JSON.stringify([watch, wake]));
+  const closed = await call(instance, `/sprints/${sprint}/close`, 'POST', {});
+  assert.equal(closed.status, 200, JSON.stringify(closed));
+  assert.ok(Date.now() < Date.parse(watch.nextRun), 'the set-up ran past the schedules\' time, so they went before the close');
+  await pause(Math.max(0, Date.parse(watch.nextRun) + 8000 - Date.now()));
+  const got = async (id, word) => (await events(instance, id)).filter((e) => e.type === 'user' && e.data.text?.endsWith('\n\n' + word));
+  assert.deepEqual(await got(sprint, 'watch'), [], 'a closed sprint\'s lead was woken by its schedule');
+  assert.deepEqual(await got(made.chat, 'wake'), [], 'a closed sprint\'s worker was woken by its schedule');
+  // Kept, paused (read from the store: a closed chat's own tools are refused).
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'), { timeout: 5000 }); t.after(() => db.close());
+  assert.deepEqual(db.prepare('SELECT owner, paused FROM schedules ORDER BY owner = ? DESC').all(sprint).map((r) => [r.owner, r.paused]), [[sprint, 1], [made.chat, 1]]);
+  console.log('PASS O141: close paused the lead\'s and the worker\'s schedules; neither woke');
+});
