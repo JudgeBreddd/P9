@@ -87,6 +87,9 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.equal((await call(instance, '/projects/' + project)).body.project.sprints.find((s) => s.lead === sprint).paused, true);
   const marked = Object.fromEntries((await rows(instance)).map((c) => [c.id, !!c.paused]));
   assert.deepEqual([marked[sprint], marked[id.w1], marked[id.w2], marked[first]], [true, true, true, false]);
+  // O141 review 13: the lead sees it in list_chats (its usage watch settles no hold while paused).
+  const listed = Object.fromEntries((await lead.tool('list_chats')).chats.map((c) => [c.id, c.paused]));
+  assert.deepEqual([listed[id.w1], listed[id.w2]], [true, true], 'list_chats does not say the workers are paused');
   assert.equal((await w1.tool('pause_sprint')).error, 'not-a-sprint-lead');
 
   // A note passes (it starts nothing), a question from beside is refused, the lead opens no worker.
