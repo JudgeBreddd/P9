@@ -1186,9 +1186,16 @@ async function earlier(s) {
   const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
   for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
   // O266: a call sent again after a compaction can have its first on this page and its second below: one row, where it
-  // first ran, with the newer page's details (its later updates went there), kept finished against a replayed pending.
+  // first ran. The older row is the base; the newer one adds what it carries (its later updates went there), never a
+  // replayed pending or an empty field, so a status-only repeat keeps the first run's output and diff.
   const below = new Map(s.events.filter(e => e.t === 'tool' && e.id != null).map(e => [e.id, e]));
-  old.events = old.events.map(e => { const n = e.t === 'tool' && below.get(e.id); if (!n) return e; s.events.splice(s.events.indexOf(n), 1); if (n.status === 'pending') n.status = e.status; return n; });
+  const has = v => v != null && v !== '' && !(Array.isArray(v) && !v.length);
+  old.events = old.events.map(e => {
+    const n = e.t === 'tool' && below.get(e.id); if (!n) return e;
+    s.events.splice(s.events.indexOf(n), 1);
+    const row = { ...e }; for (const [k, v] of Object.entries(n)) if (has(v) && !(k === 'status' && v === 'pending')) row[k] = v;
+    return row;
+  });
   s.events = [...old.events, ...s.events];
   tailed(s, r.body);
 }
