@@ -9,7 +9,7 @@ re-checked in P9 on 2026-10-16 by the recorded turns in `test/fixtures/acp/`.
 | Package | Version | License | Role |
 |---|---|---|---|
 | `@agentclientprotocol/sdk` | 2.8.0 | Apache-2.0 | The connection (`apps/server/acp.mjs` wraps it), `ndJsonStream`, schema types for ACP 1 and 2 |
-| `@agentclientprotocol/claude-agent-acp` | 0.109.1 | Apache-2.0 | Claude adapter; brings `@anthropic-ai/claude-agent-sdk` 0.3.330 and its bundled Claude Code binary |
+| `@agentclientprotocol/claude-agent-acp` | 0.112.0 | Apache-2.0 | Claude adapter; brings `@anthropic-ai/claude-agent-sdk` 0.3.331 and its bundled Claude Code binary |
 | `@agentclientprotocol/codex-acp` | 2.9.0 | Apache-2.0 | Codex adapter; brings `@openai/codex` 0.171.0 |
 
 All three are exact pins in `package.json`. Upgrading one is a deliberate change: record new fixtures
@@ -78,8 +78,8 @@ reach it.
 (Write tool, `allow-once`); Codex, in `read-only` mode, runs `curl -sI` (`allow_once`). Each records the
 adapter version it was captured against. Both are raw ACP 2 traffic, so the replay runs the translator.
 The replay sends the recorded `initialize` reply whatever P9 asks, so the contract test asks for the version
-the fixture was recorded on (`P9_ACP_VERSION`). Since 0.1.9 phase 4.5 P9 asks Claude for ACP 1 (`ACP_ASK` in
-`chat.mjs`), so Claude's default path has no recorded 0.106.0 turn until `claude.json` is re-recorded on 1.
+the fixture was recorded on (`P9_ACP_VERSION`). Both agents are asked for ACP 2 (A1, `agents.mjs`), so each
+fixture is that agent's default path.
 
 To re-record after an upgrade (real logins, a few cents of usage): run a scratch daemon with
 `--acp-override test/acp-record.mjs` (`daemon()` in `test/helpers.mjs` takes the argument), drive one turn

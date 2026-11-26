@@ -85,11 +85,9 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // agents read, write and run under their own permission checks.
 // The ACP version P9 asks each agent for (0.1.9 O52). ACP 2 is still a draft to its authors, so each agent has its own
 // number here and P9_ACP_VERSION=1 in the daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
-// Claude asks for 1 (0.1.9 phase 4.5, OPEN-ITEMS "A message cannot be sent while a turn runs"): its adapter (0.106.0)
-// has `_session/steering` only on 1, and without it a message sent mid-turn waited for the turn's end instead of going
-// in at the next tool-call boundary (session.steering, hold() and toolStep() below). Steer goes to the agent
-// between tool calls and never cancels a running tool call. Back to 2 once the adapter
-// advertises steering there: the ACP 2 case in test/real-adapter-steering.test.mjs goes red once it does.
+// Claude is on 2 (A1, claude-agent-acp 0.112.0): its ACP 2 surface has no `_session/steering`, so acp-v2.mjs tells P9 it
+// can steer and sends a steer as a session/prompt while the turn runs, which the adapter puts into that turn when Claude
+// Code next takes input (session.steering, hold() and toolStep() below). Steer never cancels a running tool call.
 // CAT-1c: the numbers are each catalog entry's acp (agents.mjs).
 const ACP_ASK = ACP;
 // O109: the line on a kept message P9 sends again after a restart that cut its sending short.

@@ -87,7 +87,7 @@ test('fallback: an agent that answers ACP 1, or refuses the v2 ask, runs on ACP 
     assert.equal(hit.type, 'turn-end', flag + ': ' + JSON.stringify(hit.data));
     assert.ok(says(seen).includes('v1:hello'), flag);
   }
-  assert.deepEqual([acpAsk('codex', {}), acpAsk('claude', {}), acpAsk('codex', { P9_ACP_VERSION: '1' }), acpAsk('claude', { P9_ACP_VERSION: '1' }), acpAsk('codex', { P9_ACP_VERSION: '9' })], [2, 1, 1, 1, 2]);
+  assert.deepEqual([acpAsk('codex', {}), acpAsk('claude', {}), acpAsk('codex', { P9_ACP_VERSION: '1' }), acpAsk('claude', { P9_ACP_VERSION: '1' }), acpAsk('codex', { P9_ACP_VERSION: '9' })], [2, 2, 1, 1, 2]);
   console.log('PASS acp v2 fallback: answers-1 and refuses-2 agents both ran a v1 turn; the version ask follows the per-agent setting and the override');
 });
 
@@ -114,6 +114,51 @@ test('the agent\'s sign-in notices stop at the translator', async () => {
   const next = (await read.read()).value;
   assert.equal(next.method, 'session/update', JSON.stringify(next));
   assert.equal(next.params.update.content.text, 'next');
+});
+
+// A1: claude-agent-acp 0.112.0 on ACP 2 offers no steering, but steers a prompt sent while a turn runs. The translator
+// offers steering, sends P9's _session/steering as that prompt, and answers it as v1 does; the prompted turn still ends once.
+test('A1: an ACP 2 agent with no steering of its own is steered by a busy prompt; its turn still ends once', async () => {
+  const toAgent = new TransformStream(), fromAgent = new TransformStream();
+  const p9 = v1Stream({ readable: fromAgent.readable, writable: toAgent.writable });
+  const write = p9.writable.getWriter(), agent = fromAgent.writable.getWriter(), read = p9.readable.getReader(), asked = toAgent.readable.getReader();
+  const next = async () => (await read.read()).value, sentToAgent = async () => (await asked.read()).value;
+  await write.write({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 2, clientCapabilities: {} } }); await sentToAgent();
+  agent.write({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 2, info: { name: 'x' }, capabilities: {}, _meta: { other: 1 } } });
+  assert.deepEqual((await next()).result._meta, { other: 1, steering: { supported: true } }, 'steering offered, its other _meta kept');
+  const update = (u) => agent.write({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: u } });
+  await write.write({ jsonrpc: '2.0', id: 2, method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'go' }] } }); await sentToAgent();
+  agent.write({ jsonrpc: '2.0', id: 2, result: { messageId: 'm1' } }); assert.equal((await next()).method, '_p9/prompt_taken');
+  update({ sessionUpdate: 'state_update', state: 'running' });
+  const steer = { jsonrpc: '2.0', id: 3, method: '_session/steering', params: { sessionId: 's', prompt: [{ type: 'text', text: 'also' }], _meta: { steering: { idleBehavior: 'promptRequired' } } } };
+  await write.write(steer);
+  assert.deepEqual(await sentToAgent(), { jsonrpc: '2.0', id: 3, method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'also' }] } });
+  agent.write({ jsonrpc: '2.0', id: 3, result: { messageId: 'm2' } });
+  assert.deepEqual(await next(), { jsonrpc: '2.0', id: 3, result: { outcome: 'injected' } }, 'taken into the running turn');
+  update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' });
+  assert.deepEqual(await next(), { jsonrpc: '2.0', id: 2, result: { stopReason: 'end_turn' } }, 'the prompted turn ends once, as its own reply');
+  // No turn running: promptRequired is answered as v1 does and nothing reaches the agent (P9 sends it as a prompt).
+  await write.write({ ...steer, id: 4 });
+  assert.deepEqual(await next(), { jsonrpc: '2.0', id: 4, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } });
+  // The turn ends before the agent takes the steer in: it started a turn of its own (CP8 ends it in chat.mjs); a refused
+  // steer stays the agent's error.
+  // A steer sent after P9's prompt, before the agent took it, still goes: the adapter steers it into that prompt.
+  await write.write({ jsonrpc: '2.0', id: 6, method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'again' }] } }); assert.equal((await sentToAgent()).id, 6);
+  await write.write({ ...steer, id: 5 }); assert.equal((await sentToAgent()).id, 5, 'the agent got this steer: the one before it never did');
+  agent.write({ jsonrpc: '2.0', id: 6, result: { messageId: 'm4' } }); await next(); update({ sessionUpdate: 'state_update', state: 'running' });
+  await write.write({ ...steer, id: 7 }); await sentToAgent();
+  update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' }); assert.equal((await next()).id, 6);
+  agent.write({ jsonrpc: '2.0', id: 5, result: { messageId: 'm5' } });
+  assert.deepEqual(await next(), { jsonrpc: '2.0', id: 5, result: { outcome: 'startedNewTurn' } });
+  agent.write({ jsonrpc: '2.0', id: 7, error: { code: -32800, message: 'cancelled' } });
+  assert.equal((await next()).error.code, -32800);
+  // An agent that offers steering itself keeps its own _session/steering.
+  const toB = new TransformStream(), fromB = new TransformStream(), pB = v1Stream({ readable: fromB.readable, writable: toB.writable });
+  const wB = pB.writable.getWriter(), aB = fromB.writable.getWriter(), rB = pB.readable.getReader(), qB = toB.readable.getReader();
+  await wB.write({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 2, clientCapabilities: {} } }); await qB.read();
+  aB.write({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 2, info: { name: 'y' }, capabilities: {}, _meta: { steering: { supported: true, own: 1 } } } });
+  assert.deepEqual((await rB.read()).value.result._meta.steering, { supported: true, own: 1 });
+  await wB.write(steer); assert.equal((await qB.read()).value.method, '_session/steering', 'its own steering, untouched');
 });
 
 // O121 part 3, O219: codex-acp 2.6.0 streams a command's output to a v2 client as terminal_output_chunk pieces, and its
