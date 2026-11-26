@@ -417,7 +417,10 @@ test('agent lock: no-write mode for new and running sessions, permission request
   assert.deepEqual([(await shield({ on: !was.on, rev: 'stale' })).body, (await shield({ on: was.on, rev: 1 })).status], [was, 400], 'a stale rev left protection');
   const moved = (await shield({ on: was.on, rev: was.rev })).body;
   assert.ok(moved.on === was.on && moved.rev !== was.rev, 'the last rev makes the change and gives a new one');
-  assert.deepEqual((await lock({ on: true, rev })).body.on, true);
+  // Round 2: each write's reply carries its own rev, even when a second write lands while the first switches live sessions.
+  const both = await Promise.all([lock({ on: true, rev }), lock({ on: true })]);
+  assert.deepEqual(both.map((r) => r.body.on), [true, true]);
+  assert.notEqual(both[0].body.rev, both[1].body.rev, 'two writes answered with the same rev');
   at = (await until(instance, said(waiting, 'permission:reject'), at)).cursor;
   await call(instance, `/chat/${before}/prompt`, 'POST', { text: 'mode' });
   const switched = await until(instance, said(before, 'mode:'), at);

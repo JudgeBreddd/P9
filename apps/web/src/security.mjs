@@ -18,7 +18,7 @@ export const SECURITY = {
   // Review 3 L5: "Open, don't ask again" in the link question, shown and undone here (desktop only; the phone never asks).
   links: ['Ask before opening agent links', 'A link in an agent reply opens in your browser only after a question showing its whole address, on this computer.',
     'On: a link in an agent reply asks first, showing its whole address. Off: it opens on a click. Turning Unrestricted mode off turns this back on.'],
-  unknown: 'Unknown: the daemon did not answer.',
+  unknown: 'Unknown: the daemon did not answer. Reopen Settings to check.',
   noModes: 'Waiting for the agents\' modes from P9; open Settings again in a moment.',
   noLoose: 'Unavailable: no agent P9 lists has a mode that acts without asking.', // review 14: the catalog answered with none
 };
@@ -69,31 +69,35 @@ export const modesNote = () => CATALOG.ours ? SECURITY.noLoose : SECURITY.noMode
 // A refusal, a "keep it" answer (on comes back unchanged), or (turning on) no loosened mode known once the writes are done
 // (the catalog can land meanwhile) puts back every setting this changed, newest first, and names any it could not put back.
 // ok: both are as asked, so the device may set its own part.
-// O267b: a write with no { on } may still have been made (its reply lost on the way back), so the setting is read: as asked,
-// it counts as done; not read, it shows unknown (null), never the old value. A put-back sends the rev of the change it
-// undoes, so a newer change (another device, another switch) stays; an older daemon gives no rev, and its put-back is plain.
-// ponytail: a write whose answer and read are both lost is not put back (its state shows unknown); set it again by hand.
+// O267b: a write with no { on } may still have been made (its reply lost on the way back), so the setting is read. A read
+// shows the setting, not who set it (another device may have set the same value), so a change found that way is shown and
+// left as it is, never put back. Only a write whose own reply came back is put back, with the rev that reply gave it, so a
+// newer change (another device, another switch) stays; an older daemon gives no rev, and its put-back is plain. Not read
+// either: it shows unknown (null), never the old value, and the note says to reopen Settings, which reads it again.
 export async function changeFree(on, state, write, read) {
-  const now = { ...state }, done = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
-  const known = (r) => typeof r?.on === 'boolean';
+  const now = { ...state }, done = [], left = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
+  const known = (r) => typeof r?.on === 'boolean', both = (l) => l.join(' and ');
   let note = null;
   for (const [key, want] of [['protect', !on], ...(on ? [['lock', false]] : [])]) {
     if (now[key] === want) continue;
     const w = await write(key, want), r = known(w) ? w : await read(key);
     now[key] = known(r) ? r.on : null;
-    if (now[key] === null) { note = 'Stopped: P9 did not say whether ' + names[key] + ' changed, so it shows as unknown.'; break; }
+    if (now[key] === null) { note = 'Stopped: P9 did not say whether ' + names[key] + ' changed. Reopen Settings to check.'; break; }
     if (now[key] !== want) { note = known(w) ? '' : 'Not changed: ' + (w?.error || 'P9 did not answer') + '.'; break; }
-    done.push([key, r.rev]);
+    if (known(w)) done.push([key, w.rev]); else left.push(names[key]);
   }
   if (note === null && on && !modesKnown()) note = 'Not changed: the agents\' modes changed meanwhile.';
   if (note === null) return { ok: true, state: now, note: '' };
-  const lost = [];
+  const lost = [], unsure = [];
   for (const [key, rev] of done.reverse()) {
     const w = await write(key, state[key], rev), r = known(w) ? w : await read(key);
     now[key] = known(r) ? r.on : null;
-    if (now[key] !== state[key]) lost.push(names[key]);
+    if (now[key] !== state[key]) (now[key] === null ? unsure : lost).push(names[key]);
   }
-  if (lost.length) note = (note ? note + ' ' : '') + 'Could not put back ' + lost.join(' and ') + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.';
+  const add = (more) => { note = (note ? note + ' ' : '') + more; };
+  if (left.length) add(both(left) + ' changed, but P9\'s answer was lost, so it was left as it is.');
+  if (lost.length) add('Could not put back ' + both(lost) + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.');
+  if (unsure.length) add('P9 did not say whether ' + both(unsure) + ' went back. Reopen Settings to check.');
   return { ok: false, state: now, note };
 }
 // Before GET /agents answers there are no loosened modes to check, so it reads off.

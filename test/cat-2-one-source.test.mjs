@@ -240,15 +240,24 @@ test('O267b: Unrestricted reads a write back when its reply is lost, and a put-b
     d.write = async (key, want, rev) => { d.calls.push(key + ':' + want); const r = await answer(key, want, d, rev); if (r) return r;
       if (rev === undefined || rev === d.rev[key]) d.set(key, want); return d.read(key); }; return d; };
   const start = { lock: true, protect: true };
-  // The protection write was made but its reply lost; then the lock is refused: protection is read back as off, so it is put back.
+  // The protection write was made but its reply lost; then the lock is refused. The read shows protection off but not who
+  // turned it off (another device may have), so it is shown and left as it is, never put back.
   let d = daemon((key, want, d) => { if (key === 'protect' && !want) { d.set('protect', false); return {}; } return key === 'lock' ? { error: 'refused' } : null; });
   let r = await security.changeFree(true, start, d.write, d.read);
-  assert.deepEqual([r.ok, r.state, d.protect, d.calls, r.note], [false, start, true, ['protect:false', 'lock:false', 'protect:true'], 'Not changed: refused.'], 'lost reply: read back, put back');
-  // The reply and the read both lost: the setting shows unknown, never the old value, and nothing more is written.
+  assert.deepEqual([r.ok, r.state, d.protect, d.calls], [false, { lock: true, protect: false }, false, ['protect:false', 'lock:false']], 'lost reply: read back, not put back');
+  assert.equal(r.note, 'Not changed: refused. File protection changed, but P9\'s answer was lost, so it was left as it is.');
+  // The reply and the read both lost: the setting shows unknown, never the old value, nothing more is written, and the note
+  // gives a step the user can take (reopening Settings reads it again).
   d = daemon((key, want, d) => { if (key === 'protect') { d.set('protect', false); d.readable = false; return {}; } return null; });
   r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state, d.calls], [false, { lock: true, protect: null }, ['protect:false']], 'not known: unknown');
-  assert.match(r.note, /did not say whether File protection changed/);
+  assert.match(r.note, /did not say whether File protection changed\. Reopen Settings to check\.$/);
+  assert.match(security.SECURITY.unknown, /Reopen Settings to check\./, 'the unknown row says how to check');
+  // A put-back whose reply and read are both lost: unknown, with the same step, never "set it again" on a disabled switch.
+  d = daemon((key, want, d, rev) => { if (key === 'lock') return { error: 'refused' }; if (rev) { d.set('protect', true); d.readable = false; return {}; } return null; });
+  r = await security.changeFree(true, start, d.write, d.read);
+  assert.deepEqual([r.ok, r.state], [false, { lock: true, protect: null }], 'put-back not known: unknown');
+  assert.equal(r.note, 'Not changed: refused. P9 did not say whether File protection went back. Reopen Settings to check.');
   // Another device turns protection off again (the same value, a newer change) while the lock is refused: the put-back leaves it.
   d = daemon((key, want, d) => { if (key === 'lock') { d.set('protect', false); return { error: 'refused' }; } return null; });
   r = await security.changeFree(true, start, d.write, d.read);
