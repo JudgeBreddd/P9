@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { pastedFiles, quoted, quoteFate, quoteNow, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
+import { pastedFiles, quoted, quoteFate, quoteNow, quoteSent, esc, copy, limitLine, limitLines, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, imgSrc, agentWarning, toolImages, ageOf, exitTag } from './helpers.mjs';
 import { pinned, applyCard, isReport, reportKey, SHUT, TUCK } from './pinned.mjs';
 // O109: the worker reports the user closed, kept over a restart. ponytail: one short key per closed report, never pruned; fine until thousands.
 import { strip, chip, turnKey, diffRows, diffCreated, diffDeleted } from './composer.mjs';
@@ -753,7 +753,7 @@ function paint(root, ss, only) {
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn,
     // Ctrl Enter or Interrupt (when 'now') stops the turn and sends it.
-    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; const from = !cmd && s.quotes?.length ? { draft: typed, quotes: s.quotes } : undefined; if (from) s.quotes = []; sendText(s, t, now, when, from); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
+    const go = (now, when) => { const typed = ta.value.trim(), cmd = (n => !!n && (s.commands || outer.lastCommands[s.agent] || []).some(c => c.name === n))(/^\/(\S+)/.exec(typed)?.[1]), t = cmd ? typed : quoted(s.quotes, typed); if (adding.has(s.id)) return outer.toast({ kind: 'not sent', txt: 'Still attaching a file. Send again in a moment.', level: 'warn' }, true); if (!canSend(s, t, now)) return; s.draft = ''; s.recall = null; const from = !cmd && s.quotes?.length ? { draft: typed, quotes: s.quotes } : undefined; if (from) { from.quotes.forEach(q => quoteSent.set(q, from)); s.quotes = []; } sendText(s, t, now, when, from); if (bare && outer.settings.closeOnSend) outer.closeModal(); };
     const stopTurn = () => { cancelTurn(s); outer.renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       plainPaste = !e.isComposing && e.shiftKey && (e.ctrlKey || e.metaKey) && e.code === 'KeyV' ? ta : null;
@@ -916,8 +916,8 @@ const src = (s, ev) => ({ ev, chat: s.id });
 const quote = (s, p, rect, text, raw, from, was) => { import('./quote.mjs').then(m => {
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
   if (!alive()) return;
-  m.settle(); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
-  m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
+  m.settle(was); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
+  m.quoteBox({ rect, text, raw, comment: was?.comment, edit: was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: (q, away) => { if (!outer.S.sessions.includes(s)) return; // the chat was deleted meanwhile
       const qs = s.quotes ||= [], n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat };
       const now = quoteNow(was); if (was && !now) return; // its × was clicked meanwhile: it stays gone (another edit may have replaced it)

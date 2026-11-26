@@ -1384,8 +1384,8 @@ function dropQuotes(id: string, sent: Quote[]) {
 function openQuote(id: string, rect: DOMRect, text: string, raw: string, key: string, was?: Quote) {
   import('./quote.mjs').then((m) => {
     const alive = quoteAlive(id); if (!alive()) return;
-    m.settle(); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
-    m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, back: () => one<HTMLTextAreaElement>('#prompt').focus(),
+    m.settle(was); const at = quoteNow(was); if (was && !at) return; was = at ?? undefined; // the chip as it is now
+    m.quoteBox({ rect, text, raw, comment: was?.comment, edit: was, alive, back: () => one<HTMLTextAreaElement>('#prompt').focus(),
       add: (q: { text: string; comment: string }, away?: boolean) => {
         const list = [...quotes.get(id) ?? []], n = { text: was?.text ?? q.text, comment: q.comment, key }; // a new list: a send on its way keeps its own
         const now = quoteNow(was); if (was && !now) return; // its ✕ was tapped meanwhile: it stays gone (another edit may have replaced it)
@@ -1429,10 +1429,13 @@ let attachedRead = false; // until the kept images are read back, a redraw must 
 function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
 try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
 const chipName = (q: Quote) => q.comment ? escape(q.comment.slice(0, 60)) : `“${escape(q.text.replace(/\s+/g, ' ').trim().slice(0, 40))}”`;
+// The chips' HTML as last drawn: a redraw that changes nothing keeps the buttons, so a tap or the focus on one is not lost.
+let attachedHtml = '';
 function renderAttached() {
   const list = attached.get(openId) ?? [], qs = quotes.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length && !qs.length; keepAttached();
-  box.innerHTML = qs.map((q, i) => `<span class="chip-quote" title="${escape(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><button type="button" class="quote-go" data-quote-go="${i}" aria-label="Show the reply quoted: ${chipName(q)}"><span>${chipName(q)}</span></button><button type="button" class="quote-edit" data-quote-edit="${i}" aria-label="Edit the comment on ${chipName(q)}">✎</button><button type="button" data-unquote="${i}" aria-label="Remove the quote ${chipName(q)}">✕</button></span>`).join('') + list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  const html = qs.map((q, i) => `<span class="chip-quote" title="${escape(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><button type="button" class="quote-go" data-quote-go="${i}" aria-label="Show the reply quoted: ${chipName(q)}"><span>${chipName(q)}</span></button><button type="button" class="quote-edit" data-quote-edit="${i}" aria-label="Edit the comment on ${chipName(q)}">✎</button><button type="button" data-unquote="${i}" aria-label="Remove the quote ${chipName(q)}">✕</button></span>`).join('') + list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  if (html !== attachedHtml) box.innerHTML = attachedHtml = html;
   label();
 }
 // One attach at a time per chat (paste, + sheet or drop), and no send while one runs: two at once both passed the four-file

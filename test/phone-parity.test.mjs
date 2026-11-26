@@ -1371,4 +1371,8 @@ test('A2 step 6b: quote a whole reply or a selection on the phone, as a chip wit
   await until(async () => (await box.count()) === 1 && (await box.locator('textarea').inputValue()) === 'x more again', 'the new box starts from the edit just left', 5000);
   await page.keyboard.press('Escape'); await until(async () => await box.count() === 0, 'Esc closes it', 5000);
   assert.deepEqual(await labels(), ['x more again'], 'one chip, with the edit');
+  // A redraw that leaves the chips as they were keeps their buttons (a tap between press and release is not lost).
+  await chips.first().locator('[data-quote-edit]').evaluate((b) => { b.p9same = true; });
+  await send(page, '/ping'); await said(page, 'echo:/ping'); // a command goes alone; the chip stays
+  assert.equal(await chips.first().locator('[data-quote-edit]').evaluate((b) => b.p9same), true, 'the same button after the redraw');
 });

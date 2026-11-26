@@ -192,6 +192,8 @@ export const BIG_PASTE = 5000;
 // A2 step 6: what became of a quote chip, for an edit still open and a refused send's restore (desktop and phone): edited ->
 // the chip that replaced it; removed with its ✕ -> null. quoteNow: the chip as it is now, or null if removed.
 export const quoteFate = new WeakMap();
+// quoteSent (desktop): a chip -> the send that took it from the box, so a refused send gives back only chips no later send took.
+export const quoteSent = new WeakMap();
 export const quoteNow = (q) => { while (q && quoteFate.get(q)) q = quoteFate.get(q); return q && quoteFate.get(q) === null ? null : q; };
 // A2 step 6: the quotes in the box go first in the message sent, each as a Markdown quote with its comment under it.
 export const quoted = (quotes, text) => [...(quotes || []).map(q => q.text.replace(/^/gm, '> ') + (q.comment ? '\n\n' + q.comment : '')), text].filter(Boolean).join('\n\n');

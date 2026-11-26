@@ -15,10 +15,10 @@ import { afterPress } from './press-hold.mjs';
 // the box again with its comment (comment: the text it starts with).
 const MAX = 8000;
 let shut = null, n = 0, pop = null;
-const owed = new Set();
-// Comments kept by presses outside wait for each press's click (afterPress); settle adds them at once, so a box opened
-// meanwhile for the same chip (its pencil tapped again) starts from it, not from the comment before it.
-export const settle = () => [...owed].forEach((f) => f());
+const owed = new Map(); // each comment still to be added -> the chip its box edits
+// Comments kept by presses outside wait for each press's click (afterPress); settle(chip) adds that chip's at once, so a box
+// opened meanwhile for it (its pencil tapped again) starts from it, not from the comment before it. Others wait for their press.
+export const settle = (chip) => chip && [...owed].forEach(([f, of]) => of === chip && f());
 // range: a copy of the selection it is for (cloneRange, taken when it was made), raw its text. A selection changed or
 // cleared since (Shift+arrow, the same words in another reply, or while this file loaded) gets no button, and closes it.
 // at(): where that text is now (the chat may scroll under it while a reply streams); the button follows it. view: the
@@ -48,8 +48,8 @@ export function commentButton({ range, raw, view, host = document.body, pick, al
   place(); // after the cleanup is in place: a first place() that closes stops the timer too
   return b;
 }
-// edit: the box is a chip's pencil; leaving it saves any change to the comment, a cleared one too.
-export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = false, add, host = document.body, back, alive = () => true }) {
+// edit: the chip whose pencil this box is; leaving it saves any change to the comment, a cleared one too.
+export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = null, add, host = document.body, back, alive = () => true }) {
   pop?.();
   shut?.();
   const text = whole.length > MAX ? whole.slice(0, MAX) + '…' : whole, id = 'quote-' + ++n;
@@ -78,7 +78,7 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = 
   const leave = shut = (press) => { const c = ta.value.trim(); close(); if (!(edit ? c !== comment.trim() : c)) return;
     const go = () => add({ text, comment: c }, true);
     if (!(press instanceof PointerEvent)) return go();
-    const once = () => owed.delete(once) && go(); owed.add(once);
+    const once = () => owed.delete(once) && go(); owed.set(once, edit);
     afterPress(press, once); };
   box.onsubmit = e => { e.preventDefault(); close(); if (alive()) add({ text, comment: ta.value.trim() }); };
   box.querySelector('[type=button]').onclick = () => close(true);
