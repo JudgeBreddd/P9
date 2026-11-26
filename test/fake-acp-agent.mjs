@@ -489,12 +489,20 @@ const connection = acp.connectAgent(stream, {
       setTimeout(async () => { await piece('L1', long + tail); await piece('L2', long + tail); }, 300);
       return { stopReason: 'end_turn' };
     }
-    // DUP-1 (a)/(b): claude-agent-acp's result fallback. A turn's result that reports no output tokens ends it, then the
-    // adapter forwards the result text, the reply the agent already streamed, whole under the result's own id.
-    if (text === 'twice short') {
+    // DUP-1 (a)/(b): claude-agent-acp's result fallback. A turn's result that reports no output tokens ends it, and the
+    // adapter forwards the result text, the reply the agent already streamed, whole under a new id: after the turn-end
+    // (twice short, as the server's ledger shows it) or before it (twice early, as the adapter's source orders it). Then
+    // the same words once more under S2, a reply of their own, and the marker 'twice: end'. say done: a turn whose whole
+    // reply is one short piece that an earlier turn also said.
+    if (text === 'twice short' || text === 'twice early' || text === 'say done') {
       const piece = (messageId, reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: reply } } });
-      await piece('S1', 'Done, '); await piece('S1', 'merged.');
-      setTimeout(async () => { await piece('5b0e5d55-ffc2-4f6b-9a39-2d0c0f3c6b11', 'Done, merged.'); await piece('S2', 'Done, merged.'); }, 300);
+      const copy = () => piece('5b0e5d55-ffc2-4f6b-9a39-2d0c0f3c6b11', 'Done, merged.');
+      const rest = async () => { await piece('S2', 'Done, merged.'); await piece('M', 'twice: end'); };
+      if (text === 'say done') { await piece('D1', 'Done, merged.'); await piece('M2', 'twice: end'); }
+      else {
+        await piece('S1', 'Done, '); await piece('S1', 'merged.');
+        if (text === 'twice early') { await copy(); setTimeout(rest, 300); } else setTimeout(async () => { await copy(); await rest(); }, 300);
+      }
       return { stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 } };
     }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }

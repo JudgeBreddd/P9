@@ -98,18 +98,23 @@ test('a reply the agent sends again after its turn ended is recorded once', asyn
   assert.deepEqual(next.seen.filter(said(id, '')).map((event) => event.data.content.text).filter((text) => !text.startsWith('mode:')), [], 'a copy after the turn-end was recorded');
 });
 
-// DUP-1 (a)/(b): a turn that ends with no output tokens, then its reply again whole under a new id, however short. Only
-// that first piece is the copy: the same words once more after it are a reply of their own.
-test('a short reply sent again after a turn that ended with no output tokens is recorded once', async (t) => {
+// DUP-1 (a)/(b): a reply sent again whole under a new id, however short, right after it streamed in the same turn, is
+// recorded once, whether it comes after the turn-end or before it. Only that first piece is the copy: the same words once
+// more under S2 are a reply of their own. A short reply of a later turn that an earlier one also said is kept.
+test('a short reply sent again in its own turn is recorded once; the same words in a later turn are kept', async (t) => {
   const instance = await start(t);
   const id = await create(instance);
-  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'twice short' });
-  const end = await until(instance, (event) => event.conversation === id && event.type === 'turn-end');
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
-  const next = await until(instance, said(id, 'mode:'), end.cursor);
-  assert.deepEqual(end.seen.filter(said(id, '')).map((event) => event.data.content.text), ['Done, ', 'merged.']);
-  assert.deepEqual(next.seen.filter(said(id, '')).map((event) => event.data.content.text).filter((text) => !text.startsWith('mode:')), ['Done, merged.'], 'the copy was recorded, or the reply after it was not');
+  const ids = (events) => events.filter(said(id, '')).map((event) => [event.data.messageId, event.data.content.text]);
+  let from = 0;
+  for (const mode of ['twice short', 'twice early']) {
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: mode });
+    const end = await until(instance, said(id, 'twice: end'), from);
+    assert.deepEqual(ids(end.seen), [['S1', 'Done, '], ['S1', 'merged.'], ['S2', 'Done, merged.'], ['M', 'twice: end']], mode + ': the copy was recorded, or S2 was not');
+    from = end.cursor;
+  }
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'say done' });
+  const later = await until(instance, said(id, 'twice: end'), from);
+  assert.deepEqual(ids(later.seen), [['D1', 'Done, merged.'], ['M2', 'twice: end']], 'a later turn\'s short reply was taken for a copy');
 });
 
 // phone-1: "No, keep planning" on Claude's plan approval ended the turn as an internal error on the phone and the
