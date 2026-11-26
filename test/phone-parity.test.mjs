@@ -1314,19 +1314,34 @@ test('A2 step 6b: quote a whole reply or a selection on the phone, as a chip wit
   await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('keep me');
   await page.mouse.click(195, 120); await until(async () => await box.count() === 0, 'a tap outside closes the box', 5000);
   await until(async () => await chips.count() === 3, 'the typed comment is kept as a chip', 5000);
+  // The pencil, its comment cleared, then a tap outside: the chip goes back to the quote's start.
+  await chips.nth(2).locator('[data-quote-edit]').click(); await box.waitFor({ timeout: 5000 });
+  await page.keyboard.press('Control+A'); await page.keyboard.press('Backspace');
+  await page.mouse.click(195, 120); await until(async () => await box.count() === 0, 'a tap outside closes the edit', 5000);
+  await until(async () => (await labels())[2]?.startsWith('“echo:The first'), 'a cleared comment shows the quote\'s start', 5000);
+  // A tap on a chip's ✕ while a comment is typed: the ✕ removes that chip, and the typed comment is still kept.
+  await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('late');
+  await chips.nth(2).locator('[data-unquote]').click(); await until(async () => await box.count() === 0, 'the ✕ tap closes the box', 5000);
+  await until(async () => (await labels()).join('|') === 'why this? really|“first sentence. The”|late', 'the ✕ removed its chip and the typed one was kept', 5000);
   await reply.locator('[data-quote-reply]').click(); await box.waitFor({ timeout: 5000 }); await page.keyboard.type('dropped');
   await box.getByRole('button', { name: 'Cancel' }).click(); await until(async () => await box.count() === 0, 'Cancel closes it', 5000);
   assert.equal(await chips.count(), 3, 'Cancel adds nothing');
   await chips.nth(2).locator('[data-unquote]').click(); await until(async () => await chips.count() === 2, '✕ removes a chip', 5000);
   await shot(page, 'a2-phone-chips');
-  // A tap on a chip scrolls its reply into view and marks it.
+  // A tap on a chip scrolls its reply into the chat's view and marks it.
+  const marked = () => page.evaluate(() => { const el = [...document.querySelectorAll('#events article[data-kind="agent"]')].find((a) => a.textContent.includes('echo:The first sentence')), r = el.getBoundingClientRect(), view = document.querySelector('#chatBody').getBoundingClientRect();
+    return el.classList.contains('quote-src') && r.bottom > view.top && r.top < view.bottom; });
   await page.evaluate(() => { const c = document.querySelector('#chatBody'); c.scrollTo({ top: c.scrollHeight, behavior: 'instant' }); });
   await chips.first().locator('.quote-go').click();
-  await until(() => page.evaluate(() => { const el = [...document.querySelectorAll('#events article[data-kind="agent"]')].find((a) => a.textContent.includes('echo:The first sentence')), r = el.getBoundingClientRect();
-    return el.classList.contains('quote-src') && r.bottom > 0 && r.top < innerHeight; }), 'the chip shows its reply, marked', 5000);
-  // The next message carries both quotes first, each with its comment; the chips go.
+  await until(marked, 'the chip shows its reply, marked', 5000);
+  // The next message carries both quotes first, each with its comment; the chips go. The mark, taken off by hand just
+  // before, is put back by the redraw the send brings (it lasts 1.6 s from the tap).
   posts.length = 0;
-  await send(page, 'and this'); await said(page, 'echo:> echo:The first sentence.');
+  await chips.first().locator('.quote-go').click(); await until(marked, 'a second tap marks it again', 1000);
+  await page.evaluate(() => document.querySelector('#events .quote-src').classList.remove('quote-src'));
+  await send(page, 'and this');
+  await until(() => page.evaluate(() => !!document.querySelector('#events .quote-src')), 'a redraw keeps the mark', 1400);
+  await said(page, 'echo:> echo:The first sentence.');
   assert.equal(posts.at(-1), '> echo:The first sentence. The second sentence.\n\nwhy this? really\n\n> first sentence. The\n\nand this');
   await until(async () => await chips.count() === 0, 'the sent quotes leave the box', 5000);
   assert.equal(await page.inputValue('#prompt'), '');

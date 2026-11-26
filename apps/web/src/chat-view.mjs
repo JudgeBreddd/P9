@@ -917,7 +917,7 @@ const quote = (s, p, rect, text, raw, from, was) => { import('./quote.mjs').then
   const ta = () => p.querySelector('.composer textarea'), alive = aliveIn(s, p);
   if (alive()) m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, host: p.closest('dialog') || document.body, back: () => ta()?.focus(),
     add: (q, away) => { if (!outer.S.sessions.includes(s)) return; // the chat was deleted meanwhile
-      const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat }; if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
+      const qs = s.quotes ||= [], i = qs.indexOf(was), n = { ...q, ...(was ? { text: was.text } : {}), ev: from.ev, chat: from.chat }; if (was && i < 0) return; /* its chip was removed meanwhile: it stays gone */ if (i >= 0) qs[i] = n; else qs.push(n); renderChats(); if (!away) ta()?.focus(); } });
 }, () => outer.toast({ kind: 'chat', txt: 'The quote box did not load. Select the text again.', level: 'bad' }, true)); };
 // A selection in a reply shows a small Comment button beside it (the selection stays, so Copy works); the button opens the box.
 const commentOn = (s, p, view, range, text, raw, from) => import('./quote.mjs').then(m => {

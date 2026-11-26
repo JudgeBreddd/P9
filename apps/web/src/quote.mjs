@@ -55,13 +55,23 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = 
   const ta = box.querySelector('textarea'), ac = new AbortController();
   ta.value = comment;
   host.append(box);
-  const h = box.offsetHeight, w = box.offsetWidth;
-  box.style.left = Math.max(8, Math.min(rect.left, innerWidth - w - 8)) + 'px';
-  box.style.top = (rect.bottom + 4 + h <= innerHeight - 8 ? rect.bottom + 4 : Math.max(8, rect.top - 4 - h)) + 'px';
+  // Against the visible part of the page: a phone's keyboard shrinks it, so the box moves up with it (review: Comment and
+  // Cancel could end below the keyboard).
+  const place = () => { const v = window.visualViewport, top = v ? v.offsetTop : 0, bottom = v ? v.offsetTop + v.height : innerHeight, h = box.offsetHeight, w = box.offsetWidth;
+    box.style.left = Math.max(8, Math.min(rect.left, innerWidth - w - 8)) + 'px';
+    box.style.top = Math.max(top + 8, Math.min(rect.bottom + 4 + h <= bottom - 8 ? rect.bottom + 4 : rect.top - 4 - h, bottom - 8 - h)) + 'px'; };
+  place();
   const close = (refocus) => { ac.abort(); box.remove(); if (shut === leave) shut = null; if (refocus) back?.(); };
+  window.visualViewport?.addEventListener('resize', place, { signal: ac.signal }); window.visualViewport?.addEventListener('scroll', place, { signal: ac.signal });
   // Leaving without Comment (another focus mode or chat, a click outside, another box): a comment typed is kept, as the chip
   // (the owner, 2026-11-25: keep it as the chip, to finish with the pencil). away: the reader went elsewhere, so the message box does not take the focus. Cancel and Esc drop it.
-  const leave = shut = () => { const c = ta.value.trim(); close(); if (edit ? c !== comment.trim() : c) add({ text, comment: c }, true); };
+  // tap: left by pressing outside; the chip is added once that press ends (review: adding it on the press redrew what was
+  // pressed, so Stop could become Send, and a chip's pencil or x did nothing).
+  const leave = shut = (tap) => { const c = ta.value.trim(); close(); if (!(edit ? c !== comment.trim() : c)) return;
+    const go = () => add({ text, comment: c }, true);
+    if (tap !== true) return go();
+    const after = new AbortController(), run = () => { after.abort(); setTimeout(go, 0); };
+    for (const k of ['pointerup', 'pointercancel']) document.addEventListener(k, run, { capture: true, signal: after.signal }); };
   box.onsubmit = e => { e.preventDefault(); close(); if (alive()) add({ text, comment: ta.value.trim() }); };
   box.querySelector('[type=button]').onclick = () => close(true);
   box.onkeydown = e => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(true); } };
@@ -72,7 +82,7 @@ export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = 
   // Tab or a shortcut taking the focus out (to another chat, say) closes it as a click outside does.
   box.addEventListener('focusout', e => { if (e.relatedTarget && !box.contains(e.relatedTarget)) leave(); }, { signal: ac.signal });
   const watch = setInterval(() => alive() || leave(), 200); ac.signal.addEventListener('abort', () => clearInterval(watch));
-  document.addEventListener('pointerdown', e => { if (!box.contains(e.target)) leave(); }, { capture: true, signal: ac.signal });
+  document.addEventListener('pointerdown', e => { if (!box.contains(e.target)) leave(true); }, { capture: true, signal: ac.signal });
   ta.focus(); ta.setSelectionRange(comment.length, comment.length);
   return box;
 }

@@ -1213,7 +1213,7 @@ async function submitFromBox(event: Event) {
   const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
   // A2 step 6b: the chat's quotes go first, each with its comment (helpers.mjs quoted). A slash command goes as typed and
   // its quotes stay for the next message. ponytail: any text starting with / counts as a command here.
-  const typed = (art ?? input.value).trim(), qs = art === null && !typed.startsWith('/') ? quotes.get(id) ?? [] : [];
+  const typed = (art ?? input.value).trim(), qs = art === null && !typed.startsWith('/') ? [...quotes.get(id) ?? []] : []; // a copy: the list can change while this is on its way
   // O21: Stop only when the box is empty at the tap. data-stop is from the last redraw, and text can reach the box with
   // no input event (a keyboard's own insert, dictation): that tap then stopped the turn, or did nothing, and sent nothing.
   if (id && submitter?.dataset.stop === 'true' && art === null && !input.value.trim() && !images.length && !qs.length) {
@@ -1275,7 +1275,7 @@ async function submitFromBox(event: Event) {
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
     if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
+    else { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }]); spend(id, picked, sentPids); if (typed) editDraft(id, (now) => now.replace(typed, '').trim()); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
   }
   else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
 }
@@ -1386,7 +1386,8 @@ function openQuote(id: string, rect: DOMRect, text: string, raw: string, key: st
     const alive = quoteAlive(id); if (!alive()) return;
     m.quoteBox({ rect, text, raw, comment: was?.comment, edit: !!was, alive, back: () => one<HTMLTextAreaElement>('#prompt').focus(),
       add: (q: { text: string; comment: string }, away?: boolean) => {
-        const list = quotes.get(id) ?? [], n = { text: was?.text ?? q.text, comment: q.comment, key }, i = was ? list.indexOf(was) : -1;
+        const list = [...quotes.get(id) ?? []], n = { text: was?.text ?? q.text, comment: q.comment, key }, i = was ? list.indexOf(was) : -1; // a new list: a send on its way keeps its own
+        if (was && i < 0) return; // its chip was removed meanwhile (its ✕ tapped while the pencil was open): it stays gone
         if (i >= 0) list[i] = n; else list.push(n);
         quotes.set(id, list); if (id === openId) { renderAttached(); label(); if (!away) one<HTMLTextAreaElement>('#prompt').focus(); }
       } });
@@ -1398,8 +1399,12 @@ function openQuote(id: string, rect: DOMRect, text: string, raw: string, key: st
 // second tap restarts it.
 const keyed = (key: string) => [...one('#events').children as HTMLCollectionOf<HTMLElement>].find((el) => el.dataset.key === key);
 function showQuoted(q: Quote) {
-  let el = keyed(q.key); if (!el && hiddenBlocks > 0 && hiddenBlocks <= 600) { windowSize += hiddenBlocks; render(); el = keyed(q.key); }
-  if (!el) { note(hiddenBlocks > 600 ? 'The reply this quote came from is too far up to jump to.' : 'The reply this quote came from is not on screen any more.'); return; }
+  let el = keyed(q.key);
+  // Not drawn: as many earlier blocks as reach it, up to 600 more.
+  const all = el || !openId ? [] : itemsOf(build(openId).blocks), at = all.findIndex((item) => item.key === q.key), need = at < 0 ? 0 : all.length - at;
+  if (!el && need > windowSize && need - windowSize <= 600) { windowSize = need; render(); el = keyed(q.key); }
+  if (!el) { note(need - windowSize > 600 ? 'The reply this quote came from is too far up to jump to.' : 'The reply this quote came from is not on screen any more.'); return; }
+  if (mark && mark.key !== q.key) keyed(mark.key)?.classList.remove('quote-src'); // the last jump's mark goes with it
   const m = mark = { key: q.key }; window.setTimeout(() => { if (mark === m) { mark = null; keyed(m.key)?.classList.remove('quote-src'); } }, 1600);
   el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.classList.remove('quote-src'); void el.offsetWidth; el.classList.add('quote-src');
 }
