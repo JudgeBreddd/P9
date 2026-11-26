@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 
 export const SCHEDULE_TEXT_MAX = 4000, SCHEDULES_MAX = 20, EVERY_MIN = 1, EVERY_MAX = 7 * 24 * 60; // minutes
-const MINUTE = 60_000, CHECK_MS = 60_000; // the timer is armed at most a minute ahead, so a changed clock is caught
+const MINUTE = 60_000, CHECK_MS = 60_000, AGAIN_MS = 10_000; // the timer is armed at most a minute ahead, so a changed clock is caught
 
 export function createSchedules({ db, fire, now = () => Date.now() }) {
   db.exec(`CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, owner TEXT NOT NULL, chat TEXT NOT NULL, text TEXT NOT NULL,
@@ -36,6 +36,9 @@ export function createSchedules({ db, fire, now = () => Date.now() }) {
           db.prepare('UPDATE schedules SET next = ? WHERE id = ?').run(row.next + missed * step, row.id);
         } else db.prepare('DELETE FROM schedules WHERE id = ?').run(row.id);
         const sent = await Promise.resolve(fire(row)).catch((error) => ({ error: error?.message ?? 'send-failed' }));
+        // O141 review 4: again, a refusal that sent nothing and may not hold for long (a sprint being closed): a once
+        // prompt comes back AGAIN_MS later, so it is not lost if that passes (a Close that failed).
+        if (sent?.again && !row.every) db.prepare('INSERT INTO schedules (id, owner, chat, text, every, next, paused) VALUES (?, ?, ?, ?, NULL, ?, 0)').run(row.id, row.owner, row.chat, row.text, now() + AGAIN_MS);
         const last = new Date(now()).toISOString() + ' ' + (sent?.error ? 'not sent: ' + sent.error + (sent.reason ? ' (' + sent.reason + ')' : '') : typeof sent?.sent === 'string' ? sent.sent : 'sent');
         db.prepare('UPDATE schedules SET last = ? WHERE id = ?').run(last, row.id);
       }

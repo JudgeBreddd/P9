@@ -251,8 +251,9 @@ export function createDelegate({ chat, allowed, usage }) {
   // A closed sprint starts no more chats (SECURITY.md § Close sprint): the caller or a chat above it is a closed sprint's lead.
   // O141 review 2: what a scheduled prompt may not wake or be set from: a chat of a sprint closed, or being closed (marked
   // once the owner allowed Close, before it waits on any Stop, so a schedule due meanwhile cannot restart a stopped worker).
+  // Review 4: only being closed is again: a once prompt due then is tried later (schedules.mjs), so a Close that fails keeps it.
   const closing = new Set();
-  const asleep = (id) => { for (let at = id, n = 0; at && n < 8; at = chat.info(at)?.parent, n += 1) if (closing.has(at) || chat.projects.closed(at)) return { error: 'sprint-closed', detail: 'That chat is in a closed sprint: nothing scheduled wakes it.' }; return null; };
+  const asleep = (id) => { for (let at = id, n = 0; at && n < 8; at = chat.info(at)?.parent, n += 1) if (closing.has(at) || chat.projects.closed(at)) return { error: 'sprint-closed', detail: 'That chat is in a closed sprint: nothing scheduled wakes it.', ...(!chat.projects.closed(at) && { again: true }) }; return null; };
   const shutFor = (caller) => { for (let id = caller, n = 0; id && n < 8; id = chat.info(id)?.parent, n += 1) if (chat.projects.closed(id)) return { error: 'sprint-closed', detail: 'This sprint is closed: it starts no more chats.' }; return null; };
   async function openChat(caller, args, signal, opts = {}) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };

@@ -90,8 +90,9 @@ const LEAD = 'Watching plan use is part of leading this sprint: a window that hi
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
   + '"Usage watch: call plan_usage. If a window your workers use has pace ahead and projected over 100 (its reading not stale), hold your '
   + 'least-advanced running worker not held yet: send it, as steer, Finish the step you are on, write a Next line in your notes, end your '
-  + 'turn, and wait until I resume you. A steer can wait in its queue until that turn ends, so it is held only once wait_chat on it (a short '
-  + 'timeoutMs) returns idle after your message; working or a timeout is not yet: on each watch, check every hold not yet confirmed. When every window is back to on or headroom, resume every '
+  + 'turn, and wait until I resume you. A steer can wait in its queue until that turn ends, or be dropped with it, so it is held only once '
+  + 'the worker answers it: read_chat on it shows a reply after your message saying it is holding. Idle, working or a timeout is not yet: on '
+  + 'each watch, check every hold not yet confirmed, and send it again to one idle without that reply. When every window is back to on or headroom, resume every '
   + 'worker you held, not only the last. Keep each held chat id, with the numbers, under ## Usage watch in sprint.md: a line when you hold '
   + 'it, its confirmation, and its resume."\n'
   + '- A stale reading is no reason to hold: note it and wait for the next one.\n';
