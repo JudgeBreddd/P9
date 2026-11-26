@@ -459,25 +459,30 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // under that reply's id after the reply was over, or opens a new id and is 200 characters or more (no first piece
   // of a stream is a whole long reply; a short one may be a new reply that says the same). A reply is over at its
   // turn's end, at the next message sent, at a compaction, or when another reply starts.
-  // DUP-1 (a)/(b), claude-agent-acp 0.106.0 (v1/acp-agent.js, shouldForwardResult): when a turn's result reports no
-  // output tokens and the adapter thinks the turn showed no text, it forwards the result text, the reply already
-  // streamed, under the result's own id. So the first new piece after a turn-end with no output tokens is a copy at any
-  // length (empty, cleared by the next message or the next new piece).
+  // DUP-1 (a)/(b): a short copy under a new id. Both on the server since 2026-11-13 (85 and 115 characters) came within
+  // half a second of their reply's last piece, in the same turn (no message sent between), next to a turn-end with no
+  // usage: claude-agent-acp's result fallback (v1/acp-agent.js shouldForwardResult) forwarding the reply it had streamed.
+  // So a piece that opens a new id and is exactly a reply of this turn streamed in pieces, within COPY_MS of that
+  // reply's last piece, is its copy at any length, before or after the turn-end. Only once per reply: the same words
+  // again after that are a reply of their own. A reply of an earlier turn is never matched this way, however short.
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
-  // reply, or of a short reply under a new id is recorded.
+  // reply, or of a short reply under a new id in a later turn or more than COPY_MS later is recorded.
+  const COPY_MS = 5000;
   const repeated = (session, update) => {
-    const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over;
+    const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over, at = Date.now();
     if (update?.sessionUpdate === 'compaction_update') { if (open) open.over = true; return false; }
     if (update?.sessionUpdate !== 'agent_message_chunk') return false;
     // A piece that is not text (an image, a link) belongs to its reply like any other; a reply that has one is never
     // taken for a copy's original.
     const id = update.messageId, text = typeof update.content?.text === 'string' ? update.content.text : null;
     if (typeof id !== 'string') { if (open) open.over = true; return false; }
-    if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; } return false; }
-    const copy = text !== null && heard.some((m) => !m.mixed && m.parts > 1 && m.text === text && (m.id === id || text.length >= 200 || heard.empty));
-    heard.empty = false;
+    if (going && open.id === id) { if (text === null) open.mixed = true; else { open.text += text; open.parts += 1; open.at = at; } return false; }
+    const same = (m) => !m.mixed && m.parts > 1 && m.text === text;
+    const fresh = text !== null && heard.find((m) => same(m) && m.id !== id && !m.copied && m.turn === (heard.turn ?? 0) && at - m.at < COPY_MS);
+    if (fresh) fresh.copied = true;
+    const copy = Boolean(fresh) || (text !== null && heard.some((m) => same(m) && (m.id === id || text.length >= 200)));
     // A copy under a new id still opens that id: whatever follows under it is a reply streaming, and is kept.
-    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, ...(text === null && { mixed: true }) });
+    if (!copy || open?.id !== id) heard.push({ id, text: text ?? '', parts: 1, at, turn: heard.turn ?? 0, ...(text === null && { mixed: true }) });
     if (heard.length > 20) heard.shift();
     return copy;
   };
@@ -539,7 +544,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     } else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
     if (type === 'turn-end' || type === 'user') { // repeated(), below
       const heard = live.get(conversation)?.heard;
-      if (heard?.length) { heard.at(-1).over = true; heard.empty = type === 'turn-end' && data.usage?.outputTokens === 0; }
+      if (heard?.length) heard.at(-1).over = true;
+      if (heard && type === 'user') heard.turn = (heard.turn ?? 0) + 1; // a message sent: what follows is another turn's
     }
     try { ledger.append(conversation, type, data, measured.get(data)); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
