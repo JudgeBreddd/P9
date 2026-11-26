@@ -95,6 +95,8 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // for a model's own window, runs that model; each hold keeps its window, and only a fresh reading of that window resumes it;
 // Review 10: a reset is a later resetsAt (a usedPercent can be corrected down inside one window), and a worker with a hold
 // still unanswered gets no second one (the lead keeps one held ID a worker).
+// Review 11: a hold is sent again only while its window still calls for one, replacing the one kept (so a hold still
+// queued at a turn's end is replaced, not doubled), and a new window that is already running hot resumes no one.
 // a hold that went straight into the turn has no held ID, so its carry-on goes without replaces.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
   + '- At your first turn, call list_schedules. With no usage watch there, call schedule_prompt to yourself every 10 minutes with this text: '
@@ -107,9 +109,11 @@ const LEAD = 'Watching plan use is part of leading this sprint: a window that hi
   + 'before you send it, read_chat on the worker and keep that answer\'s next cursor with the held chat id, the window (provider and fiveHour, '
   + 'sevenDay or the model name) and its usedPercent and resetsAt, and keep the held ID send_chat returns if the steer waits. On each watch, read_chat '
   + 'from that cursor (after), following next while more is true, for the reply; keep that cursor until you have read the whole reply. Idle, '
-  + 'working or a timeout is not yet: send the hold again to one idle without that reply, the same way (read_chat first, keep its next). A '
+  + 'working or a timeout is not yet. Send the hold again only to one idle without that reply, and only while that window\'s latest reading still calls '
+  + 'for a hold, the same way (read_chat first, keep its next), with replaces set to its held ID when you kept one (a hold still waiting is then '
+  + 'replaced, not doubled); keep the held ID and cursor of the new one in place of the old. A '
   + 'held worker\'s window is back when a reading of it taken after the hold (asOf later, not stale) has pace on or headroom, or a resetsAt later than the one you kept (the window reset; a lower usedPercent '
-  + 'alone is a corrected reading, not a reset); other windows do not matter to it, and a pace of null alone is not back. Then, if its hold has no reply '
+  + 'alone is a corrected reading, not a reset) and that reading is not itself pace ahead with projected over 100; other windows do not matter to it, and a pace of null alone is not back. Then, if its hold has no reply '
   + 'yet, send it, as steer, Usage is back: carry on, with replaces set to its held ID (without replaces when send_chat gave no held ID: the '
   + 'steer went into its turn; a hold already delivered gets it as a new message, which resumes it); then resume every worker you held whose '
   + 'window is back, not only the last. Keep each held chat id, with its window and the numbers, under ## Usage watch in sprint.md: a line '
