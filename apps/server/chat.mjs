@@ -1843,7 +1843,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // (a lead's send_chat, a reviewer wake, the messages that waited for a turn's end): each is kept, in order, for
       // Resume. The owner's own message goes through (holding it would look like a dead chat),
       // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
-      const pausing = (from || mixed.has(body)) && !notes.has(body) && pausedOf(conversation.parent);
+      // O141: a worker its lead holds (paused:<worker>, pause_sprint with chat) keeps them the same way; its sprint's pause first.
+      const pausedAt = (from || mixed.has(body)) && !notes.has(body) ? [conversation.parent, id].find((k) => pausedOf(k)) : undefined;
+      const pausing = pausedAt && pausedOf(pausedAt);
       const bare = commands.has(body);
       if (pausing) {
         release();
@@ -1859,7 +1861,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try {
           if (origin) setResuming(origin.lead, resumingOf(origin.lead).filter((i) => i.id !== origin.id));
           if (held?.length) settleResumed(held);
-          setPaused(conversation.parent, [...pausing, item]);
+          setPaused(pausedAt, [...pausing, item]);
           db.exec('COMMIT');
         } catch (error) { db.exec('ROLLBACK'); throw error; }
         crashAt('pause-write');

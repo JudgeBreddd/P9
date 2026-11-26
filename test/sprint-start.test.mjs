@@ -158,7 +158,7 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
   // ...and they reach the lead with its first message, as approved, with the check it schedules for itself.
   // (the fake agent logs P9's start block to start.log in the folder the chat runs in)
   const opening = fs.readdirSync(ws, { recursive: true }).filter((f) => path.basename(f) === 'start.log').map((f) => fs.readFileSync(path.join(ws, f), 'utf8')).join('\n');
-  // Review 12 (13): one phrase a rule, so taking any rule out of LEAD fails here by name.
+  // Review 12 (13, 14b): one phrase a rule, so taking any rule out of LEAD fails here by name.
   const rules = {
     'the text is the owner\'s, approved': 'your instructions, approved by the user',
     'one watch, looked for first': 'At your first turn, call list_schedules. With no usage watch there',
@@ -171,27 +171,24 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
     'a model window needs the model': 'for a window under models, its model names that family',
     'no plan or another model: never held': 'a plan of null, or a model that does not name the family (default included), draws on none',
     'unsure: never held': 'and if you cannot tell, it does not',
-    'one hold a worker': 'Each worker has at most one hold of yours',
-    'each hold kept in sprint.md': 'kept under ## Usage watch in sprint.md with its chat id, the window, the cursor and whether it is sent or held',
-    'never replaces': 'Never send a hold or a carry-on with replaces',
-    'paused: no hold settled': 'Each hold still sent: while list_chats gives its worker paused, its sprint is paused: leave the hold as sent',
-    'settled only when idle': 'wait_chat on the worker with timeoutMs 0, and while it is working leave it',
-    'read once idle, every page': 'Once it is idle, read_chat from the cursor (after), following next while more is true',
-    'held only on its own reply': 'if a reply of the worker\'s own there says Holding for usage, it is held',
-    'its text alone is dropped': 'if not (your text there alone is not enough), the hold was dropped: forget it',
-    'resume checks every window it draws on': 'A held worker is back when its plan\'s reading is there, not stale,',
+    'held is P9\'s flag': 'A worker is held when list_chats gives it held: true: P9 starts no turn for it until you release it',
+    'each hold kept with its window': 'keep each worker you hold with its chat id and the window it was held for',
+    'paused: do nothing': 'While list_chats gives your workers paused, your sprint is paused: do nothing this watch',
+    'not held any more: forget': 'Each worker kept there that list_chats no longer gives held: forget it',
+    'release checks its reading': 'One still held is back when its plan\'s reading is there, not stale,',
     'the held-for window decides': 'the window it was held for is in it, and every window it draws on',
-    'resume needs a projected': 'has a projected and does not call for a hold',
-    'the resume is a carry-on steer': 'Send it, as steer, Usage is back: carry on',
-    'a refused carry-on keeps the hold': 'If send_chat answers with an error, keep the hold for the next watch; otherwise forget it',
-    'resume every one back': 'Do this for every held worker that is back',
-    'hold the least-advanced, one not held': 'For each window that calls for a hold, take the least-advanced running worker that draws on it and has no hold of yours',
-    'cursor taken before the send': 'Just before you send, read_chat on it and keep that answer\'s next as the cursor',
-    'the hold asks it to stop and reply': 'Send it, as steer, Finish the step you are on, write a Next line in your notes, reply Holding for usage, end your turn, and wait until I resume you',
-    'a refused send is no hold': 'If send_chat answers with an error, nothing was sent: keep no hold',
-    'any other answer is a hold sent': 'Otherwise keep it as sent',
-    'every step logged': 'Log each hold, each one held or dropped, and each resume under ## Usage watch',
-    'stale is no reason either way': 'A stale reading is no reason to hold or to resume',
+    'release needs a projected': 'has a projected and does not call for a hold',
+    'carry-on first, release every one back': 'For every one back, send it Usage is back: carry on',
+    'the carry-on voids a raced note': 'any note before this to end your turn for usage no longer applies',
+    'a refused carry-on keeps the hold': 'If send_chat answers with an error, leave it held for the next watch',
+    'release is resume_sprint with chat': 'otherwise call resume_sprint with its chat and forget it',
+    'hold the least-advanced working one, not held': 'take the least-advanced worker that draws on it, that list_chats gives working and not held',
+    'the hold is pause_sprint with chat': 'and call pause_sprint with its chat',
+    'a refused hold is no hold': 'If that answers with an error, keep nothing',
+    'then a note asks it to stop': 'Otherwise keep it, and send it as a note',
+    'the note: finish the step and end the turn': 'finish the step you are on, write a Next line in your notes and end your turn',
+    'every step logged': 'Log each hold and each release under ## Usage watch',
+    'stale is no reason either way': 'A stale reading is no reason to hold or to release',
   };
   for (const [rule, said] of Object.entries(rules))
     assert.ok(opening.includes(said), 'the lead\'s first message lacks the rule "' + rule + '": ' + said + '\n' + opening.slice(0, 600));

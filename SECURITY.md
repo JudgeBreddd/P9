@@ -1483,6 +1483,14 @@ migration spec S13).
   phone sends nothing if that phone was signed out or revoked meanwhile (until a P9 restart, which forgets that check).
   Pause and Resume each send the lead one notice: a note by default, a message when Settings > Notices sets that kind
   to message (O197).
+- **Holding one worker (O141).** The lead may hold one worker it started, alone: `pause_sprint` with `chat`. P9 keeps
+  that worker's messages the same way (the same kept list, under the worker's ID, in the ledger, at most 100) and
+  `list_chats` gives it `held: true`. `resume_sprint` with `chat` releases it and sends what was kept, as Resume does.
+  Only the worker's own lead can hold or release it, never while the agent lock is on, and never a worker that leads a
+  sprint of its own. No pause or resume script runs and no notice is sent. A paused sprint keeps its messages first; on
+  its Resume a held worker's messages wait on for its release. The lead's usage watch holds a worker this way when plan
+  use runs high. A message you type into a held worker still goes through. Nothing but its lead releases it, and Close
+  stops it either way.
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Standing merge

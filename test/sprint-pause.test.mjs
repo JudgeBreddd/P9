@@ -288,3 +288,54 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.equal(got.reason ?? got.error, 'sprint-paused-full', JSON.stringify(got));
   console.log('PASS Pause sprint: held in order across a restart, resumed with senders; note and owner pass; ask_chat, open_chat, start_sprint refused; lock; senders\' mode now; a restart mid-Resume loses and repeats nothing, queued behind a running turn too; cap 100');
 });
+
+// O141 (review 14b): a lead holds one worker it started (pause_sprint with chat): P9 starts no turn for it on what agents
+// send (kept, as under Pause), list_chats says held, the other worker goes on, and resume_sprint with chat delivers it.
+test('Hold one worker: a held worker starts no turn for the lead\'s message, list_chats says held, its peer goes on, and release delivers what was kept', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await until(instance, (e) => e.conversation === first && e.data?.content?.text?.startsWith('config:'));
+  const prep = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'P1' })).body, sprint = prep.sprint;
+  const row = (key, model, effort) => ({ key, provider: 'claude', model, effort });
+  fs.writeFileSync(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [row('lead', 'opus', 'high'), row('w1', 'haiku', 'low'), row('w2', 'haiku', 'low')] }));
+  for (const key of ['lead', 'w1', 'w2']) fs.writeFileSync(path.join(prep.folder, `roles/${key}.work.md`), 'mcp');
+  const press = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  const id = Object.fromEntries(press.body.chats.map((c) => [c.key, c.chat]));
+  const lead = await attach(t, instance, sprint), w1 = await attach(t, instance, id.w1);
+  for (const w of [id.w1, id.w2]) for (;;) { if (!(await lead.tool('wait_chat', { chat: w })).timedOut) break; }
+  const turns = async (chat, text) => (await events(instance, chat)).filter((e) => e.type === 'user' && e.data.text?.includes(text));
+  const listed = async () => Object.fromEntries((await lead.tool('list_chats')).chats.map((c) => [c.id, [c.held ?? false, c.paused ?? false]]));
+
+  // Only the lead holds, and only a worker it started.
+  assert.equal((await w1.tool('pause_sprint', { chat: id.w2 })).error, 'not-a-sprint-lead');
+  assert.equal((await lead.tool('pause_sprint', { chat: first })).error, 'chat-not-found', 'a chat the lead did not start was held');
+  assert.deepEqual(await lead.tool('pause_sprint', { chat: id.w1 }), { held: true });
+  assert.deepEqual(await lead.tool('pause_sprint', { chat: id.w1 }), { held: true, already: true });
+  let seen = await listed();
+  assert.deepEqual([seen[id.w1], seen[id.w2]], [[true, false], [false, false]], 'list_chats: only w1 is held, and the sprint is not paused');
+
+  // The lead's message to the held worker is kept and starts no turn; a note still arrives; the peer takes its message.
+  const kept = await lead.tool('send_chat', { chat: id.w1, text: 'hold-one' });
+  assert.ok(kept.held, 'the held worker took the lead\'s message: ' + JSON.stringify(kept));
+  assert.equal(kept.sent, 'kept until its sprint resumes or its lead releases it');
+  assert.match((await lead.tool('send_chat', { chat: id.w1, text: 'a note', when: 'note' })).sent, /^as a note/);
+  assert.equal((await lead.tool('send_chat', { chat: id.w2, text: 'free-one' })).error, undefined);
+  await until(instance, (e) => e.conversation === id.w2 && e.data?.content?.text?.includes('free-one'));
+  await pause(1500);
+  assert.deepEqual(await turns(id.w1, 'hold-one'), [], 'a held worker started a turn');
+
+  // Release: what was kept goes out with its sender, and the flag goes.
+  assert.deepEqual(await lead.tool('resume_sprint', { chat: id.w1 }), { held: false, sent: 1 });
+  await until(instance, (e) => e.conversation === id.w1 && e.data?.content?.text?.includes('hold-one'));
+  assert.deepEqual((await turns(id.w1, 'hold-one')).map((e) => e.data.from), [sprint]);
+  seen = await listed();
+  assert.deepEqual(seen[id.w1], [false, false], 'the released worker still says held');
+  assert.deepEqual(await lead.tool('resume_sprint', { chat: id.w1 }), { held: false, already: true });
+  console.log('PASS O141 hold one worker: kept while held, peer ran, note passed, release delivered in order with its sender');
+});
