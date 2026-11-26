@@ -465,6 +465,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // of its last piece (the two short ones 85 and 115 characters); 112 others (limit notices, command output) repeat none.
   // So a piece under a uuid that is exactly a reply streamed under an id that is not one, within COPY_MS of its last
   // piece, is its copy at any length, once per reply. Words said again under any other id are a reply of their own.
+  // Review 3: the adapter also sends a command's own output under a uuid, but only in answer to a new prompt, and the
+  // fallback copies the reply of its own prompt. So a prompt sent to the agent ends every earlier reply's chance of a copy
+  // (copied, at the send below): output that matches a reply from before that prompt is kept. A steer goes through
+  // _session/steering, not a prompt, so the turn it joins keeps its copy rule.
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
   // reply, or of a short reply under an id that is not a uuid or more than COPY_MS later is recorded.
   const COPY_MS = 5000, UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1998,7 +2002,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (content?.length && session.turn === turn && live.get(id) === session) emit(id, 'update', { sessionUpdate: 'tool_call', toolCallId: 'p9-shell-' + turn, title: 'Shell edits', kind: 'edit', status: 'completed', content, locations: content.map((c) => ({ path: c.path })) });
       });
       // The snapshot is taken before the prompt goes, so the agent's first write is never in it.
-      new Promise((resolve) => resolve(shellFrom.then(() => (session.cut === turn ? { stopReason: 'cancelled' } : session.agent.prompt({ sessionId: session.sessionId, prompt }))))).then(
+      new Promise((resolve) => resolve(shellFrom.then(() => (session.cut === turn ? { stopReason: 'cancelled' } : (session.heard?.forEach((m) => { m.copied = true; }), session.agent.prompt({ sessionId: session.sessionId, prompt })))))).then(
         (result) => shellEdits().then(() => result), (error) => shellEdits().then(() => { throw error; }),
       ).then(
         done,

@@ -505,6 +505,12 @@ const connection = acp.connectAgent(stream, {
       }
       return { stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 0 } };
     }
+    // DUP-1 review 3: a command's own output, which the adapter sends under a uuid too, saying what the last reply said.
+    if (text === 'command result') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: '0c6a4f0e-3d4b-4b8e-9a51-7c2e1f9d3a20', content: { type: 'text', text: 'Done, merged.' } } });
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'M3', content: { type: 'text', text: 'twice: end' } } });
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     // Works until a file named go is in its folder, then ends on its own: messages queued meanwhile go when it ends.
     if (text === 'gate') { await say('gating'); while (!existsSync('go')) await new Promise((resolve) => setTimeout(resolve, 20)); await say('gated'); return { stopReason: 'end_turn' }; }
