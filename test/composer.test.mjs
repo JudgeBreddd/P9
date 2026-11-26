@@ -886,6 +886,26 @@ test('O266: a tool call sent again after a compaction keeps its one finished row
 
 // O266 review: the first call outside the newest 200 blocks a reloaded window loads, its second inside them. Show earlier
 // brings the first's page: still one row, where the call first ran, finished.
+test('O266 review 3: Show earlier keeps the first run\'s diff for a file the repeat names without one, and adds a streamed piece to its output', { timeout: 120000 }, async (t) => {
+  const { page, pane, send, errors } = await setup(t, 'o266-files');
+  await send('toolrepeat files');
+  await pane.locator('.msg.agent', { hasText: 'after repeat files' }).waitFor({ timeout: 30000 });
+  await page.reload();
+  const fresh = page.locator('.pane .hist').filter({ hasText: 'after repeat files' }).first();
+  await fresh.waitFor({ timeout: 30000 });
+  await fresh.locator('[data-earlier]').click();
+  await fresh.locator('details.tool', { hasText: 'step 0' }).waitFor({ timeout: 15000 });
+  const rows = fresh.locator('details.tool', { hasText: 'repeat edit' });
+  assert.equal(await rows.count(), 1, 'one row for the call');
+  assert.match(await rows.first().textContent(), /first run output and a streamed piece/, 'the streamed piece is added to the first run\'s output, not put in its place');
+  await page.locator('.pane [data-chat-files]').first().click();
+  await page.locator('#side .cf-tabs [role=tab]').nth(1).dispatchEvent('click'); // a card in this window's corner covers the tab
+  const item = page.locator('#side .cf-item[data-cf-file]', { hasText: 'kept.md' });
+  await item.waitFor({ timeout: 8000 });
+  assert.match(await item.textContent(), /\+1 −1/, 'the file keeps the first run\'s diff: ' + await item.textContent());
+  assert.deepEqual(errors, [], 'no page errors');
+});
+
 test('O266: Show earlier across a compaction still draws the call once, finished, where it first ran', { timeout: 120000 }, async (t) => {
   const { page, pane, send, errors } = await setup(t, 'o266-earlier');
   await send('toolrepeat far');

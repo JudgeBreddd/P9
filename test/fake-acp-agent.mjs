@@ -387,6 +387,20 @@ const connection = acp.connectAgent(stream, {
       await say('after repeat');
       return { stopReason: 'end_turn' };
     }
+    // O266 review 3: an edit sent again after a compaction whose repeat names its file with no diff of its own (a location),
+    // then streams one more output piece (p9/append), as a running command's output comes. Show earlier must keep the
+    // first run's diff for that file and add the piece to the first run's output.
+    if (text === 'toolrepeat files') {
+      const call = { sessionUpdate: 'tool_call', toolCallId: 'repeat-f', title: 'repeat edit', kind: 'edit', status: 'pending' };
+      const first = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', status: 'completed', content: [
+        { type: 'diff', path: 'kept.md', oldText: 'old line\n', newText: 'new line\n' }, { type: 'content', content: { type: 'text', text: 'first run output' } }] };
+      const between = Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' }));
+      const again = { ...call, locations: [{ path: 'kept.md' }] };
+      const more = { sessionUpdate: 'tool_call_update', toolCallId: 'repeat-f', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: ' and a streamed piece' } }], _meta: { 'p9/append': true } };
+      for (const update of [call, first, ...between, { sessionUpdate: 'tool_call', toolCallId: 'compact-r', title: 'Compact conversation', kind: 'think', status: 'completed' }, again, more]) await connection.sessionUpdate({ sessionId, update });
+      await say('after repeat files');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'compact') {
       setTimeout(async () => {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-1', title: 'Compact conversation', kind: 'think', status: 'completed' } });
