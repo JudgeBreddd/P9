@@ -90,7 +90,8 @@ export const itemsOf = (plan, key) => planItems(plan).filter((i) => i.role && i.
 // no cursor, reply or delivery rule, since reading chat text and states drifted from what was delivered (reviews 12 to 14).
 // Only the lead's own workers (yours, parent not yours: the chats it started, as pause_sprint takes); the held-for window
 // must be read; a window with no projected decides nothing. Review 15: a held worker with no record is released (a watch
-// stopped between the hold and its record), and a record goes only when list_chats gives the worker not held.
+// stopped between the hold and its record), and a record goes only when list_chats gives the worker not held. Review 16: a
+// carry-on refused for a full held list releases first (that refusal would repeat every watch).
 // ponytail: a turn that ends between list_chats and the note gets the note with its next message, the carry-on at release
 // (seconds wide, at a turn's end); the carry-on says an earlier note no longer applies, so the worker carries on.
 const LEAD = 'Watching plan use is part of leading this sprint: a window that hits its cap stops every worker, holding one stops only that one.\n'
@@ -106,7 +107,8 @@ const LEAD = 'Watching plan use is part of leading this sprint: a window that hi
   + 'that is not kept there is back now (a watch stopped before keeping it). One kept and still held is back when its plan\'s reading is there, '
   + 'not stale, the window it was held for is in it, and every window it draws on has a projected and does not call for a hold. '
   + 'For every one back, send it Usage is back: carry on (any note before this to end your turn for usage no longer applies). If '
-  + 'send_chat answers with an error, leave it held for the next watch; otherwise call resume_sprint with its chat and forget it. '
+  + 'send_chat answers sprint-paused-full (its held list is full), call resume_sprint with its chat, then send it the carry-on and forget it. If '
+  + 'send_chat answers with another error, leave it held for the next watch; otherwise call resume_sprint with its chat and forget it. '
   + '2. For each window that calls for a hold, take the least-advanced worker that draws on it, that list_chats gives working and not '
   + 'held, and call pause_sprint with its chat. If that answers with an error, keep nothing. Otherwise keep it, and send it as a note: '
   + 'Usage is running high: finish the step you are on, write a Next line in your notes and end your turn; I will tell you when to carry on. '
