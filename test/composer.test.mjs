@@ -620,3 +620,76 @@ test('A2 step 6: the box stays put, Esc anywhere in it closes it, a command leav
   assert.deepEqual(errors.filter((e) => !/not-ready|409/.test(e)), [], 'no page errors');
   console.log('PASS A2 step 6 round 2: box kept, Esc from a button, command alone, refusal keeps chips, the dialog');
 });
+
+// A2 step 7: Ctrl+S in the message box saves its text as a draft and empties the box; Ctrl+S in an empty box, or Drafts,
+// lists them, newest first; one picked goes back in the box and leaves the list; its x deletes it; Esc closes the list.
+test('A2 step 7: Ctrl+S puts the draft aside, Drafts lists them, one picked comes back, x deletes, Esc closes', { timeout: 90000 }, async (t) => {
+  const { page, pane, errors } = await setup(t, 'a2-drafts');
+  const composer = pane.locator('.composer textarea'), btn = pane.locator('[data-drafts]'), menu = page.locator('.drafts-menu');
+  await composer.click(); await page.keyboard.type('first idea'); await page.keyboard.press('Control+s');
+  await until(async () => (await composer.inputValue()) === '' && (await btn.textContent())?.trim() === 'Drafts 1', 'saved aside, the box empty', 5000);
+  await page.keyboard.type('second idea'); await page.keyboard.press('Control+s');
+  await until(async () => (await btn.textContent())?.trim() === 'Drafts 2', 'two drafts', 5000);
+  await page.keyboard.press('Control+s');
+  await menu.waitFor({ timeout: 5000 });
+  assert.deepEqual(await menu.locator('.draft-take .truncate').allTextContents(), ['second idea', 'first idea'], 'newest first');
+  assert.equal(await menu.locator('.draft-take').first().evaluate((b) => document.activeElement === b), true, 'the list has the keys');
+  const png = await page.screenshot({ type: 'png', clip: await menu.evaluate((m) => { const r = m.getBoundingClientRect(); return { x: Math.max(0, r.left - 20), y: Math.max(0, r.top - 20), width: r.width + 40, height: r.height + 80 }; }) });
+  if (process.env.P9_EVIDENCE) await writeFile(path.join(process.env.P9_EVIDENCE, 'a2-drafts.png'), png); else console.log('P9_SHOT a2-drafts ' + png.toString('base64'));
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await until(async () => (await composer.inputValue()) === 'first idea' && await menu.count() === 0, 'the picked draft is back in the box', 5000);
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the box has the typing');
+  assert.equal((await btn.textContent())?.trim(), 'Drafts 1', 'and it left the list');
+  await btn.click(); await menu.waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
+  await until(async () => await menu.count() === 0, 'Esc closes the list', 5000);
+  assert.ok(await composer.evaluate((b) => document.activeElement === b), 'the box has the typing again');
+  await btn.click(); await menu.locator('.draft-del').first().click();
+  await until(async () => await menu.count() === 0 && await btn.count() === 0, 'x deleted the last draft; no list, no Drafts', 5000);
+  assert.equal(await composer.inputValue(), 'first idea', 'the box kept its text');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-drafts')), '[]', 'the store is empty');
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS A2 step 7: Ctrl+S puts aside, Drafts lists newest first, pick brings back, x deletes, Esc closes');
+});
+
+// A2 step 7 review (#535): a full store changes nothing on a swap; a row another window took is redrawn away, not brought back;
+// a menu whose pane now shows another chat takes nothing; a restored leading blank line survives a repaint.
+test('A2 step 7 review: full store keeps the box, a taken row is not brought back, a moved pane takes nothing', { timeout: 90000 }, async (t) => {
+  const { page, pane, errors } = await setup(t, 'a2-drafts-review');
+  const composer = pane.locator('.composer textarea'), btn = pane.locator('[data-drafts]'), menu = page.locator('.drafts-menu');
+  // As another window writes it; quiet: the storage event that window would send is missed (a stale row).
+  const seed = (d, quiet) => page.evaluate(([d, quiet]) => { localStorage.setItem('p9-drafts', JSON.stringify(d)); if (!quiet) window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' })); }, [d, quiet]);
+  const store = () => page.evaluate(() => JSON.parse(localStorage.getItem('p9-drafts')).map((x) => x.text));
+  await seed([{ text: 'saved one', at: 1 }, { text: '\nblank first', at: 2 }]);
+  await composer.click(); await page.keyboard.type('typed now'); await composer.evaluate((b) => b.dispatchEvent(new Event('input', { bubbles: true })));
+  // Full store: picking a draft with text in the box must leave both as they were.
+  await page.evaluate(() => { const o = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (k === 'p9-drafts') throw new DOMException('full', 'QuotaExceededError'); return o.call(this, k, v); }; window.__unfull = () => { Storage.prototype.setItem = o; }; });
+  await btn.click(); await menu.waitFor({ timeout: 5000 });
+  await menu.locator('.draft-take').first().click();
+  await page.locator('#toasts .toast', { hasText: 'nothing changed' }).waitFor({ timeout: 5000 });
+  assert.equal(await composer.inputValue(), 'typed now', 'the box kept its text');
+  assert.deepEqual(await store(), ['saved one', '\nblank first'], 'the list is as it was');
+  await page.evaluate(() => window.__unfull());
+  // Another window took 'saved one' (no storage event in this window, so the row is stale): clicking it brings nothing back.
+  await seed([{ text: '\nblank first', at: 2 }], true);
+  await menu.locator('.draft-take', { hasText: 'saved one' }).click();
+  await until(async () => await menu.locator('.draft-take', { hasText: 'saved one' }).count() === 0, 'the stale row redrawn away', 5000);
+  assert.equal(await composer.inputValue(), 'typed now', 'nothing restored from the stale row');
+  // The pane is no longer shown (as when another focus mode hides it): the open menu takes nothing and closes. A style rule,
+  // not the pane's own attributes, which the next redraw puts back (CI: a redraw between the change and the click).
+  const hide = await page.addStyleTag({ content: '.pane { visibility: hidden !important }' });
+  await menu.locator('.draft-take').first().click();
+  await until(async () => await menu.count() === 0, 'the menu closed', 5000);
+  await hide.evaluate((el) => el.remove());
+  assert.equal(await composer.inputValue(), 'typed now', 'nothing taken into a pane no longer shown');
+  assert.deepEqual(await store(), ['\nblank first'], 'the draft is still saved');
+  // Taken for real: the box text is saved in the same write, and the leading blank line is kept through a repaint.
+  await btn.click(); await menu.waitFor({ timeout: 5000 }); await menu.locator('.draft-take').first().click();
+  await until(async () => (await composer.inputValue()) === '\nblank first', 'the draft is in the box', 5000);
+  assert.deepEqual(await store(), ['typed now'], 'the box text took its place in the list');
+  await page.evaluate(() => window.dispatchEvent(new StorageEvent('storage', { key: 'p9-drafts' }))); // a repaint
+  await until(async () => (await btn.textContent())?.trim() === 'Drafts 1', 'repainted', 5000);
+  assert.equal(await composer.inputValue(), '\nblank first', 'the leading blank line survived the repaint');
+  assert.deepEqual(errors, [], 'no page errors');
+  console.log('PASS A2 step 7 review: full store, stale row, moved pane, leading newline');
+});
