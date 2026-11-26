@@ -7,7 +7,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
-import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
+import { randomUUID } from 'node:crypto';
+import { remoteDaemon, passkeyDevice, enrollDevice, http, authenticated, root } from './helpers.mjs';
 import { phoneLink, qrSvg, phoneDialogBody } from '../apps/web/src/phone-link.mjs';
 
 // The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
@@ -41,6 +42,8 @@ const until = async (check, what) => {
   for (let i = 0; i < 100; i++) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 100)); }
   throw new Error('timed out: ' + what);
 };
+const call = (server, route, body) => http({ socketPath: server.credentials.socketPath, route, method: 'POST',
+  headers: { ...authenticated(server.credentials), 'content-type': 'application/json', 'x-p9-op': randomUUID() }, body: JSON.stringify(body) });
 const setOnline = (page, on) => page.evaluate((on) => { window.__on = on; dispatchEvent(new Event(on ? 'online' : 'offline')); }, on);
 // Back to the Chats list from a chat (the tab bar is gone inside one).
 async function toList(page) {
@@ -377,6 +380,8 @@ test('O267: a queued message refused with turn-running tries again under a new o
 });
 
 // O267 round 4: storage that refuses the new ID keeps the stored one: the next try uses the ID a reload would use.
+// Review 5: as the daemon does, every try under the stored ID gets its recorded refusal back (no copy while storage is full);
+// once storage takes writes again, a fresh ID is stored before it is used, and the message goes once.
 test('O267: a new operation ID storage refuses is not used; the next try keeps the stored one', { timeout: 120000 }, async (t) => {
   const { page } = await phoneOn(t);
   const id = await newChat(page, 'claude');
@@ -384,20 +389,54 @@ test('O267: a new operation ID storage refuses is not used; the next try keeps t
   await page.waitForSelector('#stale:not([hidden])');
   await page.fill('#prompt', 'keep my id'); await page.click('#composer button');
   await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
-  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key))[0].qid, 'p9-queue:' + id);
-  const ops = [];
+  const key = 'p9-queue:' + id, stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k))[0].qid, key);
+  await page.evaluate(() => { const set = window.o267set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, value) { if (String(k).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, k, value); }; });
+  const ops = [], kept = [];
   await page.route('**/chat/*/prompt', async (route) => {
-    ops.push(route.request().headers()['x-p9-op']);
-    if (ops.length === 1) {
-      await page.evaluate(() => { const set = window.o267set = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (String(key).startsWith('p9-queue:')) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, key, value); }; });
-      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
-    } else await route.continue();
+    const op = route.request().headers()['x-p9-op']; ops.push(op);
+    if (op === stored) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    kept.push(await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]')[0]?.qid, key));
+    await route.continue();
   });
   await setOnline(page, true);
-  await page.waitForSelector('#events article:has-text("echo:keep my id")', { timeout: 15000 });
-  assert.deepEqual(ops, [stored, stored], 'both tries under the stored ID');
+  await until(async () => ops.length >= 2, 'two tries while storage is full');
+  assert.deepEqual(ops, [stored, stored], 'both tries under the stored ID, each refused as the daemon replays it');
   assert.match(await page.textContent('#composerNote'), /storage is full/);
+  assert.equal(await page.locator('#events article', { hasText: 'echo:keep my id' }).count(), 0, 'nothing sent while storage is full');
   await page.evaluate(() => { Storage.prototype.setItem = window.o267set; });
+  await page.waitForSelector('#events article:has-text("echo:keep my id")', { timeout: 40000 });
+  const fresh = ops.at(-1);
+  assert.notEqual(fresh, stored, 'the try that went has a new ID');
+  assert.deepEqual(kept, [fresh], 'that ID was in storage before it was used');
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('#events article', { hasText: 'echo:keep my id' }).count(), 1, 'one copy in the chat');
+  await page.unroute('**/chat/*/prompt');
+});
+
+// O267 review 5: a turn's end wakes the queue itself. On the chat list nothing redraws the chat, and a message refused
+// three times (waits 2, 4, then 8 s) goes within a moment of the turn ending, not when its wait runs out.
+test('O267: a queued message goes as its chat\'s turn ends, also from the chat list', { timeout: 120000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await call(server, '/chat/' + id + '/prompt', { text: 'slow' });
+  await setOnline(page, false);
+  await page.waitForSelector('#stale:not([hidden])');
+  await page.fill('#prompt', 'wake me'); await page.click('#composer button');
+  await page.waitForSelector('#queued:not([hidden]) [data-unqueue]', { state: 'attached' });
+  const at = [];
+  await page.route('**/chat/*/prompt', async (route) => {
+    if (route.request().postDataJSON()?.text !== 'wake me') return route.continue();
+    at.push(Date.now());
+    if (at.length <= 3) await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) });
+    else await route.continue();
+  });
+  await setOnline(page, true);
+  await until(async () => at.length === 3, 'three refused tries');
+  await page.goBack();
+  const ended = Date.now();
+  await call(server, '/chat/' + id + '/cancel', {});
+  await until(async () => at.length === 4, 'a try after the turn ended');
+  assert.ok(at[3] - ended < 4000, `it went ${at[3] - ended} ms after the turn ended, not after its 8 s wait`);
   await page.unroute('**/chat/*/prompt');
 });
 

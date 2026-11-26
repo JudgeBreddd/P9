@@ -747,20 +747,22 @@ test('A2 step 6: a refused send made with the pencil open gives back the edited 
 // O267: a send whose retry gets outcome-unknown (a remote's first try still in flight) asks again with the same operation
 // ID until the daemon answers, so its own answer settles it (a held one keeps its files the normal way); an identical
 // message from elsewhere does not count as it. Never answered: back in the box, saying it may still have arrived.
-test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 270000 }, async (t) => {
+test('O267: a send with an unknown outcome asks again with its own operation ID, then goes back in the box unsure', { timeout: 360000 }, async (t) => {
   const { app, instance, id, page, pane, send, errors } = await setup(t, 'o267-unknown', { files: ['slow-tools'] });
   const composer = pane.locator('.composer textarea');
   // 'landed': the daemon's first two answers are lost in flight, the third try is the one it runs. 'lost': never answered.
   // 'held': the daemon runs the first try (held mid-turn) but its answer is lost; the second meets a dropped link (503);
   // the third gets the daemon's own answer replayed (202 with its held ID).
   await app.evaluate(({ ipcMain }) => { const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o267 = [];
-    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled'].includes(text)) return h(e, ...args);
+    ipcMain.handle('p9:chat', async (e, ...args) => { const text = args[0] === 'prompt' && args[1]?.text; if (!['landed', 'lost', 'held', 'stalled', 'late'].includes(text)) return h(e, ...args);
       globalThis.o267.push([text, args[1].op]);
       const n = globalThis.o267.filter(([x]) => x === text).length;
       if (text === 'held') { if (n === 1) { await h(e, ...args); return { status: 409, body: { error: 'outcome-unknown', operation: args[1].op } }; } if (n === 2) return { status: 503, body: { error: 'daemon-unavailable' } }; globalThis.o267replayed = await h(e, ...args); return globalThis.o267replayed; }
       if (text === 'landed' && n >= 3) return h(e, ...args);
       // Round 4: 'lost' stalls its tries from 50 s on (a bridge prompt can wait 90 s): the send still ends unsure at 60 s.
       // Round 5: 'stalled' never answers its first try: the 60 s deadline counts from it too.
+      // Review 5: 'late' lands at 62 s, after the window gave up on it at 60 s; a send again goes straight to the daemon.
+      if (text === 'late') { if (n === 1) await new Promise((res) => setTimeout(res, 62000)); return h(e, ...args); }
       if (text === 'stalled') { globalThis.o267stalled = Date.now(); await new Promise(() => {}); }
       if (text === 'lost') { globalThis.o267lost ??= Date.now(); if (Date.now() - globalThis.o267lost > 50000) await new Promise(() => {}); }
       return { status: 409, body: { error: 'outcome-unknown', operation: args[1]?.op } }; }); });
@@ -803,6 +805,15 @@ test('O267: a send with an unknown outcome asks again with its own operation ID,
   const waited = Date.now() - (await app.evaluate(() => globalThis.o267stalled));
   assert.ok(waited < 64000, `by the 60 s deadline from the first try (${waited} ms)`);
   assert.equal((await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'stalled').length)), 1, 'one try: it never answered');
+  // Review 5: back in the box at 60 s while its first try is still on its way, then sent again: the same operation, so the
+  // daemon runs it once, whichever try reaches it first.
+  await composer.fill(''); await send('late');
+  await until(async () => (await composer.inputValue()) === 'late', 'back in the box at the deadline', 75000);
+  await composer.fill(''); await send('late');
+  await until(async () => (await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'late').length)) === 2, 'sent again', 10000);
+  await page.waitForTimeout(8000); // past the first try's 62 s
+  assert.equal(new Set(await app.evaluate(() => globalThis.o267.filter(([x]) => x === 'late').map(([, op]) => op))).size, 1, 'sent again under its first operation ID');
+  assert.equal((await users(instance, id)).filter((u) => u === 'late').length, 1, 'arrived once though the first try landed late');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PASS O267: an unknown outcome asks again with its own ID; identical words elsewhere do not settle it; never answered, back in the box unsure');
 });
