@@ -1743,8 +1743,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const { on, rev, ...rest } = body && typeof body === 'object' ? body : {};
       if (typeof on !== 'boolean' || Object.keys(rest).length || (rev !== undefined && typeof rev !== 'string')) return refused(400, 'request-refused');
       if (rev !== undefined && rev !== lockRev) return { status: 200, on: locked, rev: lockRev };
-      // O267b: this write's own rev and value, taken before any await: a newer write meanwhile has its own, so the reply
-      // never hands this caller another device's rev to put back.
+      // O267b: this write's own rev, taken before any await. The reply gives the lock as it is now (locked), and rev only
+      // while this write is still the last one; a newer write meanwhile makes it rev: null (changed after, not to put back).
       const mine = lockRev = randomUUID(); locked = on;
       db.prepare("INSERT INTO prefs (key, value) VALUES ('agent-lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(locked ? 'on' : 'off');
       await Promise.all([...live].map(async ([id, session]) => {
@@ -1760,7 +1760,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try { await setMode(session, row(id).provider, undefined, true, 5000); }
         catch { if (locked) await stopConversation(id); }
       }));
-      return { status: 200, on, rev: mine };
+      return { status: 200, on: locked, rev: lockRev === mine ? mine : null };
     },
     // Most recently used first, for the desktop's History and the phone. used: the chat's newest event,
     // not counting NOT_USE (protocol): the stops a close, an exit or a restart write, a move, rename or archive, nor the created event (its time is a later Date.now()

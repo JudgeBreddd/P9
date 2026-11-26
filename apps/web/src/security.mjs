@@ -71,20 +71,25 @@ export const modesNote = () => CATALOG.ours ? SECURITY.noLoose : SECURITY.noMode
 // ok: both are as asked, so the device may set its own part.
 // O267b: a write with no { on } may still have been made (its reply lost on the way back), so the setting is read. A read
 // shows the setting, not who set it (another device may have set the same value), so a change found that way is shown and
-// left as it is, never put back. Only a write whose own reply came back is put back, with the rev that reply gave it, so a
-// newer change (another device, another switch) stays; an older daemon gives no rev, and its put-back is plain. Not read
-// either: it shows unknown (null), never the old value, and the note says to reopen Settings, which reads it again.
+// left as it is, never put back. Only a write whose own reply came back with its own rev is put back, with that rev, so a
+// newer change (another device, another switch) stays. rev: null, a newer change came after this one: shown, not put
+// back. No rev at all, an older daemon: its put-back is plain, as before. cancelled (the desktop's "Keep protection on"):
+// no write was made, so it stops there. Not read either: it shows unknown (null), never the old value, and the note says to
+// reopen Settings, which reads it again.
 export async function changeFree(on, state, write, read) {
   const now = { ...state }, done = [], left = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
-  const known = (r) => typeof r?.on === 'boolean', both = (l) => l.join(' and ');
+  const known = (r) => typeof r?.on === 'boolean', both = (l) => l.join(' and '), is = (key) => names[key] + ' is now ' + (now[key] ? 'on' : 'off');
   let note = null;
   for (const [key, want] of [['protect', !on], ...(on ? [['lock', false]] : [])]) {
     if (now[key] === want) continue;
-    const w = await write(key, want), r = known(w) ? w : await read(key);
+    const w = await write(key, want);
+    if (w?.cancelled) { if (known(w)) now[key] = w.on; note = ''; break; }
+    const r = known(w) ? w : await read(key);
     now[key] = known(r) ? r.on : null;
     if (now[key] === null) { note = 'Stopped: P9 did not say whether ' + names[key] + ' changed. Reopen Settings to check.'; break; }
+    if (known(w) && w.rev === null) { note = is(key) + ': another change came after this one. Left as it is.'; break; }
     if (now[key] !== want) { note = known(w) ? '' : 'Not changed: ' + (w?.error || 'P9 did not answer') + '.'; break; }
-    if (known(w)) done.push([key, w.rev]); else left.push(names[key]);
+    if (known(w)) done.push([key, w.rev]); else left.push(is(key) + ' (P9\'s answer was lost; it may have been another device). Left as it is.');
   }
   if (note === null && on && !modesKnown()) note = 'Not changed: the agents\' modes changed meanwhile.';
   if (note === null) return { ok: true, state: now, note: '' };
@@ -95,7 +100,7 @@ export async function changeFree(on, state, write, read) {
     if (now[key] !== state[key]) (now[key] === null ? unsure : lost).push(names[key]);
   }
   const add = (more) => { note = (note ? note + ' ' : '') + more; };
-  if (left.length) add(both(left) + ' changed, but P9\'s answer was lost, so it was left as it is.');
+  left.forEach(add);
   if (lost.length) add('Could not put back ' + both(lost) + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.');
   if (unsure.length) add('P9 did not say whether ' + both(unsure) + ' went back. Reopen Settings to check.');
   return { ok: false, state: now, note };

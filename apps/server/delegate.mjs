@@ -753,14 +753,14 @@ export function createDelegate({ chat, allowed, usage }) {
       const end = { at: Date.now(), by: caller ?? 'owner', record };
       chat.projects.recordClose(sprint, end);
       schedules?.pause([...below(chat.family(), sprint), sprint]); // O141: nothing of a closed sprint wakes on its own
-      // O141: no worker stays held. O267b: each chat whose messages a release dropped is told which, in one note of its own
-      // (its own replacement key). Only a message it sent alone is quoted: a combined one (mixed) holds other chats' text too.
+      // O141: no worker stays held. O267b: each chat whose messages a release dropped is told which, in one notice with no
+      // replacement key (wake keeps nothing for it). Only a message it sent alone is quoted: a combined one (mixed) holds other chats' text too.
       const dropped = new Map(), clip = (t, n) => (t.length > n ? t.slice(0, n) + '…' : t);
       for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) for (const item of chat.release(c.id, sprint) ?? []) {
         const to = '- to ' + (c.title || c.id) + ': ', line = item.mixed ? to + 'a combined message with other chats\' (not quoted)' : to + clip(item.body.text, 200);
         for (const from of new Set(item.mixed ?? [item.from])) if (ID.test(from ?? '')) dropped.set(from, [...(dropped.get(from) ?? []), line]);
       }
-      for (const [from, lines] of dropped) notify(from, 'sprint', '[p9] The sprint closed while it held a worker, so ' + (lines.length === 1 ? 'this message you sent was' : 'these ' + lines.length + ' messages you sent were') + ' not delivered:\n' + lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n- and ' + (lines.length - 10) + ' more' : ''), 'sprint-dropped:' + sprint + ':' + from);
+      for (const [from, lines] of dropped) notify(from, 'sprint', '[p9] The sprint closed while it held a worker, so ' + (lines.length === 1 ? 'this message you sent was' : 'these ' + lines.length + ' messages you sent were') + ' not delivered:\n' + lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n- and ' + (lines.length - 10) + ' more' : ''));
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint, { bundle: true }).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
@@ -1528,7 +1528,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const replacing = waitingNote.has(id) ? { replaces: waitingNote.get(id) } : {};
     chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }), ...replacing }, undefined, 'p9')
       .then((sent) => (sent.status === 409 ? chat.prompt(parent.id, { text: line, when: 'queue', ...replacing }, undefined, 'p9') : sent))
-      .then((sent) => { if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {});
+      .then((sent) => { if (id === undefined) return; if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {}); // no key: nothing to replace later
   }
 
   // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and

@@ -245,7 +245,16 @@ test('O267b: Unrestricted reads a write back when its reply is lost, and a put-b
   let d = daemon((key, want, d) => { if (key === 'protect' && !want) { d.set('protect', false); return {}; } return key === 'lock' ? { error: 'refused' } : null; });
   let r = await security.changeFree(true, start, d.write, d.read);
   assert.deepEqual([r.ok, r.state, d.protect, d.calls], [false, { lock: true, protect: false }, false, ['protect:false', 'lock:false']], 'lost reply: read back, not put back');
-  assert.equal(r.note, 'Not changed: refused. File protection changed, but P9\'s answer was lost, so it was left as it is.');
+  assert.equal(r.note, 'Not changed: refused. File protection is now off (P9\'s answer was lost; it may have been another device). Left as it is.');
+  // Round 3: "Keep protection on" while another device turned protection off: cancelled is no write, so it stops there.
+  d = daemon((key, want, d) => { if (key === 'protect') { d.set('protect', false); return { on: false, cancelled: true }; } return null; });
+  r = await security.changeFree(true, start, d.write, d.read);
+  assert.deepEqual([r.ok, r.state, d.calls, r.note], [false, { lock: true, protect: false }, ['protect:false'], ''], 'cancelled: no further write, nothing put back');
+  // Round 3: a newer change came after this write (rev: null): shown as the daemon has it, not put back, and said.
+  d = daemon((key, want, d) => { if (key === 'lock') { d.set('lock', true); return { on: true, rev: null }; } return null; });
+  r = await security.changeFree(true, start, d.write, d.read);
+  assert.deepEqual([r.ok, r.state, d.calls], [false, { lock: true, protect: true }, ['protect:false', 'lock:false', 'protect:true']], 'changed after: the lock left, protection put back');
+  assert.equal(r.note, 'Agent lock is now on: another change came after this one. Left as it is.');
   // The reply and the read both lost: the setting shows unknown, never the old value, nothing more is written, and the note
   // gives a step the user can take (reopening Settings reads it again).
   d = daemon((key, want, d) => { if (key === 'protect') { d.set('protect', false); d.readable = false; return {}; } return null; });

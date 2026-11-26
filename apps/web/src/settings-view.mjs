@@ -470,7 +470,7 @@ function renderSettings() {
   Object.keys(outer.focusNames).forEach(f => { outer.$('#setF-' + f).onchange = e => saveSettings({ ...outer.settings, focus: { ...outer.settings.focus, [f]: e.target.checked } }); });
   if (outer.$('#setLock')) outer.$('#setLock').onchange = async e => { const r = await outer.liveChat.call('setLock', { on: e.target.checked }); outer.agentLock = r.status === 200 ? r.body.on : outer.agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
-  if (outer.$('#setProtect')) outer.$('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); outer.fileProtect = r?.status === 200 ? r.body.on : outer.fileProtect; renderSettings(); };
+  if (outer.$('#setProtect')) outer.$('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); outer.fileProtect = r?.status === 200 && typeof r.body.on === 'boolean' ? r.body.on : outer.fileProtect; renderSettings(); };
   outer.$('#setWarn').onchange = e => { setWarnsLoose(e.target.checked); renderSettings(); };
   if (outer.$('#setLinks')) outer.$('#setLinks').onchange = e => { e.target.checked ? localStorage.removeItem('p9-link-ok') : localStorage.setItem('p9-link-ok', '1'); renderSettings(); };
   if (outer.$('#setFree')) outer.$('#setFree').onchange = e => setUnrestricted(e.target.checked);
