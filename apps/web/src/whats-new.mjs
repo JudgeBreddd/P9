@@ -4,16 +4,17 @@
 export const WHATS_NEW = {
   version: '0.1.9-beta.16',
   changes: [
-    "Sprints: the lead watches plan usage and holds only a worker near a cap; closing a sprint pauses its schedules.",
-    "Remote: a send still waiting for its answer is asked about again instead of sent twice.",
+    "Sprints: a new sprint's lead is told to watch plan usage and hold a worker near a cap; Close pauses its schedules.",
+    "Desktop, remote: a send with no answer yet is asked about again with the same ID for up to 10 minutes.",
     "Phone: a message the phone cannot store in its queue stays in the box with a note saying why.",
-    "Chat box: Ctrl+S saves its text as a draft; Drafts beside the paperclip brings one back.",
+    "Desktop chat box: Ctrl+S saves its text as a draft, quotes included; Drafts beside the paperclip brings one back.",
     "Desktop chat: selected text shows a small Comment button, so Copy still works; a quote is a small chip you can edit.",
     "Phone chat: quote part of a reply with a comment, as on desktop.",
-    "Phone: the chat list tries again after a failed load and says why.",
-    "A short reply no longer shows twice when the agent sends it again after its turn ends.",
+    "Phone: the chat list and an open chat try again after a failed load and say why.",
+    "A short reply no longer shows twice when the agent's connection sends it again.",
     "A tool call shown again after a compaction stays one row instead of coming back as pending.",
-    "Dev Focus: the editor's terminal draws its letters at full size.",
+    "Dev Focus: the editor's terminal draws its letters at full size (GPU drawing is now off by default).",
     "Desktop: open chats keep their order in the panel after a restart.",
+    "Settings: Unrestricted reads the service's own list of modes, and stays off when the service offers none.",
   ],
 };
