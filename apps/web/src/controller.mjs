@@ -1288,12 +1288,15 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   let r;
   try {
     r = await ask();
+    // Review 10: a first try that may have gone out (unsure) stays unsure whatever the next try meets, so it is read here,
+    // before any retry: a plain 503 after it used to send it back to the box though the daemon may have taken it.
+    let unsure = r.status === 503 && !!r.body?.unsure;
     // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
-    if (r.status === 503 && body.op) { await pause(); if (Date.now() < end) r = await ask(); }
+    if (r.status === 503 && body.op && !unsure) { await pause(); if (Date.now() < end) r = await ask(); }
     // Review 9: a link that dropped after the request went out (main says unsure: teh.mjs failedReply) is unsure too, even
     // before any outcome-unknown: the daemon may have taken it, so it keeps asking under its ID rather than coming back to be
     // sent again. One that never went out (nothing listening) is not, and comes back at once.
-    for (let unsure = false; body.op;) {
+    while (body.op) {
       if ((r.status === 409 && r.body?.error === 'outcome-unknown') || (r.status === 503 && r.body?.unsure)) unsure = true; else if (!(unsure && r.status === 503)) break;
       if (end - Date.now() <= 1000) { r = unknown; break; }
       await pause();
@@ -1335,6 +1338,8 @@ liveChat.prompt = async (s, text, images = [], when, from) => { usedAgent(s.agen
   // Review 9: Interrupt and send ('now') goes at once, not behind a send still waiting for its answer (up to SEND_CAP): the
   // daemon holds it, stops the running turn and sends it at that end. A send made after it still waits for both.
   // ponytail: an earlier send that has not reached the daemon yet (dropped links only, no outcome-unknown) may land after it.
+  // Review 10: a send waiting here behind an unanswered one goes after the Interrupt, as the daemon sends an Interrupt
+  // before what it holds (drain): the Interrupt is the message meant to go next. It still goes once.
   const prev = Promise.resolve(lines[s.id]).catch(() => {}), go = async () => s.stops !== stops ? {} : liveChat.call('prompt', { ...body, ...(images.length && (await import('./attach.mjs')).attachBody(images)) });
   const mine = when === 'now' ? go() : prev.then(go); lines[s.id] = when === 'now' ? Promise.all([prev, mine]) : mine;
   const r = await mine.finally(() => s.sending--);

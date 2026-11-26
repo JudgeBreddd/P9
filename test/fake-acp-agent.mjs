@@ -201,6 +201,8 @@ const connection = acp.connectAgent(stream, {
   },
   async closeSession() { if (existsSync('slow-close')) await new Promise((resolve) => setTimeout(resolve, 2000)); return {}; },
   async setSessionConfigOption(params) {
+    // #540 review 10: slow-config holds every setting 3 s, and config-started says one is under way (an Interrupt sent then).
+    if (existsSync('slow-config')) { writeFileSync('config-started', ''); await new Promise((resolve) => setTimeout(resolve, 3000)); }
     // Refuses putting the chat's old settings back; P9's own safe start mode (Manual) still goes through, since P9 fails the
     // start rather than run a Claude chat in the adapter's auto.
     if (cwd.startsWith('resume:') && existsSync(path.join(folder, 'refuse-resume-settings')) && !(params.configId === 'mode' && params.value === 'default')) throw new Error('restore refused');

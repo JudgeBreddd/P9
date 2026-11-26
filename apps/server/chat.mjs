@@ -1885,7 +1885,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           const repicks = session && ((body.model !== undefined && body.model !== session.models?.current)
             || (Array.isArray(picks) && picks.some(([k, v]) => { const p = session.pickers?.find((x) => x.id === k); return p?.current !== v && !(body.next && p?.category === 'collaboration_mode'); }))
             || (!locked && !body.next && body.mode !== undefined && MODES[conversation.provider][body.mode] !== (session.back ?? session.mode)));
-          if (session?.turn && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
+          // #540 review 10: also while the previous prompt is still starting (its mode or model being set: the chat reads as in a turn,
+          // but none runs yet), when steer() would refuse it: sendNow puts it first in line for that turn's end.
+          // ponytail: no turn to stop yet, so it waits for that turn's end; a start that fails leaves it in the window's queue
+          // until the chat's next turn ends. While the adapter itself is still starting (no session yet) it is still refused.
+          if (session && (session.turn || !notes.has(body)) && !session.stopping && body.when === 'now') { const r = hold(id, session, body, images, 'queue', repicks, held ?? []); if (r.status === 202) await sendNow(id, session, r.held); return r; }
           if (session?.turn && !session.stopping && (body.when === 'queue' || session.solo || repicks || waitingReplace(session, body) || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, session.solo || repicks ? 'queue' : body.when ?? 'steer', repicks, held ?? []);
           if (solo) return refused(409, 'turn-running');
           // A steer a Stop cut (session.cut) is refused still: holding it would send it as work after the Stop. A note
