@@ -159,6 +159,7 @@ const connection = acp.connectAgent(stream, {
     if (method !== '_session/steering' || !steering) throw acp.RequestError.methodNotFound(method);
     sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
+    if (existsSync('steer-modes.log')) appendFileSync('steer-modes.log', mode + '\n'); // O267b: the mode each steer met
     if (!turns.has(params.sessionId) && process.argv[2] === 'codex') {
       const text = textOf(params.prompt);
       setTimeout(() => connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'got:' + text } } }), 300);
@@ -203,10 +204,14 @@ const connection = acp.connectAgent(stream, {
   async setSessionConfigOption(params) {
     // #540 review 10: slow-config holds every setting 3 s (or the ms the file says: review 12, past P9's 5 s wait), and
     // config-started says one is under way (an Interrupt sent then).
-    // O267b: exit-config, put in during that wait, ends the adapter there (an adapter that exits while a start sets its model).
+    // O267b: exit-config, put in during that wait, ends the adapter there (an adapter that exits while a start sets its model);
+    // saying late, it closes its output first and exits 600 ms after, as a slow exit does.
     if (existsSync('slow-config')) {
       const ms = Number(readFileSync('slow-config', 'utf8')) || 3000; writeFileSync('config-started', '');
-      for (const end = Date.now() + ms; Date.now() < end;) { if (existsSync('exit-config')) process.exit(3); await new Promise((resolve) => setTimeout(resolve, 25)); }
+      for (const end = Date.now() + ms; Date.now() < end;) {
+        if (existsSync('exit-config')) { if (readFileSync('exit-config', 'utf8') === 'late') { process.stdout.end(); await new Promise((resolve) => setTimeout(resolve, 600)); } process.exit(3); }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
     }
     if (existsSync('fail-config')) throw new Error('setting refused'); // #540 review 11: a start that fails after the wait
     // Refuses putting the chat's old settings back; P9's own safe start mode (Manual) still goes through, since P9 fails the

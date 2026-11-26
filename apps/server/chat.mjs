@@ -305,6 +305,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const listeners = new Set();
   const stops = new Map(); // conversation -> the Stop in progress
+  const claims = new Map(); // conversation -> the token of the start that set it to 'turn' (prompt, after the note read)
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
   // preview: the list's second line for a chat whose events the phone has not read, by its own rule (digest() in phone.ts):
   // the newest prompt or reply, the reply being its run of chunks since the prompt or tool call before it, warnings left
@@ -985,6 +986,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   // NARROW (catalog): each agent's no-write mode, the lock's and a turn answering another chat's question.
   const modeFor = (provider) => locked ? NARROW[provider] : START[provider];
+  // #540 reviews 14 and 15: the Agent lock's one mode change per session (setLock keeps it as session.narrowing). A prompt or
+  // steer about to go waits for it, then confirms the no-write mode really is the session's (the reply's currentValue).
+  // false: under the lock and not in the no-write mode, so nothing may go.
+  const narrowed = async (session, provider) => { await session.narrowing; return !(locked && NARROW[provider] && session.mode !== NARROW[provider]); };
   // One set at a time per session (mode, model, effort), sent in the order asked: a set that answers late can never land
   // after a later one. setWaits counts the sets not settled yet; while there is one, a prompt sets its own mode, model and
   // settings instead of trusting what P9 last heard (#540 review 12: a set that timed out may still land). then: what the
@@ -998,10 +1003,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const send = () => gaveUp ? Promise.reject(new Error('timeout')) : session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }).then(then);
     session.setWaits = (session.setWaits ?? 0) + 1;
     const set = (session.setChain ?? Promise.resolve()).then(send);
-    // #540 review 15 and 16: a set the adapter never answers frees the chain after SET_CAP_MS, so it cannot refuse every
-    // later prompt ("An earlier setting has not answered") until the chat restarts.
-    // ponytail: a set that answers after the cap can still land during the next turn; 30 s is past any answer seen so far.
-    session.setChain = Promise.race([set, wait(SET_CAP_MS)]).catch(() => {}).finally(() => { session.setWaits -= 1; });
+    // #540 reviews 15 and 16: a set the adapter never answers would hold the chain, and every later prompt is refused ("An
+    // earlier setting has not answered"). Past SET_CAP_MS the session is retired instead: its adapter is stopped, so that
+    // set can never land on a later turn, and the chat's next prompt starts a clean one. The chat says why.
+    let cap;
+    const capped = new Promise((resolve) => { cap = setTimeout(resolve, SET_CAP_MS, 'cap'); });
+    session.setChain = Promise.race([set.catch(() => {}), capped]).then((how) => {
+      clearTimeout(cap);
+      if (how !== 'cap' || live.get(session.id) !== session || session.stopping) return;
+      emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 stopped it. Your next message starts it again.' });
+      stopConversation(session.id);
+    }).finally(() => { session.setWaits -= 1; });
     return ms ? Promise.race([set, wait(ms).then(() => { gaveUp = true; throw new Error('timeout'); })]) : set;
   };
   const setMode = (session, provider, value = modeFor(provider), tell = true, ms) => setOption(session, 'mode', value,
@@ -1482,8 +1494,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (!session?.turn || !session.steering || session.stopping || session.solo) return refused(409, 'turn-running'); // nothing joins a turn that answers another chat
     // O252: the turn reads as running from its user event, but its prompt goes only after the start snapshot (up to 3 s); a
     // steer before that met an agent with no turn and was refused. It waits for the prompt (queued right after the snapshot).
+    // #540 review 14: session.starting is the guarded start (false: its prompt was not sent), and the lock's change is waited
+    // for here too, so a steer never reaches the agent before the no-write mode is confirmed.
     const turn = session.turn;
-    await session.starting;
+    const started = await Promise.resolve(session.starting).catch(() => false);
+    if (started === false || !(await narrowed(session, row(id).provider))) return refused(409, 'turn-running');
     if (session.turn !== turn || session.stopping || session.cut === turn) return refused(409, 'turn-running'); // a Stop meanwhile sent no prompt
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
@@ -1753,8 +1768,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A turn answering another chat is in the no-write mode already and stays there: unlocking only changes where it returns to.
         if (session.solo && !locked) { session.back = modeFor(row(id).provider); return; }
         if (!session.solo) session.back = undefined;
-        try { await setMode(session, row(id).provider, undefined, true, 5000); }
-        catch { if (locked) await stopConversation(id); }
+        // Kept on the session (narrowed): a prompt or steer waits for this change, its check and its Stop, never a set of its own.
+        const provider = row(id).provider;
+        await (session.narrowing = (async () => {
+          try { await setMode(session, provider, undefined, true, 5000); if (locked && NARROW[provider] && session.mode !== NARROW[provider]) throw new Error('not-narrow'); }
+          catch { if (locked) await stopConversation(id); }
+        })());
       }));
       return { status: 200, on: locked };
     },
@@ -1933,6 +1952,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (!['idle', 'running', 'stopped'].includes(row(id).state)) { release(); return refused(409, row(id).state); }
       }
       setState(id, 'turn');
+      const claim = randomUUID(); claims.set(id, claim);
       // O10: and the failed Send to remote's note, which a command does not carry or use up (its user event says command).
       const note = [movedNote(db, id), bare ? null : failedMoveNote(db, id)].filter(Boolean).join('') || null; // read before this message's own user event
       // N1: the project's instructions and added files, when this chat has not been sent this exact text since its last
@@ -1942,9 +1962,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (NOTE_MS) await wait(NOTE_MS);
       // O141 review 3: a Stop (Close stops every chat of its sprint) that came while the note was read wins: nothing starts.
       // #542 round 4: so does one that ended cleanup-failed meanwhile (out of stops already): anything but this prompt's own
-      // 'turn' means its claim is gone, and connect() would start a second adapter beside one that may still live.
+      // 'turn' means its claim is gone, and connect() would start a second adapter beside one that may still live. Its own:
+      // a newer prompt that claimed the chat after a Stop meanwhile has its own token.
       const now = row(id)?.state;
-      if (stops.has(id) || now !== 'turn') { release(); return refused(409, now === 'cleanup-failed' || now === 'moving' || now === 'moved' ? now : 'stopping'); }
+      if (stops.has(id) || now !== 'turn' || claims.get(id) !== claim) { release(); return refused(409, now === 'cleanup-failed' || now === 'moving' || now === 'moved' ? now : 'stopping'); }
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
@@ -1961,14 +1982,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // #540 review 14: a start the chat's close, Stop or exit ended has no turn end to settle what it carried, so this exit
       // drains it: drain hands each one back as stopped (and keeps what P9's own shutdown keeps), as a stopped turn's end does.
       const gone = () => live.get(id) !== session || session.stopping;
-      // O267b: a setting that failed because the adapter exited fails before the exit is heard (its connection closes first),
-      // so the drain waits for that exit and hands a held Interrupt back, not sends it to an adapter that is gone.
-      // ponytail: a live adapter's failed start sends a held Interrupt 100 ms later; one whose exit takes over 1 s still races.
+      // O267b: a setting that failed because the adapter exited fails before the exit is heard (its connection closes first).
+      // With a message held for this start, the start keeps the chat (still 'turn': a new prompt waits) for a short grace: if
+      // the connection closed, it waits for the exit, which hands the held message back. Then, in one step, the chat is free
+      // again and its drain runs. With nothing held the chat is free at once.
+      // ponytail: a live adapter's failed start sends its held Interrupt 100 ms later; an exit over 5 s after the close still races.
+      const waiting = () => (gone() ? session.held.length + session.queued.length : session.queued.some((x) => nows.has(x.body)));
       const startFailed = () => {
-        if (!gone()) setState(id, 'running');
-        Promise.race([session.agent.closed?.then(() => Promise.race([session.exited, wait(1000)])), wait(100)]).then(() => { // after this start's own error event
-          if (gone() ? session.held.length + session.queued.length : session.queued.some((x) => nows.has(x.body))) drain(id, session);
-        });
+        if (!waiting()) { if (!gone()) setState(id, 'running'); return; }
+        Promise.race([(session.agent.closed ?? new Promise(() => {})).then(() => true), wait(100).then(() => false)])
+          .then((closed) => closed && Promise.race([session.exited, wait(5000)]))
+          .then(() => { // after this start's own error event
+            if (!gone()) setState(id, 'running');
+            if (waiting()) drain(id, session);
+          });
       };
       let begun = false;
       try {
@@ -2029,7 +2056,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const turn = session.turn = randomUUID();
       // MC-15: the folder's state as the turn starts; Shell edits at its end are what changed since (shell-edits.mjs).
       const shellFrom = SHELL_START_MS ? wait(SHELL_START_MS).then(() => shellStart(session.cwd)) : shellStart(session.cwd), edits = session.turnEdits = { calls: new Map(), named: new Set() };
-      session.starting = shellFrom; // O252: the prompt goes when this settles; a steer meanwhile waits for it (steer)
+      // O252: the prompt goes when this settles; a steer meanwhile waits for it (steer). false: the lock's no-write mode is
+      // not confirmed, so neither goes (dispatch, below).
+      const ready = session.starting = shellFrom.then(() => narrowed(session, conversation.provider));
       act(id);
       // O176: a prompted turn ends the unprompted run; the agent's next one has a new ID (ownRun), never the old one back.
       session.unprompted = null;
@@ -2059,18 +2088,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (content?.length && session.turn === turn && live.get(id) === session) emit(id, 'update', { sessionUpdate: 'tool_call', toolCallId: 'p9-shell-' + turn, title: 'Shell edits', kind: 'edit', status: 'completed', content, locations: content.map((c) => ({ path: c.path })) });
       });
       // The snapshot is taken before the prompt goes, so the agent's first write is never in it.
-      // #540 review 14 and 15: the last check before the prompt goes, after the snapshot (the start's own checks ran before
-      // it): a chat stopped, closed or exited meanwhile sends nothing (the failure path below, quiet once stopping), and an
-      // Agent lock turned on meanwhile has its no-write mode set first (the lock's own set may still be on its way).
-      const narrow = NARROW[conversation.provider];
+      // #540 reviews 14 and 15: the last check before the prompt goes, after the snapshot and the lock's change (ready; the
+      // start's own checks ran before them). A chat stopped, closed or exited meanwhile sends nothing (the failure path
+      // below, quiet once stopping), nor does a device revoked meanwhile. Under an Agent lock whose no-write mode is not
+      // confirmed nothing goes either, and the message is handed back (unheld, as a stopped start's held one), not lost
+      // after its 202.
       const dispatch = async () => {
-        await shellFrom;
+        const narrowOk = await ready;
         if (session.cut === turn) return { stopReason: 'cancelled' };
-        if (locked && narrow && session.mode !== narrow && !gone()) {
-          try { await setMode(session, conversation.provider, narrow, true, 5000); } catch { throw new Error('Mode ' + narrow + ' could not be set; nothing was sent.'); }
+        // First: a lock change that failed stops the chat (setLock), and this message still comes back.
+        if (!narrowOk) {
+          emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
+          throw new Error('Agent lock is on and the agent did not confirm its no-write mode; nothing was sent.');
         }
         if (gone()) throw new Error('stopping');
-        if (session.cut === turn) return { stopReason: 'cancelled' };
+        try { stillAuthorized(); } catch { throw new Error('This device was signed out; nothing was sent.'); }
         session.heard?.forEach((m) => { m.copied = true; });
         return session.agent.prompt({ sessionId: session.sessionId, prompt });
       };

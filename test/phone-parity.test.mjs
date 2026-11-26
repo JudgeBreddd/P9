@@ -563,6 +563,8 @@ test('P18: a handed-back message another chat sent does not go into the box', { 
   db.close();
   await page.waitForFunction(() => document.querySelector('#prompt').value.includes('mine'), null, { timeout: 20000 });
   assert.equal(await page.inputValue('#prompt'), 'mine', 'the other chat\'s message stayed out of the box');
+  // Review round 1 finding 8: told as not sent in the chat, as the window tells it.
+  await page.waitForFunction(() => document.querySelector('#events').textContent.includes('Not sent (stopped): from another chat'), null, { timeout: 15000 });
 });
 test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);

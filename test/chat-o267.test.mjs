@@ -183,10 +183,11 @@ test('O267b: Agent lock turned on while the start snapshot runs sets the no-writ
   const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-lock', true, { P9_SHELL_START_MS: '2000' });
   const r = await chat.prompt(id, { text: 'mode' });
   assert.equal(r.status, 202, JSON.stringify(r));
-  await writeFile(path.join(dir, 'slow-config'), '3000'); // the lock's own mode set answers after the snapshot ends
+  // Review round 1 finding 3: every setting answers in a normal 4 s, so the lock's one mode change ends after the snapshot;
+  // the prompt waits for it, not for a second set of its own behind it (two of them passed a 5 s wait).
+  await writeFile(path.join(dir, 'slow-config'), '4000');
   const lock = chat.setLock({ on: true });
   await started();
-  await unlink(path.join(dir, 'slow-config'));
   const reply = (e) => e.type === 'update' && /^mode:/.test(e.data?.content?.text ?? '');
   await until(reply, 'the mode reply');
   await lock;
@@ -195,17 +196,21 @@ test('O267b: Agent lock turned on while the start snapshot runs sets the no-writ
   console.log('PASS O267b lock: the prompt sent after the lock went on ran as ' + said);
 });
 
-test('O267b: a setting the adapter never answers stops refusing later prompts after its cap', { timeout: 60000 }, async (t) => {
-  const { chat, dir, id, until, started } = await setup(t, 'o267b-hang', true, { P9_SET_CAP_MS: '8000' });
+test('O267b: a setting the adapter never answers retires its adapter after the cap, and the next prompt starts a clean one', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-hang', true, { P9_SET_CAP_MS: '8000' });
   await writeFile(path.join(dir, 'slow-config'), '600000'); // never answers in this test
   const doomed = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
   await started();
   await unlink(path.join(dir, 'slow-config'));
   assert.equal((await doomed).status, 500, 'the haiku set timed out');
+  // Review round 1 finding 2: the set may still land, so its adapter is stopped rather than the chain let go.
+  await until((e) => e.type === 'error' && /did not answer a setting for 8 s/.test(e.data?.message), 'the chat says why');
+  await until((e) => e.type === 'stopped', 'its adapter was stopped');
   const r = await chat.prompt(id, { text: 'after the hang' });
   assert.equal(r.status, 202, 'not refused for good: ' + JSON.stringify(r));
   await until(echoed('after the hang'), 'it reached the agent');
-  console.log('PASS O267b cap: after a setting that never answered, the next prompt went (' + r.status + ')');
+  assert.ok(seen.slice(seen.findIndex((e) => e.type === 'stopped')).some((e) => ['connected', 'resumed'].includes(e.type)), 'on a new adapter');
+  console.log('PASS O267b cap: the hung setting retired its adapter; the next prompt went on a new one (' + r.status + ')');
 });
 
 test('O267b: an Interrupt held while a start sets its model is handed back when the adapter exits', async (t) => {
@@ -237,4 +242,76 @@ test('O267b: a handed-back message another chat sent says who sent it', async (t
   const back = (await until((e) => e.type === 'unheld' && e.data?.id === now.held, 'handed back')).find((e) => e.type === 'unheld' && e.data?.id === now.held);
   assert.deepEqual([back.data.why, back.data.from], ['stopped', other], 'the window and phone can tell it is not the user\'s');
   console.log('PASS O267b from: the handed-back message carried from ' + back.data.from);
+});
+
+// Review round 1 (O267b): the lock barrier for steering and for a mode not confirmed, a slow exit, and whose claim it is.
+test('O267b: a steer sent while the lock\'s mode change is on its way meets the no-write mode', async (t) => {
+  const { chat, dir, id, until, started } = await setup(t, 'o267b-steer', true, { P9_SHELL_START_MS: '2000' });
+  await writeFile(path.join(dir, 'steer-modes.log'), '');
+  const r = await chat.prompt(id, { text: 'slow' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'slow-config'), '4000');
+  chat.setLock({ on: true });
+  await started();
+  const steered = await chat.prompt(id, { text: 'steer me' });
+  assert.equal(steered.status, 202, JSON.stringify(steered));
+  await until((e) => e.type === 'update' && /^got:[^]*steer me/.test(e.data?.content?.text ?? ''), 'the steer reached the turn');
+  const modes = await lines(path.join(dir, 'steer-modes.log'));
+  assert.ok(modes.length >= 1 && modes.every((m) => m === 'plan'), 'every steer met plan: ' + JSON.stringify(modes));
+  console.log('PASS O267b steer: the steer met ' + JSON.stringify(modes));
+});
+
+test('O267b: a prompt whose lock mode change failed is handed back, not lost after its 202', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-handback', true, { P9_SHELL_START_MS: '2000' });
+  const r = await chat.prompt(id, { text: 'mode' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'slow-config'), '8000'); // past the lock's 5 s wait: the lock stops the chat
+  chat.setLock({ on: true });
+  await started();
+  const back = await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'the prompt was handed back');
+  assert.deepEqual(['text', 'why'].map((k) => back.find((e) => e.type === 'unheld' && e.data?.id === r.turn).data[k]), ['mode', 'stopped']);
+  await pause(500);
+  assert.ok(!seen.some((e) => e.type === 'update' && /^mode:/.test(e.data?.content?.text ?? '')), 'never sent');
+  console.log('PASS O267b hand-back: the prompt came back as stopped and was never sent');
+});
+
+test('O267b: an Interrupt held while a start sets its model is handed back when the adapter exits slowly', async (t) => {
+  const { chat, dir, id, until, started } = await setup(t, 'o267b-slowexit');
+  await writeFile(path.join(dir, 'slow-config'), '4000');
+  const first = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
+  await started();
+  const now = await chat.prompt(id, { text: 'cut in', when: 'now' });
+  assert.ok(now.held, JSON.stringify(now));
+  await writeFile(path.join(dir, 'exit-config'), 'late'); // its output closes 600 ms before it exits
+  assert.notEqual((await first).status, 202);
+  const back = await until((e) => e.type === 'unheld' && e.data?.id === now.held, 'handed back');
+  assert.equal(back.find((e) => e.type === 'unheld' && e.data?.id === now.held).data.why, 'stopped');
+  assert.ok(!back.some(echoed('cut in')) && !back.some((e) => e.type === 'user' && e.data?.text === 'cut in'), 'and never sent');
+  console.log('PASS O267b slow exit: the held Interrupt came back as stopped');
+});
+
+test('O267b: a prompt whose Stop came during its note read does not take a newer prompt\'s claim as its own', { timeout: 60000 }, async (t) => {
+  const { chat, id, seen, until } = await setup(t, 'o267b-claim', true, { P9_NOTE_MS: '3000' });
+  const older = chat.prompt(id, { text: 'the older one' });
+  await pause(500);
+  assert.equal((await chat.stop(id)).status, 200);
+  const newer = chat.prompt(id, { text: 'the newer one' }); // claims the chat while the older one still reads its note
+  const late = await older;
+  assert.deepEqual([late.status, late.error], [409, 'stopping'], JSON.stringify(late));
+  assert.equal((await newer).status, 202);
+  await until(echoed('the newer one'), 'the newer prompt went');
+  assert.ok(!seen.some(echoed('the older one')), 'the older one never went');
+  console.log('PASS O267b claim: the older prompt got 409 ' + late.error + '; only the newer one went');
+});
+
+test('O267b: a phone revoked during the start snapshot sends nothing', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o267b-revoked', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  let live = true;
+  const r = await authority.run(() => live, () => chat.prompt(id, { text: 'from the phone' }));
+  assert.equal(r.status, 202, JSON.stringify(r));
+  live = false; // revoked while the snapshot runs
+  await until((e) => e.type === 'error' && /signed out/.test(e.data?.message), 'nothing was sent');
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  console.log('PASS O267b revoked: the revoked phone\'s prompt never reached the agent');
 });
