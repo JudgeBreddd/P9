@@ -1,7 +1,7 @@
 // Settings and the setup wizard. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { esc, info, modes, LOOSE, runnerPicks, profileModel } from './helpers.mjs';
 import { missionKeys, missionShown, missionValue, PATH_KEYS } from './mission-files.mjs';
-import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts, LOOSEST, freeLocked } from './security.mjs';
+import { SECURITY, warnsLoose, unrestricted, setWarnsLoose, setStarts, LOOSEST, freeLocked, modesKnown } from './security.mjs';
 import { maintenanceGroup, MAINTENANCE } from './maintenance.mjs';
 
 export function installSettings(outer) {
@@ -131,20 +131,26 @@ function securityGroup(box) {
   return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way. The phone has the same four.', 'security-settings')}</legend>`
     + (window.p9?.chat ? box('setLock', lock[0], outer.agentLock === true, outer.agentLock === null ? SECURITY.unknown : lock[1], outer.agentLock === null, lock[2], 'agent-lock') : '')
     + (window.p9?.fileProtection ? box('setProtect', protect[0], outer.fileProtect !== false, outer.fileProtect === null ? SECURITY.unknown : outer.fileProtect ? protect[1] : SECURITY.protectOff, outer.fileProtect === null, protect[2], 'file-protection') : '')
-    + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
+    // Review 13: with no loosened mode known from the daemon in use, the warnings have nothing to change: disabled, as Unrestricted.
+    + box('setWarn', warn[0], warnsLoose(), modesKnown() ? warn[1] : SECURITY.noModes, !modesKnown(), warn[2], 'security-settings')
     + (window.p9?.openLink ? box('setLinks', SECURITY.links[0], !localStorage.getItem('p9-link-ok'), SECURITY.links[1], false, SECURITY.links[2], 'security-settings') : '')
-    + (both ? box('setFree', free[0], unrestricted(outer.agentLock, outer.fileProtect, START), (Object.keys(LOOSEST).length ? free[1] : SECURITY.noModes) + OPEN_TOO, freeLocked(outer.agentLock, outer.fileProtect), free[2], 'security-settings') : '')
+    + (both ? box('setFree', free[0], unrestricted(outer.agentLock, outer.fileProtect, START), (modesKnown() ? free[1] : SECURITY.noModes) + OPEN_TOO, freeLocked(outer.agentLock, outer.fileProtect), free[2], 'security-settings') : '')
     + '</fieldset>';
 }
 // On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
 // protection already off that warning never shows, so Unrestricted asks once itself (row 25a: no silent loosened default).
 async function setUnrestricted(on) {
-  if (on && freeLocked(outer.agentLock, outer.fileProtect)) return renderSettings(); // review 12: no loosest mode known, nothing changes
+  // Review 12/13: no loosest mode known from the daemon in use, nothing changes. Checked again before this computer's part
+  // is committed, as GET /agents can answer while main's File protection warning is open: protection this turned off goes
+  // back on. (confirm() blocks the page, so nothing lands while it is open.)
+  const locked = () => on && freeLocked(outer.agentLock, outer.fileProtect);
+  if (locked()) return renderSettings();
   if (on && outer.fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + OPEN_TOO)) return renderSettings();
   const r = outer.fileProtect === !on ? null : await window.p9.fileProtection(!on).catch(() => null);
   outer.fileProtect = r?.status === 200 ? r.body.on : outer.fileProtect;
   if (outer.fileProtect !== !on) return renderSettings();
   if (on && outer.agentLock) { const l = await outer.liveChat.call('setLock', { on: false }); outer.agentLock = l.status === 200 ? l.body.on : outer.agentLock; }
+  if (locked()) { if (r) { const b = await window.p9.fileProtection(true).catch(() => null); outer.fileProtect = b?.status === 200 ? b.body.on : outer.fileProtect; } return renderSettings(); }
   setWarnsLoose(!on); setStarts(on, START);
   // MC-4: the chats already open follow too, not only new ones. On: each goes to its agent's loosest mode. Off: one in
   // that mode, or with it queued, goes back to the start mode. A chat with a turn running gets it queued, as a pick made

@@ -1247,7 +1247,9 @@ function applyChat(ev, into) {
     case 'resumed': notice('Resumed natively (session/resume)' + (typeof d.model === 'string' ? ' on ' + d.model : '')); if (Array.isArray(d.restoreNotice) && d.restoreNotice.length) notice('Could not restore ' + d.restoreNotice.join(', ')); s.state = 'running'; s.session = d.session; break;
     // The mode the daemon last set for this chat (the phone's own rule), so after a restart or an update the Mode pill, and
     // the mode each message sends, are the chat's own and not a new chat's. The lock's mode is the lock's, not the chat's.
-    case 'mode': if (!into && !d.lock && modes[s.agent]?.includes(d.name)) s.mode = d.name; break;
+    // Review 13: taken as the daemon gave it, not checked against the catalog (it may not have answered yet, or a remote's
+    // differs): the daemon only sets a mode from its own allowlist. Only what the user can pick comes from the catalog (modeMenu).
+    case 'mode': if (!into && !d.lock && typeof d.name === 'string' && d.name) s.mode = d.name; break;
     case 'moving': settle(); s.state = 'moving'; notice('Moving to the remote: this chat is paused here.'); break;
     case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Remote mode (the title-bar badge) and open it.'); break;
     case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;

@@ -63,7 +63,9 @@ test('CAT-2 widgets: the space check, both pages and the guide read one widget l
   assert.deepEqual(protocol.WIDGETS.filter((w) => w.tile).map((w) => w.id), ['idea', 'sprint', 'edit'], 'the three built-in tiles');
   // Review 12 nit: the lines in each page that draw a widget's name hold none of the names themselves, so a copied label fails.
   const quoted = (line) => protocol.WIDGETS.filter((w) => line.includes(`'${w.label}'`) || line.includes(`>${w.label}<`)).map((w) => w.label);
-  const pages = { 'mission-view.mjs': ['const BUILTIN =', 'class="wdg"'], 'phone.ts': ['const PHONE_WIDGET', 'const widgetLabel', 'const widgetRow'] };
+  // Review 13: the four widget windows' titles too (the desktop's widget headings and windows).
+  const pages = { 'mission-view.mjs': ['const BUILTIN =', 'class="wdg"'], 'phone.ts': ['const PHONE_WIDGET', 'const widgetLabel', 'const widgetRow'],
+    'controller.mjs': ['  mprimary: {', '  mnotes: {', '  mlaunch: {', '  musage: {'] };
   for (const [file, marks] of Object.entries(pages)) {
     const lines = readFileSync(path.join(root, 'apps/web/src', file), 'utf8').split('\n');
     for (const mark of marks) { const line = lines.find((l) => l.includes(mark));
@@ -121,13 +123,13 @@ test('CAT-2 settings: the window starts from the desktop\'s DEFAULT_SETTINGS, pa
 test('CAT-2 review 12: the desktop starts from its own catalog over the preload; with no loosest mode known Unrestricted is locked on both pages', async () => {
   const agents = publicAgents().agents;
   let exposed = null;
-  const electron = { contextBridge: { exposeInMainWorld: (_name, api) => { exposed = api; } }, ipcRenderer: { sendSync: (channel) => channel === 'p9:agents' ? agents : null, invoke() {}, on() {}, send() {} }, webUtils: {} };
+  const electron = { contextBridge: { exposeInMainWorld: (_name, api) => { exposed = api; } }, ipcRenderer: { sendSync: (channel) => channel === 'p9:agents' ? { agents, local: true } : null, invoke() {}, on() {}, send() {} }, webUtils: {} };
   const preload = await readFile(path.join(root, 'apps/desktop/preload.cjs'), 'utf8');
   vm.runInNewContext(preload, { require: (m) => m === 'electron' ? electron : {}, process: { argv: ['electron'], platform: 'linux', env: {} }, console });
-  assert.equal(JSON.stringify(exposed?.agents), JSON.stringify(agents), 'the preload hands the window main\'s catalog');
+  assert.equal(JSON.stringify(exposed?.agents), JSON.stringify({ agents, local: true }), 'the preload hands the window main\'s catalog');
   const [main, controller, settings, phone] = await Promise.all(['apps/desktop/main.mjs', 'apps/web/src/controller.mjs', 'apps/web/src/settings-view.mjs', 'apps/web/src/phone.ts'].map((f) => readFile(path.join(root, f), 'utf8')));
-  assert.match(main, /ipcMain\.on\('p9:agents', event => \{ event\.returnValue = event\.sender === window\.webContents \? publicAgents\(\)\.agents : \[\]; \}\);/, 'main.mjs answers with publicAgents()');
-  assert.match(controller, /\nfillAgents\(sampleView \? M\.agents : window\.p9\?\.agents \?\? \[\]\);/, 'the window takes it as it starts');
+  assert.match(main, /ipcMain\.on\('p9:agents', event => \{ event\.returnValue = event\.sender === window\.webContents \? \{ agents: publicAgents\(\)\.agents, local: !serverHost \} : \{ agents: \[\], local: false \}; \}\);/, 'main.mjs answers with publicAgents(), and whether the daemon in use is this computer\'s');
+  assert.match(controller, /\nfillAgents\(sampleView \? M\.agents : window\.p9\?\.agents\?\.agents \?\? \[\], sampleView \|\| window\.p9\?\.agents\?\.local === true\);/, 'the window takes it as it starts, as its daemon\'s own only when local');
   // Unrestricted needs a loosest mode to switch to: none known locks it, whatever the lock and File protection say.
   security.fillAgents([]);
   assert.equal(security.freeLocked(false, true), true, 'no catalog: locked');
@@ -137,8 +139,34 @@ test('CAT-2 review 12: the desktop starts from its own catalog over the preload;
   assert.deepEqual([security.freeLocked(false, true), security.freeLocked(null, true), security.freeLocked(false, null)], [false, true, true], 'the catalog read: only an unknown lock or protection locks it');
   // Both pages draw the switch with it and check it again before changing anything.
   assert.match(settings, /box\('setFree', [^\n]*, freeLocked\(outer\.agentLock, outer\.fileProtect\), /, 'desktop: the switch is disabled by freeLocked');
-  assert.match(settings, /async function setUnrestricted\(on\) \{\n  if \(on && freeLocked\(outer\.agentLock, outer\.fileProtect\)\) return renderSettings\(\);/, 'desktop: and refuses before any change');
+  assert.match(settings, /async function setUnrestricted\(on\) \{\n(  \/\/[^\n]*\n)*  const locked = \(\) => on && freeLocked\(outer\.agentLock, outer\.fileProtect\);\n  if \(locked\(\)\) return renderSettings\(\);/, 'desktop: and refuses before any change');
   assert.match(phone, /toggle\('setFree', [^\n]*, freeLocked\(lock, protect\)\)/, 'phone: the switch is disabled by freeLocked');
   assert.match(phone, /async function setFree\(on: boolean\) \{\n  if \(on && freeLocked\(sec\.lock, sec\.protect\)\) return drawSettings\(\);/, 'phone: and refuses before any change');
   console.log('PASS CAT-2 review 12: the desktop has its catalog from the start; Unrestricted is locked with no loosest mode, on both pages');
+});
+
+// Review 13: a desktop on a remote starts from this computer's catalog, which only fills the pickers: Unrestricted and the
+// warnings wait for the remote's own GET /agents, and both pages check again before they commit. Replay keeps the daemon's mode.
+test('CAT-2 review 13: only the daemon in use\'s catalog unlocks Unrestricted and the warnings; both pages check again before committing; replay keeps a mode the catalog does not know', async (t) => {
+  const agents = publicAgents().agents, kept = new Map();
+  globalThis.localStorage = { getItem: (k) => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: (k) => kept.delete(k) };
+  t.after(() => { delete globalThis.localStorage; });
+  security.fillAgents(agents, false);
+  assert.deepEqual([security.modesKnown(), security.freeLocked(false, true), security.unrestricted(false, false, 'k:')], [false, true, false], 'this computer\'s catalog on a remote: locked, reads off');
+  assert.ok(helpers.modes.claude.length, 'it still fills the pickers');
+  security.fillAgents(agents);
+  assert.deepEqual([security.modesKnown(), security.freeLocked(false, true)], [true, false], 'the daemon in use answered: unlocked');
+  const [settings, phone, chat] = await Promise.all(['apps/web/src/settings-view.mjs', 'apps/web/src/phone.ts', 'apps/web/src/chat-view.mjs'].map((f) => readFile(path.join(root, f), 'utf8')));
+  // The warning switch is disabled by the same test as Unrestricted, on both pages.
+  assert.match(settings, /box\('setWarn', warn\[0\], warnsLoose\(\), modesKnown\(\) \? warn\[1\] : SECURITY\.noModes, !modesKnown\(\),/, 'desktop: the warnings wait for the modes');
+  assert.match(phone, /toggle\('setWarn', [^\n]*, warnsLoose\(\), !modesKnown\(\)\)/, 'phone: the warnings wait for the modes');
+  // Checked again after the awaits, before this device's part; protection it turned off goes back on.
+  assert.match(settings, /  if \(locked\(\)\) \{ if \(r\) \{ const b = await window\.p9\.fileProtection\(true\)[^\n]*\n  setWarnsLoose\(!on\); setStarts\(on, START\);/, 'desktop: checked again before committing');
+  assert.match(phone, /  if \(on && freeLocked\(sec\.lock, sec\.protect\)\) \{\n    if \(was && sec\.protect === false\) \{ const back = await sent\('\/file-protection', \{ on: true \}\);[^\n]*\n    return drawSettings\(\);\n  \}\n  setWarnsLoose\(!on\); setStarts\(on, START\);/, 'phone: checked again before committing');
+  // The phone's Settings does not wait on GET /agents.
+  assert.doesNotMatch(phone.slice(phone.indexOf('async function openSettings'), phone.indexOf('const toggle =')), /Promise\.all\([^\n]*loadAgents\(\)/, 'phone: the sheet draws without the catalog');
+  // Replay takes the daemon's mode as given; the catalog filters only the menu.
+  const line = chat.split('\n').find((l) => l.includes("case 'mode':"));
+  assert.ok(line && !/modes\[/.test(line), 'replay keeps a mode the catalog does not know yet');
+  console.log('PASS CAT-2 review 13: the catalog unlocks only from the daemon in use; both pages recheck; replay keeps the daemon\'s mode');
 });

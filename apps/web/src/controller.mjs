@@ -14,7 +14,7 @@ import { onboardCard, templateWords, previewCard, freeName } from './onboarding.
 import { createSky } from './landing-sky.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
-import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
+import { PARTS, partOrder, WIDGETS } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 import { installMission } from './mission-view.mjs';
 import { installChat, askKey } from './chat-view.mjs';
@@ -107,7 +107,8 @@ const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], histo
 // The sample's GET /agents answer, or (review 12) this computer's own catalog over the preload (main.mjs p9:agents), so history
 // replays, a new chat and its first send, and Settings have every agent's modes before GET /agents answers (chat-view.mjs
 // loadAgents replaces them). ponytail: only the modes; a third local agent's name waits for GET /agents (two ship today).
-fillAgents(sampleView ? M.agents : window.p9?.agents ?? []);
+// Review 13: it counts as the daemon's own catalog (security.mjs CATALOG) only when that daemon is this computer's.
+fillAgents(sampleView ? M.agents : window.p9?.agents?.agents ?? [], sampleView || window.p9?.agents?.local === true);
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 // The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
 const SP = { on: false, data: null, error: '', waiting: 0, timer: 0 };
@@ -576,15 +577,17 @@ function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'p
 // section opens in a window). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
+// Review 13: the four widget windows' titles are the widgets' names in packages/protocol WIDGETS (CAT-2).
+const WIDGET_NAME = Object.fromEntries(WIDGETS.map(w => [w.id, w.label]));
 const wins = {
-  mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
+  mprimary: { show: () => live.primary, title: () => WIDGET_NAME.primary, card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
-  mnotes: { show: () => widgetOn('notifications'), title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
-  mlaunch: { show: () => widgetOn('apps'), title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
+  mnotes: { show: () => widgetOn('notifications'), title: () => WIDGET_NAME.notifications + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
+  mlaunch: { show: () => widgetOn('apps'), title: () => WIDGET_NAME.apps, card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (an app's or page's graphic
     // or icon is its launch button). ponytail: the registry has no icon field yet.
     body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
-  musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitCard(usage.limits, names); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? c.name + ' · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
+  musage: { show: () => widgetOn('usage'), title: () => WIDGET_NAME.usage, card: () => { const c = usage.limits && limitCard(usage.limits, names); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? c.name + ' · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's plan windows as rows with the pace tick
     inline: () => { const rows = usageRows();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>${tokensSay()}`) + profileLines(usage); } },

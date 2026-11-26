@@ -27,7 +27,12 @@ export const LOOSEST = {};
 // replaces helpers' modes, AUTO and LOOSE and this LOOSEST, so a renamed or new mode is offered, warns and starts as the
 // catalog says. Desktop (chat-view.mjs) and phone (phone.ts). ponytail: LOOSE is keyed by mode name, so a name two agents
 // share warns for both.
-export const fillAgents = (agents) => {
+// Review 13: ours says the modes came from the daemon in use (its GET /agents answered, or the desktop's own catalog while
+// that daemon is this computer's). Only then may they change what that daemon enforces (Unrestricted, the warnings):
+// a desktop on a remote starts from this computer's catalog, which the remote's may not match.
+export const CATALOG = { ours: false };
+export const fillAgents = (agents, ours = true) => {
+  CATALOG.ours = ours;
   for (const t of [modes, AUTO, LOOSE, LOOSEST]) for (const k in t) delete t[k];
   for (const a of agents) {
     const all = a.modes ?? []; // an older server's GET /agents names none: no modes offered, nothing thrown
@@ -46,8 +51,10 @@ export const setStarts = (on, startKey) => Object.entries(LOOSEST).forEach(([a, 
   : localStorage.getItem(startKey + a) === m && localStorage.removeItem(startKey + a));
 // Review 12: Unrestricted mode switches new chats to each agent's loosest mode, so with none known (GET /agents not read, or
 // it lists none) the switch is off and cannot be turned on: it never turns the lock and File protection off by itself.
-// Desktop (settings-view.mjs) and phone (phone.ts).
-export const freeLocked = (lock, protect) => lock === null || protect === null || !Object.keys(LOOSEST).length;
+// Review 13: known means from the daemon in use (CATALOG.ours). The warning switch is disabled by the same test.
+// Desktop (settings-view.mjs) and phone (phone.ts); each checks freeLocked again before every change it commits.
+export const modesKnown = () => CATALOG.ours && Object.keys(LOOSEST).length > 0;
+export const freeLocked = (lock, protect) => lock === null || protect === null || !modesKnown();
 // Before GET /agents answers there are no loosened modes to check, so it reads off.
-export const unrestricted = (lock, protect, startKey) => lock === false && protect === false && Object.keys(LOOSEST).length > 0 && !warnsLoose()
+export const unrestricted = (lock, protect, startKey) => lock === false && protect === false && modesKnown() && !warnsLoose()
   && Object.entries(LOOSEST).every(([a, m]) => localStorage.getItem(startKey + a) === m);

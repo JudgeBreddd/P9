@@ -863,7 +863,9 @@ export async function createDesktop({ state, open } = {}) {
     ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
   // Review 12 (CAT-2): this computer's agent catalog (GET /agents' answer) for the preload, so the window has every agent's modes
   // before the daemon answers. Over IPC, not an argument: the catalog grows, and an argument has a length limit.
-  ipcMain.on('p9:agents', event => { event.returnValue = event.sender === window.webContents ? publicAgents().agents : []; });
+  // Review 13: local says whether the daemon in use is this computer's own (the window reloads on every switch, so it holds
+  // for the window's life); on a remote the catalog only fills the pickers until the remote's GET /agents answers (security.mjs).
+  ipcMain.on('p9:agents', event => { event.returnValue = event.sender === window.webContents ? { agents: publicAgents().agents, local: !serverHost } : { agents: [], local: false }; });
   ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
   const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}],
     // Settings > General: {} reads the welcome message setting, { show } changes it.

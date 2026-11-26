@@ -7,7 +7,7 @@ import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs'; import { shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
-import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents, freeLocked, LOOSEST } from './security.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents, freeLocked, modesKnown } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
@@ -2592,7 +2592,11 @@ const sec: { lock: boolean | null; protect: boolean | null; settings: Record<str
 async function openSettings() {
   openSheet('Settings', '<div id="phoneSettings" class="stack"><p class="muted">Loading…</p></div>');
   // Review 12: the agents' modes are read again too, so a failed first read does not leave Unrestricted waiting for good.
-  const [build, lock, protect, files] = await Promise.all([...['/rebuild', '/agent-lock', '/file-protection', '/setup/settings'].map((path) => request(path).catch(() => null)), loadAgents()]);
+  // Review 13: on their own, so a hung read leaves only the switches that need them disabled; when they land the sheet is
+  // drawn again, unless something in it has focus (a Mission row being typed in; the next draw then shows them).
+  void loadAgents().then(() => { const box = document.getElementById('phoneSettings');
+    if (box?.querySelector('#setFree') && !box.contains(document.activeElement)) drawSettings(box.querySelector('#secNote')?.textContent ?? ''); });
+  const [build, lock, protect, files] = await Promise.all(['/rebuild', '/agent-lock', '/file-protection', '/setup/settings'].map((path) => request(path).catch(() => null)));
   Object.assign(sec, { build, lock: lock?.on ?? null, protect: protect?.on ?? null, settings: files?.settings ?? null });
   drawSettings();
 }
@@ -2603,8 +2607,9 @@ function drawSettings(note = '') {
   box.innerHTML = '<h2 class="eyebrow">Security settings</h2>'
     + toggle('setLock', lock === null ? [SECURITY.lock[0], SECURITY.unknown] : SECURITY.lock, lock === true, lock === null)
     + toggle('setProtect', protect === null ? [SECURITY.protect[0], SECURITY.unknown] : protect ? SECURITY.protect : [SECURITY.protect[0], SECURITY.protectOff], protect !== false, protect === null)
-    + toggle('setWarn', SECURITY.warn, warnsLoose())
-    + toggle('setFree', Object.keys(LOOSEST).length ? SECURITY.unrestricted : [SECURITY.unrestricted[0], SECURITY.noModes], unrestricted(lock, protect, START), freeLocked(lock, protect))
+    // Review 13: with no loosened mode known, the warnings have nothing to change: disabled, as Unrestricted.
+    + toggle('setWarn', modesKnown() ? SECURITY.warn : [SECURITY.warn[0], SECURITY.noModes], warnsLoose(), !modesKnown())
+    + toggle('setFree', modesKnown() ? SECURITY.unrestricted : [SECURITY.unrestricted[0], SECURITY.noModes], unrestricted(lock, protect, START), freeLocked(lock, protect))
     + `<p class="muted" id="secNote" role="status">${escape(note)}</p>`
     + (settings ? '<h2 class="eyebrow">Mission Control files</h2>' + missionKeys().map(([k, name]) => `<label class="mission-file"><strong>${escape(name)}</strong>`
       + (k === 'notes_roots' ? `<textarea class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${escape(missionShown(k, settings[k]))}</textarea>`
@@ -2637,11 +2642,18 @@ async function setSecurity(change: { lock?: boolean; protect?: boolean }) {
 async function setFree(on: boolean) {
   if (on && freeLocked(sec.lock, sec.protect)) return drawSettings(); // review 12: no loosest mode known, nothing changes
   if (on && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + '\n\n' + FILE_PROTECTION_RISK)) return drawSettings();
+  const was = sec.protect;
   for (const [path, key, want] of [['/file-protection', 'protect', !on], ['/agent-lock', 'lock', false]] as const) {
     if (sec[key] === want || (key === 'lock' && !on)) continue;
     const result = await sent(path, { on: want });
     if (result.status !== 200) return drawSettings('Not changed: ' + said(result));
     sec[key] = result.body.on as boolean;
+  }
+  // Review 13: checked again before this phone's part is committed, as the modes can land during the two changes above;
+  // protection this turned off goes back on. (confirm() blocks the page, so nothing lands while it is open.)
+  if (on && freeLocked(sec.lock, sec.protect)) {
+    if (was && sec.protect === false) { const back = await sent('/file-protection', { on: true }); if (back.status === 200) sec.protect = back.body.on as boolean; }
+    return drawSettings();
   }
   setWarnsLoose(!on); setStarts(on, START);
   drawSettings();
