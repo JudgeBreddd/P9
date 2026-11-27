@@ -1357,7 +1357,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
         const g = goalSaid(update);
-        if (g !== undefined) { goals.set(conversation.id, g); session.goalHeld = !!g; } // O265: this run's agent has it (api.goal)
+        if (g !== undefined) { goals.set(conversation.id, g); session.goalHeld = !!g; } // O265: this run's agent has it (api.setGoal)
         // An oversized update is stored without its _meta (trim); its goal (set or cleared, already cut to size) is put
         // back alone, so the read-back after a restart finds it and does not bring back the one before.
         let stored = trim(agentImages(update));
@@ -2467,7 +2467,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // said (a resume drops it and reports none). By a press, not on every resume: a met goal does not come back as a clear
     // (live check 2026-11-27, n=1), so an automatic set would bring a met goal back after each restart. In a running turn the
     // adapter's own _session/goal steers it in; otherwise it goes alone as a command (command, above), which starts the agent.
-    async goal(id, body) {
+    async setGoal(id, body) { // not goal: that name is the read above (read_chat, list_chats)
       if (!ID.test(id ?? '') || !row(id)) return refused(404, 'unknown-conversation');
       if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'action' || !['set', 'clear'].includes(body.action)) return refused(400, 'request-refused');
       const g = goalNow(id), session = live.get(id), set = body.action === 'set';

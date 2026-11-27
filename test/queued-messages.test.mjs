@@ -392,7 +392,7 @@ test('A2 step 5: the agent\'s goal shows above the box with its status, follows 
   const sameBox = async (why) => assert.equal(await chat.pane.locator('.composer textarea').evaluate(el => el.p9Mark), 1, why);
   await goal('{"objective":"  ship the goal line  ","status":"active","iterations":2}', 2);
   await until(async () => await line().count() === 1, 'the goal shows');
-  assert.equal((await line().innerText()).replace(/\s+/g, ' ').trim(), 'Goal: ship the goal line', 'active is the usual status and is not shown');
+  assert.equal((await line().locator(':scope > span').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(), 'Goal: ship the goal line', 'active is the usual status and is not shown (the buttons aside)');
   await sameBox('the box is kept when the goal line appears');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-goal-line ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
   await goal('{"objective":"ship the goal line","status":"paused"}', 3);
