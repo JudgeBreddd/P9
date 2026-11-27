@@ -67,7 +67,7 @@ export const DELEGATE_TOOLS = (input) => {
       folder: { type: 'string', description: 'Where it starts, relative to the workspace. With worktree, every worker of your sprint comes from one repository: a folder of another is refused.' },
       worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
     ['ready', 'Finish your assigned task after reporting each check and the weakest part. A worker with a work queue (its role\'s items in the plan) reports its first item not yet passed: ready queues it for the reviewer (key review) and wakes it; your next item waits until this one passes. Do not use this for an unfinished task.', input({ commit: { type: 'string', description: 'The commit id of the work to review, as git in your start folder\'s repository knows it; it is recorded as sent (unknown-commit if that repository does not have it).' }, results: { type: 'array', items: { type: 'object', properties: { check: { type: 'string' }, result: { type: 'string' } }, required: ['check', 'result'] } }, weakest: { type: 'string' }, row: { type: 'string', description: 'The plan row this commit is for (its O-number, say O84). Each row gets its own review record; without it the record is your task\'s item, so two rows would share one.' } }, ['commit', 'results', 'weakest'])],
-    ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. P9 sends the worker your note, counts its fixes, and asks the lead for a larger model at the third fix. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
+    ['verdict', 'Review a worker at its ready commit, after its ready went through. A chat beside it calls this: another worker of the same lead, or a chat of its project. P9 sends the worker your note, counts its fixes, and at the third fix asks the lead for a larger model when there is one. Do not review your own work or work by a chat you started.', input({ chat, commit: { type: 'string' }, result: { type: 'string', enum: ['pass', 'fix'] }, note: { type: 'string' } }, ['chat', 'commit', 'result', 'note'])],
     ['schedule_prompt', 'Have P9 send a prompt later, once (at) or every so many minutes (every), to this chat (your own wake-up) or to a chat send_chat reaches. '
       + 'P9 sends it like send_chat with when: queue, so a chat that is working gets it when its turn ends. It is kept across a P9 restart; a run missed while P9 was down goes once when it is back. '
       + 'At most ' + SCHEDULES_MAX + ' per chat. With id: change one of yours (text, at, every, paused); paused: true stops it until paused: false. Returns its id and next run.',
@@ -871,6 +871,20 @@ export function createDelegate({ chat, allowed, usage }) {
     if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
+  // O243: the third fix asks the lead for a step up from the model the worker runs on (its live session's, else its newest
+  // config's, as send_chat reads it): only the larger families of its agent's ladder (agents.mjs), nothing about models at
+  // the top, and a plain "a larger model" for any other name (default, opusplan, none read yet). An agent with no ladder,
+  // or a provider profile (it may name its model fable while that routes to a smaller one), gets the plain notice. A family
+  // is read only from the forms P9 stores: a bare alias or a claude-<family>-... id, either with an optional [1m].
+  // ponytail: no cloud prefix (us.anthropic., an ARN) is read; no adapter P9 runs reports one, and such a name gets the plain notice.
+  const OR = new Intl.ListFormat('en', { type: 'disjunction' });
+  const thirdFix = (item, worker) => {
+    const c = chat.info?.(worker.id), ladder = (!c?.profile && CATALOG.find((a) => a.id === c?.provider)?.ladder) || [], f = ladder.join('|');
+    const model = ladder.length ? String(c.model ?? chat.gauge?.(worker.id)?.model ?? '').toLowerCase() : '';
+    const m = new RegExp(`^(?:claude-(${f})(?:-[a-z0-9.-]+)?|(${f}))(?:\\[1m\\])?$`).exec(model);
+    const at = ladder.indexOf(m?.[1] ?? m?.[2]), up = ladder.slice(at + 1).map((n) => n[0].toUpperCase() + n.slice(1));
+    return `[p9] ${item} by ${worker.title} got its third fix` + (at < 0 ? ': give the correction to a larger model.' : up.length ? `: give the correction to a larger model (${OR.format(up)}).` : '.');
+  };
   function verdict(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const found = reach(caller, args.chat), family = chat.family();
@@ -896,13 +910,13 @@ export function createDelegate({ chat, allowed, usage }) {
       // worker's next item, as outside a sprint (the work queue: that message ends the old ready).
       trail(worker.parent);
       if (args.result === 'pass') chat.prompt?.(args.chat, { text: `[p9] ${item} passed review at ${args.commit}. Start your next item.`, when: 'queue' }, undefined, 'p9').catch(() => {});
-      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: thirdFix(item, worker), when: 'queue' }, undefined, 'p9').catch(() => {});
       carry(worker.parent, { type: 'verdict', chat: caller, at: value.at }).catch(() => {});
     } else if (item && worker?.parent) {
       trail(worker.parent);
       const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
       chat.prompt?.(args.chat, { text: said, when: 'queue' }, undefined, 'p9').catch(() => {});
-      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: thirdFix(item, worker), when: 'queue' }, undefined, 'p9').catch(() => {});
     }
     return { verdict: value, ...(review && { review }) };
   }
@@ -980,7 +994,7 @@ export function createDelegate({ chat, allowed, usage }) {
     if (!chat.sprintFiles?.trail) return;
     const rows = chat.family().filter((c) => c.parent === lead).flatMap((c) => Object.entries(chat.sprint(c.id).reviews ?? {})
       .map(([item, r]) => `| ${cell(item)} | ${cell(c.title)} | ${cell(r.commit)} | ${r.state} | ${r.fixes} | ${r.larger ? 'yes' : ''} | ${new Date(r.at).toISOString()} |`));
-    try { chat.sprintFiles.trail(lead, '# Review trail\n\nWritten by P9 alone, at each ready and verdict: an edit here is replaced.\n\n| Item | Worker | Commit | State | Fix count | Larger model | When |\n|---|---|---|---|---|---|---|\n' + rows.join('\n') + (rows.length ? '\n' : '')); } catch { /* the record in P9 stands; the file is its copy */ }
+    try { chat.sprintFiles.trail(lead, '# Review trail\n\nWritten by P9 alone, at each ready and verdict: an edit here is replaced.\n\n| Item | Worker | Commit | State | Fix count | Third fix | When |\n|---|---|---|---|---|---|---|\n' + rows.join('\n') + (rows.length ? '\n' : '')); } catch { /* the record in P9 stands; the file is its copy */ }
   }
 
   // An archived chat is out of the sidebar, so no agent starts a turn in it (SECURITY.md § Delegate, "Archiving").

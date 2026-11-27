@@ -13,15 +13,17 @@
 // native: the agent's binary package name before its platform (linux-x64, win32-arm64, ...), as agents.json names it.
 // resultCopy (optional): its adapter may send a streamed reply again under the result's uuid (claude-agent-acp's result
 // fallback), so chat.mjs also drops a short copy under a uuid (DUP-1); without it only the same-id and 200-character rules apply.
+// ladder (optional): its model families, smallest first; a lead told of a worker's third fix is named only the ones above
+// the worker's (delegate.mjs thirdFix, O243). Without it, or on a provider profile, the lead is told only "a larger model".
 const STALE = 15 * 60 * 1000;
-const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes), usage: Object.freeze(agent.usage) });
+const entry = (agent) => Object.freeze({ ...agent, modes: Object.freeze(agent.modes), usage: Object.freeze(agent.usage), ...(agent.ladder && { ladder: Object.freeze(agent.ladder) }) });
 export const CATALOG = Object.freeze([
   entry({ id: 'claude', name: 'Claude Code', adapter: 'claude-agent-acp', native: '@anthropic-ai/claude-agent-sdk-', cliPass: ' --cli',
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], command: 'claude auth login' },
     signIn: { kind: 'browser', dir: 'claudeDir', file: '.credentials.json' },
     modes: { Auto: { value: 'auto', tier: 3 }, Manual: { value: 'default', tier: 1 }, Plan: { value: 'plan', tier: 0 },
       'Accept edits': { value: 'acceptEdits', tier: 2 }, 'Bypass permissions': { value: 'bypassPermissions', tier: 4 } },
-    acp: 1, tellStart: false, resultCopy: true,
+    acp: 1, tellStart: false, resultCopy: true, ladder: ['haiku', 'sonnet', 'opus', 'fable'],
     start: 'default', auto: 'Auto', narrow: 'plan', models: 'session', usage: { reader: 'claude-json', poll: 'claude-sdk', staleMs: STALE, pool: 'claude', hideSignedOut: false, apiPrice: true },
     signedOut: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
     why: 'Claude Code, for Claude chats and a terminal.',
