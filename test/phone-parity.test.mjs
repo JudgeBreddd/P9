@@ -589,6 +589,86 @@ test('O267b: a Take back whose answer is lost still puts the message and its fil
   assert.equal(await page.locator('#attached img').count(), 1, 'its file, once');
   assert.equal(await page.inputValue('#prompt'), 'take me back', 'its words, once');
 });
+// #547 review 2: the hand-back's signals (the prompt's 202, the Take back's answer, the removed event, a lost answer) come in
+// any order, and each used to clear something another still needed. Each test is one order the review named.
+const DOT = { name: 'dot.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') };
+// A message with a file held behind a running turn, its prompt's answer held back by the page (how: 'hold') or lost ('lose').
+// holdEvents(): the page's event reads answer only once the function it returns is called, so a Take back's own answer
+// lands before its removed event.
+const real = (route) => { const request = route.request(); return route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } }); };
+async function heldWithFile(t, text, how) {
+  const { page, server } = await phoneOn(t);
+  await newChat(page, 'claude');
+  let late = null; // routed from here: the turn's events below end the read already out, so every later one comes through this
+  await page.route((url) => url.pathname === '/chat/events', async (route) => { const answer = await real(route).catch(() => null); if (!answer) return route.abort().catch(() => {}); if (late) await late; await route.fulfill({ response: answer }).catch(() => {}); });
+  const holdEvents = () => { let go; late = new Promise((resolve) => { go = resolve; }); t.after(() => go()); return () => { late = null; go(); }; };
+  await send(page, 'slow');
+  await said(page, 'working');
+  let release; const gate = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  let first = true;
+  if (how) await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const answer = await real(route);
+    if (how === 'lose') return route.abort();
+    await gate; await route.fulfill({ response: answer }).catch(() => {});
+  });
+  await page.fill('#prompt', text);
+  await page.setInputFiles('#attachInput', DOT);
+  await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 10000 });
+  await page.click('#midTurn [data-when="queue"]');
+  await page.waitForSelector(`#queued:not([hidden]) article:has-text("${text}")`, { state: 'attached', timeout: 15000 });
+  return { page, server, release, holdEvents };
+}
+const takeBack = (page) => page.evaluate(() => { const strip = document.querySelector('#queued details'); if (!strip.open) strip.querySelector('summary').click(); document.querySelector('#queued [data-unhold]').click(); });
+const backOnce = async (page, text) => {
+  await page.waitForFunction((want) => document.querySelector('#prompt').value === want && document.querySelector('#queued').hidden, text, { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(500); // a late signal would act by now
+  assert.equal(await page.inputValue('#prompt'), text, 'its words, once');
+  assert.equal(await page.locator('#attached img').count(), 1, 'its file, once');
+};
+test('O267b: a Take back answered before the held message\'s own 202 keeps its words and file', { timeout: 90000 }, async (t) => {
+  const { page, release, holdEvents } = await heldWithFile(t, 'mine first', 'hold');
+  const events = holdEvents(), answered = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/unhold'));
+  await takeBack(page);
+  assert.equal((await answered).status(), 200); await page.waitForTimeout(300); events(); // its 200 first, then its removed event
+  await page.waitForSelector('#queued', { state: 'hidden', timeout: 15000 }); // its 200 and its removed event are in
+  release();
+  await page.waitForFunction(() => !document.querySelector('#composerNote').textContent.includes('Sending'), null, { timeout: 15000 }).catch(() => {});
+  await backOnce(page, 'mine first');
+});
+test('O267b: a removed event before the 202 puts the words back above a box changed meanwhile, with the file', { timeout: 90000 }, async (t) => {
+  const { page, server, release } = await heldWithFile(t, 'mine', 'hold');
+  await page.fill('#prompt', 'other');
+  await page.route((url) => url.pathname.endsWith('/unhold'), async (route) => { await server.desk(new URL(route.request().url()).pathname, 'POST', route.request().postDataJSON()); await route.abort(); }); // its answer is lost
+  await takeBack(page);
+  await page.waitForSelector('#queued', { state: 'hidden', timeout: 15000 }); // the removed event is in
+  release();
+  await backOnce(page, 'mine\nother');
+});
+test('O267b: a held message taken back after its prompt\'s answer was lost stays in the box through the replayed 202', { timeout: 90000 }, async (t) => {
+  const { page } = await heldWithFile(t, 'mine lost', 'lose');
+  await page.waitForFunction(() => /Not sent/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  await takeBack(page);
+  await page.waitForSelector('#queued', { state: 'hidden', timeout: 15000 });
+  const replay = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/prompt'), { timeout: 30000 });
+  // The same send again (a retry carries the first try's when, whichever button sends it): the daemon replays its 202.
+  await page.click(await page.locator('#midTurn').isVisible() ? '#midTurn [data-when="queue"]' : '#composer button[type="submit"]');
+  assert.equal((await replay).status(), 202);
+  await backOnce(page, 'mine lost');
+});
+test('O267b: a Take back answered outcome-unknown is settled by its removed event', { timeout: 90000 }, async (t) => {
+  const { page, server, holdEvents } = await heldWithFile(t, 'mine unknown');
+  const events = holdEvents(), answered = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/unhold'));
+  await page.route((url) => url.pathname.endsWith('/unhold'), async (route) => {
+    await server.desk(new URL(route.request().url()).pathname, 'POST', route.request().postDataJSON());
+    await route.fulfill({ status: 409, json: { error: 'outcome-unknown' } });
+  });
+  await takeBack(page);
+  assert.equal((await answered).status(), 409); await page.waitForTimeout(300); events(); // its 409 first, then its removed event
+  await backOnce(page, 'mine unknown');
+  assert.doesNotMatch(await page.locator('#composerNote').textContent(), /Not taken back/);
+});
 // #547 review: a GET /agents that landed after a new chat's start pick was drawn drew the Mode list again as "as set", so
 // the next prompt went without the pick.
 test('O267b: a late GET /agents keeps a new chat\'s start pick, and its prompt goes in it', { timeout: 90000 }, async (t) => {

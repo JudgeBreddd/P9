@@ -139,14 +139,15 @@ function csrfToken() {
 // (fillAgents, CAT-2).
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
 // #547 review: one read at a time (a slower, older answer cannot replace a newer one), and an answer is checked before it
-// replaces anything, so a malformed one keeps the names and modes there are. It never rejects.
+// replaces anything, so a malformed one keeps the names and modes there are. It never rejects, and has a deadline, so a
+// read that hangs does not hold every later caller (#547 review 2).
 type Agent = { id: string; name?: string; short?: string; modes?: { name: string }[] };
 const agentsOk = (agents: unknown): agents is Agent[] => Array.isArray(agents) && agents.every((a: Json | null) => !!a && typeof a.id === 'string'
   && (a.modes === undefined || (Array.isArray(a.modes) && a.modes.every((m: Json | null) => !!m && typeof m.name === 'string'))));
 let agentsRead: Promise<void> | undefined;
-const loadAgents = () => agentsRead ??= request('/agents').then(({ agents }) => { if (!agentsOk(agents)) return;
+const loadAgents = () => agentsRead ??= request('/agents', deadline(20000)).then(({ agents }) => { if (!agentsOk(agents)) return;
   fillAgents(agents); for (const k in names) delete names[k]; for (const a of agents) names[a.id] = a.short || a.name || a.id;
-  if (document.body.dataset.view === 'usage') void loadUsage(); }) // its plan cards are named from these (USE-1); the list no longer waits for them
+  if (usageData) usageLines(usageData); }) // its plan cards are named from these (USE-1): drawn again from the last read, not read again
   .catch(() => {}).finally(() => { agentsRead = undefined; });
 // A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
 const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
@@ -348,14 +349,14 @@ async function fetchEvents(wait = 0) {
     // those of a start the chat's close, Stop or exit ended before its turn (stopped, #540 review 15).
     for (const event of state.events) {
       if (Number(event.cursor) <= state.seen) continue;
-      const data = event.data as Json, held = String(data?.id);
-      if (event.type === 'unheld' && ['cancelled', 'stopped'].includes(String(data?.why))) putBack(String(event.conversation), String(data.text), held); // O61: into its own chat's text, open or not
-      else if (event.type === 'unheld' && data?.why === 'removed' && taking.has(held)) tookBack(held, typeof data.text === 'string' ? data.text : undefined);
-      else if (event.type === 'unheld' && data?.id != null) heldGone(held);
-      else if (event.type === 'user' && Array.isArray(data?.held)) for (const h of data.held as unknown[]) heldGone(String(h));
+      const data = event.data as Json, held = String(data?.id), chat = String(event.conversation);
+      if (event.type === 'unheld' && ['cancelled', 'stopped'].includes(String(data?.why))) handBack(held, chat, String(data.text)); // O61: into its own chat's text, open or not
+      else if (event.type === 'unheld' && data?.why === 'removed' && holds.get(held)?.taking) handBack(held, chat, typeof data.text === 'string' ? data.text : undefined); // a Take back of this phone's
+      else if (event.type === 'unheld' && data?.id != null) heldGone(held, chat);
+      else if (event.type === 'user' && Array.isArray(data?.held)) for (const h of data.held as unknown[]) heldGone(String(h), chat);
     }
   }
-  retireHeld(); state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
+  state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
 }
 // O251: behind, the held events go and the first read runs again: the shown chat's newest blocks, the others stubs. The
 // gap's ends are not played one by one; the list's states say which chats moved. No stub starts a load from here
@@ -1167,25 +1168,33 @@ function editDraft(id: string, change: (text: string) => string) {
   setDraft(id, text);
   if (id === boxFor) { box.value = text; label(); }
 }
-// #540 review 16: a held message's files by its held id (the 202's held), kept until it is sent or handed back, so a hand-back
-// (Take back, a Stop's cancel, stopped) puts them back with its words, as the window does (chat-view.mjs sentImgs). handed:
-// an id handed back (true) or sent (false) before its 202 came, noted only while a send with files waits for its 202
-// (filesSending) and cleared once none does (#547 review). taking: a Take back started here, settled once, by its answer or
-// by its removed event, whichever comes first (#547 review: an answer lost after the daemon let it go lost the message).
-// ponytail: in memory only, as the window: a reload loses them (attach again).
-const heldFiles = new Map<string, { chat: string; files: Attached[] }>(), handed = new Map<string, boolean>(), taking = new Map<string, { chat: string; text: string }>();
-let filesSending = 0;
-const filesBack = (id: string, files?: Attached[]) => { if (!files?.length) return; attached.set(id, [...files, ...attached.get(id) ?? []]); keepAttached(); if (id === openId) renderAttached(); };
-const putBack = (id: string, text: string, held?: string) => {
-  editDraft(id, (now) => text + (now ? '\n' + now : ''));
-  if (held) { taking.delete(held); filesBack(id, heldFiles.get(held)?.files); if (!heldFiles.delete(held) && filesSending) handed.set(held, true); }
+// #540 review 16, #547 reviews: one record per held id (the 202's held, or one an event names), so a hand-back (Take back,
+// a Stop's cancel, stopped) puts a held message's words and files back, as the window does (chat-view.mjs sentImgs). Each
+// signal fills in what it knows, in any order: the 202 its files, an event or the /unhold answer its fate, and a fate once
+// set is never cleared. A message handed back goes back once, when its files are known: while a send of this phone's in
+// that chat has no answer yet (inFlight, kept through a timeout) it may be that one, and its 202 brings them.
+// ponytail: in memory only, as the window (a reload loses the files: attach again), and only the 50 newest ids, settled
+// ones kept as their fate alone: a message still held behind 50 newer ones loses its files.
+type Hold = { chat: string; text?: string; files?: Attached[]; fate?: 'back' | 'sent'; taking?: boolean; done?: boolean };
+const holds = new Map<string, Hold>();
+const holdOf = (held: string, chat: string) => {
+  let h = holds.get(held);
+  if (!h) { holds.set(held, h = { chat }); for (const old of holds.keys()) { if (holds.size <= 50) break; holds.delete(old); } }
+  return h;
 };
-const tookBack = (held: string, text?: string) => { const take = taking.get(held); if (take) putBack(take.chat, text ?? take.text, held); };
+const filesBack = (id: string, files?: Attached[]) => { if (!files?.length) return; attached.set(id, [...files, ...attached.get(id) ?? []]); keepAttached(); if (id === openId) renderAttached(); };
+const putBack = (id: string, text: string) => editDraft(id, (now) => text + (now ? '\n' + now : ''));
+const settle = (held: string) => {
+  const h = holds.get(held);
+  if (!h || h.done || !h.fate || (h.fate === 'back' && !h.files && inFlight.has(h.chat))) return;
+  if (h.fate === 'back') { if (h.text) putBack(h.chat, h.text); filesBack(h.chat, h.files); }
+  h.done = true; delete h.files; delete h.text;
+};
+const settleChat = (chat: string) => { for (const [held, h] of holds) if (h.chat === chat) settle(held); };
+// text: the daemon's words (an edit may be newer than this phone's copy), else the queue row's.
+const handBack = (held: string, chat: string, text?: string) => { const h = holdOf(held, chat); h.fate ??= 'back'; if (text !== undefined && !h.done) h.text = text; settle(held); };
 // A held message that left any other way (sent, or let go unsent) takes its files with it.
-const heldGone = (held: string) => { taking.delete(held); if (!heldFiles.delete(held) && filesSending) handed.set(held, false); };
-// #547 review: a read that skipped how a held message ended (a jump) still lets its files go: its held event is read and it
-// is held no longer. ponytail: one whose held event is never read (a chat left a stub) keeps them until the page closes.
-const retireHeld = () => { for (const [held, { chat }] of heldFiles) if (!turn(chat).held.has(held) && eventsOf(chat).some((event) => event.type === 'held' && String((event.data as Json)?.id) === held)) heldFiles.delete(held); };
+const heldGone = (held: string, chat: string) => { holdOf(held, chat).fate ??= 'sent'; settle(held); };
 addEventListener('pagehide', keepDraft); document.addEventListener('visibilitychange', () => { if (document.hidden) keepDraft(); });
 function label() {
   const id = openId, send = one<HTMLButtonElement>('#composer button[type="submit"]');
@@ -1288,13 +1297,15 @@ one<HTMLElement>('#queued').onclick = async (event) => {
     const id = openId, item = turn(id).held.get(hold.dataset.unhold!);
     // O62: with a deadline, and a line when it did not work: the tap used to wait for good on a request that never answered.
     hold.disabled = true;
-    const key = hold.dataset.unhold!;
-    if (item) taking.set(key, { chat: id, text: item.text });
+    const key = hold.dataset.unhold!, h = holdOf(key, id);
+    h.taking = true; if (item && !h.done) h.text ??= item.text;
     try {
       const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: key }, SEND_DEADLINE);
-      if (result.status === 200) tookBack(key, typeof result.body.text === 'string' ? result.body.text : undefined); // the daemon's words: an edit may be newer than this copy
-      else { taking.delete(key); if (result.status !== 409) note(`Not taken back: ${result.body.error ?? result.status}`); } // 409: it was sent already, and the events show it
-    } catch (error) { hold.disabled = false; note(`Not taken back: ${(error as Error).message === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : 'P9 could not be reached'}. It is still waiting; tap Take back to try again.`); return; } // taking stays: if the daemon let it go, its removed event puts it back
+      if (result.status === 200) handBack(key, id, typeof result.body.text === 'string' ? result.body.text : undefined);
+      // outcome-unknown is no answer (the daemon is still on the first try): the record stays, and the removed event or a later
+      // tap's replayed answer settles it. 409 otherwise: it was sent already, and the events show it.
+      else if (result.body.error !== 'outcome-unknown') { h.taking = false; if (result.status !== 409 && h.fate !== 'back') note(`Not taken back: ${result.body.error ?? result.status}`); }
+    } catch (error) { hold.disabled = false; if (h.fate !== 'back') note(`Not taken back: ${(error as Error).message === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : 'P9 could not be reached'}. It is still waiting; tap Take back to try again.`); return; } // taking stays: if the daemon let it go, its removed event puts it back (and no line: it is back)
     await fetchEvents().catch(() => {}); render(); return;
   }
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
@@ -1366,20 +1377,18 @@ async function submitFromBox(event: Event) {
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
   const sent = { ...first, ...attachBody(images) };
   inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
-  // handed is noted while this waits (heldFiles, above) and cleared after the answer has been taken (a microtask: the code
-  // below runs first, with no await before it takes the 202's held).
-  if (images.length) filesSending++;
-  const answered = () => { if (images.length && !--filesSending) queueMicrotask(() => { if (!filesSending) handed.clear(); }); };
-  const result = await mutate(prompt, sent, SEND_DEADLINE).catch((error) => { answered(); throw error; }); answered();
+  const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
   if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
   inFlight.delete(id); keepInFlight();
+  if (result.status !== 202) settleChat(id); // a message handed back in this chat meanwhile was not this send: it goes back now
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
   if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id);
-    const held = typeof result.body.held === 'string' ? result.body.held : ''; if (held && images.length) { const was = handed.get(held); handed.delete(held); if (was) filesBack(id, images); else if (was === undefined) heldFiles.set(held, { chat: id, files: images }); } } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+    // Its held id's record takes its files; one already handed back gets them back here, once (settle).
+    const held = typeof result.body.held === 'string' ? result.body.held : ''; if (held) { const h = holdOf(held, id); if (!h.done) h.files = images; else if (h.fate === 'back') filesBack(id, images); } } settleChat(id); label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -2495,22 +2504,27 @@ async function loadUsage() {
     // request() turns a body it could not parse (cut short, stalled) into {}: that is a failed read, not an empty one.
     if (!data || !Object.keys(data).length) throw new Error('cut short');
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-    // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
-    // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
-    const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
-    const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id])).join('')}</div>` : '';
-    UH.shown = data.telemetryTab !== false;
-    if (data.state === 'unavailable') { UH.limits = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); drawUsage(); return; }
-    const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
-    // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before
-    // it stalls (P5). A stopped chat's last fill is history and is left out.
-    const chat = (id: string) => state.conversations.find((item) => item.id === id);
-    const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
-    const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    UH.limits = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
-      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
-    drawUsage();
+    usageData = data; usageLines(data);
   } catch { if (seq === usageRead) { UH.limits = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; drawUsage(); } }
+}
+// The Usage screen's Limits from one read: also drawn again from the last good one when the agents' names arrive (#547 review).
+let usageData: Usage | undefined;
+function usageLines(data: Usage) {
+  // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
+  // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
+  const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
+  const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id])).join('')}</div>` : '';
+  UH.shown = data.telemetryTab !== false;
+  if (data.state === 'unavailable') { UH.limits = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); drawUsage(); return; }
+  const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
+  // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before
+  // it stalls (P5). A stopped chat's last fill is history and is left out.
+  const chat = (id: string) => state.conversations.find((item) => item.id === id);
+  const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
+  const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
+  UH.limits = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
+    + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
+  drawUsage();
 }
 // Refresh reads what is shown: on Tokens or Cost their history too (superseding a read still out), and spins until it
 // answers; on Limits the history is marked old, so opening Tokens or Cost reads it again.
