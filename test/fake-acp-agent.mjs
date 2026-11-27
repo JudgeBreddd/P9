@@ -250,6 +250,8 @@ const connection = acp.connectAgent(stream, {
     // Every prompt's text blocks, only for a test that put log-prompts in the folder (a chat folder's listing stays its own).
     if (existsSync('log-prompts')) appendFileSync('prompts.log', JSON.stringify(params.prompt.filter((block) => block.type === 'text').map((block) => block.text)) + '\n');
     const text = textOf(params.prompt);
+    // O246: modes.log, when it exists, gets each prompted turn's mode and text (the mode the turn ran in).
+    if (existsSync('modes.log')) appendFileSync('modes.log', JSON.stringify({ mode, text }) + '\n');
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     for (const block of params.prompt) if (block.type === 'text' && block.text.startsWith(NOTE) && block.text.includes(']\n\n')) await say('note:' + block.text.slice(block.text.indexOf(']\n\n') + 3).trim());
     if (text === 'crash') process.exit(3);

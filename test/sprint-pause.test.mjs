@@ -200,8 +200,9 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   // crash-two and crash-three may wait together behind it and go as one prompt: every name in each prompt counts.
   assert.deepEqual(went.flatMap((e) => e.data.text.match(/crash-\w+/g)), ['crash-one', 'crash-one', 'crash-two', 'crash-three'], 'a message was lost or sent twice');
   assert.ok(!went[0].data.repeat && went[1].data.repeat === true && went[1].data.text === went[0].data.text, 'the resent crash-one does not say it may be a repeat, or its text changed: ' + JSON.stringify(went.map((e) => [e.data.text, e.data.repeat])));
-  const modes = (await events(instance, id.w2)).filter((e) => e.cursor > mark && e.type === 'mode').map((e) => e.data.name);
-  assert.equal(modes.at(-1), 'Manual', 'a kept message ran wider than its sender is now: ' + JSON.stringify(modes));
+  // O246: a turn another chat sent writes no mode event (the owner's pick stays); its message says what it ran in (ranIn).
+  const ran = went.map((e) => e.data.ranIn);
+  assert.deepEqual(ran, went.map(() => 'Manual'), 'a kept message ran wider than its sender is now: ' + JSON.stringify(ran));
   assert.equal(await isPaused(), false);
 
   // A restart while resumed messages wait in a running turn's queue (202 held, in memory only): they stay Resume's until
@@ -210,7 +211,9 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
   again = await attach(t, instance, sprint, mark);
   assert.deepEqual(await again.tool('pause_sprint'), { paused: true });
-  await call(instance, `/chat/${id.w2}/prompt`, 'POST', { text: 'slow' }); // the owner's own message goes through; its turn waits for a cancel
+  // The owner's own message goes through; its turn waits for a cancel. O246: it runs in the owner's pick, so it names the
+  // lead's Manual here: a turn wider than the lead takes no send_chat from it (mode-escalation), paused or not.
+  await call(instance, `/chat/${id.w2}/prompt`, 'POST', { text: 'slow', mode: 'Manual' });
   await until(instance, (e) => e.conversation === id.w2 && e.type === 'user' && e.data.text === 'slow', mark);
   for (const text of ['queued-one', 'queued-two']) assert.ok((await again.tool('send_chat', { chat: id.w2, text })).held, text + ' was not kept');
   mark = await cursor(instance);
