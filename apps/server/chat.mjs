@@ -506,6 +506,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // daemon-10 compact_chat (api.command only, never a body field): a command P9 itself chose, sent as the prompt's only
   // block. The adapters take a slash command only from the first text block, so it carries no label, rules or notes.
   const commands = new WeakSet();
+  const goalSending = new Set(); // O265: chats with a goal-line press on its way (setGoal)
   let noteCount = 0;
   // A chat's waiting notes: from memory, or after a restart from prefs, each rebuilt as a note from its sender.
   const waitingFor = (id) => {
@@ -2462,24 +2463,26 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       commands.add(body);
       return api.prompt(id, body, undefined, from);
     },
-    // O265: the goal line's buttons. clear: the agent's goal goes, so a stuck or failed one is one click from gone; P9 stores
-    // the clear too, so the line goes at once. set: the stored active goal goes back once to an agent started since it was
-    // said (a resume drops it and reports none). By a press, not on every resume: a met goal does not come back as a clear
-    // (live check 2026-11-27, n=1), so an automatic set would bring a met goal back after each restart. In a running turn the
-    // adapter's own _session/goal steers it in; otherwise it goes alone as a command (command, above), which starts the agent.
+    // O265: the goal line's buttons. set: the stored active goal goes back to an agent started since it was said (a resume
+    // drops it and reports none). By a press, not on every resume: a met goal does not come back as a clear (live check
+    // 2026-11-27, n=1), so an automatic set would bring a met goal back after each restart. clear: the agent's goal goes.
+    // Both go alone as a command (command, above): tracked as a turn of its own, refused during a turn (turn-running), by
+    // the agent lock and a paused sprint as any prompt is. The line follows the agent's own report; P9 stores a clear itself
+    // only when the agent does not hold the goal (none since its start), so a stuck one is still one click from gone.
     async setGoal(id, body) { // not goal: that name is the read above (read_chat, list_chats)
       if (!ID.test(id ?? '') || !row(id)) return refused(404, 'unknown-conversation');
       if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'action' || !['set', 'clear'].includes(body.action)) return refused(400, 'request-refused');
-      const g = goalNow(id), session = live.get(id), set = body.action === 'set';
+      const g = goalNow(id), set = body.action === 'set';
       if (set && g?.status !== 'active') return refused(409, 'no-goal');
-      if (set && session?.goalHeld) return refused(409, 'goal-held');
-      if (!set) { goals.set(id, null); if (session) session.goalHeld = false; emit(id, 'update', { sessionUpdate: 'session_info_update', _meta: { jetbrains: { air: { goal: null } } } }); }
-      if (session?.ready && !session.stopping && row(id).state === 'turn') {
-        session.agent.request('_session/goal', { sessionId: session.sessionId, action: body.action, ...(set && { objective: g.objective }) }).catch(() => {});
-        return { status: 200, goal: set ? g : null };
-      }
-      const sent = await api.command(id, set ? '/goal ' + g.objective : '/goal clear');
-      return sent.status >= 300 ? sent : { status: 200, goal: set ? g : null };
+      if (set && live.get(id)?.goalHeld) return refused(409, 'goal-held');
+      if (goalSending.has(id)) return refused(409, 'goal-sending'); // a second press before the first one's answer
+      goalSending.add(id);
+      try {
+        const sent = await api.command(id, set ? '/goal ' + g.objective : '/goal clear');
+        if (sent.status >= 300) return sent;
+        if (!set && !live.get(id)?.goalHeld && goalNow(id)) { goals.set(id, null); emit(id, 'update', { sessionUpdate: 'session_info_update', _meta: { jetbrains: { air: { goal: null } } } }); }
+        return { status: 200 };
+      } finally { goalSending.delete(id); }
     },
     ask(id, text, from, still) {
       let end;

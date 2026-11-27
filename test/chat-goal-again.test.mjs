@@ -46,10 +46,29 @@ test('O265: Set again sends a stored active goal back once after a restart; a st
   from = await now();
   const cleared = await goal('clear');
   assert.equal(cleared.status, 200, JSON.stringify(cleared));
-  assert.equal(await goalOf(), null, 'Clear left the line');
   const user2 = await until(instance, (e) => e.conversation === kid && e.type === 'user' && e.data?.text === '/goal clear', from);
   assert.ok(user2.hit, 'the agent was not told to clear its goal');
+  assert.ok((await agentSaid(null, from)).hit, 'the agent did not report the clear');
   await until(instance, (e) => e.conversation === kid && e.type === 'turn-end', from);
+  assert.equal(await goalOf(), null, 'Clear left the line');
+  // Review r1: during a turn neither button sends anything (no prompt outside P9's turn); the line stays.
+  from = await now();
+  await call(instance, `/chat/${kid}/prompt`, 'POST', { text: 'goal {"objective":"ship B2","status":"active"}' }); // the MCP agent was the run before the restart
+  await until(instance, (e) => e.conversation === kid && e.type === 'turn-end', from);
+  from = await now();
+  await call(instance, `/chat/${kid}/prompt`, 'POST', { text: 'slow' });
+  await until(instance, (e) => e.conversation === kid && e.type === 'user' && e.data?.text?.includes('slow'), from);
+  const busy = await goal('clear');
+  assert.deepEqual([busy.status, busy.body?.error ?? busy.error], [409, 'turn-running'], 'Clear during a turn went');
+  await call(instance, `/chat/${kid}/cancel`, 'POST');
+  await until(instance, (e) => e.conversation === kid && e.type === 'turn-end', from);
+  assert.deepEqual(await goalOf(), { objective: 'ship B2', status: 'active' }, 'a refused Clear hid the goal');
+  // An agent that does not hold it (none since its start): P9 stores the clear itself, so a stuck line still goes.
+  await again('state-2b');
+  from = await now();
+  assert.equal((await goal('clear')).status, 200);
+  await until(instance, (e) => e.conversation === kid && e.type === 'turn-end', from);
+  assert.equal(await goalOf(), null, 'a clear to an agent without the goal left the line');
   // A stored clear is not set again, after a restart too.
   await again('state-3');
   assert.equal(await goalOf(), null, 'a restart brought back a cleared goal');

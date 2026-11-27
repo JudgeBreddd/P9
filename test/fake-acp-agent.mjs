@@ -162,8 +162,6 @@ const connection = acp.connectAgent(stream, {
   },
   // Like claude-agent-acp 0.88's _session/steering with idleBehavior promptRequired.
   async extMethod(method, params) {
-    // O265: like claude-agent-acp's _session/goal, the goal as a '/goal' prompt would set or clear it.
-    if (method === '_session/goal') { await goalSays(params.sessionId, params.action === 'set' ? '/goal ' + params.objective : '/goal clear'); return {}; }
     if (method !== '_session/steering' || !steering) throw acp.RequestError.methodNotFound(method);
     sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
