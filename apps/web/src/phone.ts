@@ -1475,7 +1475,9 @@ async function legacyOp(id: string, kept: Sending, files?: Attached[]) {
   kept.op = ''; note('Not sent: this phone\'s storage for P9 is full. Your message stays on its card.'); return false;
 }
 function answered(id: string, kept: Sending, files: (Attached | undefined)[], result: { status: number; body: Json }) {
-  if (stale(id, kept.op)) return false;
+  // O262 round 5: a late 202 still means its files went, so they are tombstoned even when another tab owns the card now (the
+  // storage event takes them out of that tab's box); nothing else of the card, draft or queue is touched.
+  if (stale(id, kept.op)) { if (result.status === 202) markSent(kept.files); return false; }
   const error = result.body.error;
   // 'outcome-unknown' is the daemon still running the first try: not an answer, so the send stays as it is.
   if (error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Tap Send again in a moment; it will not go twice.'); return false; }

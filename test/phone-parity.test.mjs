@@ -1180,6 +1180,31 @@ for (const [late, status] of [['turn-running', 409], ['bad-request', 400]]) test
   assert.equal(await page.evaluate((id) => localStorage.getItem('p9-queue:' + id), id), null, 'the old send was queued to go again');
 });
 
+// O262 round 5: a late 202 for a send with a file, taken back in another tab: the file went, so it leaves that tab's box too.
+test('O262 round 5: a late 202 for a send taken back in another tab marks its file sent, so the other tab cannot send it again', { timeout: 150000 }, async (t) => {
+  const { page, context, server, session } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { await held; await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' }).catch(() => {}); });
+  await paste(page, 'went.png');
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-img').length === 1, null, { timeout: 10000 });
+  await send(page, 'with a file');
+  await pendingSend(page, 'with a file');
+  const file = await page.evaluate((id) => JSON.parse(localStorage.getItem('p9-sending:' + id)).files[0], id);
+  const tab = await context.newPage();
+  await tab.goto(server.origin + '/phone/#chat=' + id);
+  await tab.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
+  await tab.reload();
+  await tab.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(tab, 'with a file');
+  await tab.click('#sending [data-take]');
+  await tab.waitForFunction(() => document.querySelector('#sending').hidden && document.querySelectorAll('#attached .chip-img').length === 1, null, { timeout: 10000 });
+  release(); // A's 202 arrives after B took the message back
+  await tab.waitForFunction(() => document.querySelectorAll('#attached .chip-img').length === 0, null, { timeout: 15000 });
+  assert.ok((await page.evaluate(() => JSON.parse(localStorage.getItem('p9-attached-sent') ?? '[]'))).includes(file), 'the sent file was not tombstoned');
+  assert.equal(await tab.inputValue('#prompt'), 'with a file', 'the taken-back text stays in the other tab\'s box');
+});
+
 test('O262 round 3: a retry refused by the lock (423) keeps its send and operation ID, and Send again arrives once', { timeout: 150000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
