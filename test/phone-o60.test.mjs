@@ -63,7 +63,7 @@ test('O61: each chat keeps its own unsent text', { timeout: 120000 }, async (t) 
   console.log('PASS O61: A and B each kept their own text, across a chat switch and a reload');
 });
 
-test('O62: a send that fails says why, and the text stays', { timeout: 120000 }, async (t) => {
+test('O62: a send that fails says why, and the message is kept for Send again', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server, A, 'Chat A', turn('hello a'));
   const { page } = await phone(t, server);
@@ -74,9 +74,10 @@ test('O62: a send that fails says why, and the text stays', { timeout: 120000 },
   await page.waitForFunction(() => !document.querySelector('#composerNote').hidden, null, { timeout: 10000 }).catch(() => {});
   const said = await page.locator('#composerNote').textContent();
   assert.match(said, /Not sent yet: P9 could not be reached/, 'a failed send said nothing');
-  assert.equal(await page.inputValue('#prompt'), 'does this arrive');
+  // O262: kept over the box as its own record, the box empty for the next message.
+  assert.match(await page.textContent('#sending'), /does this arrive/);
   await page.click('#send', { force: true });
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#sending').hidden, null, { timeout: 10000 });
   assert.equal(attempts.length, 2); assert.equal(attempts[1].op, attempts[0].op, 'the retry was a new operation: it could arrive twice');
   console.log('PASS O62: a dropped send wrote "' + said + '" then the retry went with the same operation ID');
 });
@@ -94,10 +95,10 @@ test('O62: a send with no answer is the same send after a reload', { timeout: 12
   await page.click('#send', { force: true });
   await page.waitForFunction(() => true); while (!attempts.length) await page.waitForTimeout(100);
   await page.reload(); await page.waitForSelector('#prompt', { state: 'visible', timeout: 15000 });
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'sent before the reload', null, { timeout: 15000 });
+  await page.waitForFunction(() => !document.querySelector('#sending').hidden && document.querySelector('#sending').textContent.includes('sent before the reload'), null, { timeout: 15000 });
   await page.waitForSelector('#pickers select[data-config="effort"]', { state: 'attached', timeout: 15000 });
   await page.click('#send', { force: true });
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#sending').hidden, null, { timeout: 10000 });
   assert.equal(attempts.length, 2);
   assert.deepEqual(attempts[1].body, attempts[0].body, 'the retry after a reload is a different message');
   assert.equal(attempts[1].op, attempts[0].op, 'the retry after a reload has a new operation ID: the daemon would run it twice');
@@ -214,7 +215,7 @@ test('O64: an unsent pick survives the agent reporting its settings, and is sent
   await page.fill('#prompt', 'first of two'); await page.click('#send', { force: true });
   while (!next.length) await page.waitForTimeout(100);
   await pick(page, 'max'); release();
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#sending').hidden, null, { timeout: 10000 }); // O262: answered
   later(server, A, [settings([{ value: 'max', name: 'Max' }, { value: 'xl', name: 'Extra' }])]); // a redraw, the agent still reporting low
   await page.waitForFunction(() => document.querySelectorAll('#pickers select[data-config="effort"] option').length === 4, null, { timeout: 30000 });
   assert.equal(await page.locator('#pickers select[data-config="effort"]').inputValue(), 'max', "a pick made during a send was cleared by that send's answer");

@@ -36,6 +36,8 @@ const drafts = new Map<string, string>((() => {
 })());
 // F4 item 11: the drafts waiting to be written (setDraft(), keepDraft()); declared here, as label() can run early.
 let boxFor = '', lastSized: string | null = null, draftDirty = false, draftTimer: ReturnType<typeof setTimeout> | undefined;
+// O262: per chat, the send on its way or with no answer yet (submitFromBox, keepDraft); going: on its way now; sendingSig: renderSending's last HTML.
+const sending = new Map<string, Sending>(), going = new Set<string>(); let sendingSig = '';
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; readOnly?: boolean; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 // F4 item 10: the file editor's code (CodeMirror) loads on the first file opened, or in idle time after the first chat
 // screen, as the terminal's does (loadTerm); before, it loaded and was built before the first screen. Until then no file
@@ -911,6 +913,8 @@ one('#sheetBody').addEventListener('click', async event => {
   while (adding.has(id)) await adding.get(id)!.catch(() => true); // a paste still being read (and its fallback to text) lands before the chat changes id
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
+  // O262: a send with no answer goes with it, under a new operation ID: the old chat was empty (its delete above says so), so it never arrived.
+  const kept = sending.get(id); if (kept) { sending.delete(id); sending.set(next, { ...kept, op: crypto.randomUUID() }); draftDirty = true; keepDraft(); }
   // O61: the text typed goes with the chat to its new id. The box itself changes owner here, before the list is read again:
   // whatever is typed while that read runs (the sheet can be dismissed) is the new chat's, and route(next) leaves the box alone.
   if (boxFor === id) { setDraft(next, one<HTMLTextAreaElement>('#prompt').value); setDraft(id, ''); boxFor = next; }
@@ -1153,10 +1157,14 @@ const turn = perChat((events) => {
 // The send button, as the desktop's: during a turn an empty box makes it Stop (the text stays yours), and text goes
 // in with Steer (after the current step) or, from the Queue button beside it, after the turn.
 // F4 item 11: the draft goes to storage once typing pauses, not on every key; a hidden page or the sign-in writes it at once.
+// O262: the sends on their way (sending) are written in the same item as the drafts, so one write moves a message from the box
+// to its send: a page killed at any moment has it in one place, never both or neither. false: storage refused the write.
+// ponytail: p9-inflight (the record before O262) is dropped; a send that build lost while it updates can go again as a new one.
 function keepDraft() {
-  clearTimeout(draftTimer); if (!draftDirty) return;
-  try { if (drafts.size) localStorage.setItem('p9-drafts', JSON.stringify(Object.fromEntries(drafts))); else localStorage.removeItem('p9-drafts'); localStorage.removeItem('p9-draft'); } catch {}
-  draftDirty = false;
+  clearTimeout(draftTimer); if (!draftDirty) return true;
+  const all = { ...Object.fromEntries(drafts), ...(sending.size && { sending: Object.fromEntries([...sending].map(([id, { qs, ...kept }]) => [id, { ...kept, picks: [...chosen.get(id) ?? []] }])) }) };
+  try { if (drafts.size || sending.size) localStorage.setItem('p9-drafts', JSON.stringify(all)); else localStorage.removeItem('p9-drafts'); localStorage.removeItem('p9-draft'); localStorage.removeItem('p9-inflight'); } catch { return false; }
+  draftDirty = false; return true;
 }
 function setDraft(id: string, text: string) {
   if (!id || (drafts.get(id) ?? '') === text) return;
@@ -1175,7 +1183,8 @@ addEventListener('pagehide', keepDraft); document.addEventListener('visibilitych
 function label() {
   const id = openId, send = one<HTMLButtonElement>('#composer button[type="submit"]');
   const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
-  const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length && !(quotes.get(id) ?? []).length;
+  const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !boxFiles(id).length && !(quotes.get(id) ?? []).length;
+  const again = sending.has(id) && !going.has(id); // O262: any send button sends that one again first
   const box = one<HTMLTextAreaElement>('#prompt');
   if (id === boxFor) setDraft(id, box.value);
   box.placeholder = 'Message ' + agentName(provider(id));
@@ -1189,10 +1198,11 @@ function label() {
     // At the bottom it stays at the bottom, in the same task as the key (a taller box makes the chat shorter).
     const to = stuck ? chat.scrollHeight : top; if (chat.scrollTop !== to) chat.scrollTop = to;
   }
-  send.dataset.stop = String(busy && empty);
-  one('#send .vh').textContent = busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
+  send.dataset.stop = String(busy && empty && !again);
+  one('#send .vh').textContent = again ? 'Send again' : busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
   // P18: the slim card over the box says a send goes into a running turn, and how (Steer is the arrow's default).
-  one<HTMLElement>('#midTurn').hidden = !busy || empty;
+  one<HTMLElement>('#midTurn').hidden = !busy || empty || again;
+  renderSending();
   one('#midTurnLabel').textContent = agentName(provider(id)) + ' is working';
 }
 // O109: the waiting messages are one line, "N queued", that opens to the list with a Take back on each; 30 of them used
@@ -1294,7 +1304,10 @@ async function submitFromBox(event: Event) {
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
   const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null, stop = submitter?.dataset.stop === 'true'; // what the tapped button was: forgetSent's redraw can turn Send into Stop
   if (art === null) forgetSent(); // O264: a file another tab sent does not go again, even when this tab missed the storage event (a frozen page)
-  const images = art === null ? attached.get(id) ?? [] : [];
+  // O262: a send with no answer yet goes again first, as itself (its body, files and operation ID), whatever the box holds now.
+  const waiting = sending.get(id);
+  if (waiting) { if (art !== null) { note('Your last message has no answer yet. Send it again or take it back first.'); return false; } return post(id, waiting); }
+  const images = art === null ? boxFiles(id) : [];
   // A2 step 6b: the chat's quotes go first, each with its comment (helpers.mjs quoted). A slash command goes as typed and
   // its quotes stay for the next message. ponytail: any text starting with / counts as a command here.
   const typed = (art ?? input.value).trim(), qs = art === null && !typed.startsWith('/') ? [...quotes.get(id) ?? []] : []; // a copy: the list can change while this is on its way
@@ -1307,10 +1320,6 @@ async function submitFromBox(event: Event) {
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
   }
   if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
-  // O267: the sent words are still in the box only as its start, as whole words ("look" is not in "lookup failed", typed while
-  // it was on its way): a substring took them out of the middle of a new edit, or counted them as there when they were not.
-  const sentIn = (now: string) => { const t = now.trimStart(); return !!typed && t.startsWith(typed) && (t.length === typed.length || /\s/.test(t[typed.length])); };
-  const withoutSent = (now: string) => sentIn(now) ? now.trimStart().slice(typed.length).trim() : now;
   const text = quoted(qs, typed);
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
@@ -1318,57 +1327,90 @@ async function submitFromBox(event: Event) {
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
-  // Round 3 and 4 review: a send that got no answer stays one submission, with its first wire body and operation ID, until the daemon
-  // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
-  // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
   const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's
-  const draft = JSON.stringify([text, images.map((image) => image.data.length + ':' + image.data.slice(-64)), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
-  if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
-  const again = inFlight.has(id);
-  // O206, O209: which picks this send carries, each by its pid. A retry is the first try again, so it carries the first try's picks, not
-  // newer ones of the same value.
-  const sentPids = again ? inFlight.get(id)!.pids : Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid ?? ''])), sentPick = sentPids.model;
+  // O206, O209: which picks this send carries, each by its pid, so a refusal clears those and not newer ones of the same value.
+  const pids = Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid ?? ''])), sentPick = pids.model;
   // Behind a queued message it queues too, so they go in the order typed. Attachments are not queued (up to 12 MiB does not
   // fit this phone's storage): they stay attached and the box says why.
-  if (again && !navigator.onLine) { note('Not sent yet: the phone is offline. Your message is still in the box; tap send when it is back online.'); return; }
-  if (!navigator.onLine || (!again && (asking(id) || queued(id).length))) {
+  if (!navigator.onLine || asking(id) || queued(id).length) {
     if (images.length) { note('Not sent: attachments go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), ...body }])) { note('Not queued: this phone\'s storage is full. Your message is still in the box.'); return; }
     spend(id, picked); if (art === null) input.value = ''; dropQuotes(id, qs); renderQueue(); label(); void drain(); return true;
   }
-  if (!again && submitter?.dataset.when === 'now' && running(id)) {
-    // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
-    // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended.
-    note('Stopping this turn, then sending.');
-    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
-    if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
-    // Each read has its own deadline (a stalled one counts as "still running"), so the wait ends after about 25 s and the guard lets go.
-    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await within(fetchEvents(1000), 5000).catch(() => {}); await new Promise((done) => setTimeout(done, 250)); }
-    if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
+  // P18: Interrupt goes as when 'now': the daemon stops the turn and sends this first (O255), in one request, so there is no
+  // wait here for the turn to end that a reload could cut in two. Mid-turn the default is Steer.
+  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
+  // O262: from the tap on, this send is its own record and the box is the next message. The record and the emptied box are one
+  // storage write (keepDraft); refused (storage full), nothing is sent and the box is as it was.
+  const kept: Sending = { op: crypto.randomUUID(), body: { ...body, ...(when && { when }) }, typed, files: images.map((image) => image.id!), pids, picked: [...picked], qs, ...(art !== null && { art: true }) };
+  const was = input.value; sending.set(id, kept); draftDirty = true;
+  if (art === null) editDraft(id, () => '');
+  if (!keepDraft()) {
+    sending.delete(id); if (art === null) editDraft(id, () => was);
+    note('Not sent: this phone\'s storage for P9 is full, so the message could not be kept while it is on its way. It is still in the box.'); return false;
   }
-  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
-  // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
-  const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
-  const sending = [...images], sent = { ...first, ...attachBody(sending) }; // O264: the files that go, as they go (a ✕ while it is on its way changes the live list)
-  inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
-  const result = await mutate(prompt, sent, SEND_DEADLINE);
-  // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
-  if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Your message is still in the box. Tap send again in a moment; it will not go twice.'); return false; }
-  inFlight.delete(id); keepInFlight();
-  // A refused send says so; it used to leave the box filled with no sign anything happened.
-  // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
-  // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
-  // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); markSent(sending); const left = (attached.get(id) ?? []).filter((image) => !sending.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
-  // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
-  // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
-  else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
-    if (images.length) note('Not sent: attachments go only when the agent is free. Your message is still in the box; send it again when the turn has ended.');
-    else { if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(sentPick && { pick: sentPick }), spends: Object.fromEntries(picked), ...body }])) { if (typed) editDraft(id, (now) => sentIn(now) ? now : typed + (now.trim() ? '\n' + now : '')); note('Not queued: this phone\'s storage is full. Your message is back in the box.'); return; } // O267: a box changed meanwhile gets it back above what is there
-      spend(id, picked, sentPids); if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); label(); note(); renderQueue(); void drain(); return true; }
-  }
-  else { note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`); dropRefused(id, (body as { model?: string }).model, sentPick); render(); }
+  if (art === null) dropQuotes(id, qs);
+  renderAttached(); return post(id, kept);
 }
+// O262: a send on its way, or one that got no answer, kept apart from the box (in memory and in p9-drafts' sending, by chat).
+// op: its operation ID, the same on every try, so the daemon replays a try that did arrive. files: the ids of the attached files
+// that go with it; they stay in the chat's attached list (and its IndexedDB) but are not the box's (boxFiles) until it is answered.
+// qs: its quotes, in memory only (a reload puts back the sent text, quotes and all). art: an artifact's comments, never the box's.
+type Sending = { op: string; body: Json; typed: string; files: string[]; pids: Record<string, string>; picked: [string, string][]; qs?: Quote[]; art?: true };
+function boxFiles(id: string) { const out = new Set(sending.get(id)?.files); return (attached.get(id) ?? []).filter((image) => !out.has(image.id ?? '')); }
+// Only an answer ends a send: accepted, it leaves; refused, its text goes back in the box above what is there now (nothing is
+// ever taken out of the box); no answer, it stays, shown over the box with Send again and Take back.
+async function post(id: string, kept: Sending) {
+  const files = kept.files.map((file) => (attached.get(id) ?? []).find((image) => image.id === file));
+  if (files.some((file) => !file)) { note('Not sent again: its files are not loaded on this phone yet. Try again in a moment, or take it back.'); return false; }
+  going.add(id); label();
+  let result: { status: number; body: Json };
+  try { result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...kept.body, ...attachBody(files as Attached[]) }, SEND_DEADLINE, kept.op); }
+  catch (error) { if ((error as Error).message === 'login-required') { giveBack(id, kept); finish(id); } throw error; } // a 401 never ran it: back in the box for after the sign-in
+  finally { going.delete(id); label(); }
+  // 'outcome-unknown' is the daemon still running the first try: not an answer, so the send stays as it is.
+  if (result.body.error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Tap Send again in a moment; it will not go twice.'); return false; }
+  finish(id);
+  const picked = new Map(kept.picked);
+  // O61, O62: the picks that went with it are no longer unsent: what the agent reports is the setting again.
+  if (result.status === 202) { spend(id, picked); markSent(files as Attached[]); const left = (attached.get(id) ?? []).filter((image) => !kept.files.includes(image.id ?? '')); if (left.length) attached.set(id, left); else attached.delete(id); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
+  // phone's own queue, as the desktop does. Attachments do not queue, so a send with files comes back to the box instead.
+  if (result.status === 409 && result.body.error === 'turn-running' && !kept.art && !files.length) {
+    const { when: _, ...plain } = kept.body;
+    if (!keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(kept.pids.model && { pick: kept.pids.model }), spends: Object.fromEntries(picked), ...plain as { text: string } }])) { giveBack(id, kept); note('Not queued: this phone\'s storage is full. Your message is back in the box.'); return; }
+    spend(id, picked, kept.pids); note(); renderQueue(); void drain(); return true;
+  }
+  giveBack(id, kept);
+  note(result.status === 409 && result.body.error === 'turn-running' ? 'Not sent: attachments go only when the agent is free. Your message is back in the box; send it again when the turn has ended.'
+    : result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${result.body.error ?? result.status}`);
+  dropRefused(id, (kept.body as { model?: string }).model, kept.pids.model); render();
+}
+function finish(id: string) { sending.delete(id); draftDirty = true; keepDraft(); label(); } // a write refused here only means a reload asks the daemon again, which replays its answer
+// A send that did not go, back in its chat's box above anything typed since; its files are the box's again, its quotes chips again.
+// An artifact's comments stay with the artifact.
+function giveBack(id: string, kept: Sending) {
+  if (kept.art) return;
+  const text = kept.qs ? kept.typed : String(kept.body.text ?? '');
+  if (text) putBack(id, text);
+  if (kept.qs?.length) quotes.set(id, [...kept.qs, ...quotes.get(id) ?? []]);
+  if (id === openId) renderAttached();
+}
+// The send over the box: what it is and whether it is on its way. With no answer, Send again (any send button does the same) and
+// Take back, which puts it in the box (it may have arrived: the chat shows it if so).
+function renderSending() {
+  const kept = sending.get(openId), box = one<HTMLElement>('#sending'), on = going.has(openId);
+  const what = kept ? kept.typed || `${kept.files.length} file${kept.files.length === 1 ? '' : 's'}` : '';
+  const html = !kept ? '' : `<article class="event tool"><b>${on ? 'Sending' : 'No answer yet'}</b><p>${escape(what)}</p>${on ? '' : '<button type="submit" form="composer" class="quiet" data-retry>Send again</button><button type="button" class="quiet" data-take>Take back</button>'}</article>`;
+  box.hidden = !kept; if (html !== sendingSig) box.innerHTML = sendingSig = html;
+}
+// Its buttons keep the box's focus as the send button does (P4), so a tap does not close the keyboard.
+for (const type of ['pointerdown', 'mousedown']) one<HTMLElement>('#sending').addEventListener(type, (event) => { if ((event.target as Element).closest('button')) event.preventDefault(); });
+one<HTMLElement>('#sending').addEventListener('click', (event) => {
+  const kept = sending.get(openId);
+  if (!kept || going.has(openId) || !(event.target as Element).closest('[data-take]')) return;
+  finish(openId); giveBack(openId, kept); note('Taken back. If it had reached P9 already, it is in the chat.');
+});
 // O204 review 1: a send refused for good took no model, so its pick is not pending any more and the select goes back to the running
 // model. A newer pick made while it was on its way is the user's next choice: it stays, pending, even when it names the same
 // model again (O206: matched by the pick's own pid, not its value).
@@ -1382,20 +1424,9 @@ function dropRefused(id: string, value: string | undefined, pid: string | undefi
 // Round 1 review: two taps while the first send is still in flight both read the same box and sent the message twice (also
 // through the queue fallback above). One submit at a time; a second tap does nothing until the first has settled.
 // Round 2 review: the guard must always let go, so a send has a deadline (SEND_DEADLINE, in mutate) and the read after it is not awaited.
-// A send that gets no answer keeps its text, images and operation ID; tapping send again is the same operation.
-// ponytail: the interrupt's wait for the turn to end (up to 20 s of reads) still holds the guard; each read is short.
+// A send that gets no answer keeps its text, files and operation ID (O262: its own record, Sending); Send again is the same operation.
 const SEND_DEADLINE = 30000;
-// O62: per chat, the send that got no answer, kept in this phone's storage with the settings chosen for it: after a reload
-// the same text sent again is that same send (its first body and operation ID), so it does not arrive twice.
-const inFlight = new Map<string, { draft: string; sent: Json; pids: Record<string, string> }>(); // pids: the picks the first try carried, by key (O206, O209)
-function keepInFlight() {
-  try {
-    if (inFlight.size) localStorage.setItem('p9-inflight', JSON.stringify(Object.fromEntries([...inFlight].map(([id, kept]) => [id, { ...kept, picks: [...chosen.get(id) ?? []] }]))));
-    else localStorage.removeItem('p9-inflight');
-  } catch {}
-}
-// Round 5 review: the identity of a pending send holds the settings the user chose and that took effect, never a count of events (a
-// cancelled warning, a no-op pick or an away-and-back would raise it) and never the adapter's own redraws (they set values, not choices).
+// Round 5 review: the picks hold the settings the user chose, never the adapter's own redraws (they set values, not choices).
 // Per chat and setting: `base` is what it was before the user's first change, so a setting changed back to it is as if never touched.
 // O206: pid names this one pick, so a refused send clears the pick it carried, never a later pick of the same value.
 const chosen = new Map<string, Map<string, { base: string; value: string; pid?: string }>>();
@@ -1411,22 +1442,20 @@ function spend(id: string, picked: Map<string, string>, queued?: Record<string, 
   for (const [key, value] of picked) if (queued ? own.get(key)?.pid === queued[key] : own.get(key)?.value === value) own.delete(key);
   if (!own.size) chosen.delete(id);
 }
+// O262: the sends kept over a reload (keepDraft), with the picks chosen when last written, so a refusal still clears its own.
 try {
-  for (const [id, kept] of Object.entries(JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, { draft: string; sent: Json; pick?: string; pids?: Record<string, string>; picks: [string, { base: string; value: string; pid?: string }][] }>)) {
-    // O206: a send kept before picks had a pid gets one here, and that one is the pick it carried, so its refusal still clears it.
-    if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
-    // O209: a send kept before pids were kept per key carries its restored picks' pids (the model's own pid if O206 kept one).
-    const pids = kept.pids ?? { ...Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid!])), ...(kept.pick && { model: kept.pick }) };
-    inFlight.set(id, { draft: String(kept.draft), sent: kept.sent, pids });
+  for (const [id, kept] of Object.entries((JSON.parse(localStorage.getItem('p9-drafts') ?? '{}') ?? {}).sending ?? {}) as [string, Sending & { picks?: [string, { base: string; value: string; pid?: string }][] }][]) {
+    if (typeof kept?.op !== 'string' || !kept.body || typeof kept.body !== 'object') continue;
+    const { picks, ...send } = kept;
+    if (Array.isArray(picks) && picks.length) chosen.set(id, new Map(picks));
+    sending.set(id, { ...send, typed: String(send.typed ?? ''), files: Array.isArray(send.files) ? send.files : [], pids: send.pids ?? {}, picked: Array.isArray(send.picked) ? send.picked : [] });
   }
 } catch {}
-const chosenKey = (id: string) => JSON.stringify([...chosen.get(id) ?? []].filter(([, pick]) => pick.value !== pick.base).map(([key, pick]) => [key, pick.value]).sort());
 // The model and the agent's own pickers have no warning: a change is accepted when it fires. (Mode is recorded in its own handler, once its warning is confirmed.)
 document.addEventListener('change', (event) => {
   const pick = event.target as HTMLSelectElement;
   if (pick.matches?.('#model, #pickers select')) choose(openId, pick.id === 'model' ? 'model' : 'config:' + pick.dataset.config, pick.value, pick.dataset.current ?? '');
 }, true);
-const within = <T,>(work: Promise<T>, ms: number) => Promise.race([work, new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 let submitting = false;
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   // O21: a tap while the last send is on its way did nothing and said nothing (a send can wait up to SEND_DEADLINE). A note
@@ -1440,7 +1469,7 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
     if (why === 'login-required') return false; // the sign-in page is opening; the text is kept for after it
     const cause = why === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : why === 'offline' ? 'the phone is offline'
       : (error as Error).name === 'QuotaExceededError' ? "this phone's storage for P9 is full" : 'P9 could not be reached';
-    note(stop ? `Not stopped: ${cause}. Tap Stop to try again.` : `Not sent yet: ${cause}. Your message is still in the box. Tap send to try again; it will not go twice.`);
+    note(stop ? `Not stopped: ${cause}. Tap Stop to try again.` : `Not sent yet: ${cause}. Tap Send again to try again; it will not go twice.`);
     return false;
   }
   finally { submitting = false; }
@@ -1547,7 +1576,7 @@ const chipName = (q: Quote) => q.comment ? escape(q.comment.slice(0, 60)) : `“
 // The chips' HTML as last drawn: a redraw that changes nothing keeps the buttons, so a tap or the focus on one is not lost.
 let attachedHtml = '';
 function renderAttached() {
-  const list = attached.get(openId) ?? [], qs = quotes.get(openId) ?? [], box = one<HTMLElement>('#attached');
+  const list = boxFiles(openId), qs = quotes.get(openId) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length && !qs.length; keepAttached();
   const html = qs.map((q, i) => `<span class="chip-quote" title="${escape(q.text + (q.comment ? '\n\n' + q.comment : ''))}"><button type="button" class="quote-go" data-quote-go="${i}" aria-label="Show the reply quoted: ${chipName(q)}"><span>${chipName(q)}</span></button><button type="button" class="quote-edit" data-quote-edit="${i}" aria-label="Edit the comment on ${chipName(q)}">✎</button><button type="button" data-unquote="${i}" aria-label="Remove the quote ${chipName(q)}">✕</button></span>`).join('') + list.map((image, i) => image.file ? `<span class="chip-file"><span>${escape(image.name)}</span><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>` : `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   if (html !== attachedHtml) box.innerHTML = attachedHtml = html;
@@ -1565,9 +1594,9 @@ async function attachNow(id: string, files: Iterable<File>) {
   const say = (text = '') => { if (openId === id) note(text); };
   say(); let ok = true; // true: every file attached
   for (const file of files) {
-    const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
+    const full = attachFull(file, boxFiles(id)); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
     // the list as it is now: a send answered meanwhile took its own files from it
-    try { const got: Attached = { ...await readAttachment(file, attached.get(id) ?? []), id: crypto.randomUUID() }; attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    try { const got: Attached = { ...await readAttachment(file, boxFiles(id)), id: crypto.randomUUID() }; attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
@@ -1575,7 +1604,8 @@ one<HTMLElement>('#attached').onclick = (event) => {
   const at = (event.target as Element).closest<HTMLButtonElement>('[data-unquote], [data-quote-edit], [data-quote-go]'), q = at && quotes.get(openId)?.[Number(at.dataset.unquote ?? at.dataset.quoteEdit ?? at.dataset.quoteGo)];
   if (at && q) { if (at.dataset.unquote !== undefined) { quoteFate.set(q, null); dropQuotes(openId, [q]); } else if (at.dataset.quoteEdit !== undefined) openQuote(openId, at.getBoundingClientRect(), q.text, q.text, q.key, q); else showQuoted(q); return; }
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
-  attached.get(openId)?.splice(Number(button.dataset.unattach), 1); renderAttached();
+  const list = attached.get(openId), gone = boxFiles(openId)[Number(button.dataset.unattach)]; // the box's files: a send's own are not drawn
+  if (list && gone) list.splice(list.indexOf(gone), 1); renderAttached();
 };
 const picker = one<HTMLInputElement>('#attachInput');
 const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');

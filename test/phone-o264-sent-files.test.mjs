@@ -79,7 +79,11 @@ test('O264 round 2: a file attached while a send is on its way stays, even when 
   for (const end = Date.now() + 10000; !posts.length && Date.now() < end;) await new Promise((done) => setTimeout(done, 100));
   assert.equal(posts.length, 1, 'the send went');
   await page.setInputFiles('#attachInput', [twin('b')]);
-  assert.deepEqual(await settled(page, 2), { chips: 2, stored: 2 }, 'b.txt attached and kept while the send waits');
+  // O262: a.txt is the send's, not the box's: the box shows b.txt only, and the store keeps both until the answer.
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-file').length === 1, null, { timeout: 10000 });
+  assert.deepEqual(await names(page), ['b.txt'], 'b.txt attached while the send waits');
+  for (const end = Date.now() + 10000; (await seen(page)).stored < 2 && Date.now() < end;) await new Promise((done) => setTimeout(done, 200));
+  assert.equal((await seen(page)).stored, 2, 'b.txt kept, a.txt still kept while its send waits');
   await blockStore(page); release();
   await page.waitForFunction(() => document.querySelectorAll('#attached .chip-file').length === 1, null, { timeout: 10000 });
   await page.reload(); await page.waitForSelector('#prompt', { state: 'visible', timeout: 15000 });
@@ -88,7 +92,8 @@ test('O264 round 2: a file attached while a send is on its way stays, even when 
   console.log('PASS O264 r2 twin: a.txt sent, b.txt (same size and end) attached meanwhile, only b.txt back after the reload');
 });
 
-test('O264 round 2: a ✕ on a file while its send is on its way does not bring it back after a reload', { timeout: 120000 }, async (t) => {
+// O262: the files on their way are the send's, not the box's: no chip (so no ✕) until the answer, and none come back after it.
+test('O264 round 2: files on their way are not in the box, and none come back after a reload when the store never took them out', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seedChat(server);
   const { page } = await phone(t, server);
@@ -99,13 +104,13 @@ test('O264 round 2: a ✕ on a file while its send is on its way does not bring 
   await send(page, 'both');
   for (const end = Date.now() + 10000; !posts.length && Date.now() < end;) await new Promise((done) => setTimeout(done, 100));
   assert.deepEqual([posts[0]?.images?.length, posts[0]?.files?.length], [1, 1], 'both files went');
+  await page.waitForFunction(() => !document.querySelectorAll('#attached .chip-img, #attached .chip-file').length, null, { timeout: 10000 });
   await blockStore(page);
-  await page.click('#attached [data-unattach="1"]'); // notes.txt, on its way
   release();
   await page.waitForFunction(() => !document.querySelectorAll('#attached .chip-img, #attached .chip-file').length, null, { timeout: 10000 });
   await page.reload(); await page.waitForSelector('#prompt', { state: 'visible', timeout: 15000 });
   assert.deepEqual(await settled(page, 0), { chips: 0, stored: 0 }, 'a file that went came back');
-  console.log('PASS O264 r2 remove: both files sent, one removed mid-send, none back after the reload');
+  console.log('PASS O264 r2 on its way: both files sent, no chips while on their way, none back after the reload');
 });
 
 test('O264 round 2: another tab rewriting the store with a sent file does not bring it back on the next launch', { timeout: 120000 }, async (t) => {

@@ -61,6 +61,9 @@ async function newChat(page, agent, made201 = () => {}, folder = '') {
 }
 const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };
 // P4: a mode is picked as a thumb does it, from the pill's sheet.
+// O262: a send with no answer yet is shown over the box (#sending), apart from it; Send again goes from there.
+const pendingSend = (page, text) => page.waitForFunction((w) => { const el = document.querySelector('#sending'); return !el.hidden && el.textContent.includes(w); }, text, { timeout: 10000 });
+const sendSettled = (page) => page.waitForFunction(() => document.querySelector('#sending').hidden, null, { timeout: 15000 });
 const pickMode = async (page, value) => { await page.click('#modePill'); await page.click(`#sheet[open] [data-mode="${value}"]`); };
 
 test('T6, T2, T1: a phone terminal has P9_PHONE=1, a desktop one does not; Paste sends the clipboard on its tap only', { timeout: 90000 }, async (t) => {
@@ -731,7 +734,7 @@ test('O55 round 1: two taps while the first send is still in flight send the mes
   await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { if (first) { first = false; await held; } await route.continue(); });
   await page.fill('#prompt', 'only once');
   await page.click('#composer button[type="submit"]');
-  await page.click('#composer button[type="submit"]'); // the same text is still in the box: the first has not answered
+  await page.click('#composer button[type="submit"]'); // the first has not answered yet
   await page.waitForTimeout(500);
   const queuedAtOnce = await page.locator('#queued article').count();
   release();
@@ -747,7 +750,7 @@ test('O55 round 1: two taps while the first send is still in flight send the mes
   assert.equal(await page.inputValue('#prompt'), '', 'the box is empty');
 });
 
-test('O55 round 2: a send that never gets its answer lets go at the deadline, keeps the draft, and the retry sends it once', { timeout: 180000 }, async (t) => {
+test('O55 round 2: a send that never gets its answer lets go at the deadline, keeps it apart from the box, and the retry sends it once', { timeout: 180000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
   // The daemon gets the first send and runs it, but its answer is held past the phone's deadline (the connection stays open).
@@ -764,13 +767,14 @@ test('O55 round 2: a send that never gets its answer lets go at the deadline, ke
   });
   await page.fill('#prompt', 'stalled once');
   await page.click('#composer button[type="submit"]');
-  // Not before the deadline: the box is shut to a second tap meanwhile, and the text is still there.
+  // Not before the deadline: the box is shut to a second tap meanwhile, and the send is kept over the box (O262), the box empty.
   await page.waitForFunction(() => !document.querySelector('#composerNote').hidden, null, { timeout: 60000 });
   assert.match(await page.textContent('#composerNote'), /Not sent yet/);
-  assert.equal(await page.inputValue('#prompt'), 'stalled once', 'the draft is kept');
+  await pendingSend(page, 'stalled once');
+  assert.equal(await page.inputValue('#prompt'), '', 'the box is the next message');
   // The guard has let go: the same send again is the same operation, so the daemon replays what it already did.
   await page.click('#composer button[type="submit"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await sendSettled(page);
   await page.waitForFunction(() => [...document.querySelectorAll('#events article[data-kind="agent"]')].some((el) => el.textContent.includes('stalled once')), null, { timeout: 15000 });
   await page.waitForTimeout(2000);
   release();
@@ -783,7 +787,7 @@ test('O55 round 2: a send that never gets its answer lets go at the deadline, ke
 });
 
 // Round 3: three ways the send's recovery could still fail. Each of these failed on the round 2 head.
-test('O55 round 3: Interrupt with a stalled event read lets go of the composer, keeps the draft, and a later send goes', { timeout: 180000 }, async (t) => {
+test('O55 round 3: Interrupt with a stalled event read lets go of the composer, and a later send goes', { timeout: 180000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
   await send(page, 'slow');
@@ -795,15 +799,15 @@ test('O55 round 3: Interrupt with a stalled event read lets go of the composer, 
   t.after(release);
   await page.route((url) => url.pathname.endsWith('/chat/events') && url.search.includes('wait=1000'), async (route) => { await held; await route.abort().catch(() => {}); });
   await page.click('#midTurn [data-when="now"]');
-  // Either the turn ended and the message went, or the box says it is still stopping and keeps the text: never locked.
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '' || (!document.querySelector('#composerNote').hidden && !/^Stopping/.test(document.querySelector('#composerNote').textContent)), null, { timeout: 60000 });
+  // O262: Interrupt is one request now (the daemon stops the turn and sends it first): it goes, never locked behind the stalled read.
+  await sendSettled(page);
   await page.fill('#prompt', 'later one');
   await page.evaluate(() => document.querySelector('#composer').requestSubmit());
   // Sent or queued behind the turn, the box empties; a locked composer would leave the text there.
   await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
 });
 
-for (const status of [202, 409]) test(`O55 round 3: a ${status} whose body never finishes is not an answer: the draft stays and the retry is the same operation`, { timeout: 180000 }, async (t) => {
+for (const status of [202, 409]) test(`O55 round 3: a ${status} whose body never finishes is not an answer: the send stays and the retry is the same operation`, { timeout: 180000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
   // The first send reaches the daemon; the phone sees the status line and then a body that never ends.
@@ -822,9 +826,9 @@ for (const status of [202, 409]) test(`O55 round 3: a ${status} whose body never
   await page.fill('#prompt', 'half answered');
   await page.click('#composer button[type="submit"]');
   await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
-  assert.equal(await page.inputValue('#prompt'), 'half answered', 'the draft is kept: no complete answer came');
+  await pendingSend(page, 'half answered'); // kept: no complete answer came
   await page.click('#composer button[type="submit"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await sendSettled(page);
   await said(page, 'echo:half answered');
   await page.waitForTimeout(2000);
   assert.equal(ops.length, 2, 'two posts');
@@ -849,10 +853,12 @@ test('O55 round 3: a send that stalled while the turn started is retried as the 
   await page.fill('#prompt', 'slow');
   await page.click('#composer button[type="submit"]');
   await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
-  // The daemon ran the first send, so the turn is going now: the box would build a steer from the screen.
-  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 10000 });
-  await page.click('#midTurn [data-when="steer"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  // The daemon ran the first send, so the turn is going now: the box would build a steer from the screen. O262: the mid-turn
+  // choices wait while a send has no answer; Send again on it is the retry.
+  await page.waitForFunction(() => !!document.querySelector('[data-bar="chat"] .run'), null, { timeout: 10000 });
+  assert.equal(await page.isHidden('#midTurn'), true, 'no Steer, Queue or Interrupt while a send has no answer');
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
   await page.waitForTimeout(2000);
   const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('slow').length - 1, 0));
   assert.equal(ops.length, 2, 'two posts: ' + ops.join(' | '));
@@ -881,12 +887,12 @@ test('O55 round 4: timeout, then outcome-unknown, then a changed turn state, the
   await page.fill('#prompt', 'slow');
   await page.click('#composer button[type="submit"]');
   await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
-  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 10000 }); // the turn is running now: the box would build a steer
-  await page.click('#midTurn [data-when="steer"]');
+  await page.waitForFunction(() => !!document.querySelector('[data-bar="chat"] .run'), null, { timeout: 10000 }); // the turn is running now: the box would build a steer
+  await page.click('#sending [data-retry]');
   await page.waitForFunction(() => /still working on your first try/.test(document.querySelector('#composerNote').textContent), null, { timeout: 15000 });
-  assert.equal(await page.inputValue('#prompt'), 'slow', 'outcome-unknown is not an answer: the draft stays');
-  await page.click('#midTurn [data-when="steer"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await pendingSend(page, 'slow'); // outcome-unknown is not an answer: the send stays
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
   await page.waitForTimeout(2000);
   const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('slow').length - 1, 0));
   assert.equal(posts.length, 3, 'three posts: ' + posts.join(' | '));
@@ -917,7 +923,7 @@ test('O55 round 4: a send that applied a picked effort keeps its identity when t
   await page.waitForFunction(() => document.querySelector('#pickers select[data-config="effort"]')?.dataset.current === 'high', null, { timeout: 30000 });
   await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 60000 });
   await page.click('#composer button[type="submit"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  await sendSettled(page);
   await page.waitForTimeout(2000);
   const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('effort retry').length - 1, 0));
   assert.equal(posts.length, 2, 'two posts: ' + posts.join(' | '));
@@ -952,15 +958,91 @@ for (const how of ['a cancelled mode warning', 'a pick of the value already sele
     const model = document.querySelector('#model'), pick = (value) => { model.value = value; model.dispatchEvent(new Event('change')); }, now = model.value;
     if (away) { pick([...model.options].find((option) => option.value !== now).value); pick(now); } else pick(now);
   }, how.includes('away'));
-  // The daemon ran the first send, so the turn is going now: the box would build a steer from the screen.
-  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 10000 });
-  await page.click('#midTurn [data-when="steer"]');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  // The daemon ran the first send, so the turn is going now: the box would build a steer from the screen. O262: the mid-turn
+  // choices wait while a send has no answer; Send again on it is the retry.
+  await page.waitForFunction(() => !!document.querySelector('[data-bar="chat"] .run'), null, { timeout: 10000 });
+  assert.equal(await page.isHidden('#midTurn'), true, 'no Steer, Queue or Interrupt while a send has no answer');
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
   await page.waitForTimeout(2000);
   const users = await page.evaluate(() => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split('slow').length - 1, 0));
   assert.equal(posts.length, 2, 'two posts: ' + posts.join(' | '));
   assert.equal(posts[0], posts[1], 'the same ID and the same body: ' + posts.join(' | '));
   assert.equal(users, 1, 'the message shows once');
+});
+// O262: the box is only the next message. A send on its way, or with no answer, is its own record (its body, files and operation ID),
+// shown over the box; nothing is ever cut out of the box, and Send again is that record, whatever was typed or attached since.
+const lostAnswer = async (page) => { // the daemon gets the first send and runs it; its answer is lost on the way back
+  let first = true;
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const request = route.request();
+    await route.fetch({ url: request.url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...request.headers(), host: new URL(request.url()).host } });
+    await route.abort('connectionfailed');
+  });
+};
+const userCount = (page, text) => page.evaluate((w) => [...document.querySelectorAll('#events article[data-kind="user"]')].reduce((sum, el) => sum + el.textContent.split(w).length - 1, 0), text);
+const paste = (page, name) => page.evaluate(([b64, name]) => { const dt = new DataTransfer(), bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); dt.items.add(new File([bin], name, { type: 'image/png' })); document.querySelector('#prompt').dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt })); }, ['iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', name]);
+
+// "lookup failed" alone was kept on main already (O267 round 3: the sent words are cut only as whole words at the start); "look up
+// failed", the same words with a space, lost "look" there. Neither may lose a letter: the box is never cut.
+for (const next of ['lookup failed', 'look up failed']) test(`O262: "look" sent, then "${next}" typed while it is on its way: the box keeps "${next}"`, { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  t.after(release);
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { await held; await route.continue().catch(() => {}); });
+  await send(page, 'look');
+  await page.waitForTimeout(300);
+  await page.fill('#prompt', next); // the next message, typed while the first is on its way
+  release();
+  await said(page, 'echo:look');
+  await page.waitForTimeout(500);
+  assert.equal(await page.inputValue('#prompt'), next, 'the sent words were cut out of the next message');
+});
+
+test('O262: words typed after a send with no answer stay in the box, and Send again is the same operation, so it arrives once', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op'] + ' ' + JSON.parse(request.postData()).text); });
+  await lostAnswer(page);
+  await send(page, 'first words');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  await page.focus('#prompt'); await page.keyboard.press('End'); await page.keyboard.type(' and more'); // typing on after the send
+  await shot(page, 'o262-no-answer-yet');
+  await page.click('#composer button[type="submit"]');
+  await said(page, 'echo:first words');
+  await page.waitForTimeout(2000); // a second run would have answered by now
+  t.diagnostic('O262 ops: ' + ops.join(' | '));
+  assert.equal(ops.length, 2, 'two posts: ' + ops.join(' | '));
+  assert.equal(ops[1].split(' ')[0], ops[0].split(' ')[0], 'Send again was a new operation: ' + ops.join(' | '));
+  assert.equal(await userCount(page, 'first words'), 1, 'the message arrived twice');
+  assert.match(await page.inputValue('#prompt'), /and more/, 'the words typed since stay in the box');
+});
+
+test('O262: attachments changed after a send with no answer: Send again is the same operation with its own file, and the new file stays attached', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push([request.headers()['x-p9-op'], (JSON.parse(request.postData()).images ?? []).length]); });
+  await lostAnswer(page);
+  await paste(page, 'one.png');
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-img').length === 1, null, { timeout: 10000 });
+  await send(page, 'with a file');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  await paste(page, 'two.png'); // another file, attached after the lost answer
+  await page.waitForSelector('#attached .chip-img img[alt="two.png"]', { timeout: 10000 });
+  await page.click('#composer button[type="submit"]');
+  await said(page, 'echo:with a file');
+  await page.waitForTimeout(2000);
+  t.diagnostic('O262 posts: ' + JSON.stringify(posts));
+  assert.equal(posts.length, 2, 'two posts: ' + JSON.stringify(posts));
+  assert.equal(posts[1][0], posts[0][0], 'Send again was a new operation: ' + JSON.stringify(posts));
+  assert.deepEqual(posts.map(([, images]) => images), [1, 1], 'each try carries the one file sent with it');
+  assert.equal(await userCount(page, 'with a file'), 1, 'the message arrived twice');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#attached .chip-img').length), 1, 'the file attached since stays in the box');
 });
 // Threat model row O48p: the phone starts chats with any provider.
 test('CAT-1f on the phone: New chat lists every agent from GET /agents, a new one too', { timeout: 90000 }, async (t) => {
@@ -1112,7 +1194,7 @@ test('O204 review: a refused send clears its pick, a newer pick stays pending, a
   let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
   await page.route(prompts, async (route) => { await held; await refuse(route).catch(() => {}); });
   await pick('opus'); await send(page, 'refused two');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'refused two', null, { timeout: 5000 });
+  await pendingSend(page, 'refused two');
   await pick('haiku'); release(); await noted('Not sent: model-refused');
   await is(['Claude · Default (recommended) → Haiku', 'Model: Default (recommended), Haiku pending'], 'a newer pick made during a refused send');
   await page.unroute(prompts);
@@ -1167,7 +1249,7 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   let held = new Promise((resolve) => { release = resolve; });
   await page.route(prompts, async (route) => { await held; await refuse(route).catch(() => {}); });
   await pick('opus'); await send(page, 'refused box');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'refused box', null, { timeout: 5000 });
+  await pendingSend(page, 'refused box');
   await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
   await is(opusPending, 'box: the newer Opus pick was cleared by the old refusal');
   await page.unroute(prompts);
@@ -1186,7 +1268,7 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await pick('opus'); await send(page, 'retried'); await noted('Not sent yet');
   await pick('haiku'); await pick('opus');
   await page.evaluate(() => { document.querySelector('#composerNote').textContent = ''; });
-  await send(page, 'retried'); await noted('Not sent: model-refused');
+  await page.click('#sending [data-retry]'); await noted('Not sent: model-refused');
   assert.equal(calls, 2, 'the retry went once more');
   await is(opusPending, 'retry: the replayed refusal of the first try cleared the newer Opus pick');
   await page.unroute(prompts);
@@ -1204,18 +1286,20 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
   await is(opusPending, 'queue: the newer Opus pick was cleared by the old refusal');
   await page.unroute(prompts);
-  // A send kept in storage from before picks had a pid comes back after a reload; the same text sent again is that send (its draft
-  // matches), and refused for good, its pick still clears.
+  // A send kept in storage (O262: p9-drafts' sending) comes back after a reload with its pick; Send again is that send (its first
+  // body), and refused for good, its pick clears.
   const id = await page.evaluate(() => document.querySelector('#conversation').value);
   await page.fill('#prompt', '');
-  await page.evaluate((id) => localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: JSON.stringify(['kept', [], JSON.stringify([['model', 'opus']])]), sent: { text: 'kept, first try', model: 'opus' }, picks: [['model', { base: '', value: 'opus' }]] } })), id);
+  await page.waitForTimeout(600); // the emptied box's own write lands first, so the page does not write over the stored send as it goes
+  await page.evaluate((id) => localStorage.setItem('p9-drafts', JSON.stringify({ sending: { [id]: { op: crypto.randomUUID(), body: { text: 'kept, first try', model: 'opus' }, typed: 'kept, first try', files: [], pids: { model: 'p-kept' }, picked: [['model', 'opus']], picks: [['model', { base: '', value: 'opus', pid: 'p-kept' }]] } } })), id);
   await page.reload();
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#modelBtn')?.textContent.includes('Default'), id, { timeout: 15000 });
   await is(opusPending, 'a kept send: its pick shows as pending after the reload');
   let went; await page.route(prompts, (route) => { went = route.request().postDataJSON(); return refuse(route); });
-  await send(page, 'kept'); await noted('Not sent: model-refused');
+  await pendingSend(page, 'kept, first try');
+  await page.click('#sending [data-retry]'); await noted('Not sent: model-refused');
   assert.equal(went?.text, 'kept, first try', 'the kept send went again as itself (its first body), not rebuilt from the box');
-  await is(running, 'a kept send without a pid: its refused pick still shows as pending');
+  await is(running, 'a kept send: its refused pick still shows as pending');
   await page.unroute(prompts);
   console.log('PASS O206: newer same-model pick kept after an old refusal (box and queue); plain and kept-send refusals clear');
 });
@@ -1243,7 +1327,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   let calls = 0;
   await page.route(prompts, async (route) => { if (++calls === 1) { await held; return busy(route).catch(() => {}); } return refuse(route); });
   await pick('opus'); await send(page, 'held');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'held', null, { timeout: 5000 });
+  await pendingSend(page, 'held');
   await pick('haiku'); await pick('opus'); await clear(); release(); await noted('Not sent: model-refused');
   assert.equal(calls, 2, 'the held send moved to the queue and the queue sent it');
   await is(opusPending, 'held: moving the send to the queue spent the newer Opus pick');
@@ -1256,7 +1340,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   await page.route(prompts, (route) => ++calls === 1 ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'outcome-unknown' }) }) : calls === 2 ? busy(route) : refuse(route));
   await clear(); await pick('opus'); await send(page, 'retried'); await noted('Not sent yet');
   await pick('haiku'); await pick('opus'); await clear();
-  await send(page, 'retried'); await noted('Not sent: model-refused');
+  await page.click('#sending [data-retry]'); await noted('Not sent: model-refused');
   assert.equal(calls, 3, 'the retry went, moved to the queue, and the queue sent it');
   await is(opusPending, 'retried: moving the retry to the queue spent the newer Opus pick');
   await page.unroute(prompts);
@@ -1278,7 +1362,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   calls = 0;
   await page.route(prompts, async (route) => { if (++calls === 1) { await heldConfig; return busy(route).catch(() => {}); } return refuse(route); });
   await page.fill('#prompt', ''); await clear(); await setEffort('high'); await send(page, 'held effort');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'held effort', null, { timeout: 5000 });
+  await pendingSend(page, 'held effort');
   await setEffort(other); await setEffort('high'); await clear(); release(); await noted('Not sent: model-refused');
   assert.equal(calls, 2, 'the held effort send moved to the queue and the queue sent it');
   await page.unroute(prompts);
@@ -1295,7 +1379,7 @@ test('O209: a send moved to the queue keeps a newer pick of the same value, mode
   calls = 0;
   await page.route(prompts, async (route) => { if (++calls === 1) { await heldTaken; return busy(route).catch(() => {}); } return route.continue(); });
   await page.fill('#prompt', ''); await clear(); await pick('opus'); await send(page, 'taken');
-  await page.waitForFunction(() => document.querySelector('#prompt').value === 'taken', null, { timeout: 5000 });
+  await pendingSend(page, 'taken');
   await pick('haiku'); await pick('opus'); release();
   await page.waitForFunction(() => document.querySelector('#model').dataset.current === 'opus', null, { timeout: 15000 });
   assert.equal(calls, 2, 'the held send moved to the queue and the queue sent it');
