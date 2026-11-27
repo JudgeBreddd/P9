@@ -464,7 +464,8 @@ New folders, renames and deletes from the editor are still refused; use the term
 
 The editor host is VSCodium's server (REH, commit 824c4c46), started per user by the
 desktop in a systemd user scope, bound to 127.0.0.1 only (any other address is refused
-before spawn), with a random port and a 256-bit connection token in a 0600 file under
+before spawn), on a port kept the same between starts so it reopens on its files (O258; the
+port is no secret, the token is), and with a 256-bit connection token in a 0600 file under
 ~/.local/share/p9/editor (the folder is set to 0700 and the token file recreated 0600 on
 every start). Requests without the token get 403; the token also appears in the editor's
 resource URLs (?tkn=), so it is visible to the dev view's own devtools. The quit handler
