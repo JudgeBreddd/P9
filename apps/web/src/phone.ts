@@ -912,15 +912,15 @@ one('#sheetBody').addEventListener('click', async event => {
   // refuses one with a turn, a message or a held one), so it never arrived. Its record is written under the new chat first and
   // removed from the old one last, so a reload in between finds it in one of them.
   const kept = fresh(id), moved = kept && { ...kept, op: crypto.randomUUID() };
-  const undo = async (why: string) => { if (moved) keepSending(next, undefined); await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true }); note(why); };
-  if (moved && !keepSending(next, moved)) return undo('The chat was not replaced: this phone\'s storage for P9 is full.');
+  const undo = async (why: string) => { if (moved) keepSending(next, undefined, moved.op); await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true }); note(why); };
+  if (moved && !keepSending(next, moved, null)) return undo('The chat was not replaced: this phone\'s storage for P9 is full.');
   const removed = await mutate('/chat/' + encodeURIComponent(id) + '/delete', { empty: true });
   if (removed.status !== 200) return undo('The chat already has a message or could not be replaced.');
   while (adding.has(id)) await adding.get(id)!.catch(() => true); // a paste still being read (and its fallback to text) lands before the chat changes id
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
   // O262: a send with no answer goes with it, under a new operation ID: the old chat was empty (its delete above says so), so it never arrived.
-  if (moved) { sending.delete(id); sending.set(next, moved); keepSending(id, undefined); }
+  if (moved) { sending.delete(id); sending.set(next, moved); keepSending(id, undefined, kept.op); }
   // O61: the text typed goes with the chat to its new id. The box itself changes owner here, before the list is read again:
   // whatever is typed while that read runs (the sheet can be dismissed) is the new chat's, and route(next) leaves the box alone.
   if (boxFor === id) { setDraft(next, one<HTMLTextAreaElement>('#prompt').value); setDraft(id, ''); boxFor = next; }
@@ -1219,8 +1219,9 @@ function label() {
     // At the bottom it stays at the bottom, in the same task as the key (a taller box makes the chat shorter).
     const to = stuck ? chat.scrollHeight : top; if (chat.scrollTop !== to) chat.scrollTop = to;
   }
-  send.dataset.stop = String(busy && empty && !again);
-  one('#send .vh').textContent = again ? 'Send again' : busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
+  // O262 round 3: Stop stays while a send has no answer (the agent may be working on it); its card's Send again is the retry.
+  send.dataset.stop = String(busy && empty);
+  one('#send .vh').textContent = busy && empty ? 'Stop' : again ? 'Send again' : busy ? 'Steer' : local ? 'Queue message' : 'Send message';
   // P18: the slim card over the box says a send goes into a running turn, and how (Steer is the arrow's default).
   one<HTMLElement>('#midTurn').hidden = !busy || empty || again;
   renderSending();
@@ -1327,11 +1328,6 @@ async function submitFromBox(event: Event) {
   if (art === null) forgetSent(); // O264: a file another tab sent does not go again, even when this tab missed the storage event (a frozen page)
   // O262: a send with no answer yet goes again first, as itself (its body, files and operation ID), whatever the box holds now.
   const waiting = fresh(id);
-  if (waiting) {
-    if (art !== null) { note('Your last message has no answer yet. Send it again or take it back first.'); return false; }
-    if (waiting.expired) { note(EXPIRED); return false; }
-    return post(id, waiting);
-  }
   const images = art === null ? boxFiles(id) : [];
   // A2 step 6b: the chat's quotes go first, each with its comment (helpers.mjs quoted). A slash command goes as typed and
   // its quotes stay for the next message. ponytail: any text starting with / counts as a command here.
@@ -1343,6 +1339,11 @@ async function submitFromBox(event: Event) {
     if (result.body.error === 'no-turn') note('Nothing to stop: the turn had already ended.');
     else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);
     void fetchEvents().then(render, () => {}); return; // not awaited: the one-submit guard must not wait on a read
+  }
+  if (waiting) { // after Stop (O262 round 3): a send with no answer never takes Stop away
+    if (art !== null) { note('Your last message has no answer yet. Send it again or take it back first.'); return false; }
+    if (waiting.expired) { note(EXPIRED); return false; }
+    return post(id, waiting);
   }
   if (art === null && id && adding.has(id)) { note('Still attaching a file. Send again in a moment.'); return false; }
   const text = quoted(qs, typed);
@@ -1371,9 +1372,10 @@ async function submitFromBox(event: Event) {
   const artOf = art !== null && ART.state ? { state: ART.state, sent: [...ART.state.comments ?? []] } : undefined;
   const kept: Sending = { op: crypto.randomUUID(), body: { ...body, ...(when && { when }) }, typed, files: images.map((image) => image.id!), pids, picked: [...picked], qs, ...(art !== null && { art: true }), ...(artOf && { artOf }) };
   const full = () => note('Not sent: this phone\'s storage for P9 is full, so the message could not be kept while it is on its way. It is still in the box.');
-  if (!keepSending(id, kept)) { full(); return false; }
+  // O262 round 3: another window's send in this chat is never written over: its card is shown, and this message stays in the box.
+  if (!keepSending(id, kept, null)) { if (fresh(id)) { label(); renderAttached(); note('Not sent: another window has a message on its way in this chat, shown above. Yours is still in the box.'); } else full(); return false; }
   sending.set(id, kept);
-  if (art === null) { const was = id === boxFor ? input.value : drafts.get(id) ?? ''; setDraft(id, ''); if (!keepDraft()) { setDraft(id, was); sending.delete(id); keepSending(id, undefined); full(); return false; } if (id === boxFor) input.value = ''; }
+  if (art === null) { const was = id === boxFor ? input.value : drafts.get(id) ?? ''; setDraft(id, ''); if (!keepDraft()) { setDraft(id, was); sending.delete(id); keepSending(id, undefined, kept.op); full(); return false; } if (id === boxFor) input.value = ''; }
   if (art === null) dropQuotes(id, qs);
   label(); renderAttached(); return post(id, kept, true);
 }
@@ -1388,8 +1390,11 @@ type Sending = { op: string; body: Json; typed: string; files: string[]; pids: R
   artOf?: { state: { comments?: unknown[]; sel?: string; refresh?: () => void }; sent: unknown[] }; expired?: true; login?: true; sigs?: string[] };
 type Picks = [string, { base: string; value: string; pid?: string }][];
 const sendKey = (id: string) => 'p9-sending:' + id;
-function keepSending(id: string, kept: Sending | undefined) {
+// O262 round 3: a write or a removal goes only over the record it expects (expect: that send's operation ID, null for none), so a late
+// answer for an old send never erases or writes over a newer one, another tab's included. false: refused (storage full, or not that record).
+function keepSending(id: string, kept: Sending | undefined, expect: string | null = kept?.op ?? null) {
   try {
+    if ((readSending(localStorage.getItem(sendKey(id)))?.op ?? null) !== expect) return false;
     if (!kept) localStorage.removeItem(sendKey(id));
     else { const { qs: _, artOf: __, ...stored } = kept; localStorage.setItem(sendKey(id), JSON.stringify({ ...stored, picks: [...chosen.get(id) ?? []] })); }
     return true;
@@ -1433,32 +1438,39 @@ async function post(id: string, kept: Sending, first = false) {
   // the sign-in. O262 review: on a retry it is not "never ran" (an earlier try may have landed and lost its answer), so the send
   // stays, with its operation ID, for Send again after the sign-in: the daemon replays it if it did land, and runs it once if not.
   catch (error) {
-    if ((error as Error).message === 'login-required' && !(first && settle(id, () => giveBack(id, kept)))) { kept.login = true; keepSending(id, kept); }
+    if ((error as Error).message === 'login-required' && !(first && settle(id, kept.op, () => giveBack(id, kept)))) { kept.login = true; keepSending(id, kept); }
     throw error;
   }
   finally { going.delete(id); label(); }
+  // O262 round 3: on a retry, a refusal from in front of the daemon's operations (403, the lock's 423) or a 5xx, which a proxy gives
+  // too, says nothing of an earlier try that may have landed: the send stays, with its ID, as after a 401. A first try never landed.
+  if (!first && (result.status === 403 || result.status === 423 || result.status >= 500)) { note(`Not sent yet: P9 did not take this try (${result.body.error ?? result.status}). It stays on its card; tap Send again later. It will not go twice.`); return false; }
   return answered(id, kept, files, result);
 }
 // O262 review: a file the send carries is gone from this phone (a reload before the file store took it, or another tab sent it),
 // so its body cannot be built again. The daemon says what became of its operation: an answer settles it as a replay would; one
 // that never arrived can only be taken back (and its files attached again).
 async function lookUp(id: string, kept: Sending, files: (Attached | undefined)[]) {
-  const gone = 'Not sent: P9 never got this message, and its files are not on this phone any more. Take it back, attach them again, and send it.';
-  if (!kept.op) { note(gone); return false; }
+  if (!kept.op && !await legacyOp(id, kept)) return false;
   going.add(id); label();
   let found: Json;
   try { found = await request('/operation/' + encodeURIComponent(kept.op), deadline(SEND_DEADLINE)).catch((error) => { if (error?.status === 404) return { state: 'unknown' }; throw error; }); }
   finally { going.delete(id); label(); }
   if (found.state === 'done') { let body: Json = {}; try { body = JSON.parse(String(found.body ?? '{}')) ?? {}; } catch {} return answered(id, kept, files, { status: Number(found.status), body }); }
   if (found.state === 'expired' || found.state === 'running') return answered(id, kept, files, { status: 409, body: { error: found.state === 'expired' ? 'operation-expired' : 'outcome-unknown' } });
-  note(gone); return false;
+  note(GONE); return false;
 }
 // A send kept by the build before O262 (p9-inflight) has no operation ID of its own: that build's mutate kept it in p9-pending under
 // the body's key, so the same body finds the same ID, and the daemon replays the first try if it arrived.
-async function legacyOp(id: string, kept: Sending, files: Attached[]) {
-  const pending = keepPending('')[await opKey('/chat/' + encodeURIComponent(id) + '/prompt', JSON.stringify({ ...kept.body, ...attachBody(files) }))];
-  kept.op = pending && !pending.used ? pending.id : crypto.randomUUID();
-  if (keepSending(id, kept)) return true;
+// O262 round 3: its ID is kept even marked used (a 401 on a retry; an earlier try may have landed). With no body to match it by (a file
+// gone: files undefined, the lookup) or none matching, the chat's one kept prompt ID is that send's; only with neither is a new one made.
+const GONE = 'P9 has no answer for this message yet. It may still arrive; check the chat before sending again. Its files are gone from this phone: take it back and attach them again.';
+async function legacyOp(id: string, kept: Sending, files?: Attached[]) {
+  const path = '/chat/' + encodeURIComponent(id) + '/prompt', all = keepPending(''), mine = Object.keys(all).filter((key) => key.startsWith(path + '\n'));
+  const known = (files && all[await opKey(path, JSON.stringify({ ...kept.body, ...attachBody(files) }))]) || (mine.length === 1 ? all[mine[0]] : undefined);
+  if (!known && !files) { note(GONE); return false; }
+  kept.op = known?.id ?? crypto.randomUUID();
+  if (keepSending(id, kept, '')) return true;
   kept.op = ''; note('Not sent: this phone\'s storage for P9 is full. Your message stays on its card.'); return false;
 }
 function answered(id: string, kept: Sending, files: (Attached | undefined)[], result: { status: number; body: Json }) {
@@ -1472,7 +1484,7 @@ function answered(id: string, kept: Sending, files: (Attached | undefined)[], re
   // O61, O62: the picks that went with it are no longer unsent: what the agent reports is the setting again.
   // O264: its files are marked sent before the send leaves, so a page killed in between cannot send them again.
   if (result.status === 202) {
-    if (!settle(id, () => markSent(kept.files))) { note('Sent, but this phone\'s storage for P9 is full, so it could not note its files as sent. Free some space, then tap Send again; it will not go twice.'); return false; }
+    if (!settle(id, kept.op, () => markSent(kept.files))) { note('Sent, but this phone\'s storage for P9 is full, so it could not note its files as sent. Free some space, then tap Send again; it will not go twice.'); return false; }
     spend(id, picked);
     const left = (attached.get(id) ?? []).filter((image) => !kept.files.includes(image.id ?? '')); if (left.length) attached.set(id, left); else attached.delete(id);
     // An artifact's comments sent from the card's Send again leave the artifact too, as its own send's answer takes them.
@@ -1483,25 +1495,26 @@ function answered(id: string, kept: Sending, files: (Attached | undefined)[], re
   // phone's own queue, as the desktop does. Attachments do not queue, so a send with files comes back to the box instead.
   if (result.status === 409 && error === 'turn-running' && !kept.art && !kept.files.length) {
     const { when: _, ...plain } = kept.body;
-    if (!settle(id, () => keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(kept.pids.model && { pick: kept.pids.model }), spends: Object.fromEntries(picked), ...plain as { text: string } }]))) { note('Not queued: this phone\'s storage for P9 is full. Your message stays on its card.'); return false; }
+    if (!settle(id, kept.op, () => keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), at: Date.now(), ...(kept.pids.model && { pick: kept.pids.model }), spends: Object.fromEntries(picked), ...plain as { text: string } }]))) { note('Not queued: this phone\'s storage for P9 is full. Your message stays on its card.'); return false; }
     spend(id, picked, kept.pids); note(); renderQueue(); void drain(); return true;
   }
   const why = result.status === 409 && error === 'turn-running' ? 'Not sent: attachments go only when the agent is free. Your message is back in the box; send it again when the turn has ended.'
     : error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : chatFailed('prompt', result.body, 0) ?? `Not sent: ${error ?? result.status}`;
-  if (!settle(id, () => giveBack(id, kept))) { note(why + ' This phone\'s storage for P9 is full, so it stays on its card for now.'); return false; }
+  if (!settle(id, kept.op, () => giveBack(id, kept))) { note(why + ' This phone\'s storage for P9 is full, so it stays on its card for now.'); return false; }
   note(why + (lost ? ' Its files were not kept on this phone: attach them again.' : ''));
   dropRefused(id, (kept.body as { model?: string }).model, kept.pids.model); render();
 }
 // Ends a send only once where its message goes now is stored: put writes that at once (the box's draft, the queue, or the sent
 // files' tombstones) and says whether storage took it. Refused, the send stays, so a message is never in neither place.
-function settle(id: string, put: () => boolean) {
+function settle(id: string, op: string, put: () => boolean) {
   if (!put()) { label(); return false; }
-  sending.delete(id); keepSending(id, undefined); label(); if (id === openId) renderAttached(); return true;
+  // O262 round 3: only this operation's record goes; a newer send (another tab's) stays, and this tab shows it (fresh).
+  keepSending(id, undefined, op); if (sending.get(id)?.op === op) sending.delete(id); fresh(id); label(); if (id === openId) renderAttached(); return true;
 }
 // A send that did not go, back in its chat's box above anything typed since, written at once; its files are the box's again (they
 // were never out of the chat's list), its quotes chips again. An artifact's comments stay with the artifact.
 function giveBack(id: string, kept: Sending) {
-  if (kept.art) return true;
+  if (kept.art && kept.artOf) return true; // O262 round 3: with its editor state gone (a reload), its comments' text goes to the box
   const text = kept.qs ? kept.typed : String(kept.body.text ?? '');
   if (text) {
     const box = one<HTMLTextAreaElement>('#prompt'), before = id === boxFor ? box.value : drafts.get(id) ?? '', after = text + (before ? '\n' + before : '');
@@ -1527,7 +1540,7 @@ one<HTMLElement>('#sending').addEventListener('click', (event) => {
   if (!(event.target as Element).closest('[data-take]') || going.has(openId)) return;
   const id = openId, kept = fresh(id);
   if (!kept) { label(); note('That message was already settled in another window.'); return; }
-  if (!settle(id, () => giveBack(id, kept))) { note('Not taken back: this phone\'s storage for P9 is full. It stays on its card.'); return; }
+  if (!settle(id, kept.op, () => giveBack(id, kept))) { note('Not taken back: this phone\'s storage for P9 is full. It stays on its card.'); return; }
   note('Taken back. If it reached P9 before, it is in the chat, or held there to go in when the current step or turn ends; sending it again would send it twice.');
 });
 // O204 review 1: a send refused for good took no model, so its pick is not pending any more and the select goes back to the running
@@ -1567,20 +1580,25 @@ function spend(id: string, picked: Map<string, string>, queued?: Record<string, 
 try {
   type Old = { draft: string; sent: Json; pick?: string; pids?: Record<string, string>; picks?: Picks };
   const old = JSON.parse(localStorage.getItem('p9-inflight') ?? '{}') as Record<string, Old>;
-  let moved = true;
   for (const [id, kept] of Object.entries(old && typeof old === 'object' ? old : {})) {
-    if (!kept?.sent || typeof kept.sent !== 'object' || localStorage.getItem(sendKey(id)) !== null) continue;
+    if (!kept?.sent || typeof kept.sent !== 'object') { delete old[id]; continue; }
     let draft: unknown[] = []; try { draft = JSON.parse(String(kept.draft)); } catch {}
-    // O206: a send kept before picks had a pid gets one here, and that one is the pick it carried, so its refusal still clears it.
-    if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
-    // O209: a send kept before pids were kept per key carries its restored picks' pids (the model's own pid if O206 kept one).
-    const pids = kept.pids ?? { ...Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid!])), ...(kept.pick && { model: kept.pick }) };
-    const text = String(kept.sent.text ?? ''), sigs = Array.isArray(draft[1]) ? draft[1].map(String) : [];
-    const send: Sending = { op: '', body: kept.sent, typed: text, files: [], pids, picked: [...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value]), ...(sigs.length && { sigs }) };
-    if (!keepSending(id, send)) { moved = false; continue; }
-    if ((drafts.get(id) ?? '').trim() === text.trim() || (drafts.get(id) ?? '').trim() === String(draft[0] ?? '').trim()) { setDraft(id, ''); keepDraft(); }
+    const text = String(kept.sent.text ?? ''), there = readSending(localStorage.getItem(sendKey(id)));
+    // O262 round 3: a move cut short (its record written, its draft not cleared) is finished on the next load; another send's record is left alone.
+    if (there && String(there.body.text ?? '') !== text) { delete old[id]; continue; }
+    if (!there) {
+      // O206: a send kept before picks had a pid gets one here, and that one is the pick it carried, so its refusal still clears it.
+      if (kept.picks?.length) chosen.set(id, new Map(kept.picks.map(([key, pick]) => [key, { ...pick, pid: pick.pid ?? crypto.randomUUID() }])));
+      // O209: a send kept before pids were kept per key carries its restored picks' pids (the model's own pid if O206 kept one).
+      const pids = kept.pids ?? { ...Object.fromEntries([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.pid!])), ...(kept.pick && { model: kept.pick }) };
+      const sigs = Array.isArray(draft[1]) ? draft[1].map(String) : [];
+      const send: Sending = { op: '', body: kept.sent, typed: text, files: [], pids, picked: [...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value]), ...(sigs.length && { sigs }) };
+      if (!keepSending(id, send, null)) continue;
+    }
+    if ((drafts.get(id) ?? '').trim() === text.trim() || (drafts.get(id) ?? '').trim() === String(draft[0] ?? '').trim()) { setDraft(id, ''); if (!keepDraft()) continue; }
+    delete old[id]; // moved whole: only a move cut short is tried again, so a send settled since is never made again
   }
-  if (moved) localStorage.removeItem('p9-inflight');
+  if (old && Object.keys(old).length) localStorage.setItem('p9-inflight', JSON.stringify(old)); else localStorage.removeItem('p9-inflight');
 } catch {}
 try {
   for (let i = 0; i < localStorage.length; i++) {
@@ -1612,10 +1630,12 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   // already there ("Stopping this turn, then sending.") is kept; it says more.
   if (submitting) { event.preventDefault(); if (one<HTMLElement>('#composerNote').hidden) note('Still sending your last message. Wait for it to finish.'); return false; }
   submitting = true;
+  // What the tapped button was at the tap: a failed send's redraw can turn it into Stop (O262 round 3: Stop stays with a send kept).
+  const stop = ((event as SubmitEvent).submitter as HTMLButtonElement | null)?.dataset.stop === 'true';
   try { return await submitFromBox(event); }
   catch (error) {
     // O62: every failure says why under the box. Only a timeout did; the rest left the text in the box and no word.
-    const why = (error as Error).message, stop = ((event as SubmitEvent).submitter as HTMLButtonElement | null)?.dataset.stop === 'true';
+    const why = (error as Error).message;
     if (why === 'login-required') return false; // the sign-in page is opening; the text is kept for after it
     const cause = why === 'timeout' ? `no answer from P9 after ${SEND_DEADLINE / 1000} seconds` : why === 'offline' ? 'the phone is offline'
       : (error as Error).name === 'QuotaExceededError' ? "this phone's storage for P9 is full" : 'P9 could not be reached';

@@ -1144,6 +1144,100 @@ test('O262 review: a send whose file is gone from the phone asks P9 what became 
   assert.equal(await userCount(page, 'its file went away'), 1, 'the message arrived once');
   assert.equal(await page.inputValue('#prompt'), '', 'nothing came back to the box');
 });
+// O262 round 3: a late answer for an old send removes only its own record, never a newer send another tab made in the same chat.
+test('O262 round 3: a late answer for a send taken back in another tab leaves that tab\'s newer send kept', { timeout: 150000 }, async (t) => {
+  const { page, context, server, session } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { await held; await route.continue().catch(() => {}); });
+  await send(page, 'the older one');
+  await pendingSend(page, 'the older one');
+  const tab = await context.newPage();
+  await tab.goto(server.origin + '/phone/#chat=' + id);
+  await tab.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf); // a tab's own sign-in token, as phoneOn gives the first
+  await tab.reload();
+  await tab.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(tab, 'the older one');
+  await tab.click('#sending [data-take]'); // tab B: no answer yet, so it takes the message back
+  await tab.waitForFunction(() => document.querySelector('#sending').hidden, null, { timeout: 10000 });
+  await lostAnswer(tab); // B's new send lands; its answer is lost
+  await send(tab, 'the newer one');
+  await pendingSend(tab, 'the newer one');
+  const newer = await tab.evaluate((id) => JSON.parse(localStorage.getItem('p9-sending:' + id)).op, id);
+  release(); // A's answer for the older send arrives late
+  await page.waitForFunction(() => !document.querySelector('#sending').textContent.includes('the older one'), null, { timeout: 15000 });
+  await page.waitForTimeout(500);
+  const kept = await page.evaluate((id) => localStorage.getItem('p9-sending:' + id), id);
+  assert.ok(kept, 'the older send\'s answer erased the newer send');
+  assert.equal(JSON.parse(kept).op, newer, 'the newer send\'s record was written over');
+  assert.equal(JSON.parse(kept).body.text, 'the newer one');
+});
+
+test('O262 round 3: a retry refused by the lock (423) keeps its send and operation ID, and Send again arrives once', { timeout: 150000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op']); });
+  await lostAnswer(page); // the first try lands, its answer is lost
+  await send(page, 'kept through a lock');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  // The device is locked before the retry: the lock answers in front of the daemon's operations.
+  await page.route((url) => url.pathname.endsWith('/prompt'), (route) => route.fulfill({ status: 423, contentType: 'application/json', body: '{"error":"locked"}' }), { times: 1 });
+  await page.click('#sending [data-retry]');
+  await page.waitForFunction(() => /did not take this try/.test(document.querySelector('#composerNote').textContent), null, { timeout: 15000 });
+  await pendingSend(page, 'kept through a lock');
+  assert.equal(await page.inputValue('#prompt'), '', 'not put back in the box, where a send would be a new operation');
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
+  await said(page, 'echo:kept through a lock');
+  await page.waitForTimeout(2000);
+  assert.equal(ops.length, 3, 'three posts: ' + ops.join(' | '));
+  assert.equal(new Set(ops).size, 1, 'every try is the same operation: ' + ops.join(' | '));
+  assert.equal(await userCount(page, 'kept through a lock'), 1, 'the message arrived twice');
+});
+
+// The record as keepSending stores a send; after a reload its memory-only parts (an artifact's editor state) are gone.
+const keptSend = (page, id, extra) => page.evaluate(([id, extra]) => localStorage.setItem('p9-sending:' + id, JSON.stringify({ op: crypto.randomUUID(), body: { text: 'Comment on line 3: rename it' }, typed: 'Comment on line 3: rename it', files: [], pids: {}, picked: [], picks: [], ...extra })), [id, extra]);
+test('O262 round 3: an artifact\'s comments kept over a reload: Take back puts their text in the box', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await keptSend(page, id, { art: true });
+  await page.reload();
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(page, 'Comment on line 3');
+  await page.click('#sending [data-take]');
+  await sendSettled(page);
+  assert.equal(await page.inputValue('#prompt'), 'Comment on line 3: rename it', 'the comments were deleted, not put in the box');
+});
+
+test('O262 round 3: a send whose file is gone, unknown to P9 (404): the note says the outcome is unknown, not that P9 never got it', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await keptSend(page, id, { files: ['gone-file'] });
+  await page.reload();
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(page, 'Comment on line 3');
+  await page.click('#sending [data-retry]'); // its file is not on this phone: P9 is asked, and has no answer for it
+  await page.waitForFunction(() => !document.querySelector('#composerNote').hidden && document.querySelector('#composerNote').textContent, null, { timeout: 15000 });
+  assert.match(await page.textContent('#composerNote'), /no answer for this message yet\. It may still arrive; check the chat before sending again/);
+  await pendingSend(page, 'Comment on line 3'); // still kept
+});
+
+test('O262 round 3: Stop stays while a send has no answer and the agent is working', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const cancels = [];
+  page.on('request', (request) => { if (request.url().endsWith('/cancel')) cancels.push(request.url()); });
+  await lostAnswer(page); // the prompt reaches the daemon and the agent works on; its answer is lost
+  await send(page, 'slow');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  await page.waitForFunction(() => !!document.querySelector('[data-bar="chat"] .run'), null, { timeout: 10000 });
+  await pendingSend(page, 'slow');
+  assert.equal(await page.getAttribute('#composer button[type="submit"]', 'data-stop'), 'true', 'Stop is gone while the send has no answer');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => !document.querySelector('[data-bar="chat"] .run'), null, { timeout: 15000 });
+  assert.equal(cancels.length, 1, 'the tap stopped the turn');
+});
 // Threat model row O48p: the phone starts chats with any provider.
 test('CAT-1f on the phone: New chat lists every agent from GET /agents, a new one too', { timeout: 90000 }, async (t) => {
   const { page } = await phoneOn(t);
