@@ -1089,9 +1089,11 @@ export function createDelegate({ chat, allowed, usage }) {
     if (shelved(args.chat)) return SHELVED;
     const target = chat.info(args.chat), picked = modeFor(caller, target);
     if (picked.error) return picked;
-    // A message to a working chat joins the turn it is in, or the next one with whatever else waits, in that turn's mode
-    // and not the one picked above. So a chat working wider than the sender (or in a mode not known yet) takes nothing.
-    if (stateOf(target) === 'working' && !(tierOf(target.provider, target.mode) <= picked.ceiling)) {
+    // A message steered into a working chat runs in that turn's mode, not the one picked above, so a chat working wider
+    // than the sender (or in a mode not known yet) takes none. O246: one that only waits is fine: a queued message, or one
+    // its paused sprint or held worker keeps, starts a turn of its own in its own mode (chat.mjs joins only one mode).
+    const waits = args.when === 'queue' || chat.paused?.(args.chat) || (target.parent && chat.paused?.(target.parent));
+    if (!waits && stateOf(target) === 'working' && !(tierOf(target.provider, target.mode) <= picked.ceiling)) {
       return { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' };
     }
     // I3: a new model or effort, checked before anything changes; the message carries it, so its turn starts on it.

@@ -688,8 +688,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }
     } finally { delivering.delete(lead); }
   }
-  // The name of the mode last set on a chat's agent (its 'mode' event), so a sender not running still has one.
-  const lastMode = (id) => db.prepare("SELECT data ->> '$.name' AS name FROM events WHERE conversation = ? AND type = 'mode' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id)?.name ?? null;
+  // O246, record 2: the mode the chat's last turn ran in, its newest 'ran' event (written once, as the prompt goes; a question's
+  // read-only turn writes none). undefined: no turn ran since it was kept.
+  const ranOf = (id) => db.prepare("SELECT data ->> '$.name' AS name FROM events WHERE conversation = ? AND type = 'ran' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id);
+  // The mode a chat not running is in, so a sender not running still has one: the one its last turn ran in, else (a chat
+  // from before 'ran') the name of the mode last set on its agent.
+  const lastMode = (id) => { const ran = ranOf(id); return ran ? ran.name ?? null : db.prepare("SELECT data ->> '$.name' AS name FROM events WHERE conversation = ? AND type = 'mode' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id)?.name ?? null; };
   // A7 sprint rules (SECURITY.md § Delegate): one text per parent chat, the sprint folder's rules.md (D3; before it, prefs
   // under rules:<parent>, still read until the first set_rules); never set, it is DEFAULT_RULES, and '' is none. It rides
   // as its own block with every message that chat's agent sends a chat it started (a compaction in the worker cannot lose
@@ -941,6 +945,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const lineFor = (body) => fromFor(body) ?? (senders.get(body) === 'p9' ? P9_LINE : USER_LINE);
   const partOf = (body) => lineFor(body) + (fromFor(body) ? quoted(body.text) : body.text);
   const mixed = new WeakMap(); // a prompt joined from several senders -> those senders (rulesFor)
+  // O246: filled, a message whose mode P9 named at admission (its sender named none); ownerNamed, a joined prompt with an owner's
+  // message that named its mode (that mode is the owner's pick, and every message joined with it runs in it).
+  const filled = new WeakSet(), ownerNamed = new WeakSet();
   const loose = () => !locked && !protection();
   // What a chat is told with another chat's question (after the sender line, fromFor above).
   const ASK_NOTE = '[P9: this is a question from that chat (ask_chat). Answer it in your reply to this message: that reply is returned to the asker as it is. This turn is read-only: do not edit, run or change anything, and do not present a plan. Say what you checked and what you are not sure of, and name anything that is the user\'s decision as the user\'s.]\n\n';
@@ -998,7 +1005,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // its turn on the chain came is never sent (#540 review 13), so it cannot change the chat after the caller said it failed.
   // MC-3: the mode event the window's and the phone's pills show. told: this run of the session has said its mode, so a
   // prompt that set none (its mode was already the session's) still tells it once (prompt, below).
-  const tellMode = (session, provider) => { session.told = true; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); };
+  // O246: nopick, a mode the pill shows that is not the owner's pick (the start mode the unlock puts back): pickOf skips it.
+  const tellMode = (session, provider, nopick) => { session.told = true; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked, ...(nopick && { nopick: true }) }); };
   const setOption = (session, configId, value, then, ms) => {
     let gaveUp = false;
     // O273: nor is a set whose turn came after its session started stopping (the cap frees the chain as it stops it), and a
@@ -1029,7 +1037,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const named = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue;
     if (value === NARROW[provider] && named !== value) { session.mode = named; throw new Error('The agent did not confirm its no-write mode.'); }
     session.mode = named ?? value;
-    if (tell) tellMode(session, provider); // P6: the phone's pill shows the mode set
+    if (tell) tellMode(session, provider, tell === 'nopick'); // P6: the phone's pill shows the mode set
     return result;
   }, ms);
   // The chat's Mode picker, sent with each desktop prompt (Auto still asked before every command). Codex's
@@ -1075,18 +1083,18 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // The one place for this: resume calls it, and so must any new session started for an existing chat. A value the agent
   // no longer offers, or one it refuses, is left; the config event after it says what the session is really on.
   const lastOf = (id, type) => {
-    const found = db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ?${type === 'mode' ? " AND COALESCE(json_extract(data, '$.lock'), 0) = 0" : type === 'config' ? helperConfig : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type);
+    const found = db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ?${type === 'mode' ? " AND COALESCE(json_extract(data, '$.lock'), 0) = 0 AND json_extract(data, '$.nopick') IS NULL" : type === 'config' ? helperConfig : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type);
     try { return found ? JSON.parse(found.data) : null; } catch { return null; }
   };
   // was: read before anything is set on the new session (resume sets Codex's and the lock's mode first, which is an event too).
   const lastPicks = (id) => ({ config: lastOf(id, 'config'), mode: lastOf(id, 'mode')?.mode });
-  // O246: the owner's pick, by name: the newest mode event the lock did not write. Only a turn the owner sent writes one
-  // (and a chat's first turn, which has none yet: a worker's start mode is its pick), so no other sender's turn changes it.
+  // O246, record 3: the owner's pick, by name: the newest mode event that is neither the lock's nor marked nopick. Only a turn
+  // with the owner's own message writes one (and a chat's first turn, or one with no pick yet: a worker's start mode is its
+  // pick), so no other sender's turn, the lock or the unlock changes it.
   const pickOf = (id) => { const p = row(id)?.provider, v = lastOf(id, 'mode')?.mode; return (p && Object.keys(MODES[p]).find((k) => MODES[p][k] === v)) || null; };
   // O246, the one rule for P9's own lines (a restart, ready for review, a worker's wake, a scheduled prompt): the mode the chat's
-  // last turn ran in, whoever sent it (its ranIn, else the pick it ran in); a chat with no turn yet takes the owner's pick. Never
-  // Settings > New chats start in. A steer ran in its turn's mode and a question's read-only turn is not the chat's own work.
-  const noticeModeOf = (id) => db.prepare("SELECT data ->> '$.ranIn' AS mode FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL AND data ->> '$.ask' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.mode || pickOf(id);
+  // last turn ran in (record 2), whoever sent it; a chat with no turn yet takes the owner's pick. Never Settings > New chats start in.
+  const noticeModeOf = (id) => { const ran = ranOf(id); return ran ? ran.name : pickOf(id); };
   const carry = async (session, conversation, options, { config: was, mode } = lastPicks(conversation.id)) => {
     const set = (configId, value) => setOption(session, configId, value, (result) => result?.configOptions); // O273: on the one chain
     const listed = models(session, conversation.id, options, false), model = was?.model?.current;
@@ -1684,7 +1692,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const joined = bodies.map(new Set(bodies.map((b) => senders.get(b))).size > 1 ? partOf : (b) => b.text).join('\n\n');
       // A7: messages sent for different modes are not one prompt, or a chat's text would run in the mode of your later message.
       // Nor is another chat's question joined to anything: it gets a turn of its own (peer help).
-      const other = (mode !== undefined && item.body.mode !== undefined && item.body.mode !== mode) || (send.length > 0 && (solos.has(item.body) || solos.has(send[0].body)))
+      // O246: one mode exactly, a message with none included (record 1 names it for every work message it can), so a message
+      // never runs in a mode its sender did not pick.
+      const other = (send.length > 0 && item.body.mode !== send[0].body.mode) || (send.length > 0 && (solos.has(item.body) || solos.has(send[0].body)))
         // #257 FIX1: nor messages that pick different models or efforts: each prompt sets one model and effort, so a pick
         // the joined prompt could not carry would be lost. Picks that agree (or are left out) join, and all of them are sent.
         || (send.length > 0 && !agrees(model, config, item.body))
@@ -1701,6 +1711,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (from.length > 1) mixed.set(body, from);
     else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
+    if (send.every((item) => filled.has(item.body))) filled.add(body);
+    if (send.some((item) => !senders.has(item.body) && !mixed.has(item.body) && item.body.mode !== undefined && !filled.has(item.body))) ownerNamed.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body))).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
     else settleResumed(send.map((item) => item.id)); // O109: taken, so a restart from here on does not send it again
@@ -1793,7 +1805,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (!session.solo) session.back = undefined;
         // O273: a failed set stops the chat only while this toggle is the newest; a newer one's own set, behind this one on
         // the chain, decides (it stops the chat itself if the lock is on and that set fails too).
-        try { await setMode(session, row(id).provider, undefined, true, 5000); }
+        // O246: unlocked, the start mode it goes back to shows on the pill but is no pick of the owner's (nopick).
+        try { await setMode(session, row(id).provider, undefined, locked || 'nopick', 5000); }
         catch { if (locked && lockRev === mine) await stopConversation(id); }
       }));
       return { status: 200, on: locked, rev: lockRev === mine ? mine : null };
@@ -1871,16 +1884,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof body?.text !== 'string' || !imagesOk(images) || !filesOk(files) || images.length - photos(images).length + files.length > MAX_FILES || (files.length && !attachDir) || (!body.text.trim() && !images.length && !files.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (files.some((file) => file.data.length > MAX_FILE)) { release(); return { status: 413, error: 'file-too-large', message: 'A file is over 6 MiB (8 MiB as sent); nothing was sent.' }; }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
-      // O246: a message runs in its sender's mode, named on it here, once, so it keeps it through a hold, the queue, a pause and
-      // a restart. The owner's with none named (the phone's "as set") takes the owner's pick, only while a live session is in
-      // another mode (another sender left it there): with none, resume puts the pick back, and a session already in it needs
-      // no set (a set here would join a chain still waiting, and insist on a pick resume found refused). P9's own takes
-      // noticeModeOf; another chat's names one already (send_chat). Not a note (it starts no turn) nor a question (solo).
-      const owner = !from && !mixed.has(body);
+      // O246, record 1: a message runs in its sender's mode, resolved here, once, and stored on it, so it keeps it through a
+      // hold, the queue, a pause and a restart, and the queue joins only messages of one mode (drain). The owner's with none
+      // named (the phone's "as set") takes the owner's pick; P9's own takes noticeModeOf; another chat's names one already
+      // (send_chat). Not a note (it starts no turn) nor a question (solo: the no-write mode). Whether this needs a mode set is
+      // the dispatch's own question (filled, below). away: the live session as it came in.
+      const owner = !from && !mixed.has(body), away = live.get(id);
       if (body.mode === undefined && !notes.has(body) && !solo) {
-        const away = live.get(id), pick = owner && away?.mode ? pickOf(id) : null;
-        const fill = owner ? (pick && MODES[conversation.provider][pick] !== (away.back ?? away.mode) ? pick : null) : from === 'p9' ? noticeModeOf(id) : null;
-        if (fill && Object.hasOwn(MODES[conversation.provider], fill)) body.mode = fill;
+        const fill = owner ? pickOf(id) : from === 'p9' ? noticeModeOf(id) : null;
+        if (fill && Object.hasOwn(MODES[conversation.provider], fill)) { body.mode = fill; filled.add(body); }
       }
       // O255: next (the window): its mode and Codex's plan switch are a mode picked mid-turn, what it runs in if it waits. A steer
       // of it still goes into the running turn (repicks), which keeps its mode; the phone's and agents' mode picks wait for the turn's end.
@@ -2004,12 +2016,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
-      // O246: a chat's first turn (a worker's, sent by the chat that opened it) sets its pick, whoever sent it. After that, ranIn: a
-      // turn another sender ran in a mode other than the owner's pick says so on its message (the pill keeps the pick).
+      // O246: a chat's first turn (a worker's, sent by the chat that opened it) sets its pick, whoever sent it.
       const first = !owner && !solo && !db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type = 'user' LIMIT 1").get(id);
-      const pickNow = !owner && !solo && !first && !locked && body.mode ? pickOf(id) : null, ranIn = pickNow && body.mode !== pickNow ? body.mode : null;
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
-      emit(id, 'user', { text: body.text, ...shown(images), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(ranIn && { ranIn }), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }), ...(bare && { command: true }) }); // hash and type only: events stay small
+      emit(id, 'user', { text: body.text, ...shown(images), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...(rules && { rules: rules.hash }), ...sender(body), ...(solo && { ask: true }), ...(repeats.has(body) && { repeat: true }), ...(bare && { command: true }) }); // hash and type only: events stay small
       if (held?.length) crashAt('user-event');
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
@@ -2046,10 +2056,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (solo && session.pending.size) return refused(409, 'waiting-on-user');
         if (solo) session.back ??= session.mode;
         const want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
-        // O246: only the owner's turn tells the pill its mode (the owner's pick); another sender's is quiet, as a solo's, unless
-        // it is the chat's first turn, the chat has no pick yet, or the lock's mode is being told (a lock event is never a pick).
-        const tells = !solo && (owner || first || locked || !pickOf(id));
-        if (want && (want !== session.mode || session.setWaits)) {
+        // O246: only a turn with the owner's own message tells the pill its mode (record 3, the owner's pick); another sender's is
+        // quiet, as a solo's, unless it is the chat's first turn, the chat has no pick yet, or the lock's mode is told (a lock
+        // event is never a pick). A mode P9 filled in (record 1) is set only when the session is in another: not because an
+        // earlier set still waits (the chain wait below covers that, as for a message that names none), and not for the owner's
+        // on a session this start resumed (resume put the pick back, or the agent refused it and resume said so).
+        const mine = owner || ownerNamed.has(body), tells = !solo && (mine || first || locked || !pickOf(id));
+        const named = locked || solo || !filled.has(body) || session.back, resumed = owner && filled.has(body) && session !== away;
+        if (want && !resumed && (want !== session.mode || (session.setWaits && named))) {
           // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
           try { await setMode(session, conversation.provider, want, tells, 5000); }
           catch { emit(id, 'error', { message: 'Mode ' + want + ' could not be set; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
@@ -2057,7 +2071,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (!solo) session.back = undefined;
         // MC-3: a prompt with no mode, or with the one the session is already in, set none; the pill learns it here once.
         // O246: and an owner's turn in a mode its pick does not name yet (the session was left there by another sender's turn).
-        if (tells && session.mode && (!session.told || (owner && !locked && MODES[conversation.provider][pickOf(id)] !== session.mode))) tellMode(session, conversation.provider);
+        if (tells && session.mode && (!session.told || (mine && !locked && MODES[conversation.provider][pickOf(id)] !== session.mode))) tellMode(session, conversation.provider);
         if (body.model && (body.model !== session.models?.current || session.setWaits)) {
           if (!session.models?.options.some((o) => o.value === body.model)) {
             emit(id, 'error', { message: 'This agent does not offer that model; nothing was sent.', ends: true }); return refused(400, 'model-unknown');
@@ -2148,6 +2162,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (gone()) throw new Error('stopping');
         try { stillAuthorized(); } catch { handBack('This device was signed out; nothing was sent.'); }
         session.heard?.forEach((m) => { m.copied = true; });
+        // O246, record 2: the mode this turn runs in, as the prompt goes (every set done; the lock's own when locked). P9's
+        // lines, a stopped chat's mode and the window's "ran in" read it. label: not the owner's pick, so its message says so.
+        if (!solo) {
+          const name = Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? null;
+          emit(id, 'ran', { name, ...(name && !locked && name !== pickOf(id) && { label: true }) });
+        }
         return session.agent.prompt({ sessionId: session.sessionId, prompt });
       };
       dispatch().then(

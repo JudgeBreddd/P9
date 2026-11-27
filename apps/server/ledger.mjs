@@ -144,6 +144,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   // Without it the chat list's first read after a start scanned every event, 1.6 to 3.3 s on a 2.1M-event ledger;
   // with it, 2 ms. Built once (1.5 s on that ledger), same as the index above.
   db.exec("CREATE INDEX IF NOT EXISTS events_goal ON events (conversation, cursor) WHERE type = 'update' AND CASE WHEN json_valid(data) THEN json_type(data, '$._meta.jetbrains.air.goal') END IS NOT NULL");
+  // O246: a chat's last turn's mode (chat.mjs ranOf, read for each P9 notice and each stopped chat's mode); its WHERE matches.
+  db.exec("CREATE INDEX IF NOT EXISTS events_ran ON events (conversation, cursor) WHERE type = 'ran'");
   // O191: the usage read joins a chat's provider profile (prefs profile:<chat>, O48). The same table chat.mjs makes, outside
   // MIGRATIONS as it is there, so a ledger opened without chat.mjs can prepare the read.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');

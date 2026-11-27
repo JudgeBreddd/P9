@@ -99,7 +99,7 @@ test('I3 worker window: a stopped chat keeps the effort it ran on, from its newe
 
 test('I3 worker window: a stopped chat keeps the mode it ran in, from its newest mode event', async () => {
   const r = rig();
-  r.modes[EB] = 'auto'; // a stopped chat: info has no live session, so no mode; chat.lastMode reads its newest mode event
+  r.modes[EB] = 'auto'; // a stopped chat: info has no live session, so no mode; chat.lastMode reads the mode its last turn ran in
   const ws = (await r.hooks.view(EA)).workers, b = ws.find((w) => w.chat === EB);
   assert.equal(b.mode, 'auto');
   assert.equal(ws.find((w) => w.chat === EC).mode, null, 'a chat that never told a mode has none');

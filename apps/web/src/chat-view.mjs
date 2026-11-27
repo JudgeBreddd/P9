@@ -1252,7 +1252,7 @@ function applyChat(ev, into) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }), ...(typeof d.ranIn === 'string' && d.ranIn && { ranIn: d.ranIn }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -1268,6 +1268,8 @@ function applyChat(ev, into) {
     // the mode each message sends, are the chat's own and not a new chat's. The lock's mode is the lock's, not the chat's.
     // Review 13: taken as the daemon gave it, not checked against the catalog (it may not have answered yet, or a remote's
     // differs): the daemon only sets a mode from its own allowlist. Only what the user can pick comes from the catalog (modeMenu).
+    // O246: the mode a turn ran in, on its message when it is not your pick (another sender's turn).
+    case 'ran': if (d.label && typeof d.name === 'string' && d.name) { const u = s.events.findLast((e) => e.t === 'user'); if (u) u.ranIn = d.name; } break;
     case 'mode': if (!into && !d.lock && typeof d.name === 'string' && d.name) s.mode = d.name; break;
     case 'moving': settle(); s.state = 'moving'; notice('Moving to the remote: this chat is paused here.'); break;
     case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Remote mode (the title-bar badge) and open it.'); break;

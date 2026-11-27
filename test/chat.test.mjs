@@ -49,7 +49,7 @@ test('a turn streams through the event log; reconnecting from any cursor gives t
   const id = await create(instance);
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' })).status, 202);
   const { seen } = await until(instance, (event) => event.type === 'turn-end');
-  assert.deepEqual(seen.map((event) => event.type).filter((type) => type !== 'update'), ['created', 'user', 'connected', 'config', 'mode', 'turn-end']); // MC-3: a prompt naming no mode says the one it runs in
+  assert.deepEqual(seen.map((event) => event.type).filter((type) => type !== 'update'), ['created', 'user', 'connected', 'config', 'mode', 'ran', 'turn-end']); // MC-3: a prompt naming no mode says the one it runs in; O246: ran, the mode the turn ran in
   assert.ok(seen.some(said(id, 'echo:hello')));
   const cursors = seen.map((event) => event.cursor);
   assert.deepEqual(cursors, [...new Set(cursors)].sort((a, b) => a - b));

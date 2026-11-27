@@ -719,7 +719,7 @@ test('Delegate notes: a note reaches a wider working chat and a worker\'s parent
   assert.equal(await heard(), first + 1, 'a note sent with a refused prompt was lost');
 });
 
-test('Delegate: a chat working in a wider mode takes no message from a narrower one; read_chat gets past a message longer than a page', { timeout: 180000 }, async (t) => {
+test('Delegate: a chat working in a wider mode takes no steered message from a narrower one; read_chat gets past a message longer than a page', { timeout: 180000 }, async (t) => {
   const instance = await start(t);
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
@@ -731,10 +731,12 @@ test('Delegate: a chat working in a wider mode takes no message from a narrower 
   await said(a.conversation, 'mode:plan');
   await call(instance, `/chat/${u.conversation}/prompt`, 'POST', { text: 'slow', mode: 'Auto' });
   await said(u.conversation, 'working');
-  for (const when of ['auto', 'steer', 'queue']) {
+  for (const when of ['auto', 'steer']) {
     assert.deepEqual(await a.tool('send_chat', { chat: u.conversation, text: 'run it', when }), { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' }, when);
   }
-  assert.deepEqual(await sentTo(u.conversation), ['mcp', 'slow'], 'a refused send reached the wider turn');
+  // O246: a queued one only waits for a turn of its own in its own mode, so it is taken (the cancel below hands it back).
+  assert.equal((await a.tool('send_chat', { chat: u.conversation, text: 'run it', when: 'queue' })).sent, 'waiting for the turn to end');
+  assert.deepEqual(await sentTo(u.conversation), ['mcp', 'slow'], 'a refused or queued send reached the wider turn');
   // Its turn over, the message starts one in the sender's mode, not the chat's own.
   await call(instance, `/chat/${u.conversation}/cancel`, 'POST', {});
   assert.equal((await a.done(u.conversation)).state, 'idle');
