@@ -418,6 +418,17 @@ const connection = acp.connectAgent(stream, {
       await say('after repeat files');
       return { stopReason: 'end_turn' };
     }
+    // O267b: a call's update that comes 210 calls after it, so a reloaded window's newest blocks hold the update and not its
+    // call ('late call'); and one whose call is sent again after a compaction, its update before the repeat ('late repeat').
+    // Show earlier must put both updates on their rows.
+    if (text === 'toollate') {
+      const call = (id, title) => ({ sessionUpdate: 'tool_call', toolCallId: id, title, kind: 'execute', status: 'pending' }), out = (id, t) => ({ sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: t } }] });
+      const between = Array.from({ length: 210 }, (_, i) => ({ sessionUpdate: 'tool_call', toolCallId: 'between-' + i, title: 'step ' + i, kind: 'read', status: 'completed' }));
+      for (const update of [call('late-1', 'late call'), call('late-2', 'late repeat'), ...between, out('late-1', 'late output'), out('late-2', 'repeat late output'),
+        { sessionUpdate: 'tool_call', toolCallId: 'compact-l', title: 'Compact conversation', kind: 'think', status: 'completed' }, call('late-2', 'late repeat'), { sessionUpdate: 'tool_call_update', toolCallId: 'late-2', status: 'completed' }]) await connection.sessionUpdate({ sessionId, update });
+      await say('after late');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'compact') {
       setTimeout(async () => {
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-1', title: 'Compact conversation', kind: 'think', status: 'completed' } });

@@ -925,6 +925,27 @@ test('O266 review 3: Show earlier keeps the first run\'s diff for a file the rep
   assert.deepEqual(errors, [], 'no page errors');
 });
 
+// O267b: an update whose call is above the newest blocks a reloaded window loads was dropped, so Show earlier drew the call
+// pending with no output; one whose call came again after a compaction, before that repeat, lost its output the same way.
+test('O267b: Show earlier puts an update that came before its call was loaded on the call\'s row', { timeout: 120000 }, async (t) => {
+  const { page, pane, send, errors } = await setup(t, 'o267b-late');
+  await send('toollate');
+  await pane.locator('.msg.agent', { hasText: 'after late' }).waitFor({ timeout: 30000 });
+  await page.reload();
+  const fresh = page.locator('.pane .hist').filter({ hasText: 'after late' }).first();
+  await fresh.waitFor({ timeout: 30000 });
+  assert.equal(await fresh.locator('details.tool', { hasText: 'late call' }).count(), 0, 'the call is on the earlier page');
+  await fresh.locator('[data-earlier]').click();
+  await fresh.locator('details.tool', { hasText: 'step 0' }).waitFor({ timeout: 15000 });
+  const late = fresh.locator('details.tool', { hasText: 'late call' }), again = fresh.locator('details.tool', { hasText: 'late repeat' });
+  assert.equal(await late.count(), 1, 'one row for the late call');
+  assert.equal((await late.locator('[data-slot=badge]').first().textContent()).trim(), 'completed', 'its update\'s status is on it');
+  assert.match(await late.first().textContent(), /late output/, 'and its output');
+  assert.equal(await again.count(), 1, 'one row for the repeated call');
+  assert.match(await again.first().textContent(), /repeat late output/, 'the update before the repeat keeps its output on the first row');
+  assert.deepEqual(errors, [], 'no page errors');
+});
+
 test('O266: Show earlier across a compaction still draws the call once, finished, where it first ran', { timeout: 120000 }, async (t) => {
   const { page, pane, send, errors } = await setup(t, 'o266-earlier');
   await send('toolrepeat far');
