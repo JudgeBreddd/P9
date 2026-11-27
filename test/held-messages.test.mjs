@@ -319,9 +319,11 @@ test('O73 FIX1: a waiting message keeps the title its sender had when it sent it
   const again = async (name) => {
     instance.child.kill('SIGTERM'); await once(instance.child, 'exit'); instance = await restart(t, instance, name);
     const fresh = (await call(instance, '/chat/events?after=0')).body.cursor;
-    // P9's own restart line may be running a turn on the sender: the 'mcp' message is sent once that turn is over.
+    // P9's restart line ('P9 restarted. Interrupted mid-turn: Target') runs a turn on the sender, its opener. O271: a plain
+    // 'mcp' that met that turn was steered into it (202 steered) and answered 'got:mcp', so no 'mcp:' ever came (CI's
+    // event-timeout). Queued, it goes as its own prompt once that turn ends; 409 only while the sender's adapter starts.
     let asked;
-    for (let i = 0; i < 100 && (asked = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' })).status === 409; i += 1) await pause(100);
+    for (let i = 0; i < 100 && (asked = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp', when: 'queue' })).status === 409; i += 1) await pause(100);
     assert.ok([200, 202].includes(asked.status), JSON.stringify([asked.status, asked.body]));
     a = await connect(t, instance, a.conversation, fresh);
   };
