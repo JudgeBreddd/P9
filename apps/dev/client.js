@@ -352,8 +352,12 @@ window.p9dev.onOpen(async request => {
     }
   } catch (error) { v.window.showErrorMessage('P9 could not open it: ' + error.message); }
 });
-// O258: main asks for this before the window closes; on its own the workbench writes its open files and tree only every few
-// seconds, so files opened just before a quit were not there at the next start.
+// O258: the open files are saved when they change, not only every few seconds when the workbench is idle, so a quit, a
+// restart, an update or a switch of machines right after an open still finds them at the next start (the file tree saves
+// itself on each expand or collapse). 100 ms groups the several tab changes of one open; the gap is that plus the write.
 const storage = await getService(IStorageService);
-window.devFocusSave = () => storage.flush();
+let saving = null;
+const saveSoon = () => { clearTimeout(saving); saving = setTimeout(() => storage.flush().catch(error => console.error('p9: the editor place was not saved:', error.message)), 100); };
+v.window.tabGroups.onDidChangeTabs(saveSoon);
+v.window.tabGroups.onDidChangeTabGroups(saveSoon);
 window.devFocusReady = true;
