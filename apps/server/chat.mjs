@@ -1739,11 +1739,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body), from.length > 1 ? send : undefined)).catch(() => refused(403, 'session-ended'));
-    if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
+    // O246 round 3: a full held list refuses only this batch (another chat's or P9's); the owner's message behind it may run.
+    const full = result.error === 'sprint-paused-full';
+    if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); if (!full) unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
     else settleResumed(send.map((item) => item.id)); // O109: taken, so a restart from here on does not send it again
-    // O246 round 2: kept for Resume (a paused sprint), it started no turn, so no turn's end sends what is left: the owner's
-    // message behind it goes now.
-    if (result.when === 'pause' && session.queued.length && live.get(id) === session && !session.turn) return drain(id, session);
+    // O246 round 2: kept for Resume (a paused sprint) or refused as the held list is full, it started no turn, so no turn's
+    // end sends what is left: the owner's message behind it goes now.
+    if ((result.when === 'pause' || full) && session.queued.length && live.get(id) === session && !session.turn) return drain(id, session);
   }
 
   // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).

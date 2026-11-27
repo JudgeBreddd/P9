@@ -217,8 +217,8 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
 
 // The phone's picked chat (the hidden #conversation select the composer, queue and Mode read) follows the chat on screen.
 // O246 round 2: "As set" sends the mode it shows, as the desktop does, so a wider mode another sender's queued message sets
-// first is not what the owner's runs in. Under the agent lock it is the chat's own mode, not the lock's, and still taken.
-test('O246: the phone\'s "As set" sends the chat\'s last mode with the message; under the agent lock its own, and it is taken', { timeout: 90000 }, async (t) => {
+// first is not what the owner's runs in. Under the agent lock it is the lock's (round 3), and still taken.
+test('O246: the phone\'s "As set" sends the mode it shows with the message, the lock\'s too, and it is taken', { timeout: 90000 }, async (t) => {
   const { page, server } = await phoneOn(t);
   const id = await newChat(page, 'claude');
   const echoed = (text) => page.waitForFunction((want) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(want)), text, { timeout: 15000 });
@@ -234,7 +234,7 @@ test('O246: the phone\'s "As set" sends the chat\'s last mode with the message; 
   await echoed('echo:second');
   assert.equal((await server.desk('/agent-lock', 'POST', { on: true })).status, 200);
   await page.waitForFunction(() => document.querySelector('#mode option').textContent === 'Mode: Plan', null, { timeout: 10000 });
-  assert.deepEqual(await sent('third'), ['Manual', 202], 'under the lock: the chat\'s own mode, and the send is taken');
+  assert.deepEqual(await sent('third'), ['Plan', 202], 'under the lock: the mode it shows (an unlock before its turn does not widen it), and the send is taken');
   await echoed('echo:third');
 });
 test('P6: the composer stays on the chat on screen when that chat leaves the list (stopped unused on the desktop)', { timeout: 60000 }, async (t) => {
