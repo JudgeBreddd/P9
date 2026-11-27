@@ -200,14 +200,13 @@ const connection = acp.connectAgent(stream, {
     return { configOptions: configOptions() };
   },
   async closeSession() { if (existsSync('slow-close')) await new Promise((resolve) => setTimeout(resolve, 2000)); return {}; },
-  // O273: overlaps.log, when present, gets a line for each set that arrives while another is unanswered; hang-<id>
-  // (hang-model, hang-mode) holds a set of that option until the file goes; fail-mode refuses a mode set to the value it
-  // names; quiet-config answers a set without naming any option (the mode included).
+  // O273: overlaps.log, when present, gets a line for each set that arrives while another is unanswered; hang-model holds
+  // a model set until the file goes; fail-mode refuses a mode set to the value it names; quiet-config answers a set
+  // without naming any option (the mode included).
   async setSessionConfigOption(params) {
     if (inflight++ && existsSync('overlaps.log')) appendFileSync('overlaps.log', params.configId + '=' + params.value + '\n');
     try {
-      const hang = 'hang-' + params.configId;
-      if (existsSync(hang)) { writeFileSync('config-started', ''); while (existsSync(hang)) await new Promise((resolve) => setTimeout(resolve, 25)); }
+      if (params.configId === 'model' && existsSync('hang-model')) { writeFileSync('config-started', ''); while (existsSync('hang-model')) await new Promise((resolve) => setTimeout(resolve, 25)); }
       if (params.configId === 'mode' && existsSync('fail-mode') && readFileSync('fail-mode', 'utf8').trim() === String(params.value)) throw new Error('mode refused');
       const answer = await this.setOne(params);
       return existsSync('quiet-config') ? {} : answer;

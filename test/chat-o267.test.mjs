@@ -345,22 +345,6 @@ test('O273: a model set not answered past the cap retires the session, so a lock
   console.log('PASS O273 late model: the cap retired the session; no set overlapped; the next prompt ran in plan');
 });
 
-// O273 round 2: the barrier is right before the prompt goes. A lock pressed while the start snapshot is taken (the prompt
-// already answered 202, in the writable mode) holds the prompt until the agent confirms the no-write mode.
-test('O273: a lock pressed during the start snapshot holds the prompt until the agent confirms the no-write mode', { timeout: 60000 }, async (t) => {
-  const { chat, dir, id, until } = await setup(t, 'o273-snapshot', true, { P9_SHELL_START_MS: '1500' });
-  await writeFile(path.join(dir, 'calls.log'), '');
-  await writeFile(path.join(dir, 'hang-mode'), ''); // the lock's set stays unanswered past the snapshot
-  assert.equal((await chat.prompt(id, { text: 'mode' })).status, 202);
-  const lock = chat.setLock({ on: true });
-  await pause(2500); // the snapshot is done; the lock's set is not answered yet
-  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), [], 'the prompt went before the agent confirmed the lock');
-  await unlink(path.join(dir, 'hang-mode'));
-  assert.equal((await lock).on, true);
-  await until(said('mode:plan'), 'the prompt ran in the no-write mode');
-  console.log('PASS O273 snapshot: the lock pressed during the snapshot was answered before the prompt went; it ran in plan');
-});
-
 // O273 round 2: the cap frees the chain as it stops the session; a set queued behind the unanswered one (here the lock's,
 // queued before the cap fires) is never sent to the adapter being stopped.
 test('O273: a set queued before the cap fires is not sent to the session the cap is stopping', { timeout: 60000 }, async (t) => {

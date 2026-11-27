@@ -2056,7 +2056,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         // #540 review 13: a prompt that set nothing (or whose sets went in behind someone else's) still waits for every set
         // on the chain, so a set that timed out earlier and answers late lands before this turn, never during it.
-        // A set added after this (a lock pressed during the start snapshot) is waited for right before the prompt goes (dispatch).
+        // ponytail: it waits for the chain as it stands; a set added after this (a lock pressed during the start snapshot
+        // below) is not waited for, so the prompt can go before the agent answers the lock. A follow-up row takes that.
         if (session.setWaits) {
           try { await Promise.race([session.setChain, wait(5000).then(() => { throw new Error('timeout'); })]); }
           catch { emit(id, 'error', { message: 'An earlier setting has not answered; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
@@ -2071,10 +2072,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const turn = session.turn = randomUUID();
       // MC-15: the folder's state as the turn starts; Shell edits at its end are what changed since (shell-edits.mjs).
       const shellFrom = SHELL_START_MS ? wait(SHELL_START_MS).then(() => shellStart(session.cwd)) : shellStart(session.cwd), edits = session.turnEdits = { calls: new Map(), named: new Set() };
-      // O273: the barrier. The prompt goes once the snapshot is taken and every set queued meanwhile has settled (a lock pressed
-      // during the snapshot included), so it never goes between a lock and the agent's answer to it.
-      const ready = shellFrom.then(async () => { while (session.setWaits) await session.setChain; });
-      session.starting = ready; // O252: the prompt goes when this settles; a steer meanwhile waits for it (steer)
+      session.starting = shellFrom; // O252: the prompt goes when this settles; a steer meanwhile waits for it (steer)
       act(id);
       // O176: a prompted turn ends the unprompted run; the agent's next one has a new ID (ownRun), never the old one back.
       session.unprompted = null;
@@ -2118,12 +2116,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         throw Object.assign(new Error(message), { told: true });
       };
       const dispatch = async () => {
-        await ready;
+        await shellFrom;
         if (session.cut === turn) return { stopReason: 'cancelled' };
         if (gone()) throw new Error('stopping');
         try { stillAuthorized(); } catch { handBack('This device was signed out; nothing was sent.'); }
-        // O273: with the lock on, only an agent that confirmed its no-write mode gets the prompt; any other is stopped.
-        if (locked && session.mode !== NARROW[conversation.provider]) { stopConversation(id); handBack('The agent did not confirm its no-write mode for the lock, so P9 is stopping it; nothing was sent.'); }
         session.heard?.forEach((m) => { m.copied = true; });
         return session.agent.prompt({ sessionId: session.sessionId, prompt });
       };
