@@ -31,13 +31,13 @@ test('File protection: refused while on, a native warning before off, kept acros
   });
 
   // On by default: every locked name and the script list refused, nothing changed on disk, locked names left out of the listing.
-  assert.deepEqual((await call(instance, '/file-protection')).body, { on: true });
+  assert.deepEqual((await call(instance, '/file-protection')).body.on, true);
   assert.deepEqual(await saveAll(instance, 'changed'), [400, 400, 400, 400, 400, 403]);
   for (const name of LOCKED) assert.equal(await disk(instance, name), 'original ' + name);
   assert.deepEqual((await call(instance, '/files/list?path=')).body.entries.map((e) => e.name), ['note.txt', 'registry.json']);
   // The route takes exactly { on: boolean }.
   for (const bad of [{ on: 'off' }, { on: false, x: 1 }, {}, [false], null]) assert.equal((await call(instance, '/file-protection', 'POST', bad)).status, 400);
-  assert.deepEqual((await call(instance, '/file-protection')).body, { on: true });
+  assert.deepEqual((await call(instance, '/file-protection')).body.on, true);
 
   // The desktop: Keep answers leave it on; "Read about the risk" opens the docs and asks again; Turn off turns it off.
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-protect-')), opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
@@ -74,7 +74,7 @@ test('File protection: refused while on, a native warning before off, kept acros
   assert.deepEqual({ ...warning, detail: undefined }, { type: 'warning', title: 'Turn off file protection?',
     buttons: ['Keep protection on', 'Turn off protection', 'Read about the risk'], defaultId: 0, cancelId: 0, detail: undefined });
   assert.match(warning.detail, /phone/); assert.match(warning.detail, /\.env/); assert.match(warning.detail, /turn protection back on/);
-  assert.deepEqual((await call(instance, '/file-protection')).body, { on: true });
+  assert.deepEqual((await call(instance, '/file-protection')).body.on, true);
 
   await answers([2, 1]);
   await page.click('#setProtect');
@@ -84,7 +84,7 @@ test('File protection: refused while on, a native warning before off, kept acros
   let line = '';
   for (const end = Date.now() + 5000; !line && Date.now() < end;) line = await readFile(opened, 'utf8').catch(() => '') || await new Promise((resolve) => setTimeout(() => resolve(''), 50));
   assert.equal(line.trim(), 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection');
-  assert.deepEqual((await call(instance, '/file-protection')).body, { on: false });
+  assert.deepEqual((await call(instance, '/file-protection')).body.on, false);
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'file-protection-off.png') }); }
 
   // Off: every one of them saves, and the listing shows them.
@@ -96,8 +96,8 @@ test('File protection: refused while on, a native warning before off, kept acros
   instance.child.kill('SIGTERM');
   await once(instance.child, 'exit');
   const second = await restart(t, instance, 'state-2');
-  assert.deepEqual((await call(second, '/file-protection')).body, { on: false });
-  assert.deepEqual((await call(second, '/file-protection', 'POST', { on: true })).body, { on: true });
+  assert.deepEqual((await call(second, '/file-protection')).body.on, false);
+  assert.deepEqual((await call(second, '/file-protection', 'POST', { on: true })).body.on, true);
   assert.deepEqual(await saveAll(second, 'again'), [400, 400, 400, 400, 400, 403]);
   for (const name of LOCKED) assert.equal(await disk(second, name), 'changed');
   await answers([]);

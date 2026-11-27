@@ -18,7 +18,7 @@ export const SECURITY = {
   // Review 3 L5: "Open, don't ask again" in the link question, shown and undone here (desktop only; the phone never asks).
   links: ['Ask before opening agent links', 'A link in an agent reply opens in your browser only after a question showing its whole address, on this computer.',
     'On: a link in an agent reply asks first, showing its whole address. Off: it opens on a click. Turning Unrestricted mode off turns this back on.'],
-  unknown: 'Unknown: the daemon did not answer.',
+  unknown: 'Unknown: the daemon did not answer. Reopen Settings to check.',
   noModes: 'Waiting for the agents\' modes from P9; open Settings again in a moment.',
   noLoose: 'Unavailable: no agent P9 lists has a mode that acts without asking.', // review 14: the catalog answered with none
 };
@@ -64,28 +64,45 @@ export const freeLocked = (lock, protect) => lock === null || protect === null |
 export const sentMode = (agent, mode) => (!CATALOG.ours || modes[agent]?.includes(mode)) && mode || undefined;
 export const modesNote = () => CATALOG.ours ? SECURITY.noLoose : SECURITY.noModes;
 // Review 14: Unrestricted mode as one change of the daemon's two settings, File protection then the agent lock (desktop
-// settings-view.mjs, phone phone.ts). write(key, on) makes one change and answers the daemon's { on } (the setting as it
-// now is), or { error } when it was refused or not answered. A refusal, a "keep it" answer (on comes back unchanged), or
-// (turning on) no loosened mode known once the writes are done (the catalog can land meanwhile) puts back every setting
-// this changed, newest first, and names any it could not put back. ok: both are as asked, so the device may set its own part.
-export async function changeFree(on, state, write) {
-  const now = { ...state }, done = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
+// settings-view.mjs, phone phone.ts). write(key, on, rev) makes one change and answers the daemon's { on, rev } (the
+// setting as it now is), or { error } when it was refused or not answered; read(key) answers the same without a change.
+// A refusal, a "keep it" answer (on comes back unchanged), or (turning on) no loosened mode known once the writes are done
+// (the catalog can land meanwhile) puts back every setting this changed, newest first, and names any it could not put back.
+// ok: both are as asked, so the device may set its own part.
+// O267b: a write with no { on } may still have been made (its reply lost on the way back), so the setting is read. A read
+// shows the setting, not who set it (another device may have set the same value), so a change found that way is shown and
+// left as it is, never put back. Only a write whose own reply came back with its own rev is put back, with that rev, so a
+// newer change (another device, another switch) stays. rev: null, a newer change came after this one: shown, not put
+// back. No rev at all, an older daemon: its put-back is plain, as before. cancelled (the desktop's "Keep protection on"):
+// no write was made, so it stops there. Not read either: it shows unknown (null), never the old value, and the note says to
+// reopen Settings, which reads it again.
+export async function changeFree(on, state, write, read) {
+  const now = { ...state }, done = [], left = [], names = { protect: SECURITY.protect[0], lock: SECURITY.lock[0] };
+  const known = (r) => typeof r?.on === 'boolean', both = (l) => l.join(' and '), is = (key) => names[key] + ' is now ' + (now[key] ? 'on' : 'off');
   let note = null;
   for (const [key, want] of [['protect', !on], ...(on ? [['lock', false]] : [])]) {
     if (now[key] === want) continue;
-    const r = await write(key, want);
-    if (typeof r?.on === 'boolean') now[key] = r.on;
-    if (now[key] !== want) { note = typeof r?.on === 'boolean' ? '' : 'Not changed: ' + (r?.error || 'P9 did not answer') + '.'; break; }
-    done.push(key);
+    const w = await write(key, want);
+    if (w?.cancelled) { if (known(w)) now[key] = w.on; note = ''; break; }
+    const r = known(w) ? w : await read(key);
+    now[key] = known(r) ? r.on : null;
+    if (now[key] === null) { note = 'Stopped: P9 did not say whether ' + names[key] + ' changed. Reopen Settings to check.'; break; }
+    if (known(w) && w.rev === null) { note = is(key) + ': another change came after this one. Left as it is.'; break; }
+    if (now[key] !== want) { note = known(w) ? '' : 'Not changed: ' + (w?.error || 'P9 did not answer') + '.'; break; }
+    if (known(w)) done.push([key, w.rev]); else left.push(is(key) + ' (P9\'s answer was lost; it may have been another device). Left as it is.');
   }
   if (note === null && on && !modesKnown()) note = 'Not changed: the agents\' modes changed meanwhile.';
   if (note === null) return { ok: true, state: now, note: '' };
-  const lost = [];
-  for (const key of done.reverse()) {
-    const r = await write(key, state[key]);
-    if (r?.on === state[key]) now[key] = state[key]; else { if (typeof r?.on === 'boolean') now[key] = r.on; lost.push(names[key]); }
+  const lost = [], unsure = [];
+  for (const [key, rev] of done.reverse()) {
+    const w = await write(key, state[key], rev), r = known(w) ? w : await read(key);
+    now[key] = known(r) ? r.on : null;
+    if (now[key] !== state[key]) (now[key] === null ? unsure : lost).push(names[key]);
   }
-  if (lost.length) note = (note ? note + ' ' : '') + 'Could not put back ' + lost.join(' and ') + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.';
+  const add = (more) => { note = (note ? note + ' ' : '') + more; };
+  left.forEach(add);
+  if (lost.length) add('Could not put back ' + both(lost) + ': set ' + (lost.length > 1 ? 'them' : 'it') + ' again above.');
+  if (unsure.length) add('P9 did not say whether ' + both(unsure) + ' went back. Reopen Settings to check.');
   return { ok: false, state: now, note };
 }
 // Before GET /agents answers there are no loosened modes to check, so it reads off.

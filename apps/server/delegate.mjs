@@ -753,7 +753,14 @@ export function createDelegate({ chat, allowed, usage }) {
       const end = { at: Date.now(), by: caller ?? 'owner', record };
       chat.projects.recordClose(sprint, end);
       schedules?.pause([...below(chat.family(), sprint), sprint]); // O141: nothing of a closed sprint wakes on its own
-      for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) chat.release(c.id, sprint); // O141: no worker stays held
+      // O141: no worker stays held. O267b: each chat whose messages a release dropped is told which, in one notice with no
+      // replacement key (wake keeps nothing for it). Only a message it sent alone is quoted: a combined one (mixed) holds other chats' text too.
+      const dropped = new Map(), clip = (t, n) => (t.length > n ? t.slice(0, n) + '…' : t);
+      for (const c of chat.family()) if (c.parent === sprint && !isLead(c.id)) for (const item of chat.release(c.id, sprint) ?? []) {
+        const to = '- to ' + (c.title || c.id) + ': ', line = item.mixed ? to + 'a combined message with other chats\' (not quoted)' : to + clip(item.body.text, 200);
+        for (const from of new Set(item.mixed ?? [item.from])) if (ID.test(from ?? '')) dropped.set(from, [...(dropped.get(from) ?? []), line]);
+      }
+      for (const [from, lines] of dropped) notify(from, 'sprint', '[p9] The sprint closed while it held a worker, so ' + (lines.length === 1 ? 'this message you sent was' : 'these ' + lines.length + ' messages you sent were') + ' not delivered:\n' + lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n- and ' + (lines.length - 10) + ' more' : ''));
       hooks.fire(sprint, 'after-close', null, scripts).catch(() => null);
       const own = caller && record.workers.some((w) => w.chat === caller);
       const swept = inside ? null : await chat.workers.clean(sprint, { bundle: true }).catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
@@ -1301,10 +1308,14 @@ export function createDelegate({ chat, allowed, usage }) {
   function listChats(caller) {
     const family = chat.family(), me = family.find((c) => c.id === caller), mine = below(family, caller);
     const rows = chat.list().filter((c) => c.id !== caller && !c.archived && (mine.includes(c.id) || (me?.project && c.project === me.project)));
-    return { guidance: CROSS_CHAT, chats: rows.slice(0, 200).map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
+    // O267b: a worker the caller holds is given past the first 200 too, so its usage watch can release it. An archived one
+    // is not: it starts no turn, so release waits until it is brought back (then it is listed held, and the watch sees it).
+    const held = (c) => c.parent === caller && chat.paused?.(c.id) && !isLead(c.id);
+    const past = rows.slice(200).filter(held);
+    return { guidance: CROSS_CHAT, chats: [...rows.slice(0, 200), ...past].map((c) => ({ id: c.id, title: c.title, provider: c.provider, state: stateOf({ ...c, busy: false, compacting: chat.compacting?.(c.id) }), ...(chat.compacting?.(c.id) && { compacting: true }), waiting: c.waiting,
       ...chat.gauge(c.id), plan: planOf(c), active: new Date(c.used).toISOString(), parent: c.parent ?? null, key: family.find((f) => f.id === c.id)?.key ?? null, yours: mine.includes(c.id),
       // askable: open to questions, and not the caller's parent or below it (ask_chat's own two checks).
-      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((chat.paused?.(c.parent) || (chat.paused?.(c.id) && isLead(c.id))) && { paused: true }), ...(chat.paused?.(c.id) && !isLead(c.id) && { held: true }), ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length > 200 && { more: rows.length - 200 }) };
+      askable: c.askable && !mine.includes(c.id) && !below(family, c.id).includes(caller), preview: c.preview, ...((chat.paused?.(c.parent) || (chat.paused?.(c.id) && isLead(c.id))) && { paused: true }), ...(chat.paused?.(c.id) && !isLead(c.id) && { held: true }), ...((g) => g && { goal: g })(chat.goal?.(c.id)) })), ...(rows.length - 200 - past.length > 0 && { more: rows.length - 200 - past.length }) };
   }
 
   async function answerChat(caller, args, signal) {
@@ -1517,7 +1528,7 @@ export function createDelegate({ chat, allowed, usage }) {
     const replacing = waitingNote.has(id) ? { replaces: waitingNote.get(id) } : {};
     chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }), ...replacing }, undefined, 'p9')
       .then((sent) => (sent.status === 409 ? chat.prompt(parent.id, { text: line, when: 'queue', ...replacing }, undefined, 'p9') : sent))
-      .then((sent) => { if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {});
+      .then((sent) => { if (id === undefined) return; if (sent.held) waitingNote.set(id, sent.held); else waitingNote.delete(id); }).catch(() => {}); // no key: nothing to replace later
   }
 
   // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and

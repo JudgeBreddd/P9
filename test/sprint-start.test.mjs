@@ -178,7 +178,7 @@ test('Start sprint: one press makes every chat on exactly its row (lead included
     'missing from list_chats: keep': 'one it does not give, keep',
     'held with no record: release': 'A worker list_chats gives held that is not kept there is back now',
     'release checks its reading': 'One kept and still held is back when its plan\'s reading is there, not stale,',
-    'the held-for window decides': 'the window it was held for is in it, and every window it draws on',
+    'the held-for window decides, cool': 'the window it was held for is in it, has a projected and does not call for a hold, and so does every window it draws on now',
     'release needs a projected': 'has a projected and does not call for a hold',
     'carry-on first, release every one back': 'For every one back, send it Usage is back: carry on',
     'the carry-on voids a raced note': 'any note before this to end your turn for usage no longer applies',

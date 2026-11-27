@@ -1652,7 +1652,8 @@ export async function createDesktop({ state, open } = {}) {
   // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,
   // which the page can neither draw nor answer; turning it on never asks.
   ipcMain.handle('p9:file-protection', async (event, ...args) => {
-    if (!fromApp(event) || args.length > 1 || (args.length && typeof args[0] !== 'boolean')) throw new Error('ipc-sender-refused');
+    // O267b: (on, rev): rev, the daemon's name for the change a put-back undoes (server.mjs POST /file-protection).
+    if (!fromApp(event) || args.length > 2 || (args.length && typeof args[0] !== 'boolean') || (args.length > 1 && (typeof args[1] !== 'string' || args[1].length > 64))) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     try {
       if (!args.length) return await daemonRequest(state, 'GET', '/file-protection');
@@ -1660,11 +1661,14 @@ export async function createDesktop({ state, open } = {}) {
         const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Turn off file protection?', message: 'Turn off file protection?',
           detail: FILE_PROTECTION_RISK, buttons: ['Keep protection on', 'Turn off protection', 'Read about the risk'], defaultId: 0, cancelId: 0, noLink: true });
         if (response === 1) break;
-        if (response !== 2) return await daemonRequest(state, 'GET', '/file-protection');
+        // O267b: "Keep protection on" is no write: cancelled, with the setting as it is for display and no rev, so Unrestricted
+        // (security.mjs changeFree) stops there and never counts another device's change as its own.
+        if (response !== 2) { const now = await daemonRequest(state, 'GET', '/file-protection').catch(() => null);
+          return { status: 200, body: { cancelled: true, ...(typeof now?.body?.on === 'boolean' && { on: now.body.on }) } }; }
         if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [FILE_PROTECTION_DOCS], { shell: false, stdio: 'ignore' }).on('error', () => {});
         else await shell.openExternal(FILE_PROTECTION_DOCS);
       }
-      return await daemonRequest(state, 'POST', '/file-protection', { on: args[0] });
+      return await daemonRequest(state, 'POST', '/file-protection', { on: args[0], ...(args.length > 1 && { rev: args[1] }) });
     } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // The shell's DUWOP look (colours as #rrggbbaa), kept for the next Dev Focus start and passed on to a running one.

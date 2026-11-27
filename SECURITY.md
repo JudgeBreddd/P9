@@ -1485,13 +1485,17 @@ migration spec S13).
   to message (O197).
 - **Holding one worker (O141).** The lead may hold one worker it started, alone: `pause_sprint` with `chat`. P9 keeps
   that worker's messages the same way (the same kept list, under the worker's ID, in the ledger, at most 100) and
-  `list_chats` gives it `held: true`. `resume_sprint` with `chat` releases it and sends what was kept, as Resume does.
+  `list_chats` gives it `held: true` (a held worker is listed even past its first 200 rows). `resume_sprint` with `chat`
+  releases it and sends what was kept, as Resume does.
   Only the worker's own lead can hold or release it, never while the agent lock is on, and never a worker that leads a
   sprint of its own. No pause or resume script runs and no notice is sent. A paused sprint keeps its messages first; on
   its Resume a held worker's messages wait on for its release. The lead's usage watch holds a worker this way when plan
   use runs high. A message you type into a held worker still goes through. Only its lead releases it, except Close,
-  which lets go of every held worker: what one kept joins the sprint's own kept list if the sprint is paused, and is
-  otherwise dropped, as Stop drops what waits in a turn's queue.
+  which lets go of every held worker: what one kept joins the sprint's own kept list if the sprint is paused, in the
+  order each message was kept (a sequence number set when it is kept; one kept before that number existed counts as
+  oldest), and that merge is the one way a kept list passes 100. Otherwise it is dropped, as Stop drops what waits in a
+  turn's queue, and each chat that sent one gets one notice saying what was not delivered: its own messages quoted, a
+  message combined with other chats' named but not quoted.
 - **Not done here.** A second press that stops turns already running (spec S13) is a follow-up.
 
 ## Standing merge

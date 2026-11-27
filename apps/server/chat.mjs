@@ -616,7 +616,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // Agent lock (threat model row 15): kept in the ledger so a restart keeps it. While on, sessions run in the provider's
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-  let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
+  let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on'; let lockRev = randomUUID(); // O267b: setLock's rev
+  // O267b: a kept message's seq, strictly increasing: microseconds of the clock, or one more than the last when two land in
+  // the same one. ponytail: kept in memory, so after a restart it starts from the clock again; a clock set back meanwhile
+  // could put a newer message behind an older one in Close's merge. One kept before seq existed has none and counts as 0.
+  let lastSeq = 0; const keptSeq = () => (lastSeq = Math.max(lastSeq + 1, Date.now() * 1000));
   // S13 Pause sprint (SECURITY.md § Pause sprint): prefs paused:<lead> is the list, in order, of what agents and P9 sent that
   // lead's workers while it is paused ({ id, chat, held, from, mixed, body }). In the ledger, so a restart keeps the pause
   // and every message it holds. Absent: not paused.
@@ -1694,7 +1698,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // The watcher (telemetry.mjs) reads a live chat's CPU and peak memory from its systemd scope: the unit, or null.
     scopeOf: (id) => live.get(id)?.proc.unit ?? null,
     // With a chat's id: also on while that chat's turn answers another chat's question (peer help), for P9's own tools.
-    lock: (id) => ({ status: 200, on: locked || Boolean(live.get(id)?.solo) }),
+    lock: (id) => ({ status: 200, on: locked || Boolean(live.get(id)?.solo), rev: lockRev }),
     // Unrestricted mode (v0.1.6 U1-U5): the agent lock off and File protection off, the two switches the mode turns off and the
     // daemon holds. Folder roots may hold home and the workspace, P9's MCP tools stop asking, a chat may start in any folder.
     loose: (id) => loose() && !live.get(id)?.solo,
@@ -1734,9 +1738,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     pin: (id, card) => emit(id, 'card', card),
     unpin: (id, card) => emit(id, 'unpin', { id: card }),
     // Desktop only (server.mjs). Live sessions switch now; one whose mode change fails is stopped rather than left writable.
+    // O267b: rev, as POST /file-protection's (server.mjs): sent, the change is made only if it is still the last one.
     async setLock(body) {
-      if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return refused(400, 'request-refused');
-      locked = body.on;
+      const { on, rev, ...rest } = body && typeof body === 'object' ? body : {};
+      if (typeof on !== 'boolean' || Object.keys(rest).length || (rev !== undefined && typeof rev !== 'string')) return refused(400, 'request-refused');
+      if (rev !== undefined && rev !== lockRev) return { status: 200, on: locked, rev: lockRev };
+      // O267b: this write's own rev, taken before any await. The reply gives the lock as it is now (locked), and rev only
+      // while this write is still the last one; a newer write meanwhile makes it rev: null (changed after, not to put back).
+      const mine = lockRev = randomUUID(); locked = on;
       db.prepare("INSERT INTO prefs (key, value) VALUES ('agent-lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(locked ? 'on' : 'off');
       await Promise.all([...live].map(async ([id, session]) => {
         if (!session.sessionId || session.stopping) return; // still starting: connect reads the new value itself
@@ -1751,7 +1760,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         try { await setMode(session, row(id).provider, undefined, true, 5000); }
         catch { if (locked) await stopConversation(id); }
       }));
-      return { status: 200, on: locked };
+      return { status: 200, on: locked, rev: lockRev === mine ? mine : null };
     },
     // Most recently used first, for the desktop's History and the phone. used: the chat's newest event,
     // not counting NOT_USE (protocol): the stops a close, an exit or a restart write, a move, rename or archive, nor the created event (its time is a later Date.now()
@@ -1858,7 +1867,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         release();
         if (solo || bare) return refused(409, 'sprint-paused');
         if (pausing.length >= 100) return refused(409, 'sprint-paused-full'); // SECURITY.md § Pause sprint
-        const item = { id: randomUUID(), chat: id, held: held ?? null, from: from ?? null, fromTitle: titles.get(body) ?? null, mixed: mixed.get(body) ?? null,
+        // O267b: seq, the order it was kept in (keptSeq), so Close's merge of two kept lists (release) keeps it.
+        const item = { id: randomUUID(), seq: keptSeq(), chat: id, held: held ?? null, from: from ?? null, fromTitle: titles.get(body) ?? null, mixed: mixed.get(body) ?? null,
           body: { text: body.text, ...(images.length && { images }), ...(body.mode !== undefined && { mode: body.mode }), ...(body.model !== undefined && { model: body.model }), ...(body.config !== undefined && { config: body.config }), ...(repeats.has(body) && { repeat: true }) } };
         // O109 FIX2 (Reviewer): a message that may be a repeat keeps saying so through the pause (repeat: true, as hold() does).
         // Kept in the same write that takes it off Resume's list (deliver's entry, or what a turn's end drained): a crash after
@@ -2240,15 +2250,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     lastPicks, // O207 FIX1 (delegate.mjs startSprint): what carry sets a stopped chat back to
     pause(lead) { if (pausedOf(lead)) return false; setPaused(lead, []); wakeAll('paused'); return true; },
     // O141: Close lets go of a worker its lead held. What it kept joins its sprint's own list while the sprint is paused (the
-    // owner's Resume sends it with the rest); otherwise it goes, as Stop drops what waits in a turn's queue.
+    // owner's Resume sends it with the rest); otherwise it goes, as Stop drops what waits in a turn's queue, and is returned
+    // (delegate.mjs closeSprint tells each sender what of theirs was dropped, O267b).
+    // O267b: the merge is in the order each was kept (seq, keptSeq; one kept before seq existed counts as oldest, as a
+    // worker's own list is older than its paused sprint's; ties among those keep the worker's list first, as before).
+    // ponytail: the merge is not cut to the 100 a kept list takes at intake (SECURITY.md § Pause sprint): Close is the one
+    // way past it, at most 100 more per held worker, and cutting it would drop messages nobody was told about.
     release(worker, lead) {
       const list = pausedOf(worker), into = pausedOf(lead);
-      if (!list) return;
+      if (!list) return [];
       db.exec('BEGIN');
-      // The worker's go first: they are older, since a worker keeps its own only while its sprint is not paused.
-      try { if (into) setPaused(lead, [...list, ...into]); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
+      try { if (into) setPaused(lead, [...list, ...into].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped' });
       wakeAll('resumed');
+      return into ? [] : list;
     },
     // resume: every message held goes out, in order, each chat's first starting its turn and the rest waiting for its
     // end. Returns how many were held, or null when the sprint was not paused. resumed(count) is called once the pause is
