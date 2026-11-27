@@ -871,6 +871,15 @@ export function createDelegate({ chat, allowed, usage }) {
     if (reviewer) chat.prompt(reviewer.id, { text: `[p9] Ready for review: ${item}, by ${info.title} (chat ${caller}), commit ${value.commit}. Read its report, then call verdict with that chat and commit.`, when: 'queue' }, undefined, 'p9').catch(() => {});
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
+  // O243: the third fix asks the lead for a step up from the model the worker runs on (its live session's, else its newest
+  // config's, as send_chat reads it): only the larger families, nothing about models on Fable, and a plain "a larger
+  // model" when its name says no family (default, a profile's or another agent's model, none read yet).
+  const LADDER = ['haiku', 'sonnet', 'opus', 'fable'], OR = new Intl.ListFormat('en', { type: 'disjunction' });
+  const thirdFix = (item, worker) => {
+    const model = String(chat.info?.(worker.id)?.model ?? chat.gauge?.(worker.id)?.model ?? '').toLowerCase();
+    const at = LADDER.findIndex((f) => model.includes(f)), up = LADDER.slice(at + 1).map((f) => f[0].toUpperCase() + f.slice(1));
+    return `[p9] ${item} by ${worker.title} got its third fix` + (at < 0 ? ': give the correction to a larger model.' : up.length ? `: give the correction to a larger model (${OR.format(up)}).` : '.');
+  };
   function verdict(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const found = reach(caller, args.chat), family = chat.family();
@@ -896,13 +905,13 @@ export function createDelegate({ chat, allowed, usage }) {
       // worker's next item, as outside a sprint (the work queue: that message ends the old ready).
       trail(worker.parent);
       if (args.result === 'pass') chat.prompt?.(args.chat, { text: `[p9] ${item} passed review at ${args.commit}. Start your next item.`, when: 'queue' }, undefined, 'p9').catch(() => {});
-      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: thirdFix(item, worker), when: 'queue' }, undefined, 'p9').catch(() => {});
       carry(worker.parent, { type: 'verdict', chat: caller, at: value.at }).catch(() => {});
     } else if (item && worker?.parent) {
       trail(worker.parent);
       const said = args.result === 'pass' ? `[p9] ${item} passed review at ${args.commit}. Start your next item.` : `[p9] ${item}: the reviewer asked for a fix (fix ${review.fixes}) at ${args.commit}: ${args.note}`;
       chat.prompt?.(args.chat, { text: said, when: 'queue' }, undefined, 'p9').catch(() => {});
-      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: `[p9] ${item} by ${worker.title} got its third fix: give the correction to a larger model (Opus or Fable).`, when: 'queue' }, undefined, 'p9').catch(() => {});
+      if (review.fixes === 3 && args.result === 'fix') chat.prompt?.(worker.parent, { text: thirdFix(item, worker), when: 'queue' }, undefined, 'p9').catch(() => {});
     }
     return { verdict: value, ...(review && { review }) };
   }

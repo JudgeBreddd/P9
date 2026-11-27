@@ -78,7 +78,7 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
     for (let i = 0; i < 250 && !sent.some(told); i++) await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual(sent.find(told).slice(1, 3), [`[p9] daemon-1: the reviewer asked for a fix (fix ${n}) at ${at}: finding ${n}`, 'queue']);
   }
-  assert.deepEqual(sent.filter((s) => s[0] === lead).map((s) => s[1]), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Opus or Fable).']);
+  assert.deepEqual(sent.filter((s) => s[0] === lead).map((s) => s[1]), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model.'], 'no model read: no family named');
   const c2 = commit('passed');
   await tools.ready({ ...report, commit: c2 }, worker);
   assert.equal(tools.verdict({ chat: worker, commit: c2, result: 'pass', note: 'ok' }, reviewer).review.state, 'passed');
@@ -103,4 +103,28 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
   assert.equal(readFileSync(files.fileOf(lead, 'review-trail.md'), 'utf8'), trail);
   assert.ok(files.list(lead).some((f) => f.name === 'review-trail.md'), 'the project page does not list the trail');
   console.log('PASS Work queue: ready from the queue, reviewer woken, fix count from verdicts, third fix flagged, trail P9-only');
+});
+
+// O243: the third-fix notice names only a step up from the model the worker runs on, in a sprint and outside one.
+test('O243: the third fix asks for a step up from the worker\'s model: Fable only from Opus, no model advice on Fable', () => {
+  const ask = (model, sprint, gauged) => {
+    const family = [{ id: lead }, { id: worker, parent: lead, key: 'daemon', title: 'Daemon', model }, { id: reviewer, project: 'p' }].map((c) => ({ project: 'p', ...c }));
+    const states = new Map([[worker, { ready: { commit: 'c4', item: 'daemon-1' }, reviews: { 'daemon-1': { state: 'fix', commit: 'c3', fixes: 2 } } }]]), sent = [];
+    const chat = { lock: () => ({ on: false }), info: (id) => family.find((c) => c.id === id), family: () => family, list: () => family,
+      sprint: (id) => states.get(id) ?? {}, setSprint: (id, patch) => states.set(id, { ...states.get(id), ...patch }), gauge: () => ({ model: gauged ?? null }),
+      projects: { started: () => (sprint ? { plan: 'sprint.md' } : null) }, prompt: async (id, body) => { sent.push([id, body.text]); return { status: 202 }; },
+      note: async () => {}, pin: () => {}, turnEnded: () => {}, settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
+    assert.equal(createDelegate({ chat }).verdict({ chat: worker, commit: 'c4', result: 'fix', note: 'again' }, reviewer).review.fixes, 3);
+    return sent.filter((s) => s[0] === lead && s[1].includes('third fix')).map((s) => s[1]);
+  };
+  for (const sprint of [true, false]) {
+    assert.deepEqual(ask('opus', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Fable).'], 'opus, sprint ' + sprint);
+    assert.deepEqual(ask('claude-fable-5-1', sprint), ['[p9] daemon-1 by Daemon got its third fix.'], 'fable, sprint ' + sprint);
+    assert.deepEqual(ask('sonnet', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Opus or Fable).']);
+    assert.deepEqual(ask('claude-haiku-4-5-20251001', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Sonnet, Opus, or Fable).']);
+    // No live session: the newest config's model (gauge) says what it runs; a name with no family gets no names.
+    assert.deepEqual(ask(null, sprint, 'fable'), ['[p9] daemon-1 by Daemon got its third fix.']);
+    assert.deepEqual(ask('default', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model.']);
+  }
+  console.log('PASS O243: third fix names only a step up');
 });
