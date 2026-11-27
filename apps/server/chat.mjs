@@ -1741,6 +1741,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body), from.length > 1 ? send : undefined)).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
     else settleResumed(send.map((item) => item.id)); // O109: taken, so a restart from here on does not send it again
+    // O246 round 2: kept for Resume (a paused sprint), it started no turn, so no turn's end sends what is left: the owner's
+    // message behind it goes now.
+    if (result.when === 'pause' && session.queued.length && live.get(id) === session && !session.turn) return drain(id, session);
   }
 
   // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).
@@ -1897,6 +1900,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // anything is sent, so no restore step exists that a prompt could race.
     // parts: a batch joined from several senders (drain), so a hand-back returns each message to its own sender.
     async prompt(id, body, held, from, solo, parts) {
+      // O246 round 2: another chat's agent's text is quoted as it comes in, so a "[P9:" in it cannot pass as P9's own line,
+      // whether it goes alone or told with others. notice: P9's own lines for it (send_chat's new role key), put in front
+      // unquoted. Once only: not on its way back in from a turn's queue (held) or from Resume (origins).
+      if (ID.test(from ?? '') && !held && body && typeof body === 'object' && typeof body.text === 'string' && !origins.has(body)) { body.text = (typeof body.notice === 'string' ? body.notice : '') + quoted(body.text); delete body.notice; }
       if (from && body && typeof body === 'object') { senders.set(body, from); if (!titles.has(body)) titles.set(body, titleOf(from)); }
       if (solo && body && typeof body === 'object') solos.set(body, solo);
       await recovered;

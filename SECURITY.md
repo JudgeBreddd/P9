@@ -875,9 +875,10 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
   never joined into one prompt (O246): each sender's message gets a turn of its own, in that
   sender's mode and under that sender's rules. Several messages from the same sender still go as
   one prompt. A note told along with a message of yours puts a line saying it is yours in front
-  of your message, and inside another agent's note P9 changes `[P9:` to `[P9 (quoted):`, so that
-  text cannot pass as one of P9's lines. A different mode and another chat's question still each
-  get a turn of their own.
+  of your message. Inside any text another chat's agent sends (a message or a note, alone or
+  told with others) P9 changes `[P9:` to `[P9 (quoted):` as it comes in, so that text cannot pass
+  as one of P9's lines; P9's own lines for it (a new role key) go in front unchanged. A different
+  mode and another chat's question still each get a turn of their own.
 - **What cut a call short (O231).** The agent's command-line tool ends any call it cuts short with
   words saying the user wants it to stop and wait. Your Stop is the only cut that is yours. So a
   message steered into a running turn carries a P9 line saying that it, not you, cut a call

@@ -7,7 +7,7 @@ import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs'; import { shotWatcher } from './shots.mjs';
 import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
-import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents, freeLocked, modesKnown, modesNote, changeFree } from './security.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted, fillAgents, freeLocked, modesKnown, modesNote, changeFree, sentMode } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
@@ -1041,8 +1041,8 @@ async function madeChat(agent: string, extra: Json) {
   return String(result.body.conversation);
 }
 // Mode and Model for the picked chat (the phone could change neither; threat model row 15). An open
-// chat starts at "as set" and sends nothing until picked, so a Plan picked on the desktop stays; the label shows the mode
-// the daemon last set (its 'mode' event). A chat made here starts in this phone's last pick for its agent. P6 (row 25):
+// chat starts at "as set", which sends the mode the daemon last set (its 'mode' event; O246 round 2), so a Plan picked on the
+// desktop stays; the label shows the newest mode, the lock's too (the send carries the chat's own, as the desktop). A chat made here starts in this phone's last pick for its agent. P6 (row 25):
 // all of the agent's modes, the two loosened ones behind the desktop's red warning. Model lists the agent's own models
 // from its newest config event.
 const provider = (id: string) => String(state.conversations.find((item) => item.id === id)?.provider ?? '');
@@ -1051,7 +1051,8 @@ let picksFor = '';
 // made while the page's first read runs is a stub, drawn only once its history is in.
 const startPick = new Map<string, string>();
 const swapModel = new Map<string, string>();
-const picksOf = perChat((events) => ({ configs: events.filter((event) => event.type === 'config'), set: events.findLast((event) => event.type === 'mode')?.data as { name?: string } | undefined }));
+const picksOf = perChat((events) => ({ configs: events.filter((event) => event.type === 'config'), set: events.findLast((event) => event.type === 'mode')?.data as { name?: string } | undefined,
+  own: (events.findLast((event) => event.type === 'mode' && !(event.data as { lock?: boolean })?.lock)?.data as { name?: string } | undefined)?.name }));
 function renderPicks(id: string) {
   const { configs, set } = picksOf(id);
   // The agent is in the key: a chat made here can draw before its row is read, with no modes yet.
@@ -1350,7 +1351,9 @@ async function submitFromBox(event: Event) {
   // O21: no silent exit; a tap that sends nothing says why under the box.
   if (!id || (!text && !images.length)) { note(!id ? 'Not sent: no chat is open.' : 'Nothing to send: the box is empty.'); return false; }
   note(); one<HTMLElement>('#slash').hidden = true; // an earlier why is not about this send
-  const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
+  // O246 round 2: "As set" sends the chat's own last mode, as the desktop does (sentMode; the lock's mode is the lock's), so
+  // a wider mode another sender's message set just ahead of this one is not what this one runs in. None reported yet: none.
+  const mode = one<HTMLSelectElement>('#mode').value || sentMode(provider(id), picksOf(id).own), model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
   const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's
