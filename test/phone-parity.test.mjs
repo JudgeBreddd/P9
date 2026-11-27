@@ -983,12 +983,12 @@ test('USE-1 web on the phone: names arriving after a failed Usage read leave "Us
   usage.limits = { claude: { asOf: Date.now(), fiveHour: { usedPercent: 40, resetsAt: Date.now() + 3600000, windowMins: 300 }, sevenDay: null, stale: false }, codex: null };
   let release; const held = new Promise((r) => { release = r; }); t.after(() => release());
   await page.route('**/agents', async (route) => { await held; await route.continue().catch(() => {}); });
-  let reads = 0;
-  await page.route('**/usage', (route) => (++reads === 1 ? route.fulfill({ json: usage }) : route.abort()));
+  let fail = false; // reads answer until the refresh below, which fails
+  await page.route('**/usage', (route) => (fail ? route.abort() : route.fulfill({ json: usage })));
   await page.reload(); await page.locator('#newChat').waitFor();
   await page.click('[data-nav="usage"]');
   await page.waitForSelector('#usage [data-limits]', { timeout: 15000 }); // the first read drew
-  await page.click('#refreshUsage');
+  fail = true; await page.click('#refreshUsage');
   await page.waitForSelector('#usage h2:text-is("Usage unavailable")', { timeout: 15000 }); // the second failed
   const named = page.waitForResponse((r) => new URL(r.url()).pathname === '/agents');
   release(); await named; await page.waitForTimeout(500); // the names' redraw acts by now
