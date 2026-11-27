@@ -132,8 +132,10 @@
 .ppage .sv-item{color:var(--muted-foreground);font-size:12.5px}
 .ppage .sv-row:is([data-status="fix"],[data-status="asked"],[data-status="failed"]) .tag{background:color-mix(in oklch,var(--destructive) 22%,transparent)}
 .ppage .sv-row:is([data-status="working"],[data-status="ready"]) .tag{background:color-mix(in oklch,var(--primary) 18%,transparent)}
-.ppage .sv-items li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:5px 2px;font-size:13px}
-.ppage .sv-items .sv-text{flex:1 1 14ch} /* I3: the name takes the room and the pill its own width; a row too narrow for both puts the pill under it */
+.ppage .sv-items li{display:grid;grid-template-columns:18px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:5px 2px;font-size:13px}
+/* I3: a worker's own items have no box: the name takes the room and the pill its own width; too narrow for both puts the pill under it */
+.ppage .sv-mine li{display:flex;flex-wrap:wrap;gap:4px 10px}
+.ppage .sv-mine .sv-text{flex:1 1 14ch}
 .ppage .sv-items .box{display:inline-grid;place-items:center;width:17px;height:17px;font-size:13px;line-height:1;color:var(--muted-foreground)}
 .ppage .sv-items li[data-review="passed"] .box{color:var(--ok)}
 .ppage .sv-items li[data-review="passed"] .tag{background:color-mix(in oklch,var(--primary) 18%,transparent)}

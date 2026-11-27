@@ -229,7 +229,7 @@ export function createHooks({ chat, usage, stateOf, rolesOf, allowed, minute = 6
       const info = chat.info(c.id), row = listed.get(c.id), mine = chat.sprint(c.id), gauge = chat.gauge(c.id);
       if (!info) continue;
       workers.push({ chat: c.id, key: c.id === sprint ? 'lead' : c.key ?? null, title: info.title, provider: info.provider, profile: info.profile?.id ?? null,
-        model: info.model ?? gauge?.model ?? null, effort: info.effort?.value ?? gauge?.effort ?? null, mode: info.mode ?? null, state: stateOf(info), waiting: Boolean(row?.waiting),
+        model: info.model ?? gauge?.model ?? null, effort: info.effort?.value ?? gauge?.effort ?? null, mode: info.mode ?? chat.lastMode?.(c.id) ?? null, state: stateOf(info), waiting: Boolean(row?.waiting),
         context: gauge?.context ?? null, spent: gauge?.spent ?? null, folder: await chat.startFolder(c.id), active: iso(row?.used),
         task: mine.task ? { item: mine.task.item } : null,
         ready: mine.ready ? { item: mine.ready.item, commit: mine.ready.commit, at: iso(mine.ready.at) } : null,

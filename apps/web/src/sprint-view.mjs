@@ -12,7 +12,7 @@ const k = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigi
 export const usedText = u => u === null ? 'Nothing reported yet' : `${k.format(u.inputTokens || 0)} in · ${k.format(u.outputTokens || 0)} out · ${k.format(u.cachedTokens || 0)} cached${u.costUsd > 0 ? ` · $${u.costUsd.toFixed(2)}` : ''}`;
 // I3 tokens: a chat's context is its newest usage_update's used of size (chat.mjs gauge), so its limit is the size; null until reported.
 const ctxPct = c => c?.size > 0 ? Math.round(c.used / c.size * 100) : null;
-const ctxText = c => ctxPct(c) === null ? 'Not reported yet' : `${k.format(c.used)} of ${k.format(c.size)} tokens · ${ctxPct(c)}%`;
+const ctxText = c => ctxPct(c) === null ? 'Nothing reported yet' : `${k.format(c.used)} of ${k.format(c.size)} tokens · ${ctxPct(c)}%`;
 export const span = ms => { const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : m ? `${m} min` : 'under a minute'; };
 const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Failed' };
 // What a worker's row says: a review's answer first, then a question to you, then what the chat is doing.
@@ -93,7 +93,7 @@ const lookHtml = (w, s, esc, acts) => {
     + p('Review', w.ready ? `Ready: ${esc(w.ready.item ?? '')} at ${esc(String(w.ready.commit ?? '').slice(0, 8))}` + (w.verdict ? ` · ${esc(w.verdict.result ?? '')}${w.verdict.note ? ': ' + esc(w.verdict.note) : ''}` : '') : w.verdict ? esc(`${w.verdict.result ?? ''}${w.verdict.note ? ': ' + w.verdict.note : ''}`) : 'Nothing sent for review')
     + p('Tokens used', usedText(w.spent ?? null)) + p('Context', ctxText(w.context))
     + (w.waiting ? p('Question', 'It is waiting for you: open its chat to answer.') : '') + '</dl>'
-    + `<h4>Its items</h4>${mine.length ? `<ul class="sv-items">${mine.map(i => `<li data-sv-litem="${esc(i.id)}"><span class="sv-text">${esc(i.text)}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.merged ? ', merged' : '') + (i.review.fixes ? ` · ${i.review.fixes} fix${i.review.fixes === 1 ? '' : 'es'}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : '<p class="muted sm">No items in the plan for this role.</p>'}`
+    + `<h4>Its items</h4>${mine.length ? `<ul class="sv-items sv-mine">${mine.map(i => `<li data-sv-litem="${esc(i.id)}"><span class="sv-text">${esc(i.text)}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.merged ? ', merged' : '') + (i.review.fixes ? ` · ${i.review.fixes} fix${i.review.fixes === 1 ? '' : 'es'}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : '<p class="muted sm">No items in the plan for this role.</p>'}`
     + `<h4>Notes${L?.notes ? ` <span class="muted sm mono">${esc(L.notes.file)}</span>` : ''}</h4>${L?.notes?.tail.length ? `<pre class="sv-pre" data-sv-notes>${esc(L.notes.tail.join('\n'))}</pre>` : `<p class="muted sm">${L?.notes ? 'The notes file is empty.' : 'No notes file.'}</p>`}`
     + `<h4>Last reply</h4>${L?.reply ? `<pre class="sv-pre" data-sv-reply>${esc(L.reply)}</pre>` : '<p class="muted sm">No reply yet.</p>'}`
     + (acts ? actsHtml(w, esc) : '') + '</div>';
