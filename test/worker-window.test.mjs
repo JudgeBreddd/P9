@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { chromium } from '@playwright/test';
 import { createHooks, parseStatus } from '../apps/server/sprint-hooks.mjs';
 import { statusHtml } from '../apps/web/src/sprint-view.mjs';
 
@@ -35,10 +36,10 @@ function rig() {
   fs.writeFileSync(path.join(repo, 'new.txt'), 'n');
   const folders = { [EA]: null, [EB]: repo, [EC]: plain, [ED]: null }, keys = { [EB]: 'build', [EC]: 'docs', [ED]: null };
   const r = { repo, closed: null, notes: { 'notes/build.md': '# Notes\n\n## Now\n- Doing: B4\n\x1b[31mred\x1b[0m line\n\n' + Array.from({ length: 20 }, (_, i) => `- Log ${i}`).join('\n') + '\n' },
-    replies: { [EB]: 'Pushed B4. Done.', [EC]: '' } };
+    replies: { [EB]: 'Pushed B4. Done.', [EC]: '' }, gauges: {}, modes: {} };
   const info = (c) => (c in folders ? { title: c.slice(0, 2), provider: 'fake' } : null);
   const chat = { lock: () => ({ on: false }), info, family: () => [{ id: EA }, ...[EB, EC, ED].map((id) => ({ id, parent: EA, key: keys[id] }))], list: () => [],
-    sprint: () => ({}), gauge: () => null, startFolder: async (c) => folders[c], scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
+    sprint: () => ({}), gauge: (c) => r.gauges[c] ?? null, lastMode: (c) => r.modes[c] ?? null, startFolder: async (c) => folders[c], scriptLibrary: () => [], allowScripts: () => false, paused: () => false,
     socketPath: '/nowhere', note: async () => ({}), closing: () => false, reply: (c) => r.replies[c] ?? '',
     sprintFiles: { exists: (c) => c === EA, read: (c, name) => (name === 'sprint.md' ? '# Plan\n\n- [ ] B4: build it; role build\n' : r.notes[name] ?? null), folderOf: () => repo, log: () => {} },
     projects: { merge: () => true, started: () => ({ at: 0, by: 'owner', plan: null, scripts: [] }), closed: () => r.closed, prepOf: () => null, record: async () => null, sprintSet: async () => ({ source: null, setup: '' }) } };
@@ -89,6 +90,21 @@ test('I3 worker window: a git that does not answer is stopped after 5 s and the 
   } finally { process.env.PATH = PATH; }
 });
 
+test('I3 worker window: a stopped chat keeps the effort it ran on, from its newest config, as it keeps its model', async () => {
+  const r = rig();
+  r.gauges[EB] = { model: 'haiku', effort: 'low', context: null, spent: null }; // a stopped chat: info has no live session, so no model or effort
+  const b = (await r.hooks.view(EA)).workers.find((w) => w.chat === EB);
+  assert.deepEqual([b.model, b.effort], ['haiku', 'low']);
+});
+
+test('I3 worker window: a stopped chat keeps the mode it ran in, from its newest mode event', async () => {
+  const r = rig();
+  r.modes[EB] = 'auto'; // a stopped chat: info has no live session, so no mode; chat.lastMode reads its newest mode event
+  const ws = (await r.hooks.view(EA)).workers, b = ws.find((w) => w.chat === EB);
+  assert.equal(b.mode, 'auto');
+  assert.equal(ws.find((w) => w.chat === EC).mode, null, 'a chat that never told a mode has none');
+});
+
 const esc = (v) => String(v).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const s = (workers, items = []) => ({ sprint: { id: 'L' }, closed: null, workers, items, done: { merged: 0, ticked: 0, total: items.length }, spent: null, scripts: { running: 0, additional: 0, waiting: 0 } });
 const w = (chat, more) => ({ chat, key: chat, title: chat, provider: 'fake', profile: null, model: 'm', effort: null, state: 'idle', folder: '/w/' + chat, work: null, ...more });
@@ -133,4 +149,52 @@ test('I3 worker window: Details stays open across the 5 s redraw, per chat', asy
     press();
     assert.deepEqual([f.hidden, panel(draw(), 'a')[1]], [true, ' hidden'], 'pressed again: shut, and the redraw keeps it shut');
   } finally { delete globalThis.document; }
+});
+
+test('I3 worker window: Details shows tokens used and the context of its limit, or says they are not reported yet; the row reads the same context', () => {
+  const html = statusHtml(s([w('a', { spent: { inputTokens: 12000, outputTokens: 3400, cachedTokens: 0, costUsd: 0 }, context: { used: 50000, size: 200000 }, look: { git: null, notes: null, reply: null } }),
+    w('b', { spent: null, context: null, look: { git: null, notes: null, reply: null } })]), esc);
+  assert.match(panel(html, 'a')[2], /<dt>Tokens used<\/dt><dd>12K in · 3\.4K out · 0 cached<\/dd>/);
+  assert.match(panel(html, 'a')[2], /<dt>Context<\/dt><dd>50K of 200K tokens · 25%<\/dd>/);
+  assert.match(html, /<li data-key="a">[^]*?<span class="muted">m · context 25% · 12K in/, 'the row: its context as a share, from the same reading');
+  assert.match(panel(html, 'b')[2], /<dt>Tokens used<\/dt><dd>Nothing reported yet<\/dd>[^]*<dt>Context<\/dt><dd>Nothing reported yet<\/dd>/);
+  assert.doesNotMatch(html, /<li data-key="b">[^]*?<span class="muted">m · context/, 'no context reported: none on the row');
+});
+
+// The page's own stylesheet in a real browser, with Details open: the item names get their room beside the state pill, and a
+// long last reply with no spaces wraps inside its box instead of scrolling sideways.
+const shown = async (t, html) => {
+  const css = fs.readFileSync(new URL('../apps/web/src/styles/projects.css', import.meta.url), 'utf8');
+  const browser = await chromium.launch(); t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
+  await page.setContent(`<style>${css}</style><div class="ppage" style="width:740px">${html}</div>`);
+  await page.evaluate(() => document.querySelectorAll('[data-sv-look]').forEach((x) => { x.hidden = false; }));
+  return page;
+};
+const browserTest = { timeout: 60000, skip: process.platform === 'win32' && 'Windows CI has no Playwright Chromium' };
+
+test('I3 worker window: in the browser an item name is not cut to one character beside its pill', browserTest, async (t) => {
+  const items = [{ id: 'B1', text: 'B1: draw the beds page', role: 'a', ticked: false }, { id: 'B2', text: 'B2: test the beds page', role: 'a', ticked: false, review: { state: 'ready' } }];
+  const page = await shown(t, statusHtml(s([w('a', { look: { git: null, notes: null, reply: null } })], items), esc));
+  const got = await page.evaluate(() => [...document.querySelectorAll('[data-sv-litem]')].map((li) => {
+    const n = li.querySelector('.sv-text'), g = li.querySelector('.tag');
+    return { name: n.getBoundingClientRect().width, full: n.scrollWidth, pill: g.getBoundingClientRect().width, row: li.getBoundingClientRect().width };
+  }));
+  assert.equal(got.length, 2);
+  for (const x of got) {
+    assert.ok(x.name >= x.full && x.name > 100, `the whole name shows: ${x.name} px for ${x.full} px of text`);
+    assert.ok(x.pill < x.row / 4, `the pill is as wide as its text, not the row: ${x.pill} px of ${x.row} px`);
+  }
+  // The plan list (box, name, pills) keeps its grid, so its columns line up across rows as before.
+  const plan = await page.evaluate(() => [...document.querySelectorAll('li[data-sv-item]')].map((li) => { const c = getComputedStyle(li); return [c.display, c.gridTemplateColumns.split(' ').length]; }));
+  assert.ok(plan.length >= 2, 'the plan list is drawn');
+  for (const x of plan) assert.deepEqual(x, ['grid', 4]);
+});
+
+test('I3 worker window: in the browser a last reply with no spaces wraps, with no sideways scroll', browserTest, async (t) => {
+  const page = await shown(t, statusHtml(s([w('a', { look: { git: null, notes: null, reply: 'token:' + 'dca80f66'.repeat(60) } })]), esc));
+  const r = await page.evaluate(() => { const x = document.querySelector('[data-sv-reply]'); return { scroll: x.scrollWidth, box: x.clientWidth, wide: x.getBoundingClientRect().width, tall: x.clientHeight }; });
+  assert.ok(r.wide <= 740, `the box stays inside the page, not pushed out by the line: ${r.wide} px`);
+  assert.ok(r.scroll <= r.box, `no sideways scroll: ${r.scroll} px in ${r.box} px`);
+  assert.ok(r.tall > 40, `it wraps onto more lines: ${r.tall} px tall`);
 });
