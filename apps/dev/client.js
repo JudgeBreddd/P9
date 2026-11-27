@@ -1,7 +1,7 @@
 // Dev Focus: Monaco + VS Code services (the phase-2 editor, docs/spike-decision.md) against the desktop's loopback editor host.
 // Every write P9's editor makes inside the workspace goes through window.p9dev.save, which the desktop sends to the daemon's
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
-import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
@@ -352,4 +352,8 @@ window.p9dev.onOpen(async request => {
     }
   } catch (error) { v.window.showErrorMessage('P9 could not open it: ' + error.message); }
 });
+// O258: main asks for this before the window closes; on its own the workbench writes its open files and tree only every few
+// seconds, so files opened just before a quit were not there at the next start.
+const storage = await getService(IStorageService);
+window.devFocusSave = () => storage.flush();
 window.devFocusReady = true;

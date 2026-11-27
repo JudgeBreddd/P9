@@ -1152,6 +1152,18 @@ export async function createDesktop({ state, open } = {}) {
   // wait for promises on quit, and the host must not outlive the app. One handler for the current start (review item 24:
   // one per start piled up); a failed start aborts its own process at once.
   // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
+  // O258: a close or quit asks the editor to save its open files and tree first (devFocusSave), so the next start opens on
+  // what was open. At most 2 s: a page that does not answer does not hold the window. A quit asked (before-quit) goes on as a
+  // quit; a close goes on as a close.
+  let devSaved = false, quitAsked = false;
+  app.on('before-quit', () => { quitAsked = true; });
+  window.on('close', event => {
+    if (devSaved || !devView || devView.webContents.isDestroyed()) return;
+    event.preventDefault();
+    devSaved = true;
+    Promise.race([devView.webContents.executeJavaScript('window.devFocusSave?.()').catch(() => {}), new Promise(resolve => setTimeout(resolve, 2000))])
+      .finally(() => { if (window.isDestroyed()) return; if (quitAsked) app.quit(); else window.close(); });
+  });
   let hostQuit = null;
   app.once('will-quit', () => hostQuit?.());
   const startHost = () => editorHost ??= (async () => {

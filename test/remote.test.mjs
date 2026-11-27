@@ -1741,8 +1741,7 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   assert.notEqual(mine, here.address().port, 'the taken port is passed over');
   assert.notEqual(mine, first, 'not the remote\'s kept port');
   here.close();
-  // The workbench saves its state each 60 s (its storage's flush interval), so a quit sooner keeps nothing whatever the port.
-  await sleep(70000);
+  // Quit at once: the workbench writes its state only every few seconds on its own, so this also checks the save asked on close.
   await app.close();
   await launch('');
   dev = await devFocus('');
