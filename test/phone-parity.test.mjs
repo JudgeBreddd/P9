@@ -980,21 +980,21 @@ test('USE-1 web on the phone: Usage draws one plan card per agent in the usage l
 test('USE-1 web on the phone: names arriving after a failed Usage read leave "Usage unavailable" up', { timeout: 90000 }, async (t) => {
   const { page } = await phoneOn(t);
   const [agents, usage] = await page.evaluate(() => Promise.all(['/agents', '/usage'].map((p) => fetch(p).then((r) => r.json()))));
-  agents.agents.find((a) => a.id === 'claude').short = 'Clyde'; // shows on the open chat's box once this catalog is applied
   usage.limits = { claude: { asOf: Date.now(), fiveHour: { usedPercent: 40, resetsAt: Date.now() + 3600000, windowMins: 300 }, sevenDay: null, stale: false }, codex: null };
   let release, asked = 0; const held = new Promise((r) => { release = r; }); t.after(() => release());
   await page.route('**/agents', async (route) => { asked ||= Date.now(); await held; await route.fulfill({ json: agents }).catch(() => {}); });
   let fail = false; // reads answer until the refresh below, which fails
   await page.route('**/usage', (route) => (fail ? route.abort() : route.fulfill({ json: usage })));
   await page.reload(); await page.locator('#newChat').waitFor();
-  await newChat(page, 'claude');
   await page.click('[data-nav="usage"]');
   await page.waitForSelector('#usage [data-limits]', { timeout: 5000 }); // the first read drew
   fail = true; await page.click('#refreshUsage');
   await page.waitForSelector('#usage h2:text-is("Usage unavailable")', { timeout: 5000 }); // the second failed
   assert.ok(asked && Date.now() - asked < 10000, 'the held GET /agents is let go well before its 20 s deadline');
+  // An applied catalog draws the Chats picker again (phone.ts readChat), after the Usage cards: that redraw is the signal.
+  await page.evaluate(() => { window.pickerDraws = 0; new MutationObserver(() => window.pickerDraws++).observe(document.querySelector('#conversation'), { childList: true }); });
   release();
-  await page.waitForFunction(() => document.querySelector('#prompt').placeholder === 'Message Clyde', null, { timeout: 5000 }); // the catalog is applied
+  await page.waitForFunction(() => window.pickerDraws > 0, null, { timeout: 5000 });
   assert.equal(await page.locator('#usage h2:text-is("Usage unavailable")').count(), 1, 'the failure is still shown');
   assert.equal(await page.locator('#usage [data-limits]').count(), 0, 'no cards from the older read');
 });
