@@ -1292,14 +1292,15 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('#composer but
 async function submitFromBox(event: Event) {
   event.preventDefault(); const id = openId; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
+  const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null, stop = submitter?.dataset.stop === 'true'; // what the tapped button was: forgetSent's redraw can turn Send into Stop
   if (art === null) forgetSent(); // O264: a file another tab sent does not go again, even when this tab missed the storage event (a frozen page)
-  const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+  const images = art === null ? attached.get(id) ?? [] : [];
   // A2 step 6b: the chat's quotes go first, each with its comment (helpers.mjs quoted). A slash command goes as typed and
   // its quotes stay for the next message. ponytail: any text starting with / counts as a command here.
   const typed = (art ?? input.value).trim(), qs = art === null && !typed.startsWith('/') ? [...quotes.get(id) ?? []] : []; // a copy: the list can change while this is on its way
   // O21: Stop only when the box is empty at the tap. data-stop is from the last redraw, and text can reach the box with
   // no input event (a keyboard's own insert, dictation): that tap then stopped the turn, or did nothing, and sent nothing.
-  if (id && submitter?.dataset.stop === 'true' && art === null && !input.value.trim() && !images.length && !qs.length) {
+  if (id && stop && art === null && !input.value.trim() && !images.length && !qs.length) {
     const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (result.body.error === 'no-turn') note('Nothing to stop: the turn had already ended.');
     else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);

@@ -136,9 +136,9 @@ test('O264 round 2: another tab rewriting the store with a sent file does not br
 
 // Round 3. Two tabs on one draft: B opens the chat with the photo in its memory, then A sends the photo and A's removal from
 // the store lands. A sent file's mark stays (a tombstone), so B can neither write it back nor send it.
-async function twoTabs(t) {
+async function twoTabs(t, { running = false, deaf = false } = {}) {
   const server = await remoteDaemon(t, {});
-  seedChat(server);
+  seedChat(server, { running });
   const { page, session } = await phone(t, server);
   const posts = [];
   await page.context().route('**/chat/*/prompt', (route) => { posts.push(route.request().postDataJSON()); return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
@@ -146,9 +146,12 @@ async function twoTabs(t) {
   await page.setInputFiles('#attachInput', [FILES[0]]);
   assert.deepEqual(await settled(page, 1), { chips: 1, stored: 1 });
   const other = await page.context().newPage();
+  // deaf: B's own storage listeners are let go of once deaf is set, as on a page frozen when the event came
+  if (deaf) await other.addInitScript(() => { const add = window.addEventListener; window.addEventListener = function (type, fn, ...rest) { return add.call(this, type, type === 'storage' ? (event) => { if (!window.deaf) fn(event); } : fn, ...rest); }; });
   await other.goto(server.origin + '/phone/#chat=' + CHAT_ID);
   await other.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
   await other.waitForSelector('#attached img[alt="dot.png"]', { timeout: 15000 });
+  if (deaf) await other.evaluate(() => { window.deaf = true; });
   await send(page, 'photo');
   await page.waitForFunction(() => !document.querySelectorAll('#attached img').length, null, { timeout: 10000 });
   assert.deepEqual(await settled(page, 0), { chips: 0, stored: 0 }, 'A sent the photo and its removal landed');
@@ -200,4 +203,17 @@ test('O264 round 3: a file kept before files had ids, sent before any rewrite of
   await page.reload(); await page.waitForSelector('#prompt', { state: 'visible', timeout: 15000 });
   assert.deepEqual(await settled(page, 0), { chips: 0, stored: 0 }, 'the old photo came back');
   console.log('PASS O264 r3 legacy: a photo stored with no id, sent with the store blocked, was not back after a reload');
+});
+
+test('O264 round 4: a Send tap on a photo-only draft whose photo another tab sent stops nothing and sends nothing', { timeout: 120000 }, async (t) => {
+  const { page, other, posts } = await twoTabs(t, { running: true, deaf: true });
+  const cancels = [];
+  await page.context().route('**/chat/*/cancel', (route) => { cancels.push(route.request().url()); return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); });
+  assert.equal(await other.locator('#send').getAttribute('data-stop'), 'false', 'B still shows the photo, so its button is Steer, not Stop');
+  await send(other, '');
+  await other.waitForFunction(() => document.querySelector('#composerNote')?.textContent.includes('Nothing to send'), null, { timeout: 10000 }).catch(() => {});
+  await new Promise((done) => setTimeout(done, 1000));
+  assert.deepEqual([cancels.length, posts.length], [0, 1], 'B\'s Send tap stopped the turn or sent again');
+  assert.match(await other.locator('#composerNote').textContent(), /Nothing to send/);
+  console.log('PASS O264 r4 send-not-stop: B\'s Send on a photo another tab sent stopped nothing and sent nothing');
 });
