@@ -411,7 +411,7 @@ function history(id: string) {
 type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; files?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
-type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
+type Attached = { mimeType?: string; data: string; name: string; file?: true; id?: string }; // A2 step 1: file marks one that is not a photo; O264: id, given when attached (not sent)
 // A2 step 6b: per chat, the quotes waiting above the message box (see openQuote). key: the reply's own (b + its time), which
 // finds it again after a redraw.
 type Quote = { text: string; comment: string; key: string };
@@ -1320,7 +1320,7 @@ async function submitFromBox(event: Event) {
   // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
   // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
   const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's
-  const draft = JSON.stringify([text, images.map(print), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
+  const draft = JSON.stringify([text, images.map((image) => image.data.length + ':' + image.data.slice(-64)), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
   if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
   const again = inFlight.has(id);
   // O206, O209: which picks this send carries, each by its pid. A retry is the first try again, so it carries the first try's picks, not
@@ -1347,7 +1347,7 @@ async function submitFromBox(event: Event) {
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
   // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
-  const sent = { ...first, ...attachBody(images) };
+  const sending = [...images], sent = { ...first, ...attachBody(sending) }; // O264: the files that go, as they go (a ✕ while it is on its way changes the live list)
   inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
@@ -1357,7 +1357,7 @@ async function submitFromBox(event: Event) {
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); markSent(id, images); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); markSent(id, sending); const left = (attached.get(id) ?? []).filter((image) => !sending.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -1515,18 +1515,32 @@ function commentOnSelection() {
 }
 let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
 // O264: the store's rewrite after an accepted send is not waited for, so a page killed before it lands brought the sent files back
-// on reload, and send sent them again. The sent files (per chat, by size and end) are kept in localStorage first, which is
-// synchronous; a launch leaves them out, and the first rewrite made after them that lands forgets them.
-const SENT = 'p9-attached-sent', print = (image: Attached) => image.data.length + ':' + image.data.slice(-64);
-const sentFiles = (): Record<string, string[]> => { try { return JSON.parse(localStorage.getItem(SENT) ?? '{}') ?? {}; } catch { return {}; } };
-function markSent(id: string, images: Attached[]) {
-  if (!images.length) return; const all = sentFiles(); all[id] = [...all[id] ?? [], ...images.map(print)];
-  try { localStorage.setItem(SENT, JSON.stringify(all)); } catch {} // storage full: as before, only the rewrite drops them
+// on reload, and send sent them again. The sent files' ids are kept per chat in localStorage first, which is synchronous; a
+// launch leaves them out. Only a removal of exactly those ids from that chat's stored list, once it lands, forgets them: a
+// whole-store rewrite never does (another tab's may still hold them). Each localStorage access has its own try, so the store
+// never waits on it.
+const SENT = 'p9-attached-sent';
+function sentFiles(): Record<string, string[]> {
+  let all: unknown = null; try { all = JSON.parse(localStorage.getItem(SENT) ?? 'null'); } catch {}
+  if (!all || typeof all !== 'object' || Array.isArray(all)) return {};
+  return Object.fromEntries(Object.entries(all).filter(([, ids]) => Array.isArray(ids) && ids.every((one) => typeof one === 'string')));
 }
-function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { const sent = localStorage.getItem(SENT); store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id);
-  if (sent) store.transaction.addEventListener('complete', () => { if (localStorage.getItem(SENT) === sent) localStorage.removeItem(SENT); }); }); } catch {} } // a send since then keeps its own
-try { const sent = sentFiles(); attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); }
-  const id = String(at.key), list = (at.value as Attached[]).filter((image) => !sent[id]?.includes(print(image))); if (!attached.has(id) && list.length) attached.set(id, list); at.continue(); }; }); } catch {}
+const keepSent = (all: Record<string, string[]>) => { try { if (Object.keys(all).length) localStorage.setItem(SENT, JSON.stringify(all)); else localStorage.removeItem(SENT); } catch {} };
+function dropSent(chat: string, ids: string[]) {
+  try { attachedStore('readwrite', (store) => {
+    const got = store.get(chat);
+    got.onsuccess = () => { const list = Array.isArray(got.result) ? got.result.filter((image: Attached) => !ids.includes(image?.id ?? '')) : []; if (list.length) store.put(list, chat); else store.delete(chat); };
+    store.transaction.addEventListener('complete', () => { const all = sentFiles(), left = (all[chat] ?? []).filter((one) => !ids.includes(one)); if (left.length) all[chat] = left; else delete all[chat]; keepSent(all); });
+  }); } catch {}
+}
+function markSent(chat: string, images: Attached[]) {
+  const ids = images.flatMap((image) => image.id ? [image.id] : []); if (!ids.length) return;
+  const all = sentFiles(); all[chat] = [...new Set([...all[chat] ?? [], ...ids])]; keepSent(all); dropSent(chat, ids);
+}
+function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
+try { const sent = sentFiles(); attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result;
+  if (!at) { attachedRead = true; for (const [chat, ids] of Object.entries(sent)) dropSent(chat, ids); return renderAttached(); }
+  const id = String(at.key), list = (at.value as Attached[]).filter((image) => !image.id || !sent[id]?.includes(image.id)); if (!attached.has(id) && list.length) attached.set(id, list); at.continue(); }; }); } catch {}
 const chipName = (q: Quote) => q.comment ? escape(q.comment.slice(0, 60)) : `“${escape(q.text.replace(/\s+/g, ' ').trim().slice(0, 40))}”`;
 // The chips' HTML as last drawn: a redraw that changes nothing keeps the buttons, so a tap or the focus on one is not lost.
 let attachedHtml = '';
@@ -1551,7 +1565,7 @@ async function attachNow(id: string, files: Iterable<File>) {
   for (const file of files) {
     const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
     // the list as it is now: a send answered meanwhile took its own files from it
-    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    try { const got: Attached = { ...await readAttachment(file, attached.get(id) ?? []), id: crypto.randomUUID() }; attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
