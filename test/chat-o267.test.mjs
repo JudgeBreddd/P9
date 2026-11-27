@@ -671,3 +671,72 @@ test('O275 T7: a held steer out when Stop came is handed back, not sent as a new
   assert.equal(seen.filter((e) => e.type === 'unheld' && e.data?.text === 'nudge').length, 1, 'handed back once');
   console.log('PASS O275 T7: the refused steer came back once; no turn after the Stop');
 });
+
+const ends = (n) => (e, i, all) => all.filter((x) => x.type === 'turn-end').length >= n;
+
+// Round 3: an agent can keep the permissions a turn started with (Codex does), so a confirmed lock is not enough to steer.
+test('O275 T8: a steer after the lock is confirmed is not sent into a turn begun unlocked; it runs at that turn\'s end', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o275-t8');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202);
+  await until(said('gating'), 'the turn is running, begun unlocked');
+  assert.equal((await chat.setLock({ on: true })).on, true); // confirmed while the turn runs
+  const s = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(s.status, 202, JSON.stringify(s));
+  await writeFile(path.join(dir, 'go'), '');
+  await until(echoed('nudge'), 'the message ran as the next prompt');
+  const log = await order(dir);
+  assert.ok(!log.some(sent('steer', 'nudge')), 'steered into the turn begun unlocked: ' + JSON.stringify(log));
+  assert.ok(log.lastIndexOf('set mode=plan') >= 0 && log.lastIndexOf('set mode=plan') < log.findIndex(sent('prompt', 'nudge')), JSON.stringify(log));
+  console.log('PASS O275 T8: no steer under the lock; the message ran as the next prompt, in the no-write mode');
+});
+
+test('O275 T9: a held steer refused after its turn was stopped and a new one began is handed back, not run at that turn\'s end', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t9');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'tools 2' })).status, 202);
+  await until(toolAt('in_progress'), 'a tool is running');
+  const h = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(h.when, 'steer', JSON.stringify(h));
+  await writeFile(path.join(dir, 'steer-wait'), '2500'); // the agent refuses the steer only after turn B began
+  await writeFile(path.join(dir, 'steering-refuses'), '');
+  await until(toolAt('completed'), 'the tool ended: the held steer is out');
+  await pause(200);
+  assert.equal((await chat.cancel(id)).status, 200);
+  await until((e) => e.type === 'turn-end' && e.data?.stopReason === 'cancelled', 'turn A ended cancelled');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202); // turn B, before A's steer is refused
+  await until(said('gating'), 'turn B is running');
+  await pause(2500); // the refusal came back during B
+  await writeFile(path.join(dir, 'go'), '');
+  await until(ends(3), 'turn B ended');
+  await pause(1500);
+  await until(() => true, 'read the events since');
+  const log = await order(dir);
+  assert.ok(log.some(sent('steer', 'nudge')), 'the steer was out: ' + JSON.stringify(log));
+  assert.ok(!log.some(sent('prompt', 'nudge')), 'the stopped turn\'s message ran at turn B\'s end: ' + JSON.stringify(log));
+  assert.equal(seen.filter((e) => e.type === 'unheld' && e.data?.text === 'nudge').length, 1, 'handed back once');
+  console.log('PASS O275 T9: handed back once; nothing ran at turn B\'s end');
+});
+
+test('O275 T10: a batch of two senders stopped before it went hands each message back to its own sender', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t10', true, { P9_SHELL_START_MS: '1500' });
+  const other = (await chat.create({ provider: 'claude' })).conversation;
+  await writeFile(path.join(dir, 'calls.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202);
+  await until(said('gating'), 'the turn is running');
+  const mine = await chat.prompt(id, { text: 'mine', when: 'queue' });
+  const theirs = await chat.prompt(id, { text: 'theirs', when: 'queue' }, undefined, other);
+  assert.ok(mine.held && theirs.held, JSON.stringify([mine, theirs]));
+  await writeFile(path.join(dir, 'go'), '');
+  await until(ends(2), 'the turn ended: the two go as one prompt, in its start snapshot');
+  await pause(300);
+  assert.equal((await chat.stop(id)).status, 200);
+  await until((e) => e.type === 'unheld', 'handed back');
+  await pause(500);
+  await until(() => true, 'read the events since');
+  const back = seen.filter((e) => e.type === 'unheld');
+  assert.deepEqual(back.filter((e) => !e.data.from).map((e) => e.data.text), ['mine'], 'the owner\'s box gets only the owner\'s text: ' + JSON.stringify(back.map((e) => e.data)));
+  assert.deepEqual(back.filter((e) => e.data.from).map((e) => [e.data.text, e.data.from]), [['theirs', other]]);
+  assert.equal((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')).length, 1, 'the batch was sent');
+  console.log('PASS O275 T10: each message went back to its own sender, nothing sent');
+});

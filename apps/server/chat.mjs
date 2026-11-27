@@ -1539,8 +1539,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (session.turn !== turn || session.stopping || session.cut === turn) return refused(409, 'turn-running');
     // O275: nor while a setting is unanswered or the lock unconfirmed (admit), read with no await from here to the
     // request: a steer never waits, so a Stop never misses one. 409: the message waits for the turn's end (the caller holds
-    // it) and goes as a prompt, which meets the barrier.
-    if (admit(session)) return refused(409, 'turn-running');
+    // it) and goes as a prompt, which meets the barrier. Round 3: never while the lock is on, even confirmed: an agent
+    // can keep the permissions a turn started with (Codex does), so a steer would run writable in a turn begun unlocked.
+    if (locked || admit(session)) return refused(409, 'turn-running');
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session, body);
@@ -1659,10 +1660,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (result.status === 202) return;
     markKept(id, item.id, { trying: undefined });
     if (result.status === 403) return unheld(id, [item], 'session-ended');
-    // Refused (the turn ended meanwhile, or the agent would not take it): it goes as the next prompt instead. A Stop of its
-    // turn meanwhile (the steer request was out) is that turn's end for it too: handed back, as the drain at that end does.
+    // A Stop of its turn meanwhile (the steer request was out) is that turn's end for it too: handed back, as the drain at
+    // that end does, before it can join the queue of a turn started since (round 3). Not a cut alone: a send-now's Stop
+    // cuts without halting, and its held steers go next.
+    if (turn && session.halt === turn) return unheld(id, [item], 'cancelled');
+    // Refused (the turn ended meanwhile, or the agent would not take it): it goes as the next prompt instead.
     session.queued.unshift(item);
-    if (!session.turn) drain(id, session, Boolean(turn) && session.halt === turn);
+    if (!session.turn) drain(id, session);
   }
   // O255: send now (a held one's bolt, or a prompt sent 'now'): first in line, and the turn stops; drain sends it at that end.
   // Not after the user's Stop (it ends the turn and hands back what waits), nor a note (it starts no turn of its own).
@@ -1726,7 +1730,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (from.length > 1) mixed.set(body, from);
     else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
-    const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body))).catch(() => refused(403, 'session-ended'));
+    const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body), from.length > 1 ? send : undefined)).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
     else settleResumed(send.map((item) => item.id)); // O109: taken, so a restart from here on does not send it again
   }
@@ -1883,7 +1887,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // another chat's question. Its turn runs alone, in the agent's no-write mode with approvals rejected, and
     // solo.end gets the reply. session.back is the mode the chat returns to: the next ordinary prompt sets it before
     // anything is sent, so no restore step exists that a prompt could race.
-    async prompt(id, body, held, from, solo) {
+    // parts: a batch joined from several senders (drain), so a hand-back returns each message to its own sender.
+    async prompt(id, body, held, from, solo, parts) {
       if (from && body && typeof body === 'object') { senders.set(body, from); if (!titles.has(body)) titles.set(body, titleOf(from)); }
       if (solo && body && typeof body === 'object') solos.set(body, solo);
       await recovered;
@@ -2147,7 +2152,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // with no turn while the start's Shell edits finish.
       const handBack = (message) => {
         session.cut = turn;
-        emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
+        // Round 3: a batch of several senders goes back as its messages, each with its own sender, as the drain hands back.
+        if (parts) unheld(id, parts, 'stopped');
+        else emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
         if (message || images?.length) emit(id, 'error', { message: (message ?? 'Nothing was sent.') + (images?.length ? ' Attach its files again.' : ''), ends: true });
         throw Object.assign(new Error(message ?? 'stopping'), { told: true });
       };
