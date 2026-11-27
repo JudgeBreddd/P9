@@ -399,7 +399,7 @@ test('a Claude chat starts and resumes in Manual when a prompt names no mode', a
 test('agent lock: no-write mode for new and running sessions, permission requests rejected by the daemon, kept across a restart', async (t) => {
   const instance = await start(t);
   const lock = (body) => json(call(instance, '/agent-lock', 'POST', body));
-  assert.deepEqual((await json(call(instance, '/agent-lock'))).body, { on: false });
+  assert.deepEqual((await json(call(instance, '/agent-lock'))).body.on, false);
   for (const bad of [{}, { on: 'yes' }, { on: true, extra: 1 }, [true]]) assert.equal((await lock(bad)).status, 400, JSON.stringify(bad));
   const before = await create(instance, 'codex');
   await call(instance, `/chat/${before}/prompt`, 'POST', { text: 'mode' });
@@ -408,7 +408,22 @@ test('agent lock: no-write mode for new and running sessions, permission request
   const waiting = await create(instance);
   await call(instance, `/chat/${waiting}/prompt`, 'POST', { text: 'permission' });
   at = (await until(instance, (event) => event.type === 'approval' && event.conversation === waiting, at)).cursor;
-  assert.deepEqual((await lock({ on: true })).body, { on: true });
+  // O267b: a change sent with a rev that is no longer the last one changes nothing (a put-back after a newer change),
+  // on both settings; a rev not a string is refused.
+  const { rev } = (await json(call(instance, '/agent-lock'))).body;
+  assert.equal((await lock({ on: true, rev: 1 })).status, 400);
+  assert.deepEqual((await lock({ on: true, rev: 'stale' })).body, { on: false, rev }, 'a stale rev left the lock');
+  const shield = (body) => json(call(instance, '/file-protection', 'POST', body)), was = (await json(call(instance, '/file-protection'))).body;
+  assert.deepEqual([(await shield({ on: !was.on, rev: 'stale' })).body, (await shield({ on: was.on, rev: 1 })).status], [was, 400], 'a stale rev left protection');
+  const moved = (await shield({ on: was.on, rev: was.rev })).body;
+  assert.ok(moved.on === was.on && moved.rev !== was.rev, 'the last rev makes the change and gives a new one');
+  // Rounds 2 and 3: on and off at once, the second landing while the first switches live sessions. Both replies give the
+  // lock as the daemon has it now; only the last write's carries its rev, the other's is null (changed after, not to put back).
+  const both = (await Promise.all([lock({ on: true, rev }), lock({ on: false })])).map((r) => r.body), now = (await json(call(instance, '/agent-lock'))).body;
+  assert.deepEqual(both.map((b) => b.on), [now.on, now.on], 'a reply showed a lock the daemon no longer has: ' + JSON.stringify(both));
+  assert.deepEqual(both.map((b) => b.rev === null).sort(), [false, true], 'not exactly one reply superseded: ' + JSON.stringify(both));
+  assert.equal(both.find((b) => b.rev !== null).rev, now.rev, 'the last write\'s reply has the live rev');
+  assert.equal((await lock({ on: true })).body.on, true);
   at = (await until(instance, said(waiting, 'permission:reject'), at)).cursor;
   await call(instance, `/chat/${before}/prompt`, 'POST', { text: 'mode' });
   const switched = await until(instance, said(before, 'mode:'), at);
@@ -428,13 +443,13 @@ test('agent lock: no-write mode for new and running sessions, permission request
   instance.child.kill('SIGTERM');
   await once(instance.child, 'exit');
   const second = await restart(t, instance, 'state-2');
-  assert.deepEqual((await json(call(second, '/agent-lock'))).body, { on: true });
+  assert.deepEqual((await json(call(second, '/agent-lock'))).body.on, true);
   const fresh = await create(second);
   await call(second, `/chat/${fresh}/prompt`, 'POST', { text: 'mode' });
   let cursor = (await until(second, said(fresh, 'mode:plan'))).cursor;
   await until(second, (event) => event.type === 'turn-end' && event.conversation === fresh, cursor - 1);
   // Off again: the normal mode comes back and a request reaches the screen.
-  assert.deepEqual((await json(call(second, '/agent-lock', 'POST', { on: false }))).body, { on: false });
+  assert.deepEqual((await json(call(second, '/agent-lock', 'POST', { on: false }))).body.on, false);
   await call(second, `/chat/${fresh}/prompt`, 'POST', { text: 'mode' });
   cursor = (await until(second, said(fresh, 'mode:default'), cursor)).cursor;
   await until(second, (event) => event.type === 'turn-end' && event.conversation === fresh, cursor - 1);
@@ -465,7 +480,7 @@ test('mode picker: each prompt sets the picked mode, unknown modes refused, the 
   assert.equal(await modeAfter(codex, 'Full access'), 'mode:agent-full-access', 'threat model row 25');
   for (const [id, mode] of [[claude, 'bypassPermissions'], [claude, 'auto'], [codex, 'Auto'], [codex, 'agent'], [codex, 'workspace-write'], [claude, 'Full access'], [claude, 'toString']])
     assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode })).status, 400, mode);
-  assert.deepEqual((await json(call(instance, '/agent-lock', 'POST', { on: true }))).body, { on: true });
+  assert.deepEqual((await json(call(instance, '/agent-lock', 'POST', { on: true }))).body.on, true);
   assert.equal(await modeAfter(claude, 'Bypass permissions'), 'mode:plan', 'the lock wins over bypass');
   assert.equal(await modeAfter(codex, 'Full access'), 'mode:read-only', 'the lock wins over Full access');
   console.log('PASS mode picker: Claude 5 and Codex 4 modes reach the agent by its own ids, 7 unknown modes 400, lock wins over bypass and Full access');
@@ -1551,7 +1566,7 @@ test('resume: a chat last in Full access comes back in it for a message with no 
   const back = (await until(second, (e) => said(loose, 'mode:')(e) && e.cursor > after, 0)).hit;
   assert.equal(back.data.content.text, 'mode:agent-full-access', 'a message with no mode runs in the chat\'s own Full access');
   await until(second, (event) => event.type === 'turn-end' && event.conversation === loose, back.cursor - 1);
-  assert.deepEqual((await json(call(second, '/agent-lock', 'POST', { on: true }))).body, { on: true });
+  assert.deepEqual((await json(call(second, '/agent-lock', 'POST', { on: true }))).body.on, true);
   assert.equal((await call(second, `/chat/${held}/prompt`, 'POST', { text: 'mode' })).status, 202);
   const { hit: locked, seen } = await until(second, (e) => said(held, 'mode:')(e) && e.cursor > back.cursor, 0);
   assert.equal(locked.data.content.text, 'mode:read-only', 'the lock wins over the Full access a resume puts back');

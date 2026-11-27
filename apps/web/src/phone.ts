@@ -2686,9 +2686,11 @@ async function setFree(on: boolean) {
   if (on && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + '\n\n' + FILE_PROTECTION_RISK)) return drawSettings();
   // Review 14: the daemon's two settings change as one (security.mjs changeFree): anything refused, or the modes gone once
   // they are written, puts both back first and says so.
-  const write = (key: string, want: boolean) => sent(key === 'protect' ? '/file-protection' : '/agent-lock', { on: want })
+  const where = (key: string) => key === 'protect' ? '/file-protection' : '/agent-lock';
+  const write = (key: string, want: boolean, rev?: string) => sent(where(key), { on: want, ...(rev ? { rev } : {}) })
     .then((result) => result.status === 200 ? result.body : { error: said(result) });
-  const { ok, state: now, note } = await changeFree(on, { lock: sec.lock, protect: sec.protect }, write);
+  const read = (key: string) => request(where(key)).catch(() => null);
+  const { ok, state: now, note } = await changeFree(on, { lock: sec.lock, protect: sec.protect }, write, read);
   Object.assign(sec, { lock: now.lock, protect: now.protect });
   if (!ok) return drawSettings(note);
   setWarnsLoose(!on); setStarts(on, START);

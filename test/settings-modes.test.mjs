@@ -92,7 +92,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   await page.click('[data-set-page="Mission Control"]'); await page.uncheck('#setF-mission');
   await page.click('[data-set-page="General"]'); await page.check('#setLock');
   await page.locator('#setLock:checked').waitFor();
-  assert.deepEqual(await call(instance, '/agent-lock'), { on: true });
+  assert.equal((await call(instance, '/agent-lock')).on, true);
   // The last focus mode left on cannot be turned off.
   await page.click('[data-set-page="Dev Focus"]'); await page.uncheck('#setF-dev');
   // The box is disabled after the save comes back (main refuses all three off: main.mjs normalizes to null).

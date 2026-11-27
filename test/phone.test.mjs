@@ -92,10 +92,10 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   // Threat model row 66 (c18, amending rows 15 and 4): a phone reads and changes the agent lock and file
   // protection through the desktop's routes, behind its session and CSRF (test/phone-c18.test.mjs has the refusals).
   const reader = await enrollDevice(server, await passkeyDevice(browser, server, 'lock-probe'));
-  assert.deepEqual((await server.remote('/agent-lock', { session: reader })).body, { on: false });
-  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: true }, headers: { 'x-p9-op': crypto.randomUUID() } })).body, { on: true });
-  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: false }, headers: { 'x-p9-op': crypto.randomUUID() } })).body, { on: false });
-  assert.deepEqual((await server.remote('/file-protection', { session: reader })).body, { on: true });
+  assert.deepEqual((await server.remote('/agent-lock', { session: reader })).body.on, false);
+  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: true }, headers: { 'x-p9-op': crypto.randomUUID() } })).body.on, true);
+  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: false }, headers: { 'x-p9-op': crypto.randomUUID() } })).body.on, false);
+  assert.deepEqual((await server.remote('/file-protection', { session: reader })).body.on, true);
   assert.equal((await server.remote('/file-protection', { method: 'POST', session: reader, body: { on: true, x: 1 }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 400);
   // Threat model row 4: creating files from the editor is desktop-only.
   assert.equal((await server.remote('/files', { method: 'POST', session: reader, body: { path: 'phone-made.txt', content: 'x' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);

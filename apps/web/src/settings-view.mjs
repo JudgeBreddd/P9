@@ -126,6 +126,8 @@ function serverRow() {
 // c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
 const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
 const OPEN_TOO = ' On this computer the chats already open switch too, and back when it is turned off.'; // MC-4
+// One switch row (renderSettings; refreshDefaults draws the security rows again with it).
+const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
 function securityGroup(box) {
   const [lock, protect, warn, free] = [SECURITY.lock, SECURITY.protect, SECURITY.warn, SECURITY.unrestricted], both = window.p9?.chat && window.p9?.fileProtection;
   return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way. The phone has the same four.', 'security-settings')}</legend>`
@@ -144,9 +146,10 @@ async function setUnrestricted(on) {
   // as one (security.mjs changeFree): anything refused, or the modes gone once they are written, puts both back first.
   if (on && freeLocked(outer.agentLock, outer.fileProtect)) return renderSettings();
   if (on && outer.fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + OPEN_TOO)) return renderSettings();
-  const write = (key, want) => (key === 'protect' ? window.p9.fileProtection(want) : outer.liveChat.call('setLock', { on: want }))
-    .then(r => r?.status === 200 ? r.body : { error: r?.body?.error }, () => ({}));
-  const { ok, state, note } = await changeFree(on, { lock: outer.agentLock, protect: outer.fileProtect }, write);
+  const answer = p => p.then(r => r?.status === 200 ? r.body : { error: r?.body?.error }, () => ({}));
+  const write = (key, want, rev) => answer(key === 'protect' ? window.p9.fileProtection(want, ...(rev ? [rev] : [])) : outer.liveChat.call('setLock', { on: want, ...(rev && { rev }) }));
+  const read = key => answer(key === 'protect' ? window.p9.fileProtection() : outer.liveChat.call('lock', {}, { quiet: true }));
+  const { ok, state, note } = await changeFree(on, { lock: outer.agentLock, protect: outer.fileProtect }, write, read);
   outer.agentLock = state.lock; outer.fileProtect = state.protect;
   if (note) outer.toast({ kind: 'security', txt: 'Unrestricted mode: ' + note, level: 'bad' }, true);
   if (!ok) return renderSettings();
@@ -371,6 +374,12 @@ function bindDefaults() {
 function refreshDefaults() {
   // Review 14: nothing in Settings has focus, so the whole page is drawn again: the security switches follow the modes too.
   if (outer.$('#setSecurity') && !outer.$('#setBody').contains(document.activeElement)) return renderSettings();
+  // O267b: with focus inside Settings, the security rows take the new state in place (checked, disabled, note): the
+  // focused control stays as it is and nothing typed elsewhere is lost.
+  const sec = outer.$('#setSecurity'), fresh = document.createElement('template');
+  if (sec) { fresh.innerHTML = securityGroup(box);
+    fresh.content.querySelectorAll('input').forEach(n => { const o = sec.querySelector('#' + n.id); if (!o) return; o.checked = n.checked; o.disabled = n.disabled;
+      const note = o.closest('label').querySelector('strong + .muted'); if (note) note.innerHTML = n.closest('label').querySelector('strong + .muted')?.innerHTML ?? ''; }); }
   // Review 12: an agent GET /agents added (a remote server's catalog) gets its row; one it no longer lists loses it.
   const all = outer.$('#setStartsIn'), rows = all ? Object.keys(modes) : [];
   all?.querySelectorAll('.set-defaults').forEach(row => { if (!rows.includes(row.querySelector('[data-default-mode]').dataset.defaultMode)) row.remove(); });
@@ -385,7 +394,6 @@ let tabFailed = false, tabSaving = null;
 const tabNote = () => tabFailed ? 'P9 did not answer; try again in a moment.' : 'Off: Usage shows Limits alone, here and on the phone. P9 still records every turn.';
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
-  const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
   outer.$('#setBody').innerHTML = `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}<span class="spacer"></span>${info('The P9 guide (opens on GitHub), Anymouse (a note to P9\'s makers: an idea, a bug or a gripe) and Setup (the first-start window again).', 'settings')}</div>`
     + (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(outer.settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button>${info('Makes everything in this window bigger or smaller, in every focus mode.', 'settings')}</div>` : '')
     + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">Cards waiting on you put this name after "needs". Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('Cards that wait on you put this name after "needs". Empty: no name.', 'settings')}</label>`
@@ -462,7 +470,7 @@ function renderSettings() {
   Object.keys(outer.focusNames).forEach(f => { outer.$('#setF-' + f).onchange = e => saveSettings({ ...outer.settings, focus: { ...outer.settings.focus, [f]: e.target.checked } }); });
   if (outer.$('#setLock')) outer.$('#setLock').onchange = async e => { const r = await outer.liveChat.call('setLock', { on: e.target.checked }); outer.agentLock = r.status === 200 ? r.body.on : outer.agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
-  if (outer.$('#setProtect')) outer.$('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); outer.fileProtect = r?.status === 200 ? r.body.on : outer.fileProtect; renderSettings(); };
+  if (outer.$('#setProtect')) outer.$('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); outer.fileProtect = r?.status === 200 && typeof r.body.on === 'boolean' ? r.body.on : outer.fileProtect; renderSettings(); };
   outer.$('#setWarn').onchange = e => { setWarnsLoose(e.target.checked); renderSettings(); };
   if (outer.$('#setLinks')) outer.$('#setLinks').onchange = e => { e.target.checked ? localStorage.removeItem('p9-link-ok') : localStorage.setItem('p9-link-ok', '1'); renderSettings(); };
   if (outer.$('#setFree')) outer.$('#setFree').onchange = e => setUnrestricted(e.target.checked);

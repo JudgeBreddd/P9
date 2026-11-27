@@ -105,7 +105,7 @@ const LEAD = 'Watching plan use is part of leading this sprint: a window that hi
   + 'While list_chats gives your workers paused, your sprint is paused: do nothing this watch. '
   + '1. Each worker kept there that list_chats gives and not held: forget it; one it does not give, keep. A worker list_chats gives held '
   + 'that is not kept there is back now (a watch stopped before keeping it). One kept and still held is back when its plan\'s reading is there, '
-  + 'not stale, the window it was held for is in it, and every window it draws on has a projected and does not call for a hold. '
+  + 'not stale, the window it was held for is in it, has a projected and does not call for a hold, and so does every window it draws on now. '
   + 'For every one back, send it Usage is back: carry on (any note before this to end your turn for usage no longer applies). If '
   + 'send_chat answers sprint-paused-full (its held list is full), call resume_sprint with its chat, then send it the carry-on and forget it. If '
   + 'send_chat answers with another error, leave it held for the next watch; otherwise call resume_sprint with its chat and forget it. '

@@ -341,9 +341,25 @@ test('Hold one worker: a held worker starts no turn for the lead\'s message, lis
   // Close lets go of a held worker: nothing is kept for it after, and what it kept goes as Stop drops a queue.
   assert.deepEqual(await lead.tool('pause_sprint', { chat: id.w1 }), { held: true });
   assert.ok((await lead.tool('send_chat', { chat: id.w1, text: 'hold-two' })).held, 'hold-two was not kept');
+  // O267b: a combined message from the lead and w2 kept too (written into the ledger: it forms only when two sends merge).
+  const ledger = new DatabaseSync([path.join(instance.directory, 'p9-foundation/p9.db'), path.join(instance.directory, '.local/state/p9-foundation/p9.db')].find((f) => fs.existsSync(f)));
+  t.after(() => ledger.close());
+  ledger.exec('PRAGMA busy_timeout = 5000');
+  const heldList = JSON.parse(ledger.prepare('SELECT value FROM prefs WHERE key = ?').get('paused:' + id.w1).value);
+  heldList.push({ id: crypto.randomUUID(), seq: Date.now() * 1000 + 999, chat: id.w1, held: null, from: sprint, mixed: [sprint, id.w2], body: { text: 'words-of-w2' } });
+  ledger.prepare('UPDATE prefs SET value = ? WHERE key = ?').run(JSON.stringify(heldList), 'paused:' + id.w1);
   assert.equal((await call(instance, `/sprints/${sprint}/close`, 'POST', {})).status, 200);
   assert.equal((await rows(instance)).find((c) => c.id === id.w1).paused, undefined, 'Close left the worker held');
   assert.deepEqual((await events(instance, id.w1)).filter((e) => e.type === 'unheld' && e.data.text?.includes('hold-two')).map((e) => e.data.why), ['stopped']);
+  // O267b: each sender is told what of its Close dropped, in one notice. Its own message is quoted; a combined one is named,
+  // never quoted, so no sender reads another's words.
+  const told = async (chat) => (await events(instance, chat)).filter((e) => JSON.stringify(e.data ?? {}).includes('not delivered')).map((e) => JSON.stringify(e.data));
+  const toLead = await told(sprint), toW2 = await told(id.w2);
+  assert.deepEqual([toLead.length, toW2.length], [1, 1], 'each sender gets one notice');
+  assert.match(toLead[0], /hold-two/);
+  for (const notice of [toLead[0], toW2[0]]) { assert.match(notice, /a combined message/); assert.doesNotMatch(notice, /words-of-w2/, 'a combined message was quoted'); }
+  assert.doesNotMatch(toW2[0], /hold-two/, 'w2 was shown the lead\'s message');
+  assert.doesNotMatch(fs.readFileSync(path.join(root, 'apps/server/delegate.mjs'), 'utf8'), /'sprint-dropped/, 'Close notices keep a replacement key');
   // Review 15: a closed sprint holds no worker again, even from its lead reopened by the owner.
   const mark = await cursor(instance);
   await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
@@ -351,4 +367,60 @@ test('Hold one worker: a held worker starts no turn for the lead\'s message, lis
   assert.equal((await reopened.tool('pause_sprint', { chat: id.w1 })).error, 'sprint-closed', 'a worker was held after Close');
   assert.equal((await rows(instance)).find((c) => c.id === id.w1).paused, undefined, 'a worker was held after Close');
   console.log('PASS O141 hold one worker: kept while held, peer ran, note passed, release delivered in order with its sender; Close let go of it');
+});
+
+// O267b: a worker held past list_chats' first 200 rows is still listed (and not counted in more); a paused Close merges two
+// held workers' kept lists in the order they were kept: back-to-back sends get strictly increasing seq, and one kept before
+// seq existed counts as oldest.
+test('O267b: held workers past 200 rows are listed; a paused Close keeps the kept order', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' }); // P9 reads claude's model list
+  await until(instance, (e) => e.conversation === first && e.data?.content?.text?.startsWith('config:'));
+  const prep = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'P1' })).body, sprint = prep.sprint;
+  const row = (key) => ({ key, provider: 'claude', model: 'haiku', effort: 'low' });
+  fs.writeFileSync(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [row('lead'), row('w1'), row('w2')] }));
+  for (const key of ['lead', 'w1', 'w2']) fs.writeFileSync(path.join(prep.folder, `roles/${key}.work.md`), 'mcp');
+  const press = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  const id = Object.fromEntries(press.body.chats.map((c) => [c.key, c.chat]));
+  const lead = await attach(t, instance, sprint);
+  for (const w of [id.w1, id.w2]) for (;;) { if (!(await lead.tool('wait_chat', { chat: w })).timedOut) break; }
+  const ledgerFile = [path.join(instance.directory, 'p9-foundation/p9.db'), path.join(instance.directory, '.local/state/p9-foundation/p9.db')].find((f) => fs.existsSync(f));
+  const ledger = new DatabaseSync(ledgerFile);
+  t.after(() => ledger.close());
+  ledger.exec('PRAGMA busy_timeout = 5000');
+  const keptOf = (chat) => JSON.parse(ledger.prepare('SELECT value FROM prefs WHERE key = ?').get('paused:' + chat)?.value ?? 'null');
+
+  // 200 newer chats in the project put both workers past list_chats' first 200: the held one is still listed, the other is
+  // not, and more counts only the one left out.
+  assert.deepEqual(await lead.tool('pause_sprint', { chat: id.w1 }), { held: true });
+  const add = ledger.prepare("INSERT INTO conversations (id, provider, title, state, created, project) VALUES (?, 'claude', 'filler', 'stopped', ?, ?)");
+  const far = Date.now() + 1e9, fillers = Array.from({ length: 200 }, (_, i) => { const f = crypto.randomUUID(); add.run(f, far + i, project); return f; });
+  const page = await lead.tool('list_chats'), listed = page.chats;
+  assert.equal(listed.find((c) => c.id === id.w1)?.held, true, 'a held worker past the first 200 rows was not listed');
+  assert.equal(listed.find((c) => c.id === id.w2), undefined, 'a worker not held past the first 200 was listed');
+  assert.equal(page.more, 2, 'more counted the held worker it listed'); // left out: w2 and the project's first chat
+  for (const f of fillers) ledger.prepare('DELETE FROM conversations WHERE id = ?').run(f);
+  assert.deepEqual(await lead.tool('resume_sprint', { chat: id.w1 }), { held: false, sent: 0 });
+
+  // A paused Close: order-1 (to w2) and order-2 (to w1) back to back, so a millisecond clock could tie them and the merge
+  // would fall back to the family's order; one under the sprint's pause after both; and one in w2's list from before seq.
+  for (const w of [id.w1, id.w2]) assert.deepEqual(await lead.tool('pause_sprint', { chat: w }), { held: true });
+  const [a, b] = await Promise.all([lead.tool('send_chat', { chat: id.w2, text: 'order-1' }), lead.tool('send_chat', { chat: id.w1, text: 'order-2' })]);
+  assert.ok(a.held && b.held, 'a message to a held worker was not kept');
+  const seq = Object.fromEntries([...keptOf(id.w1), ...keptOf(id.w2)].map((i) => [i.body.text, i.seq]));
+  assert.ok(Number.isSafeInteger(seq['order-1']) && Number.isSafeInteger(seq['order-2']) && seq['order-1'] !== seq['order-2'], 'two kept messages tie: ' + JSON.stringify(seq));
+  const [early, late] = seq['order-1'] < seq['order-2'] ? ['order-1', 'order-2'] : ['order-2', 'order-1'];
+  const legacy = keptOf(id.w2); legacy.unshift({ id: crypto.randomUUID(), chat: id.w2, held: null, from: sprint, mixed: null, body: { text: 'legacy-0' } });
+  ledger.prepare('UPDATE prefs SET value = ? WHERE key = ?').run(JSON.stringify(legacy), 'paused:' + id.w2);
+  assert.deepEqual(await lead.tool('pause_sprint'), { paused: true });
+  assert.ok((await lead.tool('send_chat', { chat: id.w1, text: 'order-3' })).held);
+  assert.equal((await call(instance, `/sprints/${sprint}/close`, 'POST', {})).status, 200);
+  assert.deepEqual(keptOf(sprint).map((i) => i.body.text), ['legacy-0', early, late, 'order-3'], 'Close merged the kept lists out of order');
+  console.log('PASS O267b: held past 200 listed, not counted in more; paused Close keeps the kept order, ties included');
 });

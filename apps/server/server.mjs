@@ -867,13 +867,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     settingsSaves = turn.then(() => {}, () => {});
     return turn;
   }
-  api.get('/file-protection', (c) => c.json({ on: protection() }));
+  // O267b: rev names the last change (new at each write and each daemon start). A write that sends rev changes nothing
+  // unless it is still that one, so Settings' put-back (security.mjs changeFree) never undoes a newer change from another
+  // device or switch. Same on POST /agent-lock (chat.mjs setLock).
+  let protectRev = randomUUID();
+  api.get('/file-protection', (c) => c.json({ on: protection(), rev: protectRev }));
   api.post('/file-protection', async (c) => {
-    const body = await json(c);
-    if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return c.json({ error: 'request-refused' }, 400);
-    ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('file-protection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.on ? 'on' : 'off');
-    setProtection(body.on);
-    return c.json({ on: protection() });
+    const body = await json(c), { on, rev, ...rest } = body && typeof body === 'object' ? body : {};
+    if (typeof on !== 'boolean' || Object.keys(rest).length || (rev !== undefined && typeof rev !== 'string')) return c.json({ error: 'request-refused' }, 400);
+    if (rev !== undefined && rev !== protectRev) return c.json({ on: protection(), rev: protectRev });
+    ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('file-protection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(on ? 'on' : 'off');
+    setProtection(on); protectRev = randomUUID();
+    return c.json({ on: protection(), rev: protectRev });
   });
   // The Mission edit form (mission-editor.mjs), desktop only: names and icons of buttons, apps, links and sections, through the
   // MCP tools' own update() with its guards. File protection asks first: the form sends confirm once the user agreed.
