@@ -160,6 +160,8 @@ const connection = acp.connectAgent(stream, {
     sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
     if (existsSync('order.log')) appendFileSync('order.log', 'steer ' + textOf(params.prompt) + '\n');
+    // O275: steer-wait holds a steer the ms it names before it looks for a turn (a Stop can end the turn meanwhile).
+    if (existsSync('steer-wait')) await new Promise((resolve) => setTimeout(resolve, Number(readFileSync('steer-wait', 'utf8')) || 1500));
     if (!turns.has(params.sessionId) && process.argv[2] === 'codex') {
       const text = textOf(params.prompt);
       setTimeout(() => connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'got:' + text } } }), 300);

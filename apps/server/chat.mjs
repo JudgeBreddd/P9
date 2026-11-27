@@ -26,7 +26,7 @@ import { MARKED, SENT, createSprintFiles, hashOf, itemsOf, notesLine, writerKey 
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 import { counted, eachImage, placed } from './ledger.mjs';
 import { shellEnd, shellStart } from './shell-edits.mjs';
-import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START, RESULT_COPY } from './agents.mjs';
+import { AGENT_IDS, ADAPTER, SIGNED_OUT, NARROW, START, MODES, TIER, LOGIN, SIGN_IN_KIND, SIGN_IN_FLAG, ACP, TELL_START, RESULT_COPY } from './agents.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(AGENT_IDS);
@@ -1022,21 +1022,30 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }).finally(() => { session.setWaits -= 1; });
     return ms ? Promise.race([set, wait(ms).then(() => { gaveUp = true; throw new Error('timeout'); })]) : set;
   };
-  // O275: the one barrier before a prompt or a steer goes. It waits while any set is unanswered, reading the chain again
-  // after each wake, so a set added meanwhile (a lock pressed during the start snapshot, a second toggle) is waited for
-  // too; then, with the lock on, it asks for the no-write mode the agent confirmed (setMode: session.mode is NARROW only
-  // then). null: go. Its caller sends with no await after it, so a toggle (setLock: locked and setWaits in one step) is
-  // either seen here or goes to the agent after the send.
+  // O275: the one admission rule, read with no await between it and the send (prompt or steer). A set still unanswered:
+  // 'unsettled'. With the lock on, only the no-write mode the agent confirmed goes (setMode: session.mode is NARROW only
+  // then). want: the mode the prompt set; it goes in no mode above that one's tier, so an unlock that lands meanwhile cannot
+  // widen it (a read-only prompt needs read-only, as the lock does; Accept edits may go in Manual, a lower tier, never in
+  // Auto). A mode P9 does not know has no tier and is refused. 'unconfirmed'. null: go.
+  const tierOf = (provider, value) => TIER[provider]?.[Object.keys(MODES[provider] ?? {}).find((k) => MODES[provider][k] === value)];
+  const admit = (session, want) => {
+    if (session.setWaits) return 'unsettled';
+    const need = locked ? NARROW[session.provider] : want;
+    return need && !(tierOf(session.provider, session.mode) <= tierOf(session.provider, need)) ? 'unconfirmed' : null;
+  };
+  // O275: waits while any set is unanswered, reading the chain again after each wake, so a set added meanwhile (a lock
+  // pressed during the start snapshot, a second toggle) is waited for too; 5 s at most, or till the session retires. It
+  // decides nothing: its caller reads admit() after it. Called only while setWaits is nonzero, so a prompt with nothing to
+  // wait for goes with no await after its snapshot (a steer waiting on that snapshot cannot go first: O252).
   const settled = async (session, ms = 5000) => {
     const end = Date.now() + ms, retired = () => session.stopping || live.get(session.id) !== session;
     while (session.setWaits && !retired()) {
       const left = end - Date.now();
-      if (left <= 0) return 'unsettled';
+      if (left <= 0) return;
       let timer;
       await Promise.race([session.setChain, session.exited, new Promise((resolve) => { timer = setTimeout(resolve, left); })]);
       clearTimeout(timer);
     }
-    return locked && session.mode !== NARROW[session.provider] ? 'unconfirmed' : null;
   };
   // O273: the no-write mode (the lock's, a solo turn's) is taken as set only when the answer names it; one the answer does
   // not name is a set that failed, so every path that waits on it (start, toggle, prompt) treats it so. Any other mode the
@@ -1526,11 +1535,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // steer before that met an agent with no turn and was refused. It waits for the prompt (queued right after the snapshot).
     const turn = session.turn;
     await session.starting;
-    // O275: nor before every setting has answered and a lock is confirmed. Not settled: 409, so the message waits for the
-    // turn's end (the caller holds it) and its prompt meets the same barrier.
-    const why = await settled(session);
-    if (session.turn !== turn || session.stopping || session.cut === turn) return refused(409, 'turn-running'); // a Stop meanwhile sent no prompt
-    if (why) return refused(409, 'turn-running');
+    // a Stop meanwhile sent no prompt; nor did a start handed back (dispatch sets cut too, O275)
+    if (session.turn !== turn || session.stopping || session.cut === turn) return refused(409, 'turn-running');
+    // O275: nor while a setting is unanswered or the lock unconfirmed (admit), read with no await from here to the
+    // request: a steer never waits, so a Stop never misses one. 409: the message waits for the turn's end (the caller holds
+    // it) and goes as a prompt, which meets the barrier.
+    if (admit(session)) return refused(409, 'turn-running');
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session, body);
@@ -1643,14 +1653,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
   async function steerHeld(id, session, item) {
     if (!item.allowed()) return unheld(id, [item], 'session-ended');
+    const turn = session.turn;
     markKept(id, item.id, { trying: true }); // O109: a crash before its user event cannot tell whether the agent took it
     const result = await authority.run(item.allowed, () => steer(id, item.body, item.images, [item.id, ...(item.was ?? [])])).catch(() => refused(403, 'session-ended'));
     if (result.status === 202) return;
     markKept(id, item.id, { trying: undefined });
     if (result.status === 403) return unheld(id, [item], 'session-ended');
-    // Refused (the turn ended meanwhile, or the agent would not take it): it goes as the next prompt instead.
+    // Refused (the turn ended meanwhile, or the agent would not take it): it goes as the next prompt instead. A Stop of its
+    // turn meanwhile (the steer request was out) is that turn's end for it too: handed back, as the drain at that end does.
     session.queued.unshift(item);
-    if (!session.turn) drain(id, session);
+    if (!session.turn) drain(id, session, Boolean(turn) && session.halt === turn);
   }
   // O255: send now (a held one's bolt, or a prompt sent 'now'): first in line, and the turn stops; drain sends it at that end.
   // Not after the user's Stop (it ends the turn and hands back what waits), nor a note (it starts no turn of its own).
@@ -2033,7 +2045,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
             if (waiting()) drain(id, session);
           });
       };
-      let begun = false;
+      let begun = false, want; // want: the mode this prompt goes in (admit, here and in dispatch)
       try {
         if (session.stopping) return refused(409, 'stopping');
         stillAuthorized();
@@ -2042,7 +2054,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A question to the user that the agent raised on its own stays open: another chat's question does not decline it.
         if (solo && session.pending.size) return refused(409, 'waiting-on-user');
         if (solo) session.back ??= session.mode;
-        const want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
+        want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
         if (want && (want !== session.mode || session.setWaits)) {
           // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
           try { await setMode(session, conversation.provider, want, !solo, 5000); }
@@ -2077,11 +2089,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // #540 review 13: a prompt that set nothing (or whose sets went in behind someone else's) still waits for every set
         // on the chain, so a set that timed out earlier and answers late lands before this turn, never during it. A set
         // added after the 202 (a lock pressed during the start snapshot below) meets the same barrier in dispatch (O275).
-        const why = await settled(session);
+        if (session.setWaits) await settled(session);
         // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing, and nor
         // does a chat closed, stopped or exited meanwhile (#540 review 14: it answered 202 for a turn on a removed session).
         if (gone()) return refused(409, 'stopping');
-        if (why) { emit(id, 'error', { message: 'An earlier setting has not answered; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
+        const why = admit(session, want);
+        if (why === 'unsettled') { emit(id, 'error', { message: 'An earlier setting has not answered; nothing was sent.', ends: true }); return refused(500, 'config-failed'); }
+        if (why) { emit(id, 'error', { message: 'The agent did not confirm mode ' + (locked ? NARROW[conversation.provider] : want) + '; nothing was sent.', ends: true }); return refused(500, 'mode-failed'); }
         stillAuthorized();
         begun = true;
       } finally { if (!begun) startFailed(); }
@@ -2129,20 +2143,24 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // ponytail: another chat's message (from) shows two notices, its "Not sent" line and this error; one would be enough.
       // O275: null is a stop's hand-back: the stop's own stopped/exited ends Working, so no error line, unless its files
       // need asking for again.
+      // A handed-back start's turn is cut, so a steer that waited on its snapshot is refused (steer), not sent to an agent
+      // with no turn while the start's Shell edits finish.
       const handBack = (message) => {
+        session.cut = turn;
         emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
         if (message || images?.length) emit(id, 'error', { message: (message ?? 'Nothing was sent.') + (images?.length ? ' Attach its files again.' : ''), ends: true });
         throw Object.assign(new Error(message ?? 'stopping'), { told: true });
       };
       const dispatch = async () => {
         await shellFrom;
-        // O275: the barrier again, for a set added during the snapshot (a lock pressed meanwhile). Nothing is awaited from
-        // here to the prompt, so the lock is either seen or reaches the agent after it.
-        const why = await settled(session);
+        // O275: the barrier again, for a set added during the snapshot (a lock pressed meanwhile); then admit(), with no
+        // await from it to the prompt, so a toggle is either seen here or reaches the agent after the prompt.
+        if (session.setWaits) await settled(session);
         if (session.cut === turn) return { stopReason: 'cancelled' };
         // A stop meanwhile: the message is handed back, not lost. At shutdown it is not (the restart's cut line says it).
         if (gone()) { if (closing) throw new Error('stopping'); handBack(null); }
-        if (why) handBack(why === 'unconfirmed' ? 'The agent lock is not confirmed; nothing was sent.' : 'A setting has not answered; nothing was sent.');
+        const why = admit(session, want);
+        if (why) handBack(why === 'unsettled' ? 'A setting has not answered; nothing was sent.' : locked ? 'The agent lock is not confirmed; nothing was sent.' : 'The mode changed before it went; nothing was sent.');
         try { stillAuthorized(); } catch { handBack('This device was signed out; nothing was sent.'); }
         session.heard?.forEach((m) => { m.copied = true; });
         return session.agent.prompt({ sessionId: session.sessionId, prompt });
