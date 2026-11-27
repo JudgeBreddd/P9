@@ -144,11 +144,13 @@ const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agen
 type Agent = { id: string; name?: string; short?: string; modes?: { name: string }[] };
 const agentsOk = (agents: unknown): agents is Agent[] => Array.isArray(agents) && agents.every((a: Json | null) => !!a && typeof a.id === 'string'
   && (a.modes === undefined || (Array.isArray(a.modes) && a.modes.every((m: Json | null) => !!m && typeof m.name === 'string'))));
-let agentsRead: Promise<void> | undefined;
-const loadAgents = () => agentsRead ??= request('/agents', deadline(20000)).then(({ agents }) => { if (!agentsOk(agents)) return;
+// It answers true only when a catalog was applied (#547 review 4).
+let agentsRead: Promise<boolean> | undefined;
+const loadAgents = () => agentsRead ??= request('/agents', deadline(20000)).then(({ agents }) => { if (!agentsOk(agents)) return false;
   fillAgents(agents); for (const k in names) delete names[k]; for (const a of agents) names[a.id] = a.short || a.name || a.id;
-  if (usageData) usageLines(usageData); }) // its plan cards are named from these (USE-1): drawn again from the last read, not read again
-  .catch(() => {}).finally(() => { agentsRead = undefined; });
+  try { if (usageData) usageLines(usageData); } catch { /* the next Usage read draws it */ } // its plan cards are named from these (USE-1): drawn again from the last read, not read again
+  return true; })
+  .catch(() => false).finally(() => { agentsRead = undefined; });
 // A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
 const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
@@ -229,7 +231,7 @@ async function readChat() {
     // O267b: GET /agents is not waited for (a hung read held the list); once it lands after the list is drawn, it draws again
     // with the agents' names and modes. The Mode list is drawn again too (picksFor changed), as the same chat's, so the pick
     // on it (a new chat's start pick, already drawn) stays (#547 review).
-    let drawn = false; void loadAgents().then(() => { if (drawn) { if (picksFor) picksFor += ':agents'; fillPicker(); render(); } });
+    let drawn = false; void loadAgents().then((applied) => { if (drawn && applied) { if (picksFor) picksFor += ':agents'; fillPicker(); render(); } });
     const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request)]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
@@ -2464,8 +2466,8 @@ async function loadUsage() {
     if (seq !== usageRead) return;
     // request() turns a body it could not parse (cut short, stalled) into {}: that is a failed read, not an empty one.
     if (!data || !Object.keys(data).length) throw new Error('cut short');
+    usageLines(data); usageData = data; // kept once drawn: a malformed answer throws in usageLines and is not kept, nor timed
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-    usageLines(data); usageData = data; // kept once drawn: a malformed answer throws in usageLines and is not kept
   } catch { if (seq === usageRead) { usageData = undefined; UH.limits = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; drawUsage(); } }
 }
 // The Usage screen's Limits from one read: also drawn again from the last good one when the agents' names arrive (#547 review).
@@ -2476,8 +2478,8 @@ function usageLines(data: Usage) {
   // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
   const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
   const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id])).join('')}</div>` : '';
-  UH.shown = data.telemetryTab !== false;
-  if (data.state === 'unavailable') { UH.limits = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); drawUsage(); return; }
+  const shown = data.telemetryTab !== false; // set once the Limits below are built, so a malformed answer changes nothing
+  if (data.state === 'unavailable') { UH.limits = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); UH.shown = shown; drawUsage(); return; }
   const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
   // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before
   // it stalls (P5). A stopped chat's last fill is history and is left out.
@@ -2486,7 +2488,7 @@ function usageLines(data: Usage) {
   const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
   UH.limits = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p>${data.tokens ? `<p class="muted" data-tokens>Tokens counted: ${escape(data.tokens)}</p>` : ''}<p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>` + profileLines(data, 'muted')
     + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
-  drawUsage();
+  UH.shown = shown; drawUsage();
 }
 // Refresh reads what is shown: on Tokens or Cost their history too (superseding a read still out), and spins until it
 // answers; on Limits the history is marked old, so opening Tokens or Cost reads it again.
