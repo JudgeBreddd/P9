@@ -392,7 +392,7 @@ test('A2 step 5: the agent\'s goal shows above the box with its status, follows 
   const sameBox = async (why) => assert.equal(await chat.pane.locator('.composer textarea').evaluate(el => el.p9Mark), 1, why);
   await goal('{"objective":"  ship the goal line  ","status":"active","iterations":2}', 2);
   await until(async () => await line().count() === 1, 'the goal shows');
-  assert.equal((await line().innerText()).replace(/\s+/g, ' ').trim(), 'Goal: ship the goal line', 'active is the usual status and is not shown');
+  assert.equal((await line().locator(':scope > span').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(), 'Goal: ship the goal line', 'active is the usual status and is not shown (the buttons aside)');
   await sameBox('the box is kept when the goal line appears');
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT a2-goal-line ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
   await goal('{"objective":"ship the goal line","status":"paused"}', 3);
@@ -435,6 +435,24 @@ test('A2 step 5: the agent\'s goal shows above the box with its status, follows 
   const row = (await call(instance, '/chat')).conversations.find(c => c.id === id);
   assert.ok(Object.hasOwn(row, 'goal') && row.goal === null, 'the list gives a cleared goal as null, not a missing field');
   console.log('PASS A2 step 5: the goal line shows, follows, survives a reload past the tail, and a clear removes it');
+});
+
+// O265: the goal line carries Set again and Clear. Clear removes the line at once and tells the agent ('/goal clear' alone).
+test('O265: the goal line\'s Clear removes the line and the agent\'s goal', { timeout: 120000 }, async (t) => {
+  const { launch, open, ends, users } = await setup(t, 'o265-goal-clear');
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(), chat = await open(page);
+  const line = () => chat.pane.locator('.bottom .goal');
+  await chat.send('goal {"objective":"ship the goal line","status":"active"}');
+  await until(async () => await ends() === 2 && await line().count() === 1, 'the goal shows');
+  assert.deepEqual(await line().locator('button').evaluateAll(bs => bs.map(b => b.title)), ["A restart drops the agent's goal: send it to the agent again", 'Clear the goal, here and in the agent']);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o265-goal-buttons ' + (await chat.pane.locator('.bottom').screenshot({ type: 'png' })).toString('base64'));
+  await line().locator('[data-goal="clear"]').click();
+  await until(async () => await line().count() === 0, 'Clear removed the line');
+  await until(async () => (await users()).includes('/goal clear'), 'the agent was told to clear its goal');
+  await until(async () => await ends() === 3, 'the clear\'s turn ended');
+  assert.equal(await line().count(), 0, 'the line came back');
+  console.log('PASS O265: Clear removes the goal line and the agent\'s goal');
 });
 
 // #540 review 15: an Interrupt with a file, sent from the window while the first prompt's start is still setting its model,
