@@ -920,7 +920,7 @@ one('#sheetBody').addEventListener('click', async event => {
   const images = attached.get(id);
   if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
   // O262: a send with no answer goes with it, under a new operation ID: the old chat was empty (its delete above says so), so it never arrived.
-  if (moved) { sending.delete(id); sending.set(next, moved); keepSending(id, undefined, kept.op); }
+  if (moved) { sending.delete(id); sending.set(next, moved); keepSending(id, undefined, kept!.op); }
   // O61: the text typed goes with the chat to its new id. The box itself changes owner here, before the list is read again:
   // whatever is typed while that read runs (the sheet can be dismissed) is the new chat's, and route(next) leaves the box alone.
   if (boxFor === id) { setDraft(next, one<HTMLTextAreaElement>('#prompt').value); setDraft(id, ''); boxFor = next; }
