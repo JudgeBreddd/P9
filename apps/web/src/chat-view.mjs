@@ -1055,10 +1055,14 @@ function cancelTurn(s, quiet) {
 // The end of a turn applies a queued mode, then sends the next queued message.
 // Threat model row 21 (no notice when a turn ended): a live turn-end nobody is watching leaves an
 // "<agent> finished" card, and a desktop notice while the window is in the background. Only P9's words, never reply text.
-// O260: a chat goes on while a turn runs after this end (prompted: its user event came in the same poll) or while the
-// daemon holds a message it sends at the end; one held for a paused sprint and a note (info) start no turn.
+// O260: a chat goes on while a turn started after this end runs (began: a user event that is not a steer into the old
+// turn) or while the daemon holds a message it sends at the end; one held for a paused sprint and a note (info) start no
+// turn. Then the notice waits (later), it is not dropped: settle() asks again after every poll, so it shows at that
+// turn's end, or once the hold empties with no turn started (a held message refused or handed back).
 function finished(s) {
-  if (s.queue.length || s.prompted || s.held?.some(h => !h.info && h.when !== 'pause')) return;
+  if (s.queue.length) return;
+  if (s.began || s.held?.some(h => !h.info && h.when !== 'pause')) return void (s.later = true);
+  s.later = false;
   const onScreen = document.hasFocus() && (outer.S.focus === 'chat' && (outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)).includes(s.id) || outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id === s.id);
   if (onScreen) return;
   s.done = true; outer.keepUnseen();
@@ -1248,9 +1252,9 @@ function applyChat(ev, into) {
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!NOT_USE.includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
-  const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
+  const settle = () => { s.working = s.prompted = s.began = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!d.steered) s.began = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -1471,8 +1475,9 @@ async function loadChat() {
   // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
   // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
   // the same poll): the daemon would resume it.
-  // O260: a chat whose held message ran a whole turn in the same poll ended twice there; it finished once (a Set).
-  const settle = (ended, answered_) => { try { for (const s of new Set(ended)) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O260: a chat whose held message ran a whole turn in the same poll ended twice there; it finished once (a Set). One whose
+  // notice waits (later) is asked again, ended or not.
+  const settle = (ended, answered_) => { try { for (const s of new Set(ended)) { finished(s); turnEnd(s, free(s)); } for (const s of outer.S.sessions) if (s.later) finished(s); for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so the chat's state is as it is now.
