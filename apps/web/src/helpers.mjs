@@ -91,8 +91,6 @@ export function chatFailed(action, body, ms) {
   // O255: mid-turn sends wait in the daemon, so this refusal is a run nobody prompted (its end sends nothing waiting) or a Stop.
   if (action === 'prompt' && body?.error === 'outcome-unknown') return 'Still not sure your message arrived: P9 has not finished it after ' + (ms >= 120000 ? Math.round(ms / 60000) + ' minutes' : Math.round(ms / 1000) + ' seconds') + '. It is back in the box; check the chat before sending it again.';
   if (action === 'prompt' && /^turn-[rs]/.test(body?.error)) return 'Not sent: the agent is busy; it is back in the box.';
-  // Review round 2 finding 2 (chat.mjs lock-unconfirmed): the Agent lock's mode change failed, so the chat was stopped first.
-  if (action === 'prompt' && body?.error === 'lock-unconfirmed') return 'Not sent: the agent did not confirm the Agent lock\'s no-write mode, so P9 stopped it. Your message and files are still in the box; send again to start it under the lock.';
   if (body?.error === 'profile-gone') return 'This chat\'s provider profile was removed in Settings. The chat can be read, not continued.';
   if (body?.error !== 'daemon-unavailable') return null;
   const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);

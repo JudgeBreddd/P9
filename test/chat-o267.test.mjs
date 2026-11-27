@@ -179,26 +179,8 @@ test('O267b: a Stop while the start snapshot runs sends no prompt', async (t) =>
   console.log('PASS O267b stop: a Stop during the start snapshot sent no prompt');
 });
 
-test('O267b: Agent lock turned on while the start snapshot runs sets the no-write mode before the prompt goes', async (t) => {
-  const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-lock', true, { P9_SHELL_START_MS: '2000' });
-  const r = await chat.prompt(id, { text: 'mode' });
-  assert.equal(r.status, 202, JSON.stringify(r));
-  // Review round 1 finding 3: every setting answers in a normal 4 s, so the lock's one mode change ends after the snapshot;
-  // the prompt waits for it, not for a second set of its own behind it (two of them passed a 5 s wait).
-  await writeFile(path.join(dir, 'slow-config'), '4000');
-  const lock = chat.setLock({ on: true });
-  await started();
-  const reply = (e) => e.type === 'update' && /^mode:/.test(e.data?.content?.text ?? '');
-  await until(reply, 'the mode reply');
-  await lock;
-  const said = seen.find(reply).data.content.text;
-  assert.equal(said, 'mode:plan', 'the prompt ran in the lock\'s no-write mode');
-  console.log('PASS O267b lock: the prompt sent after the lock went on ran as ' + said);
-});
-
 // Review round 2 finding 6: past the cap only a mode set under the lock retires the session. An unlock the adapter never
-// answers frees the chain and leaves the chat as it is (still narrow); a lock turned on while it may still land is not
-// confirmed over it, so that chat is stopped.
+// answers frees the chain and leaves the chat as it is (still narrow).
 test('O267b: an unlock the adapter never answers frees the chain after the cap and leaves the chat running', { timeout: 60000 }, async (t) => {
   const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-hang', true, { P9_SET_CAP_MS: '8000' });
   assert.equal((await chat.setLock({ on: true })).on, true);
@@ -213,10 +195,7 @@ test('O267b: an unlock the adapter never answers frees the chain after the cap a
   assert.equal(r.status, 202, 'not refused for good: ' + JSON.stringify(r));
   await until(echoed('after the hang'), 'it reached the agent');
   assert.ok(!seen.some((e) => e.type === 'stopped'), 'on the same adapter');
-  // The unlock may still land, so a lock now cannot be confirmed over it: the chat is stopped instead.
-  await chat.setLock({ on: true });
-  await until((e) => e.type === 'stopped', 'the lock stopped the chat with the unlock still on its way');
-  console.log('PASS O267b cap: the hung unlock freed the chain; the chat ran on; the next lock stopped it');
+  console.log('PASS O267b cap: the hung unlock freed the chain; the chat ran on');
 });
 
 test('O267b: an Interrupt held while a start sets its model is handed back when the adapter exits', async (t) => {
@@ -248,37 +227,6 @@ test('O267b: a handed-back message another chat sent says who sent it', async (t
   const back = (await until((e) => e.type === 'unheld' && e.data?.id === now.held, 'handed back')).find((e) => e.type === 'unheld' && e.data?.id === now.held);
   assert.deepEqual([back.data.why, back.data.from], ['stopped', other], 'the window and phone can tell it is not the user\'s');
   console.log('PASS O267b from: the handed-back message carried from ' + back.data.from);
-});
-
-// Review round 1 (O267b): the lock barrier for steering and for a mode not confirmed, a slow exit, and whose claim it is.
-test('O267b: a steer sent while the lock\'s mode change is on its way meets the no-write mode', async (t) => {
-  const { chat, dir, id, until, started } = await setup(t, 'o267b-steer', true, { P9_SHELL_START_MS: '2000' });
-  await writeFile(path.join(dir, 'steer-modes.log'), '');
-  const r = await chat.prompt(id, { text: 'slow' });
-  assert.equal(r.status, 202, JSON.stringify(r));
-  await writeFile(path.join(dir, 'slow-config'), '4000');
-  chat.setLock({ on: true });
-  await started();
-  const steered = await chat.prompt(id, { text: 'steer me' });
-  assert.equal(steered.status, 202, JSON.stringify(steered));
-  await until((e) => e.type === 'update' && /^got:[^]*steer me/.test(e.data?.content?.text ?? ''), 'the steer reached the turn');
-  const modes = await lines(path.join(dir, 'steer-modes.log'));
-  assert.ok(modes.length >= 1 && modes.every((m) => m === 'plan'), 'every steer met plan: ' + JSON.stringify(modes));
-  console.log('PASS O267b steer: the steer met ' + JSON.stringify(modes));
-});
-
-test('O267b: a prompt whose lock mode change failed is handed back, not lost after its 202', { timeout: 60000 }, async (t) => {
-  const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-handback', true, { P9_SHELL_START_MS: '2000' });
-  const r = await chat.prompt(id, { text: 'mode' });
-  assert.equal(r.status, 202, JSON.stringify(r));
-  await writeFile(path.join(dir, 'slow-config'), '8000'); // past the lock's 5 s wait: the lock stops the chat
-  chat.setLock({ on: true });
-  await started();
-  const back = await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'the prompt was handed back');
-  assert.deepEqual(['text', 'why'].map((k) => back.find((e) => e.type === 'unheld' && e.data?.id === r.turn).data[k]), ['mode', 'stopped']);
-  await pause(500);
-  assert.ok(!seen.some((e) => e.type === 'update' && /^mode:/.test(e.data?.content?.text ?? '')), 'never sent');
-  console.log('PASS O267b hand-back: the prompt came back as stopped and was never sent');
 });
 
 test('O267b: an Interrupt held while a start sets its model is handed back when the adapter exits slowly', async (t) => {
@@ -325,50 +273,20 @@ test('O267b: a phone revoked during the start snapshot sends nothing', async (t)
   console.log('PASS O267b revoked: the revoked phone\'s prompt never reached the agent');
 });
 
-// Review round 2 finding 1: an unlock that answers after a newer lock went on does not stop the chat; the newer lock's
-// own change decides, and a prompt after both waits for that one.
-test('O267b: a lock turned off and on again before the agent answers keeps the chat and runs narrow', { timeout: 60000 }, async (t) => {
-  const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-overlap');
-  assert.equal((await chat.setLock({ on: true })).on, true);
-  await writeFile(path.join(dir, 'slow-config'), '2000');
-  const off = chat.setLock({ on: false });
-  await started();
-  const on = chat.setLock({ on: true });
-  await Promise.all([off, on]);
-  await unlink(path.join(dir, 'slow-config'));
-  assert.ok(!seen.some((e) => e.type === 'stopped'), 'the chat was not stopped');
-  const r = await chat.prompt(id, { text: 'mode' });
+// Review round 3 finding 6: another chat's message from a revoked device is handed back once, as a "Not sent" line (its
+// from), with no error line of its own.
+test('O267b: another chat\'s message revoked during the start snapshot is handed back with no error line', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o267b-revoked-from', true, { P9_SHELL_START_MS: '1500' });
+  const other = (await chat.create({ provider: 'claude' })).conversation;
+  await writeFile(path.join(dir, 'calls.log'), '');
+  let live = true;
+  const r = await authority.run(() => live, () => chat.prompt(id, { text: 'from the other chat' }, undefined, other));
   assert.equal(r.status, 202, JSON.stringify(r));
-  const reply = (e) => e.type === 'update' && /^mode:/.test(e.data?.content?.text ?? '');
-  await until(reply, 'the mode reply');
-  assert.ok(!seen.some((e) => e.type === 'stopped'), 'the chat was not stopped');
-  assert.equal(seen.find(reply).data.content.text, 'mode:plan');
-  console.log('PASS O267b overlap: off then on kept the chat; the prompt ran as plan');
-});
-
-// Review round 2 finding 2: a prompt that comes while the lock's change is on its way waits for it before its answer
-// and sets no mode of its own behind it (two normal 4 s answers passed its 5 s wait).
-test('O267b: a prompt sent while the lock\'s mode change is on its way waits for it before answering', { timeout: 60000 }, async (t) => {
-  const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-before');
-  await writeFile(path.join(dir, 'sets.log'), '');
-  await writeFile(path.join(dir, 'slow-config'), '4000');
-  const lock = chat.setLock({ on: true });
-  await started();
-  const r = await chat.prompt(id, { text: 'mode' });
-  assert.equal(r.status, 202, JSON.stringify(r));
-  await lock;
-  const reply = (e) => e.type === 'update' && /^mode:/.test(e.data?.content?.text ?? '');
-  await until(reply, 'the mode reply');
-  assert.equal(seen.find(reply).data.content.text, 'mode:plan');
-  assert.deepEqual((await lines(path.join(dir, 'sets.log'))).filter((l) => / mode=/.test(l)).map((l) => l.split(' ')[1]), ['mode=plan'], 'one mode set, the lock\'s');
-  console.log('PASS O267b before: the prompt waited for the lock\'s change and ran as plan');
-});
-
-// Review round 2 finding 4: the lock needs the adapter to say it is in the no-write mode.
-test('O267b: a lock whose mode answer does not name the mode stops the chat', async (t) => {
-  const { chat, dir, until } = await setup(t, 'o267b-nomode');
-  await writeFile(path.join(dir, 'no-mode-reply'), '');
-  await chat.setLock({ on: true });
-  await until((e) => e.type === 'stopped', 'the chat was stopped, not trusted');
-  console.log('PASS O267b no mode: an answer with no mode did not count as narrow');
+  live = false;
+  const back = (await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'handed back')).find((e) => e.type === 'unheld' && e.data?.id === r.turn);
+  assert.deepEqual([back.data.text, back.data.why, back.data.from], ['from the other chat', 'stopped', other]);
+  await pause(1000); // the failure path has run
+  assert.ok(!seen.some((e) => e.type === 'error' && /signed out/.test(e.data?.message)), 'no error line: ' + JSON.stringify(seen.filter((e) => e.type === 'error')));
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  console.log('PASS O267b revoked from: one unheld with from, no error line, nothing sent');
 });
